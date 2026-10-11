@@ -273,6 +273,12 @@ reachable. Remove or merge a test only when all are true:
    safety assertion for the behavior.
 3. The target plan records the replacement protection or why none is needed.
 
+A browser test meets condition 1 when a named module test covers the same
+behavior, unless the browser itself is the point: real pointer or focus,
+layout, font metrics, clipboard or download, or cross-tab behavior. Push a
+browser test's assertion down to a module test before removing it when none
+covers it yet.
+
 Split an oversized suite by protected behavior, not by arbitrary line count.
 Prefer small shared fixture builders over copying an entire Project when only a
 few facts are relevant.
