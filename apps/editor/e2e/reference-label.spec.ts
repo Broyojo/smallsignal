@@ -1,20 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   awaitEditorReady,
-  chooseComponent,
   downloadBytes,
   parseSavedProject,
+  placeResistors,
 } from "./editor-fixtures.js";
 
-async function placeResistor(page: Page) {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 240 } });
-  await page.keyboard.press("Escape");
-}
 async function projectFile(page: Page) {
   return parseSavedProject(
     (await downloadBytes(page, "File", "Export Project File…")).toString(
@@ -27,10 +18,12 @@ const visual = (page: Page) =>
     '[data-layer="annotations"] [data-object-id="instance-label-R1"]',
   );
 
-test("canvas edits one visual annotation without changing the Netlist Reference", async ({
+test("canvas edits one visual annotation without changing the Netlist Reference, and restores it in place", async ({
   page,
 }) => {
-  await placeResistor(page);
+  await page.goto("/editor");
+  await awaitEditorReady(page);
+  await placeResistors(page, [360], 240);
   await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
   await expect(
     page.getByRole("checkbox", { name: "Use display alias" }),
@@ -97,6 +90,23 @@ test("canvas edits one visual annotation without changing the Netlist Reference"
   await expect(visual(page)).toContainText("R1");
   await page.keyboard.press("Control+Shift+z");
   await expect(visual(page)).toContainText("input pair");
+
+  // Turning the alias off in place shows the live Reference again and
+  // restores its binding.
+  await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
+  const alias = page.getByRole("checkbox", { name: "Use display alias" });
+  await expect(alias).toBeChecked();
+  await alias.uncheck();
+  await expect(editor).toHaveText("R1");
+  await page.getByRole("button", { name: "Apply text changes" }).click();
+  await expect(visual(page)).toHaveText("R1");
+  const restored = (await projectFile(page)).documents[0].annotations.find(
+    (annotation: { id: string }) => annotation.id === "instance-label-R1",
+  );
+  expect(restored).toMatchObject({
+    binding: { kind: "instance-reference", instanceId: "R1" },
+  });
+  expect(restored).not.toHaveProperty("content");
 });
 
 // Renaming the electrical identity apart from the visual name, restoring

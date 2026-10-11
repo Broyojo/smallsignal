@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { createEmptyProject, createRoutePath } from "@icm/model";
 
 import {
   awaitEditorReady,
   chooseComponent,
   clickNetlistWorkflowCommand,
+  openProjectFile,
 } from "./editor-fixtures";
 
 /**
@@ -102,6 +104,45 @@ test("signed-out Save does not suppress ERC or visual check results", async ({
   await expect(page.getByTestId("project-unsaved-indicator")).toBeVisible();
 });
 
-// Free-angle wires and their one-click straightening are visual.test's
-// ("accepts arbitrary wire angles"), angled-wire-repair's and
-// selection-inspector-details' ("offers one-click angled-wire repair").
+// Free-angle wires raise no diagnostic, and 45-degree ones are left alone
+// (visual "accepts arbitrary wire angles…", angled-wire-repair "repairs
+// arbitrary angles while preserving orthogonal and 45-degree routes"); this
+// is the repair button, its status and its one undo.
+test("accepts free angles and optionally straightens them in one undoable action", async ({
+  page,
+}) => {
+  const project = createEmptyProject("angled-wire-project", "Angled wires");
+  const document = project.documents[0]!;
+  document.nets.push({ id: "net-bad", terminals: [] });
+  document.junctions.push(
+    { id: "bad-from", netId: "net-bad", position: { x: 200, y: 200 } },
+    { id: "bad-to", netId: "net-bad", position: { x: 260, y: 230 } },
+  );
+  document.routes.push(
+    createRoutePath({
+      id: "route-bad",
+      netId: "net-bad",
+      start: { kind: "junction", junctionId: "bad-from" },
+      end: { kind: "junction", junctionId: "bad-to" },
+      bends: [],
+      modes: ["manual"],
+    }),
+  );
+  await page.goto("/editor");
+  await awaitEditorReady(page);
+  await openProjectFile(page, project, "angled-wires.icproj.json");
+  const route = page.locator('polyline[data-object-id="route-bad"]');
+  await expect(route).toHaveAttribute("points", "200,200 260,230");
+
+  await clickNetlistWorkflowCommand(page, "check-and-save");
+  await expect(
+    page.getByText("VISUAL_NON_STANDARD_WIRE_ANGLE", { exact: false }),
+  ).toHaveCount(0);
+  await page.getByTestId("repair-angled-wires").click();
+  await expect(page.getByTestId("status")).toContainText(
+    "Straightened 1 non-standard angled wire segment",
+  );
+  await expect(route).toHaveAttribute("points", "200,200 260,200 260,230");
+  await page.keyboard.press("Control+z");
+  await expect(route).toHaveAttribute("points", "200,200 260,230");
+});

@@ -15,24 +15,14 @@ import { WORKING_COPY_STORAGE_KEY } from "../src/document/recovery-coordinator";
 import { CLOUD_PROJECT_LIMIT } from "../src/features/editor-shell/cloud-projects";
 import {
   awaitEditorReady,
-  chooseComponent,
   clickCommand,
   clickNetlistWorkflowCommand,
   downloadBytes,
   openMenu,
   parseSavedProject,
+  placeResistors,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
-
-async function placeResistors(page: Page, xs: number[]) {
-  for (const x of xs) {
-    await chooseComponent(page, "resistor");
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x, y: 230 } });
-    await page.keyboard.press("Escape");
-  }
-}
 
 async function mockCloudProjects(page: Page) {
   let stored: {
@@ -212,6 +202,7 @@ test("File menu falls back to one scroll area in a short viewport", async ({
   await expect(exportOption).toBeInViewport();
 });
 
+/** The Agent's reconnect proof is stored beside this tab's working copy. */
 async function expectAgentRecoveryAlongsideWorkingCopy(
   page: Page,
   sessionId: string,
@@ -219,23 +210,13 @@ async function expectAgentRecoveryAlongsideWorkingCopy(
   await expect
     .poll(() =>
       page.evaluate(
-        ([agentKey, workingCopyKey, expectedSession]) => {
-          const serialized = sessionStorage.getItem(agentKey);
-          const workingCopyId = sessionStorage.getItem(workingCopyKey);
-          if (!serialized || !workingCopyId) return false;
-          const recovery = JSON.parse(serialized) as {
-            sessionId?: string;
-          };
-          return recovery.sessionId === expectedSession;
-        },
-        [
-          AGENT_SESSION_RECOVERY_STORAGE_KEY,
-          WORKING_COPY_STORAGE_KEY,
-          sessionId,
-        ] as const,
+        ([agentKey, workingCopyKey]) =>
+          sessionStorage.getItem(workingCopyKey) &&
+          JSON.parse(sessionStorage.getItem(agentKey) ?? "{}").sessionId,
+        [AGENT_SESSION_RECOVERY_STORAGE_KEY, WORKING_COPY_STORAGE_KEY] as const,
       ),
     )
-    .toBe(true);
+    .toBe(sessionId);
 }
 
 test("Check and Save keeps its snapshot safe while the drawing is replaced or edited", async ({
@@ -312,9 +293,10 @@ test("Check and Save keeps its snapshot safe while the drawing is replaced or ed
   expect(captured!.documents[0]!.instances).toHaveLength(1);
 });
 
-// The Gallery round trip of a paired working copy is web-agent-session's
-// ("restores the same paired working copy through refresh and Gallery…").
-test("paired refreshes preserve the saved Cloud binding", async ({
+// The paired working copy's own Gallery round trip is web-agent-session's
+// ("restores the same paired working copy through refresh and Gallery…");
+// this is the Cloud binding through both.
+test("paired refresh and Gallery return preserve the saved Cloud binding", async ({
   page,
   baseURL,
 }) => {
@@ -399,6 +381,16 @@ test("paired refreshes preserve the saved Cloud binding", async ({
     "Saved New Circuit to Cloud",
   );
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
+
+  // Back from the Gallery, Ctrl+S still updates the same Cloud Project.
+  await page.getByRole("link", { name: "Back to the gallery" }).click();
+  await page.getByTestId("gallery-editor-link").click();
+  await expect(page.getByTestId("active-instance-count")).toHaveText("2", {
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
+  await page.keyboard.press("Control+s");
+  await expect.poll(() => cloud.stored()?.revision).toBe(4);
   expect(
     await client.status(session.sessionId, session.agentToken),
   ).toMatchObject({ editor: "attached" });

@@ -17,7 +17,7 @@ import {
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
 
-test("formal SVG and PNG contain wide rotated edge labels without clipping", async ({
+test("formal SVG keeps wide rotated edge labels inside its figure, and the PNG is that figure", async ({
   page,
 }) => {
   const project = createEmptyProject("export-ink", "Export ink");

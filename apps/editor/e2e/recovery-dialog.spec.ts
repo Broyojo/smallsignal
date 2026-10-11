@@ -7,19 +7,13 @@ import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
 import {
-  chooseComponent,
   clickCommand,
   downloadBytes,
   openMenu,
+  placeResistors,
   readRecoveryRecords,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
-
-async function placeResistor(page: Page, x: number, y: number) {
-  await chooseComponent(page, "resistor");
-  await page.getByTestId("schematic-canvas").click({ position: { x, y } });
-  await page.keyboard.press("Escape");
-}
 
 const fixtureText = readFileSync(
   resolve(process.cwd(), "fixtures/projects/manual-basics/project.icproj.json"),
@@ -60,7 +54,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   await page.goto("/editor");
   // A fresh navigation has no saved window workspace and can offer recovery.
   // One lone component remains below the banner's meaningful-content threshold.
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("revision")).toHaveText("1");
   await expect
     .poll(() => recoveryProjectTexts(page))
@@ -71,7 +65,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   await expect(banner).toHaveCount(0);
 
   // Three objects clear the threshold and the banner offers the restore.
-  for (const x of [360, 470, 580]) await placeResistor(page, x, 330);
+  await placeResistors(page, [360, 470, 580], 330);
   await expect(page.getByTestId("revision")).toHaveText("3");
   await expect
     .poll(() => recoveryProjectTexts(page))
@@ -92,14 +86,14 @@ test("a damaged copy restores its previous generation; a newer-schema copy downl
   page,
 }) => {
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 1');
 
   // Place one more edit so a valid previous generation exists, then corrupt
   // the latest record's Project text in place.
-  await placeResistor(page, 500, 230);
+  await placeResistors(page, [500]);
   await expect(page.getByTestId("revision")).toHaveText("2");
   await expect
     .poll(() => recoveryProjectTexts(page))
@@ -170,7 +164,7 @@ test("export keeps recovery; explicit discard removes it and hides a clean repla
 }) => {
   await page.goto("/editor");
   // Three authored objects: enough for the replacement guard to engage.
-  for (const x of [300, 380, 460]) await placeResistor(page, x, 230);
+  await placeResistors(page, [300, 380, 460]);
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 3');
@@ -179,7 +173,7 @@ test("export keeps recovery; explicit discard removes it and hides a clean repla
   // generation of the same session. That edit also invalidates the export's
   // safe stamp, so the replacement below prompts again.
   await downloadBytes(page, "File", "Export Project File…");
-  await placeResistor(page, 540, 230);
+  await placeResistors(page, [540]);
   await expect
     .poll(async () => {
       const texts = await recoveryProjectTexts(page);
@@ -224,7 +218,7 @@ test("dialog closes with Escape, keeps focus labels and deletes a copy", async (
   page,
 }) => {
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 1');
@@ -255,7 +249,7 @@ test("dialog closes with Escape, keeps focus labels and deletes a copy", async (
     .toBe(0);
 });
 
-test("storage failure offers a backup without acknowledging Cloud Save", async ({
+test("storage failure keeps editing, offers a backup and never acknowledges Cloud Save", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -267,7 +261,7 @@ test("storage failure offers a backup without acknowledging Cloud Save", async (
     });
   });
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("revision")).toHaveText("1");
   const warning = page.getByTestId("recovery-failure-banner");
   await expect(warning).toBeVisible();
@@ -275,6 +269,10 @@ test("storage failure offers a backup without acknowledging Cloud Save", async (
   await expect(page.getByTestId("recovery-state")).toHaveText(
     "Recovery unavailable — download now",
   );
+  // The editor keeps committing, and the warning stays.
+  await placeResistors(page, [500]);
+  await expect(page.getByTestId("revision")).toHaveText("2");
+  await expect(warning).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download");
   await warning.getByRole("button", { name: "Download Backup" }).click();

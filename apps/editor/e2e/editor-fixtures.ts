@@ -194,6 +194,19 @@ export async function chooseComponent(
 }
 
 /** Edit the selected component's strict JSON; valid changes update live. */
+/** Place one resistor at each x on row y, leaving no tool armed. */
+export async function placeResistors(
+  page: Page,
+  xs: number[],
+  y = 230,
+): Promise<void> {
+  for (const x of xs) {
+    await chooseComponent(page, "resistor");
+    await page.getByTestId("schematic-canvas").click({ position: { x, y } });
+    await page.keyboard.press("Escape");
+  }
+}
+
 export async function editComponentPropertyCode(
   page: Page,
   update: (value: Record<string, any>) => void,

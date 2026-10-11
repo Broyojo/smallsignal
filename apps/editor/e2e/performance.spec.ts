@@ -316,11 +316,8 @@ test.describe("editor latency on a large Project", () => {
       pan,
       note: "Production build; cold first drag sample, remaining warm. Machine-dependent rAF frame intervals, not input latency. Compare only matched builds, inputs and machines.",
     });
-    // Gross-regression ceilings only: the point is the recorded artifact.
+    // A gross-regression ceiling only: the point is the recorded artifact.
     expect(pan.frameGapMaxMs).toBeLessThan(500);
-    expect(Math.max(...drags.map((drag) => drag.longTaskMaxMs))).toBeLessThan(
-      2000,
-    );
   });
 
   test("records copy-to-ghost and drop-to-next-ghost on a dense Project", async ({

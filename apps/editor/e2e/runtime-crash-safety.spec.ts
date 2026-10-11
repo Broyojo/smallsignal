@@ -1,16 +1,11 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import {
   awaitEditorReady,
   chooseComponent,
   openCellManager,
+  placeResistors,
 } from "./editor-fixtures.js";
-
-async function placeResistor(page: Page, x: number, y: number) {
-  await chooseComponent(page, "resistor");
-  await page.getByTestId("schematic-canvas").click({ position: { x, y } });
-  await page.keyboard.press("Escape");
-}
 
 /** The App module as the dev server serves it, or its chunk in the built editor. */
 const APP_CHUNK = "**/{src/app/App.tsx,assets/App-*.js}*";
@@ -73,7 +68,7 @@ test("the recovery button gets a stuck page back into the editor", async ({
   page,
 }) => {
   // A retired chunk: the shape that genuinely means "this document can no
-  // longer boot", as distinct from the transient failure above.
+  // longer boot", as distinct from a transient failure (route-chunk-loader).
   let chunkRetired = true;
   await page.route(APP_CHUNK, (route) => {
     if (chunkRetired) return route.fulfill({ status: 404, body: "" });
@@ -111,7 +106,7 @@ test("a failed dialog chunk degrades to a scoped notice, not the crash screen", 
   page,
 }) => {
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("hit-R1")).toBeVisible();
 
   // A tab that survives a redeploy asks for chunk names the server no longer
@@ -154,7 +149,7 @@ test("a scene build failure degrades to the last good view and recovers", async 
   page,
 }) => {
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   await expect(page.getByTestId("revision")).toHaveText("1");
 
@@ -185,7 +180,7 @@ test("a scene build failure degrades to the last good view and recovers", async 
   await page.evaluate(() => {
     window.__ICM_TEST_SCENE_CRASH__ = false;
   });
-  await placeResistor(page, 640, 230);
+  await placeResistors(page, [640]);
   await expect(page.getByTestId("revision")).toHaveText("3");
   await expect(page.getByTestId("hit-R3")).toBeVisible();
   await expect(

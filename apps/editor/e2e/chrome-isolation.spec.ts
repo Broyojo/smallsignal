@@ -116,7 +116,8 @@ test("compacts the editor header at half width and keeps the account role in its
   await expect(page.getByTestId("account-name")).toBeVisible();
   await expect(page.getByTestId("account-owner")).toBeHidden();
 
-  for (const width of [320, 720, 1440]) {
+  // One width per editor-chrome.css band the original six covered.
+  for (const width of [320, 390, 480, 720, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     const leftControls = page.locator(
       ".app-brand > :is(.gallery-home-link, .header-gallery-link, .project-menu, .command-menu)",
@@ -190,5 +191,22 @@ test("compacts the editor header at half width and keeps the account role in its
   await expect(name).not.toHaveAttribute("target", "_blank");
 });
 
-// Without providers or a session the header keeps the account menu fallback
-// (App.test "renders an empty project without owning model state").
+// A failed providers or session request falls back to the account menu.
+test("keeps the account affordance when auth providers are unavailable", async ({
+  page,
+}) => {
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill({ status: 503, json: { error: "unavailable" } }),
+  );
+  await page.route("**/api/auth/me", (route) =>
+    route.fulfill({ status: 503, json: { error: "unavailable" } }),
+  );
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/editor");
+
+  const fallback = page.locator(".account-menu-fallback");
+  await expect(fallback).toBeVisible();
+  await expect(fallback.locator("summary")).toContainText("⋯");
+  await fallback.locator("summary").click();
+  await expect(fallback.locator(".account-popover")).toContainText("Account");
+});

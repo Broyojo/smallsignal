@@ -5,15 +5,10 @@ import { WORKING_COPY_STORAGE_KEY } from "../src/document/recovery-coordinator";
 import {
   chooseComponent,
   openMenu,
+  placeResistors,
   readRecoveryRecords,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
-
-async function placeResistor(page: Page, x: number, y: number): Promise<void> {
-  await chooseComponent(page, "resistor");
-  await page.getByTestId("schematic-canvas").click({ position: { x, y } });
-  await page.keyboard.press("Escape");
-}
 
 async function restoreThroughDialog(
   page: Page,
@@ -37,12 +32,12 @@ test("a hard renderer crash restores the latest committed Project, which never e
   page,
 }) => {
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("revision")).toHaveText("1");
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 1');
-  await placeResistor(page, 500, 230);
+  await placeResistors(page, [500]);
   await expect(page.getByTestId("revision")).toHaveText("2");
   // Both commits must be durably stored before the crash.
   await expect
@@ -83,8 +78,7 @@ test("simultaneous tabs keep separate working copies", async ({ context }) => {
   const pageB = await context.newPage();
 
   await pageA.goto("/editor");
-  await placeResistor(pageA, 360, 230);
-  await placeResistor(pageA, 500, 230);
+  await placeResistors(pageA, [360, 500]);
   await expect(pageA.getByTestId("revision")).toHaveText("2");
 
   await pageB.goto("/editor");

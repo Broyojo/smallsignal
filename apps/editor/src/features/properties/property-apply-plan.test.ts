@@ -68,33 +68,44 @@ describe("planPropertyApply", () => {
       rotation: 0,
       locked: false,
     });
-    const plan = (visualAnnotation: boolean) =>
-      planPropertyApply(
-        { project, document, resolver, instance },
+    const apply = (target: typeof document, visualAnnotation: boolean) => {
+      const plan = planPropertyApply(
+        {
+          project: { ...project, documents: [target] },
+          document: target,
+          resolver,
+          instance,
+        },
         {
           placement: null,
           appearance: { color: "auto" },
           display: { visualAnnotation },
         },
       );
+      if (plan.kind === "unchanged") return target;
+      if (plan.kind !== "edits") throw new Error(JSON.stringify(plan));
+      const result = executeTransaction(target, {
+        transactionId: `name-${visualAnnotation}`,
+        documentId: target.id,
+        expectedRevision: target.revision,
+        actor: { kind: "human", id: "test" },
+        edits: plan.edits,
+      });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+      return result.document;
+    };
+    const label = (target: typeof document) =>
+      target.annotations.find(
+        (annotation) => annotation.id === "instance-label-R1",
+      );
 
     // Already shown: nothing to do.
-    expect(plan(true)).toEqual({ kind: "unchanged" });
-    const hidden = plan(false);
-    if (hidden.kind !== "edits") throw new Error(JSON.stringify(hidden));
-    const result = executeTransaction(document, {
-      transactionId: "hide-name",
-      documentId: document.id,
-      expectedRevision: document.revision,
-      actor: { kind: "human", id: "test" },
-      edits: hidden.edits,
-    });
-    if (!result.ok) throw new Error(JSON.stringify(result));
-    expect(
-      result.document.annotations.find(
-        (annotation) => annotation.id === "instance-label-R1",
-      )?.visible,
-    ).toBe(false);
+    expect(apply(document, true)).toBe(document);
+    const hidden = apply(document, false);
+    expect(label(hidden)?.visible).toBe(false);
+    const shown = apply(hidden, true);
+    expect(shown).not.toBe(hidden);
+    expect(label(shown)?.visible).not.toBe(false);
   });
 
   it("renames a copied Cell Pin's formal name though it has no canvas label", () => {

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
@@ -14,18 +14,6 @@ const gateIds = [
   "and-gate",
   "nand-gate",
 ];
-
-async function screenPoint(page: Page, x: number, y: number) {
-  return page.getByTestId("schematic-canvas").evaluate(
-    (element, point) => {
-      const screen = new DOMPoint(point.x, point.y).matrixTransform(
-        (element as SVGSVGElement).getScreenCTM()!,
-      );
-      return { x: screen.x, y: screen.y };
-    },
-    { x, y },
-  );
-}
 
 // Every gate's left-anchored outline and pin joins are razavi-catalog's
 // ("left-anchored digital gates"); a turned and mirrored NAND keeping its
@@ -89,7 +77,13 @@ test("digital gates fit their hit boxes to the painted body, not the empty strip
   }
 
   // The old source viewBox used to capture clicks in this empty left strip.
-  const blank = await screenPoint(page, 160, 320);
+  const blank = await page
+    .getByTestId("schematic-canvas")
+    .evaluate((element) =>
+      new DOMPoint(160, 320).matrixTransform(
+        (element as SVGSVGElement).getScreenCTM()!,
+      ),
+    );
   await page.mouse.click(blank.x, blank.y);
   await expect(page.getByTestId("hit-U5")).not.toHaveClass(/selected/);
 });
