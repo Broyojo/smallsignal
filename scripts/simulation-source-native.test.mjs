@@ -11,6 +11,7 @@ import {
 } from "@icm/netlist";
 import {
   prepareSourceExecutionInput,
+  CAPABILITIES_ACCEPT_CELL_LIBRARIES,
   CapabilitiesSchema,
 } from "@icm/simulation-service";
 import { routeSimulationRequest } from "../worker/simulation.ts";
@@ -19,6 +20,7 @@ import {
   compileHostedSky130TransientProject,
   compileHostedSky130NoiseProject,
   hostedSky130ExtendedDeviceRequest,
+  hostedSky130HvtPfetRequest,
   profile,
 } from "./lib/preview-simulation-qualification.mjs";
 import {
@@ -26,6 +28,7 @@ import {
   validateHostedSky130TransientResult,
   validateHostedSky130NoiseResult,
   validateHostedSky130ExtendedDeviceResult,
+  validateHostedSky130HvtPfetResult,
 } from "./lib/preview-simulation-sky130-validation.mjs";
 import { standardCellGates } from "../packages/simulation-service/test-support/standard-cell-gates.ts";
 
@@ -40,6 +43,12 @@ if (
     "Native image acceptance must target its isolated loopback container",
   );
 const env = { SIMULATION_UPSTREAM_URL: endpoint };
+/** The bound inverter's two transistors: drawn 0.65/0.15 and 1/0.15 µm. */
+const CELL_SIZES = [
+  "@m.x2.x0.msky130_fd_pr__nfet_01v8[w]",
+  "@m.x2.x0.msky130_fd_pr__nfet_01v8[l]",
+  "@m.x2.x1.msky130_fd_pr__pfet_01v8_hvt[w]",
+];
 const post = (body) =>
   routeSimulationRequest(
     new Request("http://acceptance/api/simulate", {
@@ -280,8 +289,8 @@ describe.skipIf(!endpoint)("candidate ngspice46 source qualification", () => {
     );
   }
 
-  it("solves the extended devices, the HD cells' high-Vt PFET among them, at every corner", async () => {
-    for (const corner of profile.qualifiedScope.sections)
+  it("solves the extended devices and the HD cells' high-Vt PFET at every corner", async () => {
+    for (const corner of profile.qualifiedScope.sections) {
       validateHostedSky130ExtendedDeviceResult(
         await run(
           hostedSky130ExtendedDeviceRequest(corner),
@@ -290,11 +299,22 @@ describe.skipIf(!endpoint)("candidate ngspice46 source qualification", () => {
         "operator-host",
         corner,
       );
+      validateHostedSky130HvtPfetResult(
+        await run(hostedSky130HvtPfetRequest(corner), `hvt-pfet-${corner}`),
+        "operator-host",
+        corner,
+      );
+    }
   }, 160_000);
 
   it("simulates Library gates bound to SKY130 HD standard cells (#1596)", async () => {
     const caps = CapabilitiesSchema.parse(
-      await (await post({ operation: "capabilities" })).json(),
+      await (
+        await post({
+          operation: "capabilities",
+          accepts: [CAPABILITIES_ACCEPT_CELL_LIBRARIES],
+        })
+      ).json(),
     );
     const { project, folder, entry } = standardCellGates(profile.id);
     // The drawing names its nets; read them off the cells' calls, which
@@ -331,6 +351,9 @@ describe.skipIf(!endpoint)("candidate ngspice46 source qualification", () => {
       ".control",
       "set filetype=ascii",
       "set appendwrite",
+      // The cells give W and L in scaled units (w=650000u): only the
+      // continuous library's scale=1.0u makes them the drawn microns.
+      `save all ${CELL_SIZES.join(" ")}`,
       "op",
       "write out.raw",
       "alter VA dc=1.8",
@@ -360,6 +383,14 @@ describe.skipIf(!endpoint)("candidate ngspice46 source qualification", () => {
     const value = (analysis, name) =>
       analysis.probes.find((probe) => probe.name === `v(${name})`).value;
     const ops = result.data.analyses.filter((item) => item.analysis === "op");
+    // A device parameter comes back as the vector ngspice names v(@…).
+    const size = (name) =>
+      ops[0].probes.find((probe) => probe.name === `v(${name})`)?.value;
+    expect(CELL_SIZES.map(size)).toEqual([
+      expect.closeTo(0.65e-6, 12),
+      expect.closeTo(0.15e-6, 12),
+      expect.closeTo(1e-6, 12),
+    ]);
     // (A, B) = (0, 0), (1, 0), (1, 1), (0, 1): only both low drives Y high.
     expect(ops.map((op) => value(op, y) > 1.7)).toEqual([
       true,

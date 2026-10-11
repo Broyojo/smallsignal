@@ -201,31 +201,45 @@ gate; a locally available PDK is not evidence by itself.
 
 The Profile's `cellLibraries` adds the SKY130 HD standard cells (#1596):
 `sky130_fd_sc_hd.spice` from the volare build of the base image's PDK version
-(open_pdks `c6d73a35…`, Apache-2.0). The image fetches it at build time by
-exact URL and checks the archive's and the file's SHA-256; it lives at
-`/opt/sky130-cells/`, outside the measured model tree, so the models' digest
-and the environment fingerprint stay those of the primitive library. The
-harness measures the file against the Profile digest, is not ready on a
-mismatch, mounts it by `{id, sha256}` like the models, and lists both in
-`/health` `dependencies`. Capabilities advertise it as a second Profile
-dependency whose id, `sky130_fd_sc_hd`, names the library it supplies.
+(open_pdks `c6d73a35…`, Apache-2.0), vendored unmodified with its provenance
+in `containers/ngspice/cells/`. Each entry declares the library whose cells
+it defines (`cells`) and how a deck loads it (`directive: "include"`). The
+image build checks the file's SHA-256 and puts it at `/opt/sky130-cells/`,
+outside the measured model tree, so the models' digest and the environment
+fingerprint stay those of the primitive library. The harness measures the
+file against the Profile digest, is not ready on a mismatch, mounts it by
+`{id, sha256}` like the models, lists both in `/health` `dependencies`, and
+names each mounted cell library in the run's execution receipt
+(`cellLibraries`), which the Worker checks against the Profile digest.
 
-Preparation mounts and `.include`s it after the generated model `.lib` when
-the source calls a gate cell of that library (an author's own load of the
-same dependency is kept), and refuses a cell whose library the Profile lacks
-with `STANDARD_CELL_LIBRARY_UNAVAILABLE`. A Project definition without a body
-runs only as a reviewed library interface in its exact pin order or as a
-`.subckt` of the experiment's own files. Before #1596 any loaded dependency
-also counted as its body; a folder that relied on that, for a library name
-outside the reviewed set, now stops with `MODEL_IMPLEMENTATION_MISSING` and
-needs a Project model source for the name. The cells use the continuous
-library's `scale=1.0u`: `w=650000u l=150000u` is a 0.65 µm by 0.15 µm
-device. Only the gate cells a Library gate takes are reviewed; they are built
-from `nfet_01v8` and `pfet_01v8_hvt`. Flip-flops, latches and a few other
-cells call `special_nfet_01v8`/`special_pfet_01v8_hvt`, which the continuous
-library does not define. The candidate-image acceptance
-(`scripts/simulation-source-native.test.mjs`) checks NOR2 and NAND2 truth tables
-and an inverter's DC transfer from bound Library gates.
+Capabilities keep `dependencies` to the one model library. A caller that
+lists `"cell-libraries"` in its request's `accepts` also gets the Profile's
+`cellLibraries`, but only those the running simulator's `/health` reports;
+a host that predates them, or does not answer, offers none. Clients loaded
+before #1596 send no `accepts` and keep the shape they parse.
+
+Preparation mounts a cell library and loads it with its declared directive,
+after the generated model `.lib`, when the source calls a gate cell of the
+library it declares (an author's own load of the same dependency is kept).
+A cell whose library the Profile does not offer is refused with
+`STANDARD_CELL_LIBRARY_UNAVAILABLE`, naming what runs. A Project definition
+without a body runs only as a reviewed library interface in its exact pin
+order or as a `.subckt` of the experiment's own files; a standard cell
+declared out of its library's pin order, or a cell no Library gate takes,
+is refused with `STANDARD_CELL_UNSUPPORTED`. Before #1596 any loaded
+dependency also counted as a body; a folder that relied on that, for a
+library name outside the reviewed set, now stops with
+`MODEL_IMPLEMENTATION_MISSING` and needs a Project model source for the name.
+
+The cells use the continuous library's `scale=1.0u`: `w=650000u l=150000u`
+is a 0.65 µm by 0.15 µm device. Only the gate cells a Library gate takes are
+reviewed; they are built from `nfet_01v8` and `pfet_01v8_hvt`, the latter
+qualified by its own fixture at every corner. Flip-flops, latches and a few
+other cells call `special_nfet_01v8`/`special_pfet_01v8_hvt`, which the
+continuous library does not define. The candidate-image acceptance
+(`scripts/simulation-source-native.test.mjs`) checks NOR2 and NAND2 truth
+tables, an inverter's DC transfer and its transistors' effective W and L
+from bound Library gates.
 
 The Profile deliberately excludes a SKY130 diode because the selected
 continuous library does not resolve the candidate model. It also excludes the

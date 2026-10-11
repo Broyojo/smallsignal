@@ -276,6 +276,8 @@ function validCellLibraries(profile) {
       (library) =>
         typeof library?.id === "string" &&
         library.id.length > 0 &&
+        typeof library.cells === "string" &&
+        library.cells.length > 0 &&
         isSha256(library.contentSha256) &&
         library.library?.directive === "include" &&
         typeof library.library.runtimePath === "string" &&
@@ -398,11 +400,13 @@ async function observeEnvironment(ngspiceBin) {
         ? []
         : [
             {
+              kind: "models",
               id: profile.models.id,
               sha256: profile.models.contentSha256,
               runtimePath: profile.models.library.runtimePath,
             },
             ...cellLibraries.map((library) => ({
+              kind: "cells",
               id: library.id,
               sha256: library.contentSha256,
               runtimePath: library.library.runtimePath,
@@ -808,6 +812,9 @@ async function handleRun(body, streaming = false) {
         available.sha256 === dependency.sha256,
     ),
   );
+  const mountedCells = mounted
+    .filter((available) => available?.kind === "cells")
+    .map(({ id, sha256 }) => ({ id, sha256 }));
   if (mounted.some((available) => available === undefined))
     return {
       status: 400,
@@ -905,6 +912,8 @@ async function handleRun(body, streaming = false) {
           rawfileFormat: raw.rawfileFormat,
           limits: { ...LIMITS, timeoutMs: run.timeoutMs },
           environment: observed.environment,
+          // The cell libraries this run mounted, by measured identity (#1596).
+          ...(mountedCells.length > 0 ? { cellLibraries: mountedCells } : {}),
         };
         const response = await ngspiceResultResponse(body, payload, streaming);
         return {

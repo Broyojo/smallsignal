@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   extendedQualification,
+  hvtPfetQualification,
   profile,
   qualification,
 } from "./preview-simulation-qualification.mjs";
@@ -493,6 +494,64 @@ export function validateHostedSky130CornerResult(
   return { corner, nfetCurrentA, pfetSourceCurrentA };
 }
 
+export function validateHostedSky130HvtPfetResult(
+  payload,
+  expectedTarget,
+  corner,
+) {
+  const expected = hvtPfetQualification.expectedCorners?.[corner];
+  if (!expected)
+    throw new Error(`No high-Vt PFET evidence exists for ${corner}.`);
+  const result = object(payload, "simulation response");
+  if (object(result.execution, "execution metadata").target !== expectedTarget)
+    throw new Error(
+      `${expectedTarget} did not execute the high-Vt PFET at ${corner}.`,
+    );
+  if (object(result.outcome, "simulation outcome").status !== "completed")
+    throw new Error(
+      `${expectedTarget} did not complete the high-Vt PFET at ${corner}.`,
+    );
+  const metadata = object(result.metadata, "run metadata");
+  const modelLibrary = object(
+    object(metadata.configuration, "configuration metadata").modelLibrary,
+    "model selection",
+  );
+  if (
+    modelLibrary.directive !== profile.models.library.directive ||
+    modelLibrary.section !== corner
+  )
+    throw new Error(
+      `${expectedTarget} loaded ${String(modelLibrary.section)}, expected corner ${corner}.`,
+    );
+  const environment = object(metadata.environment, "environment metadata");
+  validatePinnedEnvironment(environment, expectedTarget);
+  if (
+    environment.fingerprint !==
+    hvtPfetQualification.evidence.environmentFingerprint
+  )
+    throw new Error(
+      `${expectedTarget} high-Vt PFET evidence came from a different environment.`,
+    );
+  const data = object(result.data, "parsed result data");
+  const operatingPoint = Array.isArray(data.analyses)
+    ? data.analyses.find((analysis) => analysis?.analysis === "op")
+    : null;
+  const probe = Array.isArray(operatingPoint?.probes)
+    ? operatingPoint.probes.find((candidate) => candidate?.name === "i(vsph)")
+    : undefined;
+  if (typeof probe?.value !== "number")
+    throw new Error(`${expectedTarget} returned no i(vsph) for ${corner}.`);
+  const hvtPfetSourceCurrentA = probe.value;
+  const tolerance = hvtPfetQualification.tolerances.mosCurrentA;
+  if (
+    Math.abs(hvtPfetSourceCurrentA - expected.hvtPfetSourceCurrentA) > tolerance
+  )
+    throw new Error(
+      `${expectedTarget} solved hvtPfetSourceCurrentA at ${corner} as ${hvtPfetSourceCurrentA}, expected ${expected.hvtPfetSourceCurrentA} ± ${tolerance}.`,
+    );
+  return { corner, hvtPfetSourceCurrentA };
+}
+
 export function validateHostedSky130ExtendedDeviceResult(
   payload,
   expectedTarget,
@@ -562,7 +621,6 @@ export function validateHostedSky130ExtendedDeviceResult(
   const actual = {
     lvtNfetCurrentA: scalar("i(vdnl)"),
     lvtPfetSourceCurrentA: scalar("i(vspl)"),
-    hvtPfetSourceCurrentA: scalar("i(vsph)"),
     resistorOutputV: scalar("v(rout)"),
     resistorSupplyCurrentA: scalar("i(vrin)"),
     pnpEmitterCurrentA: scalar("i(vpe)"),
@@ -574,7 +632,6 @@ export function validateHostedSky130ExtendedDeviceResult(
   const checks = [
     ["lvtNfetCurrentA", tolerances.mosCurrentA],
     ["lvtPfetSourceCurrentA", tolerances.mosCurrentA],
-    ["hvtPfetSourceCurrentA", tolerances.mosCurrentA],
     ["resistorOutputV", tolerances.resistorVoltageV],
     ["resistorSupplyCurrentA", tolerances.resistorCurrentA],
     ["pnpEmitterCurrentA", tolerances.pnpCurrentA],

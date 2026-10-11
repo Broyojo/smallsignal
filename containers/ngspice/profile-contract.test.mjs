@@ -33,10 +33,11 @@ describe("the hosted SKY130 Profile", () => {
     });
   });
 
-  it("pins the standard-cell library the image fetches, outside the model tree (#1596)", () => {
+  it("pins the vendored standard-cell library, outside the model tree (#1596)", async () => {
     expect(profile.cellLibraries).toEqual([
       {
         id: "sky130_fd_sc_hd",
+        cells: "sky130_fd_sc_hd",
         contentSha256:
           "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
         library: {
@@ -46,12 +47,18 @@ describe("the hosted SKY130 Profile", () => {
       },
     ]);
     const [cells] = profile.cellLibraries;
-    // The bytes the build checks are the bytes the harness expects.
+    // The vendored bytes, the bytes the build checks and the bytes the
+    // harness expects are one digest.
+    expect(
+      createHash("sha256")
+        .update(await readFile(join(directory, "cells/sky130_fd_sc_hd.spice")))
+        .digest("hex"),
+    ).toBe(cells.contentSha256);
     expect(dockerfile).toContain(
       `ARG SKY130_HD_SPICE_SHA256=${cells.contentSha256}`,
     );
     expect(dockerfile).toContain(
-      `/out/sky130_fd_sc_hd.spice ${cells.library.runtimePath}`,
+      `COPY \${HARNESS_DIR}/cells/sky130_fd_sc_hd.spice ${cells.library.runtimePath}`,
     );
     // The model tree's digest covers SKY130_MODEL_ROOT; the cells are not in it.
     expect(dockerfile).toContain("SKY130_MODEL_ROOT=/opt/sky130 ");

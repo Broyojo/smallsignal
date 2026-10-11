@@ -1,0 +1,17 @@
+sky130_fd_sc_hd.spice — SkyWater SKY130 high-density standard cells (SPICE)
+
+Copyright 2020 The SkyWater PDK Authors
+Licensed under the Apache License, Version 2.0 (SPDX: Apache-2.0); the
+notice is repeated in the file's own header.
+https://www.apache.org/licenses/LICENSE-2.0
+
+Unmodified. Extracted from the volare build of the PDK version the simulator
+base image's models come from (open_pdks c6d73a35f524070e85faff4a6a9eef49553ebc2b):
+
+  archive  https://github.com/chipfoundry/volare/releases/download/sky130-c6d73a35f524070e85faff4a6a9eef49553ebc2b/sky130_fd_sc_hd.tar.zst
+           SHA-256 d99597664379c9b73176858b19c47cb5dc217d478124ae0d64c9bf1145cb3e4a
+  member   sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice
+  file     SHA-256 6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3
+
+The hosted Profile (../hosted-sky130-profile.json, cellLibraries) pins the
+file's digest; the image build and the harness both check it.

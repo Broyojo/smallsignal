@@ -21,6 +21,7 @@
   "cellLibraries": [
     {
       "id": "sky130_fd_sc_hd",
+      "cells": "sky130_fd_sc_hd",
       "contentSha256": "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
       "library": {
         "directive": "include",

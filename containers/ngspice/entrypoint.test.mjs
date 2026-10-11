@@ -647,6 +647,7 @@ describeHarness("a Profile's standard-cell library (#1596)", () => {
         cellLibraries: [
           {
             id: "sky130_fd_sc_hd",
+            cells: "sky130_fd_sc_hd",
             contentSha256:
               cellSha256 ?? sha256(await readFile(cellsPath, "utf8")),
             library: { directive: "include", runtimePath: cellsPath },
@@ -687,6 +688,10 @@ describeHarness("a Profile's standard-cell library (#1596)", () => {
     const reply = await json(await run(port, request));
     expect(reply.status, JSON.stringify(reply.payload)).toBe(200);
     expect(reply.payload.log).toContain(".subckt sky130_fd_sc_hd__inv_1");
+    // The run names the cell library it mounted, by measured identity.
+    expect(reply.payload.cellLibraries).toEqual([
+      { id: cells.id, sha256: cells.sha256 },
+    ]);
     // The id alone is not the library: its bytes are.
     const changed = await json(
       await run(port, {

@@ -210,7 +210,9 @@ refused with their IDs; it never means the first of them.
   it. Hosted ngspice runs simulate a SKY130 HD gate cell: the hosted Profile
   mounts `sky130_fd_sc_hd.spice` and Prepare loads it beside the models.
   An ngspice Profile without the cell's library, as for IHP and TSMC cells,
-  refuses it (`STANDARD_CELL_LIBRARY_UNAVAILABLE`). A name of another function is refused with
+  refuses it (`STANDARD_CELL_LIBRARY_UNAVAILABLE`); a definition of a cell in
+  another pin order, or of a cell no Library gate takes, is refused with
+  `STANDARD_CELL_UNSUPPORTED`. A name of another function is refused with
   the cells that fit; an empty model returns the gate to its ideal body with
   its default parameters. A cell imported from a SPICE file stays an external
   block with its own rail pins.

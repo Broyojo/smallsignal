@@ -5,6 +5,7 @@ import {
   type SimulationEnv,
 } from "./simulation";
 import ngspiceProfile from "../containers/ngspice/hosted-sky130-profile.json";
+import { CAPABILITIES_ACCEPT_CELL_LIBRARIES } from "@icm/simulation-service";
 import {
   nativeEnvironment,
   nativeHealth,
@@ -169,35 +170,74 @@ describe("the hosted SKY130 standard cells (#1596)", () => {
     dependencies,
   });
 
-  it("advertises the cell library beside the models and mounts it by identity", async () => {
-    const fetcher = vi.fn(async (_url: URL, _init: RequestInit) =>
-      Response.json({ error: "simulator-busy" }, { status: 503 }),
+  const hd = {
+    id: "sky130_fd_sc_hd",
+    sha256: "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
+  };
+  const models = {
+    id: "sky130A-continuous",
+    sha256: ngspiceProfile.models.contentSha256,
+  };
+  /** A simulator host whose /health lists these measured libraries. */
+  const host = (dependencies?: unknown[]) => {
+    const fetcher = vi.fn(async (url: URL, _init: RequestInit) =>
+      url.pathname === "/health"
+        ? Response.json({
+            status: "ready",
+            limits: { outputBytes: 1024 },
+            ...(dependencies ? { dependencies } : {}),
+          })
+        : Response.json({ error: "simulator-busy" }, { status: 503 }),
     );
     vi.stubGlobal("fetch", fetcher);
-    const caps = (await (await routeSimulationRequest(
-      post({
-        operation: "capabilities",
-        environment: { profileId: ngspiceProfile.id },
+    return fetcher;
+  };
+  const ngspiceCaps = async (accepts?: string[]) =>
+    (
+      (await (await routeSimulationRequest(
+        post({
+          operation: "capabilities",
+          ...(accepts ? { accepts } : {}),
+          environment: { profileId: ngspiceProfile.id },
+        }),
+        env,
+      ))!.json()) as any
+    ).profiles[0];
+
+  it("keeps the shape an earlier client parses: one model library and no cells", async () => {
+    host([models, hd]);
+    const profile = await ngspiceCaps();
+    // An editor tab loaded before #1596 parses capabilities strictly, and
+    // its Prepare needs exactly one Profile library for every SKY130 run.
+    expect(profile).not.toHaveProperty("cellLibraries");
+    expect(profile.dependencies).toEqual([models]);
+    expect(profile.devices).toContain("sky130_fd_pr__pfet_01v8_hvt");
+  });
+
+  it("offers the cell library only once the running simulator measured it", async () => {
+    host([models, hd]);
+    expect(
+      (await ngspiceCaps([CAPABILITIES_ACCEPT_CELL_LIBRARIES])).cellLibraries,
+    ).toEqual([{ ...hd, cells: "sky130_fd_sc_hd", directive: "include" }]);
+    // A host that predates the cells, or one that does not answer.
+    host([models]);
+    expect(
+      (await ngspiceCaps([CAPABILITIES_ACCEPT_CELL_LIBRARIES])).cellLibraries,
+    ).toEqual([]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
       }),
-      env,
-    ))!.json()) as any;
-    expect(caps.profiles[0].dependencies).toEqual([
-      {
-        id: "sky130A-continuous",
-        sha256: ngspiceProfile.models.contentSha256,
-      },
-      {
-        id: "sky130_fd_sc_hd",
-        sha256:
-          "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
-      },
-    ]);
-    expect(caps.profiles[0].devices).toContain("sky130_fd_pr__pfet_01v8_hvt");
-    fetcher.mockClear();
-    const cells = {
-      ...caps.profiles[0].dependencies[1],
-      mountPath: "cells.spice",
-    };
+    );
+    expect(
+      (await ngspiceCaps([CAPABILITIES_ACCEPT_CELL_LIBRARIES])).cellLibraries,
+    ).toEqual([]);
+  });
+
+  it("mounts a cell library by identity", async () => {
+    const fetcher = host([models, hd]);
+    const cells = { ...hd, mountPath: "cells.spice" };
     await routeSimulationRequest(post(raw([cells])), env);
     const run = fetcher.mock.calls.find(([url]) => url.pathname === "/run");
     expect(JSON.parse(String(run?.[1].body)).dependencies).toEqual([cells]);

@@ -30,6 +30,7 @@ import {
   type ModelLibrarySelection,
 } from "@icm/spice-run";
 import {
+  CAPABILITIES_ACCEPT_CELL_LIBRARIES,
   readExecutionReceipt,
   encodeExecutionReceipt,
   EXECUTION_RECEIPT_HEADER,
@@ -91,23 +92,36 @@ function advertisedMaxOutputBytes(env: SimulationEnv): number {
  */
 const CLOUDFLARE_CONTAINER_INSTANCE_KEY = `profile:${hostedSky130Profile.id}`;
 
+/** The Profile's sectioned primitive models, as a run mounts them. */
+const MODEL_DEPENDENCY = {
+  id: hostedSky130Profile.models.id,
+  sha256: hostedSky130Profile.models.contentSha256,
+};
 /**
- * What a run may mount by identity: the sectioned primitive models, then
- * each standard-cell library (#1596), whose id names the library it supplies.
+ * The Profile's standard-cell libraries (#1596): each a dependency of its own
+ * identity, declaring the library whose cells it defines and its directive.
  */
+const CELL_LIBRARIES = hostedSky130Profile.cellLibraries.map((library) => ({
+  id: library.id,
+  sha256: library.contentSha256,
+  cells: library.cells,
+  directive: library.library.directive as "include",
+}));
+/** Whatever a run may mount, by identity. */
 const PROFILE_DEPENDENCIES = [
-  {
-    id: hostedSky130Profile.models.id,
-    sha256: hostedSky130Profile.models.contentSha256,
-  },
-  ...hostedSky130Profile.cellLibraries.map((library) => ({
-    id: library.id,
-    sha256: library.contentSha256,
-  })),
+  MODEL_DEPENDENCY,
+  ...CELL_LIBRARIES.map(({ id, sha256 }) => ({ id, sha256 })),
 ];
+const isCellLibrary = (dependency: { id: unknown; sha256: unknown }) =>
+  CELL_LIBRARIES.some(
+    (library) =>
+      library.id === dependency.id && library.sha256 === dependency.sha256,
+  );
 
 export interface SimulationRequestBody {
   operation?: unknown;
+  /** What a capabilities caller understands beyond the original shape. */
+  accepts?: unknown;
   mode?: unknown;
   environment?: {
     profileId?: unknown;
@@ -325,6 +339,9 @@ export async function routeNgspiceSimulationRequest(
   if (body.operation === "capabilities") {
     // The running collector is authoritative, including during a rolling deploy.
     let outputBytes = advertisedMaxOutputBytes(env);
+    // Only the cell libraries the running simulator measured are offered: a
+    // host that predates them, or does not answer, offers none (#1596).
+    let mounted: unknown[] = [];
     if (selected) {
       try {
         const health = await selected.runner.fetch("http://container/health", {
@@ -332,16 +349,35 @@ export async function routeNgspiceSimulationRequest(
         });
         const facts = (await health.json()) as {
           limits?: { outputBytes?: number };
+          dependencies?: unknown;
         };
         if (
           Number.isSafeInteger(facts.limits?.outputBytes) &&
           facts.limits!.outputBytes! > 0
         )
           outputBytes = facts.limits!.outputBytes!;
+        if (Array.isArray(facts.dependencies)) mounted = facts.dependencies;
       } catch {
         /* Keep the configured declaration when health is unavailable. */
       }
     }
+    // A client that predates cell libraries parses a strict shape and asks
+    // for none; it keeps that shape, and its single model dependency.
+    const cellLibraries =
+      Array.isArray(body.accepts) &&
+      body.accepts.includes(CAPABILITIES_ACCEPT_CELL_LIBRARIES)
+        ? {
+            cellLibraries: CELL_LIBRARIES.filter((library) =>
+              mounted.some(
+                (item) =>
+                  !!item &&
+                  typeof item === "object" &&
+                  (item as { id?: unknown }).id === library.id &&
+                  (item as { sha256?: unknown }).sha256 === library.sha256,
+              ),
+            ),
+          }
+        : {};
     return Response.json({
       configured: !!selected,
       rawfileCollection: "declared-single-ascii",
@@ -355,7 +391,8 @@ export async function routeNgspiceSimulationRequest(
           label: hostedSky130Profile.displayName ?? hostedSky130Profile.id,
           corners: hostedSky130Profile.qualifiedScope.sections,
           devices: hostedSky130Profile.qualifiedScope.devices,
-          dependencies: PROFILE_DEPENDENCIES,
+          dependencies: [MODEL_DEPENDENCY],
+          ...cellLibraries,
         },
       ],
       modelLibrary: {
@@ -651,6 +688,13 @@ export async function routeNgspiceSimulationRequest(
             receipt.metadata.input[key as keyof typeof expected] !== value,
         ) ||
         receipt.executedFilesSha256 !== (await sha256(JSON.stringify(files))) ||
+        // The cell libraries this run mounted, as the executor measured them.
+        JSON.stringify(receipt.cellLibraries ?? []) !==
+          JSON.stringify(
+            dependencies
+              .filter(isCellLibrary)
+              .map(({ id, sha256 }) => ({ id, sha256 })),
+          ) ||
         JSON.stringify(receipt.metadata.configuration) !==
           JSON.stringify(simulationConfigurationMetadata(modelLibrary))
       )

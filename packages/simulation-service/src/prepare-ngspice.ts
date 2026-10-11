@@ -4,7 +4,6 @@ import type {
   SimulationRunVariant,
 } from "@icm/model";
 import {
-  isStandardCellLibraryId,
   reviewedExternalBindingForMaster,
   standardCellBindingForMaster,
 } from "@icm/devices";
@@ -116,8 +115,15 @@ export async function prepareNgspiceExecutionInput(
   const available = new Map(
     (profile.dependencies ?? []).map((item) => [item.id, item.sha256]),
   );
+  // A Profile's standard-cell libraries (#1596) are mountable dependencies
+  // too, each declaring the library it defines and how a deck loads it.
+  const cellLibraries = profile.cellLibraries ?? [];
   const unavailable = dependencies.filter(
-    (item) => available.get(item.id) !== item.sha256,
+    (item) =>
+      available.get(item.id) !== item.sha256 &&
+      !cellLibraries.some(
+        (library) => library.id === item.id && library.sha256 === item.sha256,
+      ),
   );
   if (unavailable.length)
     return compilationProblem(
@@ -161,17 +167,13 @@ export async function prepareNgspiceExecutionInput(
   const insertProfileLoad = (
     comment: string,
     mountPath: string,
-    section?: string,
+    load: { directive: "include" } | { directive: "lib"; section: string },
   ) => {
     // Entry includes resolve relative to the entry's directory in ngspice 46.
     const path = "../".repeat(compiled.entry.split("/").length - 1) + mountPath;
     let directive: string;
     try {
-      directive = formatModelLibrarySelection(
-        section === undefined
-          ? { directive: "include", path }
-          : { directive: "lib", path, section },
-      );
+      directive = formatModelLibrarySelection({ ...load, path });
     } catch {
       return false;
     }
@@ -259,14 +261,15 @@ export async function prepareNgspiceExecutionInput(
     return cell ? [{ path, statement, libraryId: cell.libraryId }] : [];
   });
   const unprovidedCellCalls = cellCalls.filter(
-    (call) => !available.has(call.libraryId),
+    (call) =>
+      !cellLibraries.some((library) => library.cells === call.libraryId),
   );
   if (unprovidedCellCalls.length)
     return compilationProblem(
       unprovidedCellCalls.map(({ path, statement, libraryId }) => ({
         code: "STANDARD_CELL_LIBRARY_UNAVAILABLE",
         severity: "error" as const,
-        message: `The selected Profile does not provide the standard-cell library ${libraryId} that ${statement.master} belongs to; select a Profile that does.`,
+        message: `${statement.master} is a ${libraryId} cell, and ${libraryId} is not offered by the selected Profile's simulator now. Hosted ngspice runs sky130_fd_sc_hd combinational gate cells bound to a Library gate once its simulator mounts that library; if this is one, try again shortly, otherwise bind the gate to a sky130_fd_sc_hd cell or a Project Cell, or clear its model.`,
         path,
         sourceRef: statement.sourceRef,
       })),
@@ -313,17 +316,9 @@ export async function prepareNgspiceExecutionInput(
   const declaredProfileLibraries = dependencies.filter(
     (d) => available.get(d.id) === d.sha256,
   );
-  // Primitive model libraries take a corner section; a standard-cell
-  // library is one plain file of cells built from those primitives.
-  const modelLibraries = (profile.dependencies ?? []).filter(
-    (d) => !isStandardCellLibraryId(d.id),
-  );
-  const declaredModelLibraries = declaredProfileLibraries.filter(
-    (d) => !isStandardCellLibraryId(d.id),
-  );
   const allLibrariesLoaded =
-    declaredModelLibraries.length > 0 &&
-    declaredModelLibraries.every((d) =>
+    declaredProfileLibraries.length > 0 &&
+    declaredProfileLibraries.every((d) =>
       initialGraph.includes.some((load) => load.target === d.mountPath),
     );
   for (const dependency of declaredProfileLibraries) {
@@ -374,11 +369,11 @@ export async function prepareNgspiceExecutionInput(
     needsCanvasModels ||
     requestedCorner !== undefined ||
     ((reviewedCalls.length > 0 || cellCalls.length > 0) &&
-      modelLibraries.length === 1)
+      profile.dependencies?.length === 1)
   ) {
     // Profile-owned models are mounted by identity/digest. Neither the client
     // nor the author needs to know the host's absolute model-library path.
-    const libraries = modelLibraries;
+    const libraries = profile.dependencies ?? [];
     if (libraries.length !== 1)
       return problem(
         "SIMULATION_MODEL_LIBRARY_UNAVAILABLE",
@@ -524,11 +519,10 @@ export async function prepareNgspiceExecutionInput(
           "prepare",
         );
       if (
-        !insertProfileLoad(
-          "Profile models (generated)",
-          dependency.mountPath,
-          selectedCorner,
-        )
+        !insertProfileLoad("Profile models (generated)", dependency.mountPath, {
+          directive: "lib",
+          section: selectedCorner,
+        })
       )
         return problem(
           "SIMULATION_MODEL_PATH_INVALID",
@@ -544,12 +538,13 @@ export async function prepareNgspiceExecutionInput(
     projectedGraph().includes.map((load) => load.target),
   );
   for (const libraryId of new Set(cellCalls.map((call) => call.libraryId))) {
-    let dependency = dependencies.find((item) => item.id === libraryId);
+    const library = cellLibraries.find((item) => item.cells === libraryId)!;
+    let dependency = dependencies.find((item) => item.id === library.id);
     if (dependency && loadedTargets.has(dependency.mountPath)) continue;
     if (!dependency) {
       dependency = {
-        id: libraryId,
-        sha256: available.get(libraryId)!,
+        id: library.id,
+        sha256: library.sha256,
         mountPath: freeMountPath(libraryId, ".spice"),
       };
       dependencies.push(dependency);
@@ -558,6 +553,7 @@ export async function prepareNgspiceExecutionInput(
       !insertProfileLoad(
         "Profile standard cells (generated)",
         dependency.mountPath,
+        { directive: library.directive },
       )
     )
       return problem(

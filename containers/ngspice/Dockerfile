@@ -18,30 +18,6 @@
 # the image reports the resulting binary and model-tree hashes at runtime.
 ARG BASE_IMAGE=ghcr.io/arcadia-1/circuit-bench-sky130-ngspice@sha256:2da03dc7f1ead7ddc33f2f930a0487ae8618e51518009344584a98fca41a621d
 
-# The SKY130 HD standard cells (#1596), which the base does not carry: one
-# SPICE file, `sky130_fd_sc_hd.spice`, taken from the volare build of the
-# same PDK version as the base's models (its sky130 label names open_pdks
-# c6d73a35…). Fetched by exact URL and checked twice, the archive and then
-# the file, so a moved or rebuilt release fails the build rather than
-# changing the cells. Apache-2.0, with its notice in the file's own header.
-# A stage of its own: the downloader and the 120 MB archive stay out of the
-# image, which gains the one file.
-FROM ${BASE_IMAGE} AS standard-cells
-ARG SKY130_HD_ARCHIVE_URL=https://github.com/chipfoundry/volare/releases/download/sky130-c6d73a35f524070e85faff4a6a9eef49553ebc2b/sky130_fd_sc_hd.tar.zst
-ARG SKY130_HD_ARCHIVE_SHA256=d99597664379c9b73176858b19c47cb5dc217d478124ae0d64c9bf1145cb3e4a
-ARG SKY130_HD_SPICE_SHA256=6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3
-ARG SKY130_HD_SPICE_MEMBER=sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice
-RUN set -eu; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl zstd; \
-    curl --fail --silent --show-error --location --retry 3 \
-        --output /tmp/sky130_fd_sc_hd.tar.zst "${SKY130_HD_ARCHIVE_URL}"; \
-    echo "${SKY130_HD_ARCHIVE_SHA256}  /tmp/sky130_fd_sc_hd.tar.zst" | sha256sum -c -; \
-    mkdir -p /tmp/cells /out; \
-    zstd -dc /tmp/sky130_fd_sc_hd.tar.zst | tar -x --no-same-owner -C /tmp/cells "${SKY130_HD_SPICE_MEMBER}"; \
-    mv "/tmp/cells/${SKY130_HD_SPICE_MEMBER}" /out/sky130_fd_sc_hd.spice; \
-    echo "${SKY130_HD_SPICE_SHA256}  /out/sky130_fd_sc_hd.spice" | sha256sum -c -
-
 FROM ${BASE_IMAGE}
 
 # The harness is a Node program; the base image has none. Debian bookworm's
@@ -98,9 +74,15 @@ COPY ${HARNESS_DIR}/runtime/entrypoint.mjs ${HARNESS_DIR}/gateway.mjs /opt/harne
 COPY containers/simulation/run-local-files.mjs /opt/simulation/run-local-files.mjs
 COPY ${HARNESS_DIR}/hosted-sky130-profile.json /opt/harness/hosted-sky130-profile.json
 COPY ${HARNESS_DIR}/hosted.spiceinit /opt/harness/hosted.spiceinit
-# Beside the model tree, not in it: the tree's digest stays the models' own,
-# and the Profile pins this file's digest separately (cellLibraries).
-COPY --from=standard-cells /out/sky130_fd_sc_hd.spice /opt/sky130-cells/sky130_fd_sc_hd.spice
+# The SKY130 HD standard cells (#1596), which the base does not carry:
+# sky130_fd_sc_hd.spice, vendored unmodified with its provenance and
+# Apache-2.0 notice (containers/ngspice/cells/NOTICE), from the volare build
+# of the same PDK version as the base's models. Beside the model tree, not in
+# it: the tree's digest stays the models' own, and the Profile pins this
+# file's digest separately (cellLibraries). The build refuses other bytes.
+ARG SKY130_HD_SPICE_SHA256=6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3
+COPY ${HARNESS_DIR}/cells/sky130_fd_sc_hd.spice /opt/sky130-cells/sky130_fd_sc_hd.spice
+RUN echo "${SKY130_HD_SPICE_SHA256}  /opt/sky130-cells/sky130_fd_sc_hd.spice" | sha256sum -c -
 
 # Nothing a deck can reach is writable except its own run directory.
 #

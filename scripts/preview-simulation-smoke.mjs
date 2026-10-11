@@ -12,6 +12,7 @@ import {
   runHostedSky130Acceptance,
   runHostedSky130CornerAcceptance,
   runHostedSky130ExtendedDeviceAcceptance,
+  runHostedSky130HvtPfetAcceptance,
   runHostedSky130NoiseAcceptance,
   runHostedSky130TransientAcceptance,
   runPreviewDcSmoke,
@@ -28,6 +29,7 @@ export {
   DIVIDER_REQUEST,
   hostedSky130CornerRequest,
   hostedSky130ExtendedDeviceRequest,
+  hostedSky130HvtPfetRequest,
   RC_TRAN_REQUEST,
   RESISTOR_NOISE_REQUEST,
 } from "./lib/preview-simulation-qualification.mjs";
@@ -40,6 +42,7 @@ export {
 export {
   validateHostedSky130CornerResult,
   validateHostedSky130ExtendedDeviceResult,
+  validateHostedSky130HvtPfetResult,
   validateHostedSky130NoiseResult,
   validateHostedSky130Result,
   validateHostedSky130TransientResult,
@@ -48,6 +51,7 @@ export {
   runHostedSky130Acceptance,
   runHostedSky130CornerAcceptance,
   runHostedSky130ExtendedDeviceAcceptance,
+  runHostedSky130HvtPfetAcceptance,
   runHostedSky130NoiseAcceptance,
   runHostedSky130TransientAcceptance,
   runPreviewDcSmoke,
@@ -167,6 +171,15 @@ async function main() {
       });
       console.log(
         `${target}: SKY130 ${extended.corner.toUpperCase()} extended devices passed`,
+      );
+      const hvt = await runHostedSky130HvtPfetAcceptance({
+        baseUrl,
+        target,
+        corner,
+        fetchImpl,
+      });
+      console.log(
+        `${target}: SKY130 ${hvt.corner.toUpperCase()} high-Vt PFET passed`,
       );
     }
   }

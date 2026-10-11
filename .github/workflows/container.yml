@@ -16,6 +16,15 @@ on:
       - ".github/workflows/container.yml"
       - ".dockerignore"
       - "scripts/simulation-source-native.test.mjs"
+      # The candidate-image standard-cell gate test (#1596) and what it runs.
+      - "packages/simulation-service/test-support/standard-cell-gates.ts"
+      - "packages/simulation-service/src/prepare-ngspice.ts"
+      - "packages/simulation-service/src/contract.ts"
+      - "packages/devices/**"
+      - "packages/netlist/**"
+      - "worker/simulation-ngspice.ts"
+      - "fixtures/simulation-acceptance/**"
+      - "scripts/lib/preview-simulation-*.mjs"
   workflow_dispatch:
 
 permissions:

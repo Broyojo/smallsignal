@@ -738,13 +738,21 @@ describe("ngspice authored input identity", () => {
   );
 });
 
-/** The gates, under a Profile that mounts the HD cells beside its models. */
+/**
+ * The gates, under a Profile that declares an HD cell library beside its
+ * models. Its id names neither the library nor a file kind: what it supplies
+ * and how it loads are the Profile's declarations.
+ */
 function standardCellFixture() {
   const { project, folder } = standardCellGates("ngspice");
   const caps = nativeSweepFixture().caps;
-  caps.profiles[0]!.dependencies = [
-    { id: "models", sha256: "a".repeat(64) },
-    { id: "sky130_fd_sc_hd", sha256: "c".repeat(64) },
+  caps.profiles[0]!.cellLibraries = [
+    {
+      id: "hd-cells",
+      sha256: "c".repeat(64),
+      cells: "sky130_fd_sc_hd",
+      directive: "include",
+    },
   ];
   return { project, folder, caps };
 }
@@ -759,7 +767,7 @@ describe("a Library gate bound to a PDK standard cell (#1596)", () => {
     expect(prepared.input.dependencies).toEqual([
       { id: "models", sha256: "a".repeat(64), mountPath: "icm-models.lib" },
       {
-        id: "sky130_fd_sc_hd",
+        id: "hd-cells",
         sha256: "c".repeat(64),
         mountPath: "sky130_fd_sc_hd.spice",
       },
@@ -792,7 +800,7 @@ describe("a Library gate bound to a PDK standard cell (#1596)", () => {
     folder.input.dependencies = [
       { id: "models", sha256: "a".repeat(64), mountPath: "pdk/models.lib" },
       {
-        id: "sky130_fd_sc_hd",
+        id: "hd-cells",
         sha256: "c".repeat(64),
         mountPath: "pdk/cells.spice",
       },
@@ -816,7 +824,7 @@ describe("a Library gate bound to a PDK standard cell (#1596)", () => {
 
   it("refuses a cell whose library the selected Profile does not provide", async () => {
     const { project, folder, caps } = standardCellFixture();
-    caps.profiles[0]!.dependencies = [{ id: "models", sha256: "a".repeat(64) }];
+    delete caps.profiles[0]!.cellLibraries;
     const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
     expect(prepared).toMatchObject({
       ok: false,
@@ -825,8 +833,11 @@ describe("a Library gate bound to a PDK standard cell (#1596)", () => {
         diagnostics: ["nor2_1", "inv_1", "nand2_1"].map((cell) =>
           expect.objectContaining({
             code: "STANDARD_CELL_LIBRARY_UNAVAILABLE",
-            message: expect.stringContaining(
-              `library sky130_fd_sc_hd that sky130_fd_sc_hd__${cell}`,
+            message: expect.stringMatching(
+              new RegExp(
+                `sky130_fd_sc_hd__${cell} .*sky130_fd_sc_hd.*not offered.*Library gate`,
+                "u",
+              ),
             ),
             path: "circuit.spice",
           }),
@@ -848,8 +859,53 @@ describe("a Library gate bound to a PDK standard cell (#1596)", () => {
       error: {
         diagnostics: expect.arrayContaining([
           expect.objectContaining({
-            code: "MODEL_IMPLEMENTATION_MISSING",
-            message: expect.stringContaining("sky130_fd_sc_hd__nor2_1"),
+            code: "STANDARD_CELL_UNSUPPORTED",
+            message:
+              "sky130_fd_sc_hd__nor2_1 is declared with pins A B Y VGND VNB VPB VPWR, not in the library's order A B VGND VNB VPB VPWR Y, so the library's cell cannot stand in for it. Bind a Library gate to the cell with set-model or Properties; the gate calls it in the library's order.",
+          }),
+        ]),
+      },
+    });
+  });
+
+  it("says which standard cells run when a definition names an unsupported one", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    const definition = {
+      id: "flop",
+      name: "sky130_fd_sc_hd__dfxtp_1",
+      interfaceStatus: "declared" as const,
+      formalParameters: [],
+      terminals: ["CLK", "D", "VGND", "VNB", "VPB", "VPWR", "Q"].map(
+        (name) => ({ id: name, name, direction: "passive" as const }),
+      ),
+    };
+    project.externalSubcircuitDefinitions.push(definition);
+    project.documents[0]!.instances.push(
+      createExternalSubcircuitInstance("X4", definition, {
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        mirror: "none",
+      }),
+    );
+    project.documents[0]!.noConnects.push(
+      ...definition.terminals.map((terminal) => ({
+        id: `nc-${terminal.name}`,
+        endpoint: {
+          kind: "terminal" as const,
+          instanceId: "X4",
+          pinName: terminal.name,
+        },
+      })),
+    );
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({
+            code: "STANDARD_CELL_UNSUPPORTED",
+            message:
+              "sky130_fd_sc_hd__dfxtp_1 is a sky130_fd_sc_hd cell that simulation does not run. Hosted ngspice runs sky130_fd_sc_hd combinational gate cells (inverters, buffers, NAND, NOR, AND, OR, XOR and XNOR) bound to a Library gate; give this cell a Project model source to run it.",
           }),
         ]),
       },
@@ -879,7 +935,7 @@ describe("a Library gate bound to a PDK standard cell (#1596)", () => {
     });
     folder.input.dependencies = [
       {
-        id: "sky130_fd_sc_hd",
+        id: "hd-cells",
         sha256: "c".repeat(64),
         mountPath: "cells.spice",
       },

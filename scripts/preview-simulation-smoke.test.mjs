@@ -8,9 +8,11 @@ import {
   compileHostedSky130TransientProject,
   hostedSky130CornerRequest,
   hostedSky130ExtendedDeviceRequest,
+  hostedSky130HvtPfetRequest,
   runHostedSky130Acceptance,
   runHostedSky130CornerAcceptance,
   runHostedSky130ExtendedDeviceAcceptance,
+  runHostedSky130HvtPfetAcceptance,
   runHostedSky130NoiseAcceptance,
   runHostedSky130TransientAcceptance,
   runPreviewSimulationSmoke,
@@ -21,6 +23,7 @@ import {
   validateHostedSky130Result,
   validateHostedSky130CornerResult,
   validateHostedSky130ExtendedDeviceResult,
+  validateHostedSky130HvtPfetResult,
   validatePreviewSimulationResult,
 } from "./preview-simulation-smoke.mjs";
 
@@ -206,12 +209,30 @@ function cornerResult(target, corner = "ff") {
   };
 }
 
+function hvtPfetResult(target, corner = "ff", value = -0.0001390822188942903) {
+  const base = result(target);
+  return {
+    ...base,
+    metadata: {
+      ...base.metadata,
+      input: { inputRevision: `preview-sky130-hvt-pfet-${corner}` },
+      configuration: { modelLibrary: { directive: "lib", section: corner } },
+      environment: {
+        ...base.metadata.environment,
+        fingerprint: CORNER_ENVIRONMENT_SHA,
+      },
+    },
+    data: {
+      analyses: [{ analysis: "op", probes: [{ name: "i(vsph)", value }] }],
+    },
+  };
+}
+
 function extendedDeviceResult(target, corner = "ff") {
   const base = result(target);
   const expected = {
     lvtNfetCurrentA: -0.0001329127936535723,
     lvtPfetSourceCurrentA: -0.00006968745845296193,
-    hvtPfetSourceCurrentA: -0.0001390822188942903,
     resistorOutputV: 0.313487576360055,
     resistorSupplyCurrentA: -0.000313487576360055,
     pnpEmitterCurrentA: -2.149132309996193e-7,
@@ -239,7 +260,6 @@ function extendedDeviceResult(target, corner = "ff") {
           probes: [
             { name: "i(vdnl)", value: expected.lvtNfetCurrentA },
             { name: "i(vspl)", value: expected.lvtPfetSourceCurrentA },
-            { name: "i(vsph)", value: expected.hvtPfetSourceCurrentA },
             { name: "v(rout)", value: expected.resistorOutputV },
             { name: "i(vrin)", value: expected.resistorSupplyCurrentA },
             { name: "i(vpe)", value: expected.pnpEmitterCurrentA },
@@ -522,7 +542,6 @@ describe("the hosted SKY130 qualification", () => {
     const request = hostedSky130ExtendedDeviceRequest("ff");
     expect(request.netlist).toContain("sky130_fd_pr__nfet_01v8_lvt");
     expect(request.netlist).toContain("sky130_fd_pr__pfet_01v8_lvt");
-    expect(request.netlist).toContain("sky130_fd_pr__pfet_01v8_hvt");
     expect(request.netlist).toContain("sky130_fd_pr__res_high_po");
     expect(request.netlist).toContain("sky130_fd_pr__cap_mim_m3_1");
     expect(request.netlist).toContain(
@@ -556,6 +575,41 @@ describe("the hosted SKY130 qualification", () => {
       profileId: PROFILE_ID,
       corner: "ff",
     });
+  });
+
+  it("qualifies the HD cells' high-Vt PFET at the cells' geometry (#1596)", async () => {
+    const request = hostedSky130HvtPfetRequest("ff");
+    expect(request.netlist).toContain(
+      "XMPH d g s s sky130_fd_pr__pfet_01v8_hvt L=0.15 W=1",
+    );
+    expect(
+      validateHostedSky130HvtPfetResult(
+        hvtPfetResult("operator-host"),
+        "operator-host",
+        "ff",
+      ),
+    ).toEqual({ corner: "ff", hvtPfetSourceCurrentA: -0.0001390822188942903 });
+    let submitted;
+    await runHostedSky130HvtPfetAcceptance({
+      baseUrl: "https://preview.example",
+      target: "operator-host",
+      corner: "ff",
+      fetchImpl: async (_url, init) => {
+        submitted = JSON.parse(init.body);
+        return Response.json(hvtPfetResult("operator-host"));
+      },
+    });
+    expect(submitted.environment).toEqual({
+      profileId: PROFILE_ID,
+      corner: "ff",
+    });
+    expect(() =>
+      validateHostedSky130HvtPfetResult(
+        hvtPfetResult("operator-host", "ff", -0.00014),
+        "operator-host",
+        "ff",
+      ),
+    ).toThrow(/hvtPfetSourceCurrentA at ff/u);
   });
 
   it("refuses extended-device numerical drift", () => {

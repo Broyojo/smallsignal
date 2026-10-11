@@ -26,7 +26,11 @@ import {
 import { simulationNetlistDiagnostic } from "./simulation-diagnostic.js";
 import { reachableCircuitBindings } from "./source-file-graph.js";
 import { sha256Hex } from "@icm/derived";
-import { resolveReviewedLibraryInterface } from "@icm/devices";
+import {
+  resolveReviewedLibraryInterface,
+  standardCellBindingForMaster,
+  standardCellLibraryOfName,
+} from "@icm/devices";
 import {
   mapSimulationFile,
   insertSimulationText,
@@ -100,6 +104,35 @@ export type NgspiceSourceSimulationCompilation =
       modelSources?: ProjectModelSource[];
       modelDependencies?: SimulationRawDependency[];
     };
+
+/**
+ * Why a definition without a body cannot run, and what would. A standard
+ * cell is named as one (#1596): what is wrong with it, and which cells run.
+ */
+function missingImplementation(definition: {
+  readonly name: string;
+  readonly terminals: readonly { readonly name: string }[];
+}): SimulationSourceDiagnostic {
+  const cell = standardCellBindingForMaster(definition.name);
+  if (cell)
+    return {
+      code: "STANDARD_CELL_UNSUPPORTED",
+      severity: "error",
+      message: `${definition.name} is declared with pins ${definition.terminals.map((terminal) => terminal.name).join(" ")}, not in the library's order ${cell.terminals.map((terminal) => terminal.targetName).join(" ")}, so the library's cell cannot stand in for it. Bind a Library gate to the cell with set-model or Properties; the gate calls it in the library's order.`,
+    };
+  const library = standardCellLibraryOfName(definition.name);
+  if (library)
+    return {
+      code: "STANDARD_CELL_UNSUPPORTED",
+      severity: "error",
+      message: `${definition.name} is a ${library} cell that simulation does not run. Hosted ngspice runs sky130_fd_sc_hd combinational gate cells (inverters, buffers, NAND, NOR, AND, OR, XOR and XNOR) bound to a Library gate; give this cell a Project model source to run it.`,
+    };
+  return {
+    code: "MODEL_IMPLEMENTATION_MISSING",
+    severity: "error",
+    message: `Legacy model ${definition.name} has no resolvable implementation in this experiment. Define its source in Cell Manager`,
+  };
+}
 
 /** Author text stays native. Canvas extraction, instrumentation and output math remain shared. */
 export function compileNgspiceSourceSimulation(
@@ -189,12 +222,7 @@ export function compileNgspiceSourceSimulation(
         statement.kind === "subckt_start" &&
         statement.name.toLowerCase() === definition.name.toLowerCase(),
     );
-    if (!declaration)
-      diagnostics.push({
-        code: "MODEL_IMPLEMENTATION_MISSING",
-        severity: "error",
-        message: `Legacy model ${definition.name} has no resolvable implementation in this experiment. Define its source in Cell Manager`,
-      });
+    if (!declaration) diagnostics.push(missingImplementation(definition));
   }
   const modelNames = new Set(
     projectModels.sources.flatMap((s) =>

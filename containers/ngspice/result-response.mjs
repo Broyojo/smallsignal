@@ -86,6 +86,9 @@ export async function ngspiceResultResponse(input, raw, streaming) {
         ...(payload.execution ? { execution: payload.execution } : {}),
         cancelled: raw.cancelled === true,
         collectionStatus,
+        ...(raw.cellLibraries?.length
+          ? { cellLibraries: raw.cellLibraries }
+          : {}),
       }),
     },
   };

@@ -85,6 +85,39 @@ async function throughWorker(response, patch = {}) {
   );
 }
 
+describe("a run that mounts a standard-cell library (#1596)", () => {
+  const [hd] = profile.cellLibraries;
+  const cells = { id: hd.id, sha256: hd.contentSha256 };
+  const mount = { dependencies: [{ ...cells, mountPath: "cells.spice" }] };
+  const answer = async (cellLibraries) => {
+    const reply = await ngspiceResultResponse(
+      { ...outputInput, ...mount },
+      { ...raw(""), ...(cellLibraries ? { cellLibraries } : {}) },
+      true,
+    );
+    return throughWorker(
+      new Response(reply.body, { headers: reply.headers }),
+      mount,
+    );
+  };
+
+  it("is certified when the executor measured the library the Profile pins", async () => {
+    const response = await answer([cells]);
+    expect(response.status, await response.clone().text()).toBe(200);
+  });
+
+  it.each([
+    ["names no library", undefined],
+    ["mounted other bytes", [{ ...cells, sha256: "b".repeat(64) }]],
+  ])("is refused when the receipt %s", async (_case, cellLibraries) => {
+    const response = await answer(cellLibraries);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error: "simulator-protocol-invalid",
+    });
+  });
+});
+
 describe("large ngspice output handoff", () => {
   it("rejects self-consistent but unapproved runtime facts without a follow-up health request", async () => {
     const { fingerprint: _fingerprint, ...facts } = environment;
