@@ -8,5 +8,6 @@
   "galleryEditorStylesLoaded": false,
   "editorStylesLoaded": true,
   "galleryPdfRuntimeLoaded": false,
-  "editorPdfRuntimeLoaded": false
+  "editorPdfRuntimeLoaded": false,
+  "editorSimulationServiceLoaded": false
 }

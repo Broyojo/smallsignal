@@ -87,6 +87,7 @@ async function main() {
   let editorStylesLoaded = false;
   let galleryPdfRuntimeLoaded = true;
   let editorPdfRuntimeLoaded = true;
+  let editorSimulationServiceLoaded = true;
   try {
     server = await preview({
       root: editorRoot,
@@ -143,6 +144,12 @@ async function main() {
     await page.waitForSelector('[data-testid="schematic-canvas"]', {
       timeout: 10_000,
     });
+    // The service runtime loads when a simulation needs it, not with the
+    // editor (#1645).
+    editorSimulationServiceLoaded = await loadedJavaScriptContains(
+      page,
+      "This deployment does not advertise simulation capabilities",
+    );
     editorCodeLoaded = await loadedJavaScriptContains(page, "schematic-canvas");
     editorStylesLoaded = await loadedStylesheetContains(
       page,
@@ -240,6 +247,7 @@ async function main() {
     editorStylesLoaded,
     galleryPdfRuntimeLoaded,
     editorPdfRuntimeLoaded,
+    editorSimulationServiceLoaded,
   };
 
   if (check) {
@@ -269,6 +277,9 @@ async function main() {
   }
   if (report.galleryPdfRuntimeLoaded || report.editorPdfRuntimeLoaded) {
     throw new Error("PDF runtime loaded before a PDF export was requested");
+  }
+  if (report.editorSimulationServiceLoaded) {
+    throw new Error("Editor loaded the simulation service on startup");
   }
   if (report.consoleErrors.length > 0) {
     throw new Error(
