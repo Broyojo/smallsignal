@@ -290,8 +290,12 @@ describe("CI validation planning", () => {
       browser: true,
       mode: "focused",
     });
-    expect(plan.e2eArgs).toContain("apps/editor/e2e/project-file.spec.ts");
-    expect(plan.e2eArgs).not.toContain("apps/editor/e2e/hierarchy.spec.ts");
+    expect(plan.e2eArgs).toEqual(
+      expect.arrayContaining([
+        "apps/editor/e2e/hierarchy.spec.ts",
+        "apps/editor/e2e/project-file.spec.ts",
+      ]),
+    );
   });
 
   it("runs the hierarchy contract only for Cell and hierarchy code (#1646)", () => {
@@ -302,12 +306,16 @@ describe("CI validation planning", () => {
       "packages/edit-engine/src/cell-pin-planner.ts",
       "packages/edit-engine/src/project-cell-import.ts",
       "packages/symbols/src/hierarchical-block.ts",
+      "packages/symbols/src/resolver.ts",
+      "packages/render-svg/src/symbol-render.ts",
+      "packages/edit-engine/src/project-transaction.ts",
+      "packages/edit-engine/src/model-source-planner.ts",
     ])
       expect(ciPlan([path]).e2eArgs, path).toContain(
         "apps/editor/e2e/hierarchy.spec.ts",
       );
     for (const path of [
-      "packages/render-svg/src/symbol-render.ts",
+      "packages/render-svg/src/route-render.ts",
       "packages/symbols/src/razavi-catalog.ts",
       "packages/edit-engine/src/transaction.ts",
       "packages/project-protocol/src/load.ts",
@@ -391,7 +399,7 @@ describe("CI validation planning", () => {
           path,
           "apps/editor/src/app/App.test.tsx",
           "packages/derived/src/performance-parity.test.ts",
-          "packages/model/src/protocol-documentation.test.ts",
+          "packages/model/src/schema/object-locator.test.ts",
           "apps/editor/package.json",
         ]),
       ).toMatchObject({ heavy: true, browser: true, e2eArgs: specs });
