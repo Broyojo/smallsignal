@@ -43,7 +43,7 @@ The report uses only Python's standard library and the copied report helpers.
 `containers/vacask/starter-journey.test.mjs` checks all four bundled
 source folders against these recipes and the native compiler. The opt-in
 runs against a real VACASK binary were removed in #1646; nothing set their
-environment, so they never ran.
+environment, so they never ran in CI.
 
 Those runs compared against the analytical first-order RC response, including
 the finite 100 ns ramp. Complex AC component error must be below 1e-7; the

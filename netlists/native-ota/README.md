@@ -54,7 +54,7 @@ VACASK executor.
 `containers/vacask/starter-journey.test.mjs` compiles all eight folders and
 checks their source, corner selection and OP acquisitions. The opt-in runs
 against a real VACASK binary were removed in #1646; nothing set their
-environment, so they never ran.
+environment, so they never ran in CI.
 
 Those earlier native runs covered all 54 OP outputs, 81 DC inputs, 541 AC points in each corner,
 271 noise points, both distinct pulse stimuli, authored measurements recomputed

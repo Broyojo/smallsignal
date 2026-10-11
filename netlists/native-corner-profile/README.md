@@ -29,7 +29,7 @@ copy the 10 MB library into every Project or grow the user-input limit.
 
 The opt-in test that ran this Project through a real VACASK binary
 (`sectioned-library-journey.test.mjs`) was removed in #1646; nothing set its
-environment, so it never ran.
+environment, so it never ran in CI.
 
 The circuit uses core/LVT NFET and PFET, a high-poly resistor, a MIM capacitor,
 the fixed PNP, and native sources/load resistance at 1.8 V and 27 °C. The PNP

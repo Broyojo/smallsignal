@@ -94,7 +94,7 @@ Runner receipts cover this GUI/MCP batch only, not full M6 or model qualificatio
 
 The opt-in local runs of the starters against a real VACASK binary in
 `containers/vacask/starter-journey.test.mjs` were removed in #1646; nothing set
-their environment, so they never ran. The migration does not require numerical
+their environment, so they never ran in CI. The migration does not require numerical
 equivalence to an ngspice reference; see the
 [native acceptance decision](../../docs/roadmap/vacask-migration.md#environment-and-electrical-acceptance).
 

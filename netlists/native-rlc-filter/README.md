@@ -37,7 +37,7 @@ the [native runtime instructions](../../containers/vacask/README.md).
 
 `containers/vacask/starter-journey.test.mjs` checks all three source
 folders. The opt-in runs against a real VACASK binary were removed in #1646;
-nothing set their environment, so they never ran. They used these references.
+nothing set their environment, so they never ran in CI. They used these references.
 
 The frequency reference is `1/(1 - omega^2*L*C + j*omega*R*C)`. The transient
 reference integrates the analytical RLC step response over the finite 100 ns

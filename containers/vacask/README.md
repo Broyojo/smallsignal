@@ -297,7 +297,7 @@ The opt-in tests that ran the Python measurement helper and the shipped OTA
 through a real VACASK binary (`native-measurement-journey.test.mjs`,
 `sky130-public-journey.test.mjs`), and the standalone CLI and executor checks
 (`entrypoint-cli.test.mjs`, `execute.test.mjs`), were removed in #1646: nothing
-set their environment, so they never ran.
+set their environment, so they never ran in CI.
 
 ## Transport and shutdown
 
