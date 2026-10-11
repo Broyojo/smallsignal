@@ -449,3 +449,26 @@ export async function copyNetlistText(
 export function parseSavedProject(text: string): any {
   return parseProject(text);
 }
+
+/** The Project as File > Export Project File… saves it, decoded. */
+export async function exportedProject(page: Page): Promise<any> {
+  return parseSavedProject(
+    (await downloadBytes(page, "File", "Export Project File…")).toString(
+      "utf8",
+    ),
+  );
+}
+
+/** Open the editor on a Project a test built, through the Project file input. */
+export async function openProject(
+  page: Page,
+  project: unknown,
+  name = "fixture.icproj.json",
+): Promise<void> {
+  await page.goto("/editor");
+  await page.getByTestId("project-file").setInputFiles({
+    name,
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(project)),
+  });
+}
