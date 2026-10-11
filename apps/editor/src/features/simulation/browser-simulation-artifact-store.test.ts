@@ -717,6 +717,69 @@ describe("persistent simulation evidence", () => {
       fileCount: 2,
     });
   });
+  it("admits and reclaims 50 consecutive cache runs without leaving its byte budget", async () => {
+    const store = createBrowserSimulationArtifactStore(
+      "continuous-byte-budget",
+      new IDBFactory(),
+      {
+        retainSession: true,
+        locks: navigator.locks,
+        limits: { bytes: 24, files: 8 },
+      },
+    )!;
+    const files = new SimulationFiles(Date.now, undefined, undefined, store);
+    let peak = 0;
+    let latestId = "";
+    for (let index = 0; index < 50; index++) {
+      const refs = await files.publishEvidence(
+        `run-${index}`,
+        [
+          {
+            name: "result.raw",
+            mediaType: "text/plain",
+            text: "data",
+            metadata: { role: "raw" },
+          },
+        ],
+        () => ({
+          name: "manifest.json",
+          mediaType: "application/json",
+          text: "{}",
+          metadata: { role: "manifest" },
+        }),
+        (published) => ({
+          schemaVersion: 1,
+          runId: `run-${index}`,
+          preparedId: "prepared",
+          inputRevision: "rev",
+          retentionPolicy: "cache",
+          execution: "completed",
+          collection: "complete",
+          files: [...published],
+          datasets: [],
+        }),
+      );
+      latestId = refs[0]!.id;
+      peak = Math.max(peak, (await store.usage!()).byteLength);
+    }
+    expect(peak).toBeLessThanOrEqual(24);
+    expect(await store.usage!()).toMatchObject({
+      byteLength: 18,
+      fileCount: 6,
+      catalogCount: 3,
+      cleanupDeferred: false,
+    });
+    expect((await files.history(100)).runs.map((run) => run.runId)).toEqual([
+      "run-49",
+      "run-48",
+      "run-47",
+    ]);
+    expect(await files.readArtifact(latestId)).toMatchObject({
+      ok: true,
+      text: "data",
+    });
+    await store.releaseSession!();
+  });
   it("prunes only new unarchived cache catalogs and leaves legacy history intact", async () => {
     const factory = new IDBFactory();
     const store = createBrowserSimulationArtifactStore("project", factory)!;

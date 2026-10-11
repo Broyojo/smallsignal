@@ -1486,6 +1486,25 @@ describe("Project structural transaction", () => {
       },
     });
     if (!added.ok) return;
+    // A rename onto another folder's name, in any case, changes nothing.
+    expect(
+      executeProjectTransaction(added.project, {
+        transactionId: "rename-onto-bias",
+        projectId: project.id,
+        expectedStructureRevision: 1,
+        actor: { kind: "human", id: "human" },
+        edits: [
+          {
+            kind: "upsert_simulation_folder",
+            folder: { ...added.project.simulationFolders[1]!, name: "BIAS" },
+          },
+        ],
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { message: "Simulation folder name already exists: BIAS" },
+      project: added.project,
+    });
     const removed = executeProjectTransaction(added.project, {
       transactionId: "remove-one-folder",
       projectId: project.id,

@@ -14,7 +14,6 @@ import { harnessModuleUrl } from "./helpers/harness-url";
 const archiveUrl = harnessModuleUrl("browser-simulation-archive-store");
 const artifactUrl = harnessModuleUrl("browser-simulation-artifact-store");
 const lockUrl = harnessModuleUrl("browser-simulation-storage-lock");
-const filesUrl = harnessModuleUrl("simulation-files");
 
 test("GUI retries failed evidence storage and downloads a complete run without executing again", async ({
   page,
@@ -196,80 +195,9 @@ test("Run history can reveal browser results from other folders without changing
   await expect(history).not.toContainText("Other folder");
 });
 
-test("Online producer protection permits idle reclamation without refreshing the Editor", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  const result = await page.evaluate(
-    async (urls) => {
-      const { createBrowserSimulationArtifactStore } = await import(
-        urls.artifact
-      );
-      const { createBrowserSimulationArchiveStore } = await import(
-        urls.archive
-      );
-      const projectId = "cleanup-browser-proof";
-      const active = createBrowserSimulationArtifactStore(
-        projectId,
-        indexedDB,
-        {
-          retainSession: true,
-        },
-      );
-      const archives = createBrowserSimulationArchiveStore();
-      const ref = {
-        id: "kept",
-        name: "result.raw",
-        mediaType: "text/plain",
-        byteLength: 4,
-        sha256: await active.digest("data"),
-      };
-      await active.put(ref, "data");
-      await active.put({ ...ref, id: "orphan" }, "data");
-      await active.saveCatalog({
-        catalog: {
-          schemaVersion: 1,
-          runId: "kept-run",
-          preparedId: "prepared",
-          inputRevision: "rev",
-          execution: "completed",
-          collection: "complete",
-          files: [ref],
-          datasets: [],
-        },
-        storedAt: 1,
-      });
-      const deferred = await archives.cleanup(projectId);
-      const before = (await active.get("orphan"))?.text;
-      await active.releaseSession();
-      const reclaimed = await archives.cleanup(projectId);
-      const orphan = await active.get("orphan");
-      const kept = (await active.get("kept"))?.text;
-      const catalogs = await active.catalogs();
-      await active.releaseSession();
-      archives.close();
-      return {
-        deferred,
-        before,
-        reclaimed,
-        orphan,
-        kept,
-        runIds: catalogs.map((entry: any) => entry.catalog.runId),
-      };
-    },
-    { artifact: artifactUrl, archive: archiveUrl },
-  );
-  expect(result).toEqual({
-    deferred: { ok: true, value: { deferred: false, files: 0, bytes: 0 } },
-    before: "data",
-    reclaimed: { ok: true, value: { deferred: false, files: 1, bytes: 4 } },
-    orphan: null,
-    kept: "data",
-    runIds: ["kept-run"],
-  });
-});
-
-test("Legacy Project protection remains respected across tabs and releases on page close", async ({
+// Web Locks and IndexedDB shared by two real tabs. The same rules within one
+// tab are browser-simulation-artifact-store and -storage-lock module tests.
+test("Evidence protection holds across tabs: a Project lease until release or page close, and a viewed Run against another tab's byte budget", async ({
   page,
   context,
 }) => {
@@ -300,97 +228,8 @@ test("Legacy Project protection remains respected across tabs and releases on pa
   ).toEqual({ available: true, value: "isolated" });
   await page.evaluate(() => (window as any).evidenceLease.release());
   await expect.poll(attempt).toEqual({ available: true, value: "reclaimed" });
-  await page.evaluate(async () => {
-    await (window as any).evidenceLease.acquire();
-  });
-  expect(await attempt()).toEqual({ available: false });
-  await page.close();
-  await expect.poll(attempt).toEqual({ available: true, value: "reclaimed" });
-});
 
-test("An open Editor continuously admits and reclaims 50 cache runs within its byte budget", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  const result = await page.evaluate(
-    async (urls) => {
-      const { createBrowserSimulationArtifactStore } = await import(
-        urls.artifact
-      );
-      const { SimulationFiles } = await import(urls.files);
-      const store = createBrowserSimulationArtifactStore(
-        "continuous-byte-budget",
-        indexedDB,
-        {
-          retainSession: true,
-          limits: { bytes: 24, files: 8 },
-        },
-      );
-      const files = new SimulationFiles(Date.now, undefined, undefined, store);
-      let peak = 0;
-      let latestId = "";
-      for (let index = 0; index < 50; index++) {
-        const refs = await files.publishEvidence(
-          "run-" + index,
-          [
-            {
-              name: "result.raw",
-              mediaType: "text/plain",
-              text: "data",
-              metadata: { role: "raw" },
-            },
-          ],
-          () => ({
-            name: "manifest.json",
-            mediaType: "application/json",
-            text: "{}",
-            metadata: { role: "manifest" },
-          }),
-          (refs: any[]) => ({
-            schemaVersion: 1,
-            runId: "run-" + index,
-            preparedId: "prepared",
-            inputRevision: "rev",
-            retentionPolicy: "cache",
-            execution: "completed",
-            collection: "complete",
-            files: refs,
-            datasets: [],
-          }),
-        );
-        latestId = refs[0].id;
-        peak = Math.max(peak, (await store.usage()).byteLength);
-      }
-      const usage = await store.usage();
-      const history = await files.history(100);
-      const latest = await files.readArtifact(latestId);
-      await store.releaseSession();
-      return { peak, usage, history, latest };
-    },
-    { artifact: artifactUrl, files: filesUrl },
-  );
-  expect(result.peak).toBeLessThanOrEqual(24);
-  expect(result.usage).toMatchObject({
-    byteLength: 18,
-    fileCount: 6,
-    catalogCount: 3,
-    cleanupDeferred: false,
-  });
-  expect(result.history.runs.map((run: any) => run.runId)).toEqual([
-    "run-49",
-    "run-48",
-    "run-47",
-  ]);
-  expect(result.latest).toMatchObject({ ok: true, text: "data" });
-});
-
-test("A viewed Run in one tab permits unrelated byte-budget reclamation in another", async ({
-  page,
-  context,
-}) => {
-  await page.goto("/editor");
-  const peer = await context.newPage();
-  await peer.goto("/editor");
+  // A Run this tab views stays while the other tab reclaims unrelated cache.
   await page.evaluate(async (path) => {
     const { createBrowserSimulationArtifactStore } = await import(path);
     const store = createBrowserSimulationArtifactStore(
@@ -428,7 +267,7 @@ test("A viewed Run in one tab permits unrelated byte-budget reclamation in anoth
     }
     (window as any).viewedEvidence = await store.pinRun("viewed");
   }, artifactUrl);
-  const result = await peer.evaluate(async (path) => {
+  const reclaimed = await peer.evaluate(async (path) => {
     const { createBrowserSimulationArtifactStore } = await import(path);
     const store = createBrowserSimulationArtifactStore(
       "cross-tab-byte-budget",
@@ -451,6 +290,13 @@ test("A viewed Run in one tab permits unrelated byte-budget reclamation in anoth
       bytes: (await store.usage()).byteLength,
     };
   }, artifactUrl);
-  expect(result).toEqual({ viewed: "data", unrelated: null, bytes: 16 });
+  expect(reclaimed).toEqual({ viewed: "data", unrelated: null, bytes: 16 });
+
+  // Closing the tab that holds a lease releases it.
+  await page.evaluate(async () => {
+    await (window as any).evidenceLease.acquire();
+  });
+  expect(await attempt()).toEqual({ available: false });
   await page.close();
+  await expect.poll(attempt).toEqual({ available: true, value: "reclaimed" });
 });
