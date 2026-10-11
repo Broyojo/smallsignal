@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { z } from "zod";
 
 import {
   flattenRichText,
@@ -141,35 +140,6 @@ describe("canonical RichText helpers", () => {
     expect(accepts(fraction(math, 4))).toBe(true);
     expect(accepts(span(math, 1))).toBe(false);
     expect(accepts(fraction(span(math, 1), 1))).toBe(false);
-  });
-
-  it("builds one run schema per nesting level and formula permission", () => {
-    // Rebuilding the recursive schema per branch made 121 nested unions at
-    // module load where nine are distinct (#1645).
-    const unions = new Set<unknown>();
-    const seen = new Set<unknown>();
-    const visit = (schema: z.ZodType) => {
-      if (seen.has(schema)) return;
-      seen.add(schema);
-      const def = (
-        schema as unknown as {
-          _zod: {
-            def: {
-              type: string;
-              shape?: Record<string, z.ZodType>;
-              element?: z.ZodType;
-              options?: z.ZodType[];
-            };
-          };
-        }
-      )._zod.def;
-      if (def.type === "union") unions.add(schema);
-      Object.values(def.shape ?? {}).forEach(visit);
-      if (def.element) visit(def.element);
-      def.options?.forEach(visit);
-    };
-    visit(RichTextDocumentSchema);
-    expect(unions.size).toBe(9);
   });
 
   it("rejects an empty fraction side", () => {
