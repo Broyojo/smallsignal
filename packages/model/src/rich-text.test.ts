@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { z } from "zod";
 
 import {
   flattenRichText,
@@ -106,6 +107,69 @@ describe("canonical RichText helpers", () => {
     expect(RichTextDocumentSchema.safeParse(content).success).toBe(true);
     expect(flattenRichText(content)).toBe("10um/150nm");
     expect(flattenRichText(normalizeRichText(content))).toBe("10um/150nm");
+  });
+
+  it("bounds nesting at four levels and keeps formulas out of spans", () => {
+    const text = { kind: "text", value: "x" };
+    const span = (child: unknown, levels: number): unknown =>
+      levels === 0
+        ? child
+        : {
+            kind: "span",
+            style: "bold",
+            children: [span(child, levels - 1)],
+          };
+    const fraction = (inner: unknown, levels: number): unknown =>
+      levels === 0
+        ? inner
+        : {
+            kind: "fraction",
+            numerator: { runs: [fraction(inner, levels - 1)] },
+            denominator: { runs: [text] },
+          };
+    const math = { kind: "math", latex: "V", display: "inline" };
+    const accepts = (run: unknown) =>
+      RichTextDocumentSchema.safeParse({ runs: [run] }).success;
+
+    expect(accepts(span(text, 4))).toBe(true);
+    expect(accepts(span(text, 5))).toBe(false);
+    expect(accepts(fraction(text, 4))).toBe(true);
+    expect(accepts(fraction(text, 5))).toBe(false);
+    expect(accepts(fraction(span(text, 1), 3))).toBe(true);
+    expect(accepts(fraction(span(text, 1), 4))).toBe(false);
+    // A formula is a whole document: inside a fraction side, never a span.
+    expect(accepts(fraction(math, 4))).toBe(true);
+    expect(accepts(span(math, 1))).toBe(false);
+    expect(accepts(fraction(span(math, 1), 1))).toBe(false);
+  });
+
+  it("builds one run schema per nesting level and formula permission", () => {
+    // Rebuilding the recursive schema per branch made 121 nested unions at
+    // module load where nine are distinct (#1645).
+    const unions = new Set<unknown>();
+    const seen = new Set<unknown>();
+    const visit = (schema: z.ZodType) => {
+      if (seen.has(schema)) return;
+      seen.add(schema);
+      const def = (
+        schema as unknown as {
+          _zod: {
+            def: {
+              type: string;
+              shape?: Record<string, z.ZodType>;
+              element?: z.ZodType;
+              options?: z.ZodType[];
+            };
+          };
+        }
+      )._zod.def;
+      if (def.type === "union") unions.add(schema);
+      Object.values(def.shape ?? {}).forEach(visit);
+      if (def.element) visit(def.element);
+      def.options?.forEach(visit);
+    };
+    visit(RichTextDocumentSchema);
+    expect(unions.size).toBe(9);
   });
 
   it("rejects an empty fraction side", () => {
