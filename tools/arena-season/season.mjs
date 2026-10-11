@@ -57,7 +57,7 @@ const BUILT_IN = [
   {
     slug: "human-reference",
     role: "human-reference",
-    name: "Human Reference",
+    name: "Human",
     provider: "Gallery authors",
     modelId: "human-reference",
     reasoning: "none",
