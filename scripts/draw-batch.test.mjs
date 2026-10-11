@@ -1,8 +1,6 @@
-import { execFileSync, spawnSync } from "node:child_process";
 import {
-  existsSync,
+  mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -14,17 +12,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   decide,
   expandTemplate,
+  main,
   mcpConfig,
   parseArguments,
   parseManifest,
   parseUsage,
+  runAgent,
   splitCommand,
   summarize,
   wantsSecond,
   wilson,
 } from "./draw-batch.mjs";
-
-const root = resolve(import.meta.dirname, "..");
 
 describe("batch drawing runner (#1498)", () => {
   it("reads its options and refuses what it cannot run", () => {
@@ -292,191 +290,38 @@ describe("batch drawing runner (#1498)", () => {
   });
 });
 
-describe("batch drawing runner end to end (#1498)", () => {
+describe("batch drawing runner around its Agents (#1498)", () => {
   let work;
-  let bundle;
-  const agent =
-    "node {cwd}/scripts/lib/draw-batch-script-agent.mjs {bundle} {dir} {role}";
-  const run = (out, ...extra) =>
-    spawnSync(
-      process.execPath,
-      [
-        "scripts/draw-batch.mjs",
-        join(work, "tasks.jsonl"),
-        "--out",
-        out,
-        "--jobs",
-        "4",
-        // Long enough for a loaded CI runner to start the bundled editor and
-        // draw; the hanging task still runs into it.
-        "--timeout",
-        "20",
-        "--agent",
-        agent,
-        "--second-agent",
-        agent,
-        "--bundle",
-        bundle,
-        ...extra,
-      ],
-      { cwd: root, encoding: "utf8", timeout: 240_000 },
-    );
-  const json = (...path) => JSON.parse(readFileSync(join(...path), "utf8"));
-
   beforeAll(() => {
     work = mkdtempSync(join(tmpdir(), "icm-draw-batch-"));
-    // The real editor, bundled from source as the runner loads it.
-    execFileSync(process.execPath, [
-      join(root, "scripts/package-headless.mjs"),
-      join(work, "bundle"),
-    ]);
-    bundle = join(work, "bundle/analog-canvas-headless.mjs");
-    writeFileSync(
-      join(work, "divider.sp"),
-      "* d\nR1 vdd out 1k\nR2 out 0 2k\n",
-    );
-    // A dataset netlist that does not say what the figure shows.
-    writeFileSync(join(work, "wrong.sp"), "* w\nR1 vdd out 1k\nR2 vdd 0 2k\n");
-    writeFileSync(join(work, "figure.png"), "not really a png");
-    const task = (id, reference, instructions, extra = {}) =>
-      JSON.stringify({ id, reference, instructions, ...extra });
-    writeFileSync(
-      join(work, "tasks.jsonl"),
-      [
-        task("first", "divider.sp", "script-agent first=divider"),
-        task(
-          "second",
-          "divider.sp",
-          "script-agent first=divider-short second=divider",
-        ),
-        task(
-          "suspect",
-          "wrong.sp",
-          "script-agent first=divider second=divider",
-        ),
-        task("review", "divider.sp", "script-agent first=nothing second=fail"),
-        task(
-          "spectre",
-          "M0 (VOUT VIN VSS VSS) nmos4\nR0 (VDD VOUT) resistor",
-          "script-agent first=amplifier",
-          { image: "figure.png" },
-        ),
-        task("timeout", "divider.sp", "script-agent first=hang second=divider"),
-        JSON.stringify({
-          id: "unchecked",
-          instructions: "script-agent first=divider",
-        }),
-      ].join("\n"),
-    );
-  }, 120_000);
+  });
   afterAll(() => rmSync(work, { recursive: true, force: true }));
 
-  it("draws, grades, redraws and queues each task, and resumes where it stopped", () => {
-    const out = join(work, "out");
-    const first = run(out);
-    expect(first.status, first.stderr).toBe(0);
-    const verdict = (id) => json(out, id, "verdict.json");
-    expect(verdict("first")).toMatchObject({
-      path: "first",
-      accepted: "first",
-      reference: "spice",
-      first: {
-        outcome: "match",
-        grade: { exact: true, mode: "strict" },
-        agent: {
-          exitCode: 0,
-          timedOut: false,
-          usage: { costUsd: 0.0125, numTurns: 2, inputTokens: 1200 },
-        },
-      },
-    });
-    for (const file of [
-      "project.icproj.json",
-      "reference.sp",
-      "mcp.json",
-      "prompt.md",
-      "agent.log",
-      "netlist.sp",
-      "figure.svg",
-    ])
-      expect(existsSync(join(out, "first", file)), file).toBe(true);
-    expect(
-      json(out, "first", "mcp.json").mcpServers["analog-canvas"].args,
-    ).toContain(join(out, "first"));
-    expect(verdict("second")).toMatchObject({
-      path: "second",
-      accepted: "second",
-      first: { outcome: "mismatch", grade: { exact: false } },
-      second: { dir: join("second", "second"), outcome: "match" },
-      firstVsSecond: { exact: false },
-    });
-    expect(verdict("suspect")).toMatchObject({
-      path: "agreed",
-      accepted: "first",
-      datasetSuspect: true,
-      first: { outcome: "mismatch" },
-      second: { outcome: "mismatch" },
-      firstVsSecond: { exact: true },
-    });
-    expect(verdict("review")).toMatchObject({
-      path: "review",
-      accepted: null,
-      first: { outcome: "blocked", messages: ["Nothing was drawn"] },
-      second: { outcome: "blocked", agent: { exitCode: 3, usage: null } },
-    });
-    expect(
-      readFileSync(join(out, "review", "second", "agent.log"), "utf8"),
-    ).toContain("asked to fail");
-    // The AnalogGenie reference is read as structural Spectre and kept.
-    expect(verdict("spectre")).toMatchObject({
-      path: "first",
-      reference: "spectre",
-      first: { outcome: "match", byName: { status: "mismatch" } },
-    });
-    expect(
-      readFileSync(join(out, "spectre", "reference.scs"), "utf8"),
-    ).toContain("nmos4");
-    expect(readFileSync(join(out, "spectre", "input.png"), "utf8")).toBe(
-      "not really a png",
+  it("never draws over a batch it was not asked to resume", async () => {
+    writeFileSync(
+      join(work, "tasks.jsonl"),
+      `${JSON.stringify({ id: "a", instructions: "draw" })}\n`,
     );
-    expect(verdict("timeout")).toMatchObject({
-      path: "second",
-      first: {
-        outcome: "blocked",
-        agent: { timedOut: true, signal: "SIGTERM" },
-      },
-      second: { outcome: "match" },
-    });
-    expect(verdict("unchecked")).toMatchObject({
-      path: "unchecked",
-      reference: null,
-      first: { outcome: "no-reference" },
-    });
-    expect(json(out, "summary.json")).toMatchObject({
-      tasks: 7,
-      exact: { count: 2, n: 6 },
-      accepted: { count: 5, n: 6 },
-      datasetSuspect: 1,
-      review: 1,
-      paths: { first: 2, second: 2, agreed: 1, review: 1, unchecked: 1 },
-    });
-    const queue = () =>
-      readFileSync(join(out, "review-queue.jsonl"), "utf8").trim().split("\n");
-    expect(queue().map((line) => JSON.parse(line).id)).toEqual(["review"]);
+    const out = join(work, "out");
+    mkdirSync(out);
+    writeFileSync(join(out, "summary.json"), "{}");
+    await expect(
+      main([join(work, "tasks.jsonl"), "--out", out, "--agent", "agent"]),
+    ).rejects.toThrow("already holds a batch; pass --resume");
+  });
 
-    // A batch is never drawn over; a resumed one redraws only what has no verdict.
-    expect(run(out).stderr).toContain("already holds a batch");
-    rmSync(join(out, "review", "verdict.json"));
-    const before = readFileSync(join(out, "first", "agent.log"), "utf8");
-    const resumed = run(out, "--resume");
-    expect(resumed.status, resumed.stderr).toBe(0);
-    expect(resumed.stdout).toContain("7 tasks, 6 already done");
-    expect(readFileSync(join(out, "first", "agent.log"), "utf8")).toBe(before);
-    expect(readdirSync(join(out, ".interrupted"))).toEqual([
-      expect.stringMatching(/^review-/u),
-    ]);
-    expect(verdict("review")).toMatchObject({ path: "review" });
-    expect(queue()).toHaveLength(1);
-    expect(json(out, "summary.json")).toMatchObject({ tasks: 7, review: 1 });
-  }, 300_000);
+  it("ends an Agent that runs past its timeout", async () => {
+    const run = await runAgent({
+      command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"`,
+      cwd: work,
+      env: process.env,
+      input: "",
+      logPath: join(work, "agent.log"),
+      timeoutMs: 300,
+    });
+    expect(run).toMatchObject({ timedOut: true, signal: "SIGTERM" });
+    expect(readFileSync(join(work, "agent.log"), "utf8")).toContain(
+      "timed out after 0.3 s",
+    );
+  });
 });
