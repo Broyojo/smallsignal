@@ -111,6 +111,16 @@ const pathPoints = (data: string) => {
   }
   return points;
 };
+const extent = (points: readonly { x: number; y: number }[]) => {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return {
+    left: Math.min(...xs),
+    right: Math.max(...xs),
+    top: Math.min(...ys),
+    bottom: Math.max(...ys),
+  };
+};
 const logicalPoint = (
   measurement: (typeof mosGeometry.symbols)["nmos"],
   point: { x: number; y: number },
@@ -134,6 +144,42 @@ const canonicalMosBodyPrimitives = (symbolId: "nmos" | "pmos") =>
     .sort((left, right) =>
       JSON.stringify(left).localeCompare(JSON.stringify(right)),
     );
+
+/**
+ * Each pin's lead ends on the edge of a contact circle: no gap, no overlap.
+ * The tolerance admits the textbook circles' 0.02-unit offset from the lead.
+ */
+function expectLeadsMeetContactCircles(
+  symbol: ReturnType<typeof requireRazaviCatalogSymbol>,
+) {
+  const circles = symbol.primitives.flatMap((primitive) =>
+    primitive.kind === "circle" ? [primitive] : [],
+  );
+  const at = (
+    point: { x: number; y: number },
+    other: { x: number; y: number },
+  ) => point.x === other.x && point.y === other.y;
+  for (const pin of symbol.pins) {
+    const lead = symbol.primitives.find(
+      (primitive) =>
+        primitive.kind === "line" &&
+        (at(primitive.from, pin.at) || at(primitive.to, pin.at)),
+    );
+    if (lead?.kind !== "line")
+      throw new Error(`${symbol.id}.${pin.name} lead missing`);
+    const end = at(lead.from, pin.at) ? lead.to : lead.from;
+    expect(
+      circles.some(
+        (circle) =>
+          Math.abs(
+            Math.hypot(end.x - circle.center.x, end.y - circle.center.y) -
+              circle.radius,
+          ) < 1e-3,
+      ),
+      `${symbol.id}.${pin.name} lead meets a contact circle`,
+    ).toBe(true);
+  }
+}
 
 describe("Razavi symbol catalog", () => {
   it("publishes the versioned catalog identity and visual authority", () => {
@@ -369,17 +415,8 @@ describe("Razavi symbol catalog", () => {
     ) {
       throw new Error("Resettable DFF must keep its body and reset lead");
     }
-    const extent = (data: string) => {
-      const points = pathPoints(data);
-      return {
-        left: Math.min(...points.map((point) => point.x)),
-        right: Math.max(...points.map((point) => point.x)),
-        top: Math.min(...points.map((point) => point.y)),
-        bottom: Math.max(...points.map((point) => point.y)),
-      };
-    };
-    const bodyExtent = extent(body.data);
-    const dffExtent = extent(dffBody.data);
+    const bodyExtent = extent(pathPoints(body.data));
+    const dffExtent = extent(pathPoints(dffBody.data));
     // The reset lead runs straight from the body's bottom edge to RST.
     expect(resetLead.to).toEqual({ x: 0, y: 50 });
     expect(resetLead.from).toEqual({ x: 0, y: bodyExtent.bottom });
@@ -971,16 +1008,6 @@ describe("Razavi symbol catalog", () => {
     ) {
       throw new Error("Quantizer body or staircase is missing");
     }
-    const extent = (points: readonly { x: number; y: number }[]) => {
-      const xs = points.map((point) => point.x);
-      const ys = points.map((point) => point.y);
-      return {
-        left: Math.min(...xs),
-        right: Math.max(...xs),
-        top: Math.min(...ys),
-        bottom: Math.max(...ys),
-      };
-    };
     const bodyExtent = extent(pathPoints(body.data));
     expect(bodyExtent.right - bodyExtent.left).toBe(
       bodyExtent.bottom - bodyExtent.top,
@@ -1558,6 +1585,7 @@ describe("Razavi symbol catalog", () => {
         idealBlade.from.y - idealPivot.center.y,
       ),
     ).toBeLessThanOrEqual(idealPivot.radius + 0.312427 + 0.000001);
+    expectLeadsMeetContactCircles(idealSwitch);
     const closedSwitch = requireRazaviCatalogSymbol("closed-switch");
     expect(closedSwitchEvidence).toMatchObject({
       selection: { nativeObjectCount: 5 },
@@ -1587,6 +1615,7 @@ describe("Razavi symbol catalog", () => {
       radius: leftContact!.radius,
       center: { x: -leftContact!.center.x, y: leftContact!.center.y },
     });
+    expectLeadsMeetContactCircles(closedSwitch);
     expect(getRazaviCatalogEntry("transformer")).toBeUndefined();
     for (const id of ["vcvs", "vccs", "cccs", "ccvs"])
       expect(getRazaviCatalogEntry(id)).toMatchObject({
