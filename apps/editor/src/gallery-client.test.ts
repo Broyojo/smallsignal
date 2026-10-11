@@ -150,6 +150,47 @@ it("asks the server to search, and counts tags for the same search", async () =>
   expect(galleryCountLabel(1, { searched: true })).toBe("1 matching circuit");
 });
 
+it("asks for Needs attention with its reason, AI, Liked and sizes, and reads their counts", async () => {
+  const filterCounts = {
+    attention: 2,
+    netlistable: 0,
+    liked: 1,
+    attentionKinds: { "global-vdd": 2, "suspected-disconnection": 1 },
+    componentRanges: { "0-5": 1, "6-10": 1, "26-": 1 },
+  };
+  const fetchLike = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () =>
+      Response.json({ entries: [], nextCursor: null, filterCounts }),
+    );
+  // The wall's quick filters reach the server; the browser filters nothing.
+  const filters = {
+    attention: true,
+    attentionKind: "suspected-disconnection",
+    ai: "ai" as const,
+    liked: true,
+    parts: ["6-10", "26-"],
+  };
+  expect(await loadGalleryFeed(fetchLike, filters)).toMatchObject({
+    filterCounts,
+  });
+  expect(fetchLike).toHaveBeenLastCalledWith(
+    "/api/gallery?attention=1&reason=suspected-disconnection&ai=1&liked=1&parts=6-10%2C26-",
+    { credentials: "same-origin" },
+  );
+  // The tag counts beside the wall are narrowed the same way.
+  await loadGalleryTagSummary(fetchLike, { ...filters, ai: "human" });
+  expect(fetchLike).toHaveBeenLastCalledWith(
+    "/api/gallery/tags?attention=1&reason=suspected-disconnection&ai=0&liked=1&parts=6-10%2C26-",
+    { credentials: "same-origin" },
+  );
+  // A reason means nothing outside Needs attention.
+  await loadGalleryFeed(fetchLike, { attentionKind: "global-vdd" });
+  expect(fetchLike).toHaveBeenLastCalledWith("/api/gallery", {
+    credentials: "same-origin",
+  });
+});
+
 describe("Gallery preview caching", () => {
   it("starts the first page's previews, by the tiles' own URLs, as soon as it answers (#1590)", () => {
     const entries = Array.from({ length: 12 }, (_, index) => ({

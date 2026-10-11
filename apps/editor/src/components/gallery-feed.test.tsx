@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -7,11 +7,15 @@ import {
   GalleryFeed,
   loadGalleryFeed,
 } from "./gallery-feed";
-import { canReuseGalleryLandingFeed } from "./gallery-feed-wall";
+import {
+  canReuseGalleryLandingFeed,
+  withGalleryLike,
+} from "./gallery-feed-wall";
 import {
   contributorBoardRows,
   GalleryCountPanel,
 } from "./gallery-feed-count-panel";
+import { GalleryQuickFilters } from "./gallery-feed-quick-filters";
 import { GalleryWallTile } from "./gallery-feed-tile";
 import { GalleryTileMenu } from "./gallery-owner-controls";
 
@@ -540,5 +544,178 @@ describe("The Sim mark", () => {
       );
     expect(menu(() => {})).toContain("Verify simulation");
     expect(menu()).not.toContain("Verify simulation");
+  });
+});
+
+describe("GalleryQuickFilters", () => {
+  const props = (
+    overrides: Partial<Parameters<typeof GalleryQuickFilters>[0]> = {},
+  ): Parameters<typeof GalleryQuickFilters>[0] => ({
+    signedIn: true,
+    isOwner: true,
+    attentionOnly: false,
+    attentionKind: null,
+    attentionKindCounts: {},
+    aiFilter: null,
+    netlistableOnly: false,
+    withoutNetlistOnly: false,
+    likedOnly: false,
+    updateFilters: () => {},
+    quickCount: () => null,
+    ...overrides,
+  });
+  /** The element a test id names, to press it as a reader would. */
+  const press = (node: ReactNode, testId: string): boolean => {
+    if (Array.isArray(node))
+      return node.some((child: ReactNode) => press(child, testId));
+    if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node))
+      return false;
+    if ((node.props as Record<string, unknown>)["data-testid"] === testId) {
+      node.props.onClick!();
+      return true;
+    }
+    return press(node.props.children, testId);
+  };
+
+  it("offers a reason only under Needs attention, each with how many it holds", () => {
+    const render = (overrides: Parameters<typeof props>[0]) =>
+      renderToStaticMarkup(
+        createElement(GalleryQuickFilters, props(overrides)),
+      );
+    expect(render({})).not.toContain("gallery-filter-attention-reason");
+    const reasons = render({
+      attentionOnly: true,
+      attentionKindCounts: { "global-vdd": 2, "suspected-disconnection": 1 },
+    });
+    expect(
+      [...reasons.matchAll(/<option[^>]*>([^<]*)<\/option>/gu)].map(
+        ([, label]) => label,
+      ),
+    ).toEqual(["Every reason", "Global VDD (2)", "Wiring break (1)"]);
+  });
+
+  it("moves a pair's choice to the side pressed and forgets the reason with Needs attention", () => {
+    const pressed = (testId: string) => {
+      const patches: unknown[] = [];
+      const shown = GalleryQuickFilters(
+        props({
+          attentionOnly: true,
+          attentionKind: "global-vdd",
+          aiFilter: "ai",
+          netlistableOnly: true,
+          updateFilters: (patch) => patches.push(patch),
+        }),
+      );
+      expect(press(shown, testId)).toBe(true);
+      return patches;
+    };
+    expect(pressed("gallery-filter-without-netlist")).toEqual([
+      { withoutNetlist: true, netlistable: false },
+    ]);
+    expect(pressed("gallery-filter-netlistable")).toEqual([
+      { netlistable: false, withoutNetlist: false },
+    ]);
+    expect(pressed("gallery-filter-human")).toEqual([{ ai: "human" }]);
+    expect(pressed("gallery-filter-ai")).toEqual([{ ai: null }]);
+    expect(pressed("gallery-filter-attention")).toEqual([
+      { attention: false, attentionKind: null },
+    ]);
+  });
+});
+
+describe("withGalleryLike", () => {
+  const entry = (
+    id: string,
+    author: string,
+    extra: Partial<GalleryFeedEntry> = {},
+  ): GalleryFeedEntry => ({
+    id,
+    name: id,
+    author,
+    ownerUserId: author,
+    description: "",
+    createdAt: "2026-10-09T08:00:00.000Z",
+    schemaVersion: 1,
+    likes: 1,
+    likedByViewer: true,
+    ...extra,
+  });
+  const wall = {
+    status: "ready" as const,
+    entries: [
+      entry("amp", "Alice", {
+        netlistable: true,
+        aiGenerated: true,
+        attention: {
+          status: "needs-attention",
+          issues: [
+            { kind: "global-vdd", detail: "" },
+            { kind: "global-vdd", detail: "" },
+          ],
+        },
+      } as Partial<GalleryFeedEntry>),
+      entry("osc", "Bob"),
+    ],
+    nextCursor: null,
+    total: 2,
+    authors: [
+      { author: "Alice", ownerUserId: "Alice", count: 1 },
+      { author: "Bob", ownerUserId: "Bob", count: 1 },
+    ],
+    filterCounts: {
+      attention: 1,
+      netlistable: 1,
+      liked: 2,
+      withoutNetlist: 1,
+      ai: 1,
+      human: 1,
+      attentionKinds: { "global-vdd": 1 },
+    },
+  };
+
+  it("takes a like back off the Liked wall with its total, contributor and counts", () => {
+    const next = withGalleryLike(
+      wall,
+      "amp",
+      { likes: 0, likedByViewer: false },
+      true,
+    );
+    expect(next.entries.map(({ id }) => id)).toEqual(["osc"]);
+    expect(next.total).toBe(1);
+    expect(next.authors).toEqual([
+      { author: "Bob", ownerUserId: "Bob", count: 1 },
+    ]);
+    expect(next.filterCounts).toEqual({
+      attention: 0,
+      netlistable: 0,
+      liked: 1,
+      withoutNetlist: 1,
+      ai: 0,
+      human: 1,
+      attentionKinds: { "global-vdd": 0 },
+    });
+  });
+
+  it("keeps the entry elsewhere and applies the server's count", () => {
+    const next = withGalleryLike(
+      wall,
+      "amp",
+      { likes: 0, likedByViewer: false },
+      false,
+    );
+    expect(
+      next.entries.map(({ id, likes, likedByViewer }) => [
+        id,
+        likes,
+        likedByViewer,
+      ]),
+    ).toEqual([
+      ["amp", 0, false],
+      ["osc", 1, true],
+    ]);
+    expect(next.total).toBe(2);
+    expect(next.authors).toBe(wall.authors);
+    expect(next.filterCounts).toMatchObject({ attention: 1, liked: 1 });
+    expect(withGalleryLike(wall, "gone", { likes: 3 }, true)).toBe(wall);
   });
 });

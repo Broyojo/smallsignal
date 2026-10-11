@@ -15,6 +15,7 @@ import {
   accountTabFromSearch,
   type AccountTab,
 } from "./account-page";
+import { ModerationContent } from "./moderation";
 
 function markupFor(
   state: AccountState,
@@ -364,5 +365,33 @@ describe("fetchSessionUser", () => {
 
     expect([first, second, third]).toEqual([null, null, null]);
     expect(requests).toBe(1);
+  });
+});
+
+describe("ModerationContent", () => {
+  it("holds the two collections and none of operational maintenance", () => {
+    const owner = renderToStaticMarkup(
+      createElement(ModerationContent, { isAdmin: true }),
+    );
+    expect(owner).toContain('data-testid="rejected-list"');
+    expect(owner).toContain('data-testid="review-bin"');
+    // Maintenance belongs in scripts: no forms, settings or schema tools.
+    for (const absent of [
+      "<input",
+      "<textarea",
+      "<form",
+      "owner-settings",
+      "review-empty",
+      "Project schema maintenance",
+      "Netlist marks",
+    ])
+      expect(owner).not.toContain(absent);
+    const moderator = renderToStaticMarkup(
+      createElement(ModerationContent, { isAdmin: false }),
+    );
+    expect(moderator).toContain(
+      "Rejecting and withdrawing stay with the Owner",
+    );
+    expect(moderator).not.toContain("rejected-list");
   });
 });
