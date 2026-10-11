@@ -6,6 +6,7 @@ import { expect, test } from "./gallery-test.js";
 import { awaitEditorReady } from "./editor-fixtures.js";
 import {
   ENTRY,
+  fulfillPreview,
   galleryResistorProject,
   mockGallery,
   mockPreviews,
@@ -57,6 +58,14 @@ test("signed out, the wall and the editor's Gallery panel are grey with a way to
   await unlock.click();
   await expect(page.getByTestId("signin-github")).toBeVisible();
   await expect(page.getByTestId("signin-google")).toBeVisible();
+  // The email address takes a whole row, its button the row below.
+  const [address, send] = await Promise.all(
+    ["signin-email-input", "signin-email-send"].map((id) =>
+      page.getByTestId(id).boundingBox(),
+    ),
+  );
+  expect(Math.round(address!.width)).toBe(Math.round(send!.width));
+  expect(send!.y).toBeGreaterThan(address!.y + address!.height - 1);
 
   await page.goto("/editor");
   await awaitEditorReady(page);
@@ -120,11 +129,7 @@ test("a signed-out visitor sees the wall's first twelve circuits, dimmed and clo
       return route.fulfill({
         json: { entries, nextCursor: null, signedOut: true },
       });
-    if (url.pathname.endsWith("/preview.svg"))
-      return route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30"><rect width="40" height="30" fill="#888"/></svg>',
-      });
+    if (url.pathname.endsWith("/preview.svg")) return fulfillPreview(route);
     return route.fulfill({
       status: 401,
       json: { error: "sign-in-required" },
@@ -504,6 +509,16 @@ test("a member withdraws their own entry from its tile, then restores or deletes
   await expect(card).not.toContainText("Open in editor");
   await page.getByTestId(`mine-history-${mine.id}`).click();
   await expect(page.getByTestId("version-1")).toContainText("Live Amp v1");
+  // The dialog keeps its overlay styling on the Gallery's own route.
+  await expect(page.locator(".version-history-backdrop")).toHaveCSS(
+    "position",
+    "fixed",
+  );
+  await expect(page.getByTestId("version-history-dialog")).toHaveCSS(
+    "display",
+    "flex",
+  );
+  await expect(page.getByTestId("version-1")).toHaveCSS("display", "grid");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("version-history-dialog")).toHaveCount(0);
 

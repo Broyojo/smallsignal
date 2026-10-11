@@ -1143,6 +1143,41 @@ test("the tag menu multi-selects and a tile's tag joins the selection", async ({
     await sidebar
       .getByRole("button", { name: `Expand ${group}`, exact: true })
       .click();
+  // A group's name and its tags share one type and rhythm; a tag row stays
+  // a compact line, its box starting where its group's name does.
+  const amplifier = page.getByTestId("gallery-tag-option-amplifier");
+  expect((await amplifier.boundingBox())!.height).toBeLessThanOrEqual(28);
+  const rhythm = await sidebar
+    .getByRole("checkbox", { name: "Amplifiers", exact: true })
+    .evaluate((summary) => {
+      const group = summary.closest(".gallery-tag-group")!;
+      const items = [
+        ...group.querySelectorAll<HTMLElement>(".gallery-sidebar-tag"),
+      ];
+      const own = getComputedStyle(summary);
+      const item = getComputedStyle(items[0]!);
+      const name = summary.querySelector(".gallery-tag-group-name")!;
+      const check = items[0]!.querySelector(".gallery-tag-check")!;
+      return {
+        same: own.fontFamily === item.fontFamily && own.color === item.color,
+        font: [own.fontSize, own.fontWeight, own.paddingTop, own.paddingBottom],
+        groupMarginBottom: getComputedStyle(group).marginBottom,
+        itemGap:
+          items[1]!.getBoundingClientRect().top -
+          items[0]!.getBoundingClientRect().bottom,
+        tagIndent:
+          check.getBoundingClientRect().left -
+          name.getBoundingClientRect().left,
+      };
+    });
+  expect(rhythm).toEqual({
+    same: true,
+    // With a mouse, rows sit about a tenth closer than touch rows.
+    font: ["12px", "600", "4.5px", "4.5px"],
+    groupMarginBottom: "4px",
+    itemGap: 1,
+    tagIndent: 0,
+  });
   await page.getByTestId("gallery-tag-option-amplifier").click();
   await page.getByTestId("gallery-tag-option-adc").click();
   await expect(page).toHaveURL(/tags=amplifier%2Cadc|tags=amplifier,adc/);

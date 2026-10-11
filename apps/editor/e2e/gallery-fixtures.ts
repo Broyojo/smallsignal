@@ -38,7 +38,7 @@ export function sessionUser<Overrides extends object>(
 /** Answer the session with this account, or signed out for null. */
 export async function signIn(
   target: Page | BrowserContext,
-  user: object | null,
+  user: ReturnType<typeof sessionUser> | null,
 ): Promise<void> {
   await target.route("**/api/auth/me", (route) =>
     route.fulfill({ json: { user } }),

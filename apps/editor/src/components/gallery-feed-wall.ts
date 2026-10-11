@@ -72,6 +72,64 @@ function attentionKindsWithout(
   return { attentionKinds: next };
 }
 
+/**
+ * The wall once the server answered a thumb: the entry's own count, or,
+ * when Liked narrows the wall and the like was taken back, the wall without
+ * it, its total, contributors and quick-filter counts one entry less.
+ */
+export function withGalleryLike(
+  previous: GalleryFeedState,
+  entryId: string,
+  result: { likes?: number; likedByViewer?: boolean },
+  likedOnly: boolean,
+): GalleryFeedState {
+  const entry = previous.entries.find((item) => item.id === entryId);
+  if (!entry) return previous;
+  const liked = result.likedByViewer === true;
+  const removed = likedOnly && !liked;
+  return {
+    ...previous,
+    entries: removed
+      ? previous.entries.filter((item) => item.id !== entryId)
+      : previous.entries.map((item): GalleryFeedEntry =>
+          item.id === entryId
+            ? {
+                ...item,
+                likes: result.likes ?? item.likes ?? 0,
+                likedByViewer: liked,
+              }
+            : item,
+        ),
+    total:
+      removed && previous.total !== null ? previous.total - 1 : previous.total,
+    ...(removed && previous.authors
+      ? { authors: removeGalleryAuthorEntry(previous.authors, entry) }
+      : {}),
+    ...(previous.filterCounts
+      ? {
+          filterCounts: {
+            attention:
+              previous.filterCounts.attention -
+              Number(removed && entry.attention?.status === "needs-attention"),
+            netlistable:
+              previous.filterCounts.netlistable -
+              Number(removed && entry.netlistable === true),
+            ...pairCountsWithout(previous.filterCounts, entry, removed),
+            liked:
+              previous.filterCounts.liked +
+              Number(liked) -
+              Number(entry.likedByViewer === true),
+            ...attentionKindsWithout(
+              previous.filterCounts.attentionKinds,
+              entry,
+              removed,
+            ),
+          },
+        }
+      : {}),
+  };
+}
+
 export function useGalleryWall({
   preload,
   feedQuery,
@@ -191,57 +249,9 @@ export function useGalleryWall({
       likedByViewer?: boolean;
     } | null;
     if (!result) return;
-    setState((previous) => {
-      const entry = previous.entries.find((item) => item.id === entryId);
-      if (!entry) return previous;
-      const liked = result.likedByViewer === true;
-      const removed = likedOnly && !liked;
-      return {
-        ...previous,
-        entries: removed
-          ? previous.entries.filter((item) => item.id !== entryId)
-          : previous.entries.map((item): GalleryFeedEntry =>
-              item.id === entryId
-                ? {
-                    ...item,
-                    likes: result.likes ?? item.likes ?? 0,
-                    likedByViewer: liked,
-                  }
-                : item,
-            ),
-        total:
-          removed && previous.total !== null
-            ? previous.total - 1
-            : previous.total,
-        ...(removed && previous.authors
-          ? { authors: removeGalleryAuthorEntry(previous.authors, entry) }
-          : {}),
-        ...(previous.filterCounts
-          ? {
-              filterCounts: {
-                attention:
-                  previous.filterCounts.attention -
-                  Number(
-                    removed && entry.attention?.status === "needs-attention",
-                  ),
-                netlistable:
-                  previous.filterCounts.netlistable -
-                  Number(removed && entry.netlistable === true),
-                ...pairCountsWithout(previous.filterCounts, entry, removed),
-                liked:
-                  previous.filterCounts.liked +
-                  Number(liked) -
-                  Number(entry.likedByViewer === true),
-                ...attentionKindsWithout(
-                  previous.filterCounts.attentionKinds,
-                  entry,
-                  removed,
-                ),
-              },
-            }
-          : {}),
-      };
-    });
+    setState((previous) =>
+      withGalleryLike(previous, entryId, result, likedOnly),
+    );
     if (likedOnly) setTagCountsRefresh((previous) => previous + 1);
     announceGalleryChange({ entryId });
   }

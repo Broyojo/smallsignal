@@ -138,9 +138,24 @@ test("a member publishes from a tab, which then counts as saved and updates its 
   await expect(active.getByLabel("Unsaved")).toBeVisible();
   await expect(page.getByTestId("project-unsaved-indicator")).toBeVisible();
 
+  // The dialog's lazily loaded styles leave the editor's toolbar alone.
+  const toolbar = page.locator(".toolbar-row").first();
+  const toolbarStyle = () =>
+    toolbar.evaluate((element) => {
+      const { backgroundColor, borderTopColor, display } =
+        getComputedStyle(element);
+      return { backgroundColor, borderTopColor, display };
+    });
+  const toolbarBefore = await toolbarStyle();
   await page.getByTestId("publish-gallery-button").click();
   const dialog = page.getByTestId("publish-gallery-dialog");
   await expect(dialog).toBeVisible();
+  await expect.poll(toolbarStyle).toEqual(toolbarBefore);
+  // One part trips the content check, live on the open Project: advice that
+  // keeps Publish open, since the checker has false positives.
+  const gates = dialog.getByTestId("publish-gallery-gates");
+  await expect(gates).toContainText("publishing stays open");
+  await expect(gates).toContainText("Too little content");
   await expect(dialog.getByText("Publishing as Token Zhang")).toBeVisible();
   await expect(dialog.getByLabel("Owner passphrase")).toHaveCount(0);
   // The byline comes from the account, so there is no field to fill in.
@@ -258,6 +273,11 @@ test("a mistaken click beside the publish form keeps what was written", async ({
   await page.mouse.click(8, viewport.height - 8);
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("Circuit name")).toHaveValue("Folded Cascode");
+  // Cancelling closes it, and reopening comes back to the draft.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByTestId("publish-gallery-button").click();
+  await expect(dialog.getByLabel("Circuit name")).toHaveValue("Folded Cascode");
   await expect(dialog.getByLabel("Description")).toHaveValue(
     "Gain boosted, 1.2 V supply, trimmed offset.",
   );
@@ -312,6 +332,7 @@ localTest(
 
 for (const scenario of [
   "reopen and metadata",
+  "publish before Save",
   "source replacement",
   "unrelated Shelf rename",
 ] as const) {
@@ -415,6 +436,26 @@ for (const scenario of [
       await expect(dialog).toBeVisible();
       return dialog;
     };
+    if (scenario === "publish before Save") {
+      // A first publication before the first private Save is bound by that
+      // Save, so the reopened draft offers its Update, not a new entry.
+      await page.goto("/editor?new=1");
+      await awaitEditorReady(page);
+      const dialog = await publishDialog();
+      await dialog.getByLabel("Circuit name").fill("Publish before Save");
+      await dialog
+        .getByRole("button", { name: "Publish", exact: true })
+        .click();
+      await expect(dialog).toHaveCount(0);
+      await save();
+      expect(drafts.get("draft-1")!.galleryEntryId).toBe("published-1");
+      await page.goto("/editor?project=draft-1");
+      await awaitEditorReady(page);
+      await expect(
+        (await publishDialog()).getByRole("button", { name: "Update entry" }),
+      ).toBeEnabled();
+      return;
+    }
     if (scenario === "reopen and metadata") {
       await page.goto("/editor?new=1");
       await awaitEditorReady(page);

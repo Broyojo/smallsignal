@@ -25,7 +25,8 @@ const editingSpecs = [
   "wire-drawing",
   "wire-editing",
 ].map((name) => `apps/editor/e2e/${name}.spec.ts`);
-// The Gallery workflows, one spec per feature (#1537, #1646).
+// The Gallery workflows: the wall, accounts, moderation, publishing, history
+// and duplicates (#1646).
 const gallerySpecs = [
   "account",
   "duplicates",
@@ -113,6 +114,23 @@ describe("CI validation planning", () => {
         "apps/editor/e2e/project-file.spec.ts",
       );
     }
+  });
+
+  it("routes Gallery sources to the Gallery browser specs (#1646)", () => {
+    for (const path of [
+      "apps/editor/src/gallery-client.ts",
+      "apps/editor/src/gallery-filters.ts",
+      "apps/editor/src/gallery-search.ts",
+      "apps/editor/src/components/gallery-tag-sidebar.tsx",
+      "apps/editor/src/components/account-page.tsx",
+      "apps/editor/src/features/editor-shell/examples-panel-tags.tsx",
+      "apps/editor/src/features/editor-shell/project-shelf.tsx",
+      "apps/editor/src/app/use-gallery-publishing.ts",
+      "worker/gallery-curation.ts",
+    ])
+      expect(ciPlan([path]).e2eArgs, path).toEqual(
+        expect.arrayContaining(gallerySpecs),
+      );
   });
 
   it("maps label naming, circuit settings and recovery changes to their browser contracts", () => {

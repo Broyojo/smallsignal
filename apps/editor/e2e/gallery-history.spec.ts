@@ -11,6 +11,7 @@ import {
 import { awaitEditorReady } from "./editor-fixtures.js";
 import {
   ENTRY,
+  fulfillPreview,
   galleryResistorProject,
   mockGallery,
   mockPreviews,
@@ -109,6 +110,18 @@ test("Gallery history opens centred, compares apart from the live editor, branch
   await page.keyboard.press("Delete");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  // In a narrow window the two sides stack and nothing overflows.
+  await page.setViewportSize({ width: 640, height: 800 });
+  const sides = page.locator(".version-compare-side");
+  const beforeSide = (await sides.first().boundingBox())!;
+  const afterSide = (await sides.last().boundingBox())!;
+  expect(afterSide.y).toBeGreaterThanOrEqual(beforeSide.y + beforeSide.height);
+  expect(
+    await history.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
   // A branch is a new, unpublished Project in its own tab.
   await page.getByTestId("version-branch-1").click();
   await expect(history).toHaveCount(0);
@@ -159,11 +172,7 @@ test("Shelf save history compares, branches privately and restores with the list
   await page.route("**/api/projects**", (route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname;
-    if (path.endsWith("/preview.svg"))
-      return route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
-      });
+    if (path.endsWith("/preview.svg")) return fulfillPreview(route);
     if (path.endsWith("/restore")) {
       expect(req.headers()["if-match"]).toBe("revision-4");
       restored = true;

@@ -7,7 +7,10 @@ import {
   GalleryFeed,
   loadGalleryFeed,
 } from "./gallery-feed";
-import { canReuseGalleryLandingFeed } from "./gallery-feed-wall";
+import {
+  canReuseGalleryLandingFeed,
+  withGalleryLike,
+} from "./gallery-feed-wall";
 import {
   contributorBoardRows,
   GalleryCountPanel,
@@ -617,5 +620,102 @@ describe("GalleryQuickFilters", () => {
     expect(pressed("gallery-filter-attention")).toEqual([
       { attention: false, attentionKind: null },
     ]);
+  });
+});
+
+describe("withGalleryLike", () => {
+  const entry = (
+    id: string,
+    author: string,
+    extra: Partial<GalleryFeedEntry> = {},
+  ): GalleryFeedEntry => ({
+    id,
+    name: id,
+    author,
+    ownerUserId: author,
+    description: "",
+    createdAt: "2026-10-09T08:00:00.000Z",
+    schemaVersion: 1,
+    likes: 1,
+    likedByViewer: true,
+    ...extra,
+  });
+  const wall = {
+    status: "ready" as const,
+    entries: [
+      entry("amp", "Alice", {
+        netlistable: true,
+        aiGenerated: true,
+        attention: {
+          status: "needs-attention",
+          issues: [
+            { kind: "global-vdd", detail: "" },
+            { kind: "global-vdd", detail: "" },
+          ],
+        },
+      } as Partial<GalleryFeedEntry>),
+      entry("osc", "Bob"),
+    ],
+    nextCursor: null,
+    total: 2,
+    authors: [
+      { author: "Alice", ownerUserId: "Alice", count: 1 },
+      { author: "Bob", ownerUserId: "Bob", count: 1 },
+    ],
+    filterCounts: {
+      attention: 1,
+      netlistable: 1,
+      liked: 2,
+      withoutNetlist: 1,
+      ai: 1,
+      human: 1,
+      attentionKinds: { "global-vdd": 1 },
+    },
+  };
+
+  it("takes a like back off the Liked wall with its total, contributor and counts", () => {
+    const next = withGalleryLike(
+      wall,
+      "amp",
+      { likes: 0, likedByViewer: false },
+      true,
+    );
+    expect(next.entries.map(({ id }) => id)).toEqual(["osc"]);
+    expect(next.total).toBe(1);
+    expect(next.authors).toEqual([
+      { author: "Bob", ownerUserId: "Bob", count: 1 },
+    ]);
+    expect(next.filterCounts).toEqual({
+      attention: 0,
+      netlistable: 0,
+      liked: 1,
+      withoutNetlist: 1,
+      ai: 0,
+      human: 1,
+      attentionKinds: { "global-vdd": 0 },
+    });
+  });
+
+  it("keeps the entry elsewhere and applies the server's count", () => {
+    const next = withGalleryLike(
+      wall,
+      "amp",
+      { likes: 0, likedByViewer: false },
+      false,
+    );
+    expect(
+      next.entries.map(({ id, likes, likedByViewer }) => [
+        id,
+        likes,
+        likedByViewer,
+      ]),
+    ).toEqual([
+      ["amp", 0, false],
+      ["osc", 1, true],
+    ]);
+    expect(next.total).toBe(2);
+    expect(next.authors).toBe(wall.authors);
+    expect(next.filterCounts).toMatchObject({ attention: 1, liked: 1 });
+    expect(withGalleryLike(wall, "gone", { likes: 3 }, true)).toBe(wall);
   });
 });
