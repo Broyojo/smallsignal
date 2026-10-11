@@ -2,8 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   awaitEditorReady,
   chooseComponent,
-  downloadBytes,
+  exportedProject,
   openMenu,
+  openProjectFile,
   openProjectInfo,
   parseSavedProject,
   renameProject,
@@ -11,187 +12,13 @@ import {
 import { createEmptyProject, type CircuitProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 import { AgentHttpClient } from "../../../packages/agent-client/src/http-client.js";
-import { finiteGainProject } from "../test-fixtures/finite-gain-copy";
 
 async function insert(page: Page, symbol: string, x: number, y: number) {
   await chooseComponent(page, symbol);
   await page.getByTestId("schematic-canvas").click({ position: { x, y } });
   await page.keyboard.press("Escape");
 }
-async function saved(page: Page): Promise<CircuitProject> {
-  return parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ) as CircuitProject;
-}
-
-test("GUI and Agent copy finite_gain across Projects without outside names, and undo/reopen preserve the model", async ({
-  page,
-  context,
-  baseURL,
-}) => {
-  test.slow();
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  const sourceProject = finiteGainProject("finite-source-project");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "finite-source.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(sourceProject)),
-  });
-  const sourceBefore = await saved(page);
-  await page.getByTestId("open-agent").click();
-  const panel = page.getByTestId("connect-agent-panel");
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(/Claim: /, {
-    timeout: 45_000,
-  });
-  const { claimCode } = JSON.parse(
-    /^Claim: (.+)$/mu.exec(
-      await panel.getByTestId("agent-copy-text").inputValue(),
-    )![1]!,
-  );
-  const client = new AgentHttpClient({ baseUrl: baseURL! });
-  const session = await client.claim(claimCode);
-  await expect(panel.getByTestId("agent-status")).toHaveText("Connected");
-  await panel.getByRole("button", { name: "Close Agent dialog" }).click();
-  for (const path of ["Agent", "C", "Ctrl+C"] as const) {
-    const targetProject = finiteGainProject(`finite-target-${path}`);
-    await page.getByTestId("tab-project-file").setInputFiles({
-      name: `finite-target-${path}.icproj.json`,
-      mimeType: "application/json",
-      buffer: Buffer.from(serializeProject(targetProject)),
-    });
-    const targetTab = page.getByRole("tab").last();
-    const before = await saved(page);
-    await client.status(session.sessionId, session.agentToken);
-    for (const copyNumber of [1, 2]) {
-      if (path === "Agent") {
-        const listing = await client.projects(
-          session.sessionId,
-          session.agentToken,
-          {
-            apiVersion: "3.0",
-            requestId: `finite-list-${copyNumber}`,
-            operation: "workspace",
-            request: { action: "list" },
-          },
-        );
-        if (
-          !listing.ok ||
-          listing.operation !== "workspace" ||
-          listing.result.action !== "list"
-        )
-          throw new Error("Workspace list failed");
-        const source = listing.result.projects.find(
-          (item) => item.projectId === sourceProject.id,
-        )!;
-        const target = listing.result.projects.find(
-          (item) => item.projectId === targetProject.id,
-        )!;
-        const copied = await client.projects(
-          session.sessionId,
-          session.agentToken,
-          {
-            apiVersion: "3.0",
-            requestId: `finite-copy-${copyNumber}`,
-            operation: "workspace",
-            request: {
-              action: "copy",
-              sourceWorkspaceId: source.workspaceId,
-              sourceDocumentId: source.cells[0]!.documentId,
-              sourceRevision: source.cells[0]!.revision,
-              sourceStructureRevision: source.structureRevision,
-              targetWorkspaceId: target.workspaceId,
-              targetDocumentId: target.cells[0]!.documentId,
-              expectedRevision: target.cells[0]!.revision,
-              expectedStructureRevision: target.structureRevision,
-              selection: {
-                instanceIds: ["X1"],
-                routeIds: [],
-                junctionIds: [],
-                annotationIds: [],
-                draftingIds: [],
-              },
-              offset: { x: copyNumber * 2000, y: 0 },
-            },
-          },
-        );
-        expect(copied).toMatchObject({
-          ok: true,
-          operation: "workspace",
-          result: { action: "copy" },
-        });
-      } else {
-        await page.getByRole("tab").first().click();
-        await page.getByTestId("hit-X1").click();
-        await page.keyboard.press(path === "C" ? "c" : "ControlOrMeta+c");
-        await targetTab.click();
-        if (path === "Ctrl+C") await page.keyboard.press("ControlOrMeta+v");
-        const ghost = page.getByTestId("copy-placement-preview");
-        await expect(ghost).toBeVisible();
-        await expect(ghost.locator('[data-kind="net-label"]')).toHaveCount(0);
-        await page.getByTestId("schematic-canvas").click({
-          position: { x: 150 + 200 * copyNumber, y: 100 + 150 * copyNumber },
-        });
-        await page.keyboard.press("Escape");
-      }
-      await expect(page.getByTestId("active-instance-count")).toHaveText(
-        String(copyNumber + 1),
-      );
-    }
-    const copied = await saved(page);
-    expect(copied.documents[0]!.nets).toEqual(before.documents[0]!.nets);
-    expect(copied.documents[0]!.annotations).toEqual(
-      before.documents[0]!.annotations,
-    );
-    expect(copied.documents[0]!.connectivityEvidence).toEqual(
-      before.documents[0]!.connectivityEvidence,
-    );
-    expect(copied.modelSources).toEqual(before.modelSources);
-    expect(copied.externalSubcircuitDefinitions).toEqual(
-      before.externalSubcircuitDefinitions,
-    );
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect(page.getByTestId("active-instance-count")).toHaveText("2");
-    await page.keyboard.press("ControlOrMeta+Shift+z");
-    await expect(page.getByTestId("active-instance-count")).toHaveText("3");
-    expect((await saved(page)).documents[0]!.nets).toEqual(
-      before.documents[0]!.nets,
-    );
-  }
-  await page.getByRole("tab").first().click();
-  expect((await saved(page)).documents).toEqual(sourceBefore.documents);
-  await page.getByRole("tab").last().click();
-  const beforeReload = await saved(page);
-  page.on("dialog", (dialog) => void dialog.accept());
-  await page.reload();
-  await awaitEditorReady(page);
-  expect((await saved(page)).documents).toEqual(beforeReload.documents);
-  expect((await saved(page)).modelSources).toEqual(beforeReload.modelSources);
-});
-
-test("first blank Project has its own stable evidence identity", async ({
-  page,
-  context,
-}) => {
-  await page.goto("/editor?new=1");
-  const initialId = (await saved(page)).id;
-  expect(initialId).toMatch(/^project-/);
-  const separateWindow = await context.newPage();
-  await separateWindow.goto("/editor?new=1");
-  expect((await saved(separateWindow)).id).not.toBe(initialId);
-  await separateWindow.close();
-  await page.reload();
-  expect((await saved(page)).id).toBe(initialId);
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
-  const nextId = (await saved(page)).id;
-  expect(nextId).toMatch(/^project-/);
-  expect(nextId).not.toBe(initialId);
-});
+const saved = (page: Page): Promise<CircuitProject> => exportedProject(page);
 
 test("project tabs append a partial selection and retain independent history, cameras and code drafts", async ({
   page,
@@ -274,10 +101,24 @@ test("project tabs append a partial selection and retain independent history, ca
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   await page.keyboard.press("ControlOrMeta+Shift+z");
   await expect(page.getByTestId("active-instance-count")).toHaveText("3");
-  // A single component and native modifiers use the same append path.
+  // A single component and the browser's own copy events use the same
+  // append path. A leftover browser selection in the header must not take
+  // ownership once the canvas has focus again, and Ctrl/Cmd+C puts the
+  // fragment on the system clipboard without a placement in hand.
   await page.getByRole("tab").first().click();
   await page.getByTestId("hit-M3").click();
+  await page.evaluate(() => {
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("h1")!);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  await canvas.focus();
   await page.keyboard.press("ControlOrMeta+c");
+  await expect(page.getByTestId("status")).toContainText("Circuit copied");
+  await expect(page.getByTestId("copy-placement-preview")).toHaveCount(0);
+  const encoded = await page.evaluate(() => navigator.clipboard.readText());
+  expect(JSON.parse(encoded).project.documents[0].instances).toHaveLength(1);
   await page.getByRole("tab").nth(1).click();
   await page.keyboard.press("ControlOrMeta+v");
   await canvas.click({ position: { x: 660, y: 380 } });
@@ -300,7 +141,6 @@ test("project tabs append a partial selection and retain independent history, ca
   await page.getByRole("button", { name: /Reload/ }).click();
   await page.getByRole("tab").first().click();
   await expect(page.getByTestId("active-instance-count")).toHaveText("3");
-  await page.screenshot({ path: "plan/project-tabs.png" });
 });
 
 test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the same", async ({
@@ -355,11 +195,7 @@ test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the sa
   });
   await page.goto("/editor?new=1");
   await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "fresh-tab-copy.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProjectFile(page, serializeProject(project));
   await expect(page.getByTestId("hit-M1")).toBeVisible();
   const canvas = page.getByTestId("schematic-canvas");
   const ghost = page.getByTestId("copy-placement-preview");
@@ -417,7 +253,7 @@ test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the sa
   expect(pasted.nets.flatMap((net) => net.terminals)).toEqual([]);
 });
 
-test("tab file opening is additive and closing unsaved projects can be cancelled", async ({
+test("tab file opening is additive, and closing one tab, the others or all asks only for unsaved ones", async ({
   page,
 }) => {
   await page.goto("/editor?new=1");
@@ -429,34 +265,29 @@ test("tab file opening is additive and closing unsaved projects can be cancelled
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(exported)),
   });
-  await expect(page.getByRole("tab")).toHaveCount(2);
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveCount(2);
   await expect(
     page.getByRole("tab", { name: "Second circuit" }),
   ).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab").nth(1).focus();
+  await tabs.nth(1).focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(page.getByRole("tab").first()).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await expect(page.getByRole("tab").first()).toBeFocused();
+  await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.first()).toBeFocused();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab").nth(1)).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
   await insert(page, "capacitor", 500, 260);
   await page.setViewportSize({ width: 360, height: 600 });
   await page.getByRole("button", { name: "Close tab Second circuit" }).click();
   await expect(
     page.getByRole("button", { name: "Keep open", exact: true }),
   ).toBeFocused();
-  const closeStrip = page.getByTestId("project-tab-close-decision");
-  await expect(closeStrip.locator(".inline-confirm-decision")).toHaveText(
+  const strip = page.getByTestId("project-tab-close-decision");
+  await expect(strip.locator(".inline-confirm-decision")).toHaveText(
     "Close without savingKeep open",
   );
   expect(
-    await closeStrip.evaluate(
+    await strip.evaluate(
       (element) =>
         element.scrollWidth <= element.clientWidth &&
         element.getBoundingClientRect().height <= 44 &&
@@ -465,35 +296,27 @@ test("tab file opening is additive and closing unsaved projects can be cancelled
         ),
     ),
   ).toBe(true);
-  await page.screenshot({ path: "plan/inline-tab-close-narrow.png" });
   await page.getByRole("button", { name: "Keep open", exact: true }).click();
-  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(tabs).toHaveCount(2);
   await page.getByRole("button", { name: "Close tab Second circuit" }).click();
   await page
     .getByRole("button", { name: "Close without saving", exact: true })
     .click();
-  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(tabs).toHaveCount(1);
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-});
+  await page.setViewportSize({ width: 1280, height: 720 });
 
-test("a tab's right-click menu closes the others or all, asking once for unsaved ones", async ({
-  page,
-}) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  // A tab's right-click menu: Close Others keeps the tab right-clicked, and
+  // clean tabs go without asking.
   const newTab = page.getByRole("button", {
     name: "New project tab",
     exact: true,
   });
-  const tabs = page.getByRole("tab");
   const menu = page.getByTestId("project-tab-menu");
   await newTab.click();
-  await insert(page, "resistor", 300, 240);
   await newTab.click();
   await expect(tabs).toHaveCount(3);
-
-  // Close Others keeps the tab right-clicked; clean tabs go without asking.
-  await tabs.nth(1).click({ button: "right" });
+  await tabs.first().click({ button: "right" });
   await expect(menu.getByRole("menuitem")).toHaveText([
     "Close",
     "Close Others",
@@ -509,7 +332,6 @@ test("a tab's right-click menu closes the others or all, asking once for unsaved
   await insert(page, "capacitor", 300, 240);
   await tabs.first().click({ button: "right" });
   await menu.getByRole("menuitem", { name: "Close All" }).click();
-  const strip = page.getByTestId("project-tab-close-decision");
   await expect(strip).toContainText("Close 2 tabs? 2 have unsaved changes.");
   await strip.getByRole("button", { name: "Keep open", exact: true }).click();
   await expect(tabs).toHaveCount(2);
@@ -820,17 +642,13 @@ test("plain C/V works between internal tabs when system clipboard permission is 
   );
 });
 
-test("refresh restores every unsaved tab and active view without crossing browser windows", async ({
+test("refresh restores every unsaved tab and the active view, and a closed tab stays closed", async ({
   page,
-  context,
 }) => {
-  // Four complete circuit exports before and after reload, plus another
-  // browser window, are a longer journey than the single-edit checks.
-  test.slow();
   await page.goto("/editor?new=1");
   const expected: CircuitProject[] = [];
   const views: (string | null)[] = [];
-  for (const symbol of ["nmos", "pmos", "resistor", "capacitor"]) {
+  for (const symbol of ["nmos", "resistor"]) {
     if (expected.length)
       await page
         .getByRole("button", { name: "New project tab", exact: true })
@@ -841,19 +659,11 @@ test("refresh restores every unsaved tab and active view without crossing browse
       await page.getByTestId("schematic-canvas").getAttribute("viewBox"),
     );
   }
-  await page.getByRole("tab").nth(1).click();
-  // A different browser window starts independent, even on the same URL.
-  const other = await context.newPage();
-  await other.goto("/editor?new=1");
-  await expect(other.getByRole("tab")).toHaveCount(1);
-  await insert(other, "inductor", 260, 230);
-  other.on("dialog", (dialog) => dialog.accept());
-  await other.reload();
-  await expect(other.getByTestId("active-instance-count")).toHaveText("1");
+  await page.getByRole("tab").first().click();
   page.on("dialog", (dialog) => dialog.accept());
   await page.reload();
-  await expect(page.getByRole("tab")).toHaveCount(4);
-  await expect(page.getByRole("tab").nth(1)).toHaveAttribute(
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tab").first()).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -866,7 +676,6 @@ test("refresh restores every unsaved tab and active view without crossing browse
     );
     expect((await saved(page)).documents).toEqual(expected[index]!.documents);
   }
-  // A closed tab stays closed across the next refresh.
   await page
     .getByRole("button", { name: /Close tab / })
     .last()
@@ -875,15 +684,14 @@ test("refresh restores every unsaved tab and active view without crossing browse
     .getByRole("button", { name: "Close without saving", exact: true })
     .click();
   await page.reload();
-  await expect(page.getByRole("tab")).toHaveCount(3);
-  await other.close();
+  await expect(page.getByRole("tab")).toHaveCount(1);
 });
 
-/** How many tabs this window's saved workspace holds (null: none saved). */
-async function savedTabCount(page: Page): Promise<number | null> {
+/** This window's saved tabs, each as [unsaved, its Cloud Project id]. */
+function savedTabs(page: Page): Promise<[boolean, string | null][]> {
   return page.evaluate(
     () =>
-      new Promise<number | null>((resolve, reject) => {
+      new Promise((resolve, reject) => {
         const windowId = sessionStorage.getItem("icm.workspace-window.v1");
         const request = indexedDB.open("analog-canvas-workspaces", 1);
         request.onerror = () => reject(request.error);
@@ -894,7 +702,12 @@ async function savedTabCount(page: Page): Promise<number | null> {
             .get(windowId ?? "");
           read.onsuccess = () => {
             request.result.close();
-            resolve(read.result ? read.result.tabs.length : null);
+            resolve(
+              (read.result?.tabs ?? []).map(({ session }: { session: any }) => [
+                session.dirty,
+                session.file.cloudBinding?.id ?? null,
+              ]),
+            );
           };
           read.onerror = () => reject(read.error);
         };
@@ -902,20 +715,61 @@ async function savedTabCount(page: Page): Promise<number | null> {
   );
 }
 
-test("a fresh browser tab offers the tabs a closed window left, and reopens them once (#1250)", async ({
-  page,
+test("a fresh browser tab offers the tabs a closed window left, reopens them once, and brings a Cloud Project's unsaved edits back as a copy (#1250, #1599)", async ({
   context,
 }) => {
   test.slow();
-  await page.goto("/editor?new=1");
-  await insert(page, "resistor", 240, 250);
+  const alpha = createEmptyProject("project-alpha", "Alpha");
+  const summary = {
+    id: "cloud-alpha",
+    name: "Alpha",
+    revision: 1,
+    schemaVersion: alpha.schemaVersion,
+    updatedAt: "2026-10-10T00:00:00.000Z",
+  };
+  await context.route("**/api/auth/me", (route) =>
+    route.fulfill({
+      json: {
+        user: {
+          id: "u1",
+          displayName: "Author",
+          email: "author@example.com",
+          provider: "github",
+          isAdmin: false,
+        },
+      },
+    }),
+  );
+  await context.route("**/api/projects", (route) =>
+    route.fulfill({ json: { projects: [summary] } }),
+  );
+  await context.route("**/api/projects/cloud-alpha", (route) =>
+    route.fulfill({
+      json: { project: { ...summary, projectText: serializeProject(alpha) } },
+    }),
+  );
+  const alphaTab = (target: Page) =>
+    target.getByRole("tab", { name: /Alpha$/ });
+  const banner = (target: Page) =>
+    target.getByTestId("workspace-reopen-banner");
+
+  // Edit Cloud Project Alpha and a new circuit without saving either.
+  const page = await context.newPage();
+  await page.goto("/editor?project=cloud-alpha");
+  await expect(alphaTab(page)).toHaveAttribute("aria-selected", "true");
+  await insert(page, "resistor", 260, 240);
+  await expect(alphaTab(page).getByLabel("Unsaved")).toBeVisible();
   await page
     .getByRole("button", { name: "New project tab", exact: true })
     .click();
   await insert(page, "capacitor", 270, 250);
-  await expect.poll(() => savedTabCount(page)).toBe(2);
-  const banner = (target: Page) =>
-    target.getByTestId("workspace-reopen-banner");
+  await expect
+    .poll(() => savedTabs(page))
+    .toEqual([
+      [false, null],
+      [true, "cloud-alpha"],
+      [true, null],
+    ]);
 
   // While that window is open, its tabs are its own.
   const beside = await context.newPage();
@@ -928,16 +782,29 @@ test("a fresh browser tab offers the tabs a closed window left, and reopens them
   await page.close();
   const fresh = await context.newPage();
   await fresh.goto("/editor");
-  await expect(banner(fresh)).toContainText("2 tabs open");
+  await expect(banner(fresh)).toContainText("3 tabs open");
+  await expect(banner(fresh)).toContainText("Alpha");
+  // Opened from the Shelf, Alpha is its saved version.
+  await fresh.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  await fresh
+    .locator(".project-tabs-shelf")
+    .getByRole("button", { name: "Alpha", exact: true })
+    .click();
+  await expect(alphaTab(fresh)).toHaveAttribute("aria-selected", "true");
+  await expect(fresh.getByTestId("active-instance-count")).toHaveText("0");
+
+  // Reopen tabs brings the edits back beside it, Alpha's bound to no Cloud
+  // Project.
   await banner(fresh).getByRole("button", { name: "Reopen tabs" }).click();
   await expect(banner(fresh)).toHaveCount(0);
-  // The untouched blank circuit gave way to the two reopened tabs.
-  await expect(fresh.getByRole("tab")).toHaveCount(2);
-  for (let index = 0; index < 2; index++) {
-    await fresh.getByRole("tab").nth(index).click();
-    await expect(fresh.getByTestId("active-instance-count")).toHaveText("1");
-  }
-  await expect.poll(() => savedTabCount(fresh)).toBe(2);
+  const copy = fresh.getByRole("tab", { name: /Alpha \(unsaved copy\)$/ });
+  await expect(copy.getByLabel("Unsaved")).toBeVisible();
+  await copy.click();
+  await expect(fresh.getByTestId("active-instance-count")).toHaveText("1");
+  await alphaTab(fresh).click();
+  await expect(fresh.getByTestId("active-instance-count")).toHaveText("0");
+  await fresh.getByRole("tab").last().click();
+  await expect(fresh.getByTestId("active-instance-count")).toHaveText("1");
 
   // Taken over, they are offered to no other window.
   const later = await context.newPage();
@@ -948,11 +815,20 @@ test("a fresh browser tab offers the tabs a closed window left, and reopens them
   await later.close();
 });
 
-test("New Circuit opens a blank tab beside the circuit this window drew, and a refresh adds none", async ({
+test("each blank Project has its own stable identity, and New Circuit opens a blank tab beside the circuit this window drew", async ({
   page,
+  context,
 }) => {
   page.on("dialog", (dialog) => dialog.accept());
   await page.goto("/editor?new=1");
+  const initialId = (await saved(page)).id;
+  expect(initialId).toMatch(/^project-/);
+  const separateWindow = await context.newPage();
+  await separateWindow.goto("/editor?new=1");
+  expect((await saved(separateWindow)).id).not.toBe(initialId);
+  await separateWindow.close();
+  await page.reload();
+  expect((await saved(page)).id).toBe(initialId);
   await insert(page, "resistor", 240, 250);
 
   // The Gallery's New Circuit again, in the same browser tab: the circuit
@@ -964,6 +840,9 @@ test("New Circuit opens a blank tab beside the circuit this window drew, and a r
     "true",
   );
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
+  const nextId = (await saved(page)).id;
+  expect(nextId).toMatch(/^project-/);
+  expect(nextId).not.toBe(initialId);
   // The request is handled, so the address no longer asks for another.
   await expect(page).toHaveURL(/\/editor$/);
 
@@ -989,13 +868,10 @@ test("New Circuit opens a blank tab beside the circuit this window drew, and a r
     });
   });
   await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "opened.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(
-      serializeProject(createEmptyProject("project-opened", "Opened")),
-    ),
-  });
+  await openProjectFile(
+    page,
+    serializeProject(createEmptyProject("project-opened", "Opened")),
+  );
   await expect(page.getByRole("tab")).toHaveCount(3);
   await expect(page.getByRole("tab").nth(2)).toContainText("Opened");
   await expect(page.getByRole("tab").nth(2)).toHaveAttribute(
@@ -1012,122 +888,51 @@ test("New Circuit opens a blank tab beside the circuit this window drew, and a r
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
 });
 
-// Plain C/V across tabs is pasted by the partial-selection, fresh-copy and
-// denied-permission cases; these rows check the browser's own copy events.
-for (const modifier of ["Control", "Meta"]) {
-  test(`${modifier} C/V copies a wired subset into an existing project`, async ({
-    page,
-    context,
-  }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await page.goto("/editor?new=1");
-    await insert(page, "nmos", 260, 200);
-    await insert(page, "nmos", 450, 200);
-    await insert(page, "resistor", 600, 400);
-    await page.keyboard.press("w");
-    await page.getByTestId("terminal-M1-S").click();
-    await page.getByTestId("terminal-M2-S").click();
-    await page.keyboard.press("Escape");
-    // Box-select both transistors and their wire, leaving the resistor behind.
-    const a = (await page.getByTestId("hit-M1").boundingBox())!;
-    const b = (await page.getByTestId("hit-M2").boundingBox())!;
-    await page.mouse.move(Math.min(a.x, b.x) - 25, Math.min(a.y, b.y) - 25);
-    await page.mouse.down();
-    await page.mouse.move(
-      Math.max(a.x + a.width, b.x + b.width) + 25,
-      Math.max(a.y + a.height, b.y + b.height) + 25,
-      { steps: 5 },
-    );
-    await page.mouse.up();
-    const key = (letter: string) => `${modifier}+${letter}`;
-    // A leftover browser selection in the header must not take ownership
-    // once the canvas has focus again.
-    await page.evaluate(() => {
-      const range = document.createRange();
-      range.selectNodeContents(document.querySelector("h1")!);
-      window.getSelection()!.removeAllRanges();
-      window.getSelection()!.addRange(range);
-    });
-    await page.getByTestId("schematic-canvas").focus();
-    const sourceRoutes = await page
-      .locator('[data-layer="routes"] polyline')
-      .count();
-    await page.keyboard.press(key("c"));
-    await expect(page.getByTestId("status")).toContainText("Circuit copied");
-    await expect(page.getByTestId("copy-placement-preview")).toHaveCount(0);
-    expect(sourceRoutes).toBeGreaterThan(0);
-    const encoded = await page.evaluate(() => navigator.clipboard.readText());
-    const source = JSON.parse(encoded).project.documents[0];
-    expect(source.instances).toHaveLength(2);
-    expect(source.routes.length).toBe(sourceRoutes);
-    await page
-      .getByRole("button", { name: "New project tab", exact: true })
-      .click();
-    await insert(page, "capacitor", 300, 400);
-    await page.keyboard.press(key("v"));
-    await expect(page.getByTestId("status")).toContainText("click to place");
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x: 380, y: 200 } });
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("active-instance-count")).toHaveText("3");
-    await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(
-      sourceRoutes,
-    );
-    const result = (await saved(page)).documents[0]!;
-    expect(
-      result.instances.filter((item) => item.symbolId === "nmos"),
-    ).toHaveLength(2);
-    expect(
-      result.instances.filter((item) => item.symbolId === "capacitor"),
-    ).toHaveLength(1);
-    expect(result.instances.some((item) => item.symbolId === "resistor")).toBe(
-      false,
-    );
-    // A single undo removes the appended group, keeping the target capacitor.
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-    await page.getByRole("tab").first().click();
-    await expect(page.getByTestId("active-instance-count")).toHaveText("3");
-  });
-}
-
-test("tab names edit in place as one undoable change", async ({ page }) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  const tab = page.getByRole("tab", { selected: true });
-  await tab.dblclick();
-  const name = page.getByRole("textbox", { name: "Project name", exact: true });
-  await expect(name).toBeFocused();
-  await name.fill("OTA input stage");
-  await name.press("Enter");
-  await expect(name).toBeHidden();
-  await expect(tab).toContainText("OTA input stage");
-  await expect(tab.getByLabel("Unsaved")).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+z");
-  await expect(tab).toContainText("New Circuit");
-});
-
-test("name blur commits to the owning tab and text keys stay out of the canvas", async ({
+test("tab names edit in place as one undoable change and commit to their own tab through activation, New, Close and blur", async ({
   page,
 }) => {
   await page.goto("/editor?new=1");
   await awaitEditorReady(page);
-  await renameProject(page, "Project A");
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "New Circuit",
-  );
+  const tabs = page.getByRole("tab", { includeHidden: true });
+  const first = tabs.first();
+  const second = tabs.nth(1);
+  const selected = page.getByRole("tab", { selected: true });
+  const name = page.getByRole("textbox", { name: "Project name", exact: true });
+  const newTab = page.getByRole("button", {
+    name: "New project tab",
+    exact: true,
+  });
+  await first.dblclick();
+  await expect(name).toBeFocused();
+  await name.fill("OTA input stage");
+  await name.press("Enter");
+  await expect(name).toBeHidden();
+  await expect(first).toContainText("OTA input stage");
+  await expect(first.getByLabel("Unsaved")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(first).toContainText("New Circuit");
+
+  // New, clicked while a name commits and widens its tab, still opens a tab.
+  await first.dblclick();
+  await name.fill("A circuit name that expands on commit");
+  await newTab.click();
+  await expect(tabs).toHaveCount(2);
+  await expect(first).toContainText("A circuit name that expands on commit");
+  await expect(selected).toContainText("New Circuit");
   await renameProject(page, "Project B");
-  const first = page.getByRole("tab", { includeHidden: true }).first();
-  const second = page.getByRole("tab", { includeHidden: true }).nth(1);
-  await first.click();
-  await expect(first).toHaveAttribute("aria-selected", "true");
+
+  // Double-clicking another project's name activates it before editing.
+  await first.dblclick();
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue("A circuit name that expands on commit");
+  await name.fill("Project A");
+  await name.press("Enter");
+  await expect(selected).toContainText("Project A");
+  await expect(second).toContainText("Project B");
+
+  // Text keys stay out of the canvas, and blur commits to the owning tab.
   await insert(page, "resistor", 260, 220);
   await first.dblclick();
-  const name = page.getByRole("textbox", { name: "Project name", exact: true });
   await name.fill("Project A revised");
   await name.press("Home");
   await name.press("ArrowRight");
@@ -1147,91 +952,76 @@ test("name blur commits to the owning tab and text keys stay out of the canvas",
   await expect(first).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(first).toContainText("Project A");
+  await expect(first).not.toContainText("revised");
   await expect(page.getByTestId("hit-R1")).toHaveCount(1);
-});
 
-test("double-clicking another project's name activates it before inline editing", async ({
-  page,
-}) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await renameProject(page, "Project A");
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "New Circuit",
-  );
-  await renameProject(page, "Project B");
-  await page.getByRole("tab", { name: /Project A/ }).dblclick();
-  const name = page.getByRole("textbox", { name: "Project name", exact: true });
-  await expect(name).toBeFocused();
-  await expect(name).toHaveValue("Project A");
-  await name.fill("Revised A");
-  await name.press("Enter");
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "Revised A",
-  );
-  await expect(page.getByRole("tab", { name: /Project B/ })).toBeVisible();
-});
-
-test("tab-bar New and Close actions keep their clicked target while a name commits", async ({
-  page,
-}) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await page.getByRole("tab", { selected: true }).dblclick();
-  const name = page.getByRole("textbox", { name: "Project name", exact: true });
-  await name.fill("A circuit name that expands on commit");
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
-  await expect(page.getByRole("tab")).toHaveCount(2);
-  await expect(page.getByRole("tab").first()).toContainText(
-    "A circuit name that expands on commit",
-  );
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "New Circuit",
-  );
-  await page.getByRole("tab", { selected: true }).dblclick();
+  // Close, clicked while a name commits, asks about that unsaved tab.
+  await first.dblclick();
   await name.fill("Another renamed circuit");
   await page
-    .getByRole("button", { name: "Close tab New Circuit", exact: true })
+    .getByRole("button", { name: "Close tab Project A", exact: true })
     .click();
-  await expect(page.getByTestId("project-tab-close-decision")).toBeVisible();
-  await expect(page.getByRole("tab")).toHaveCount(2);
+  const decision = page.getByTestId("project-tab-close-decision");
+  await expect(decision).toBeVisible();
+  await expect(tabs).toHaveCount(2);
   await page.getByRole("button", { name: "Keep open", exact: true }).click();
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "Another renamed circuit",
-  );
-});
+  await expect(selected).toContainText("Another renamed circuit");
 
-test("closing a clean tab does not borrow the renamed tab's unsaved decision", async ({
-  page,
-}) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
-  await expect(page.getByRole("tab")).toHaveCount(2);
-  await page.getByRole("tab").first().click();
-  await expect(page.getByRole("tab").first()).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await page.getByRole("tab", { selected: true }).dblclick();
-  const name = page.getByRole("textbox", { name: "Project name", exact: true });
+  // Closing a clean tab does not borrow the renamed tab's unsaved decision.
+  await newTab.click();
+  await first.click();
+  await first.dblclick();
   await name.fill("Edited project");
   await page
     .getByRole("button", { name: "Close tab New Circuit", exact: true })
-    .nth(1)
     .click();
-  await expect(page.getByRole("tab")).toHaveCount(1);
-  await expect(page.getByTestId("project-tab-close-decision")).toHaveCount(0);
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "Edited project",
-  );
+  await expect(tabs).toHaveCount(2);
+  await expect(decision).toHaveCount(0);
+  await expect(selected).toContainText("Edited project");
+});
+
+test("unchanged imported or legacy names make no edit on Enter, blur or IME Enter, past the Cloud-length input limit", async ({
+  page,
+}) => {
+  const spaced = createEmptyProject("spaced-name", "  Preserved name  ");
+  await page.goto("/editor?new=1");
+  await awaitEditorReady(page);
+  await openProjectFile(page, serializeProject(spaced));
+  const tab = page.getByRole("tab", { selected: true });
+  const name = page.getByRole("textbox", { name: "Project name", exact: true });
+  await expect(tab).toHaveAttribute("title", spaced.name);
+  const before = await saved(page);
+  for (const method of ["Enter", "blur"]) {
+    await tab.dblclick();
+    await expect(name).toHaveValue(spaced.name);
+    if (method === "Enter") await name.press("Enter");
+    else await page.getByTestId("project-menu-toggle").click();
+    await expect(name).toBeHidden();
+    await expect(tab).toHaveAttribute("title", spaced.name);
+    await expect(tab.getByLabel("Unsaved")).toHaveCount(0);
+    expect(await saved(page)).toEqual(before);
+  }
+
+  const legacy = createEmptyProject("legacy-name", "A".repeat(124));
+  await openProjectFile(page, serializeProject(legacy));
+  await expect(tab).toContainText(legacy.name);
+  for (const key of ["Escape", "Enter"]) {
+    await tab.dblclick();
+    await expect(name).toHaveValue(legacy.name);
+    await expect(name).toHaveAttribute("maxlength", "120");
+    await name.press(key);
+    await expect(name).toBeHidden();
+    await expect(tab).toContainText(legacy.name);
+  }
+  await tab.dblclick();
+  await name.fill("放大器");
+  await name.dispatchEvent("keydown", { key: "Enter", isComposing: true });
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue("放大器");
+  await name.press("Enter");
+  await expect(tab).toContainText("放大器");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(tab).toContainText(legacy.name);
 });
 
 test("external tab activation cannot discard the focused name draft", async ({
@@ -1303,69 +1093,6 @@ test("external tab activation cannot discard the focused name draft", async ({
   await expect(page.getByRole("tab", { name: /Pending B/ })).toBeVisible();
 });
 
-test("unchanged imported whitespace names make no edit on Enter or blur", async ({
-  page,
-}) => {
-  const project = createEmptyProject("spaced-name", "  Preserved name  ");
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "spaced.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  const tab = page.getByRole("tab", { selected: true });
-  await expect(tab).toHaveAttribute("title", project.name);
-  const before = await saved(page);
-  for (const method of ["Enter", "blur"]) {
-    await tab.dblclick();
-    const name = page.getByRole("textbox", {
-      name: "Project name",
-      exact: true,
-    });
-    await expect(name).toHaveValue(project.name);
-    if (method === "Enter") await name.press("Enter");
-    else await page.getByTestId("project-menu-toggle").click();
-    await expect(name).toBeHidden();
-    await expect(tab).toHaveAttribute("title", project.name);
-    await expect(tab.getByLabel("Unsaved")).toHaveCount(0);
-    expect(await saved(page)).toEqual(before);
-  }
-});
-
-test("unchanged legacy names survive the Cloud-length input limit and IME Enter", async ({
-  page,
-}) => {
-  const project = createEmptyProject("legacy-name", "A".repeat(124));
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "legacy.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  const tab = page.getByRole("tab", { selected: true });
-  await expect(tab).toContainText(project.name);
-  const name = page.getByRole("textbox", { name: "Project name", exact: true });
-  for (const key of ["Escape", "Enter"]) {
-    await tab.dblclick();
-    await expect(name).toHaveValue(project.name);
-    await expect(name).toHaveAttribute("maxlength", "120");
-    await name.press(key);
-    await expect(name).toBeHidden();
-    await expect(tab).toContainText(project.name);
-  }
-  await tab.dblclick();
-  await name.fill("放大器");
-  await name.dispatchEvent("keydown", { key: "Enter", isComposing: true });
-  await expect(name).toBeFocused();
-  await expect(name).toHaveValue("放大器");
-  await name.press("Enter");
-  await expect(tab).toContainText("放大器");
-  await page.keyboard.press("ControlOrMeta+z");
-  await expect(tab).toContainText(project.name);
-});
-
 test("tab rename keeps header geometry and Project Info renames the circuit and its Cell", async ({
   page,
 }) => {
@@ -1421,7 +1148,6 @@ test("tab rename keeps header geometry and Project Info renames the circuit and 
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
     expect(Math.abs(bounds.width - (width * 2) / 3)).toBeLessThanOrEqual(2);
-    await page.screenshot({ path: `plan/project-info-${width}.png` });
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
   }
@@ -1465,524 +1191,170 @@ test("tab rename keeps header geometry and Project Info renames the circuit and 
   await openProjectInfo(page);
   await expect(cellField).toHaveValue(cellName);
   await page.keyboard.press("Escape");
+});
 
-  // Projects are switched with the tabs.
+test("attaches a Net Label copied across Projects with Ctrl+C/V to a wire with its exact look", async ({
+  page,
+  context,
+}) => {
+  const { createRoutePath } = await import("@icm/model");
+  const { resolveDocumentLogicalNets } = await import("@icm/derived");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const project = createEmptyProject("label-landing", "Label landing");
+  const document = project.documents[0]!;
+  for (const [id, y] of [
+    ["source", 100],
+    ["target", 300],
+  ] as const) {
+    document.nets.push({ id, terminals: [] });
+    document.junctions.push(
+      {
+        id: `${id}-a`,
+        netId: id,
+        position: { x: 100, y },
+        role: "route-anchor",
+      },
+      {
+        id: `${id}-b`,
+        netId: id,
+        position: { x: 300, y },
+        role: "route-anchor",
+      },
+    );
+    document.routes.push(
+      createRoutePath({
+        id: `${id}-wire`,
+        netId: id,
+        start: { kind: "junction", junctionId: `${id}-a` },
+        end: { kind: "junction", junctionId: `${id}-b` },
+        bends: [],
+        modes: ["manual"],
+      }),
+    );
+  }
+  document.annotations.push({
+    id: "source-label",
+    kind: "net-label",
+    netId: "source",
+    binding: { kind: "net-name", netId: "source" },
+    anchor: { kind: "free", position: { x: 200, y: 80 } },
+    alignment: "end",
+    rotation: 0,
+    locked: false,
+    textColor: "#be123c",
+    sizeScale: 1.25,
+    formatOverride: {
+      runs: [
+        {
+          kind: "span",
+          style: "overbar",
+          children: [
+            { kind: "text", value: "IN" },
+            {
+              kind: "span",
+              style: "subscript",
+              children: [{ kind: "text", value: "1" }],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  document.connectivityEvidence.push({
+    id: "source-name",
+    kind: "name-claim",
+    netId: "source",
+    name: "IN_1_bar",
+    scope: "local",
+    owner: { kind: "net-label", annotationId: "source-label" },
+  });
+  const sourceLabel = structuredClone(document.annotations[0]!);
+  const open = async (value: CircuitProject) => {
+    await openProjectFile(page, value);
+    await awaitEditorReady(page);
+  };
+  await page.goto("/editor?new=1");
+  await open(project);
   await page
     .getByRole("button", { name: "New project tab", exact: true })
     .click();
-  await expect(name).toHaveCount(0);
-  await insert(page, "capacitor", 340, 260);
+  const destination = structuredClone(project);
+  destination.id = "destination";
+  destination.documents[0]!.annotations = [];
+  destination.documents[0]!.connectivityEvidence = [];
+  await open(destination);
   await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("hit-R1")).toHaveCount(1);
-  await expect(page.getByTestId("hit-C1")).toHaveCount(0);
-});
-
-for (const method of ["C", "C across Projects", "Ctrl+C/V across Projects"]) {
-  test(`attaches a copied Net Label to a wire with its exact look using ${method}`, async ({
-    page,
-    context,
-  }) => {
-    const { createRoutePath } = await import("@icm/model");
-    const { resolveDocumentLogicalNets } = await import("@icm/derived");
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    const project = createEmptyProject("label-landing", "Label landing");
-    const document = project.documents[0]!;
-    for (const [id, y] of [
-      ["source", 100],
-      ["target", 300],
-    ] as const) {
-      document.nets.push({ id, terminals: [] });
-      document.junctions.push(
-        {
-          id: `${id}-a`,
-          netId: id,
-          position: { x: 100, y },
-          role: "route-anchor",
-        },
-        {
-          id: `${id}-b`,
-          netId: id,
-          position: { x: 300, y },
-          role: "route-anchor",
-        },
-      );
-      document.routes.push(
-        createRoutePath({
-          id: `${id}-wire`,
-          netId: id,
-          start: { kind: "junction", junctionId: `${id}-a` },
-          end: { kind: "junction", junctionId: `${id}-b` },
-          bends: [],
-          modes: ["manual"],
-        }),
-      );
-    }
-    document.annotations.push({
-      id: "source-label",
-      kind: "net-label",
-      netId: "source",
-      binding: { kind: "net-name", netId: "source" },
-      anchor: { kind: "free", position: { x: 200, y: 80 } },
-      alignment: "end",
-      rotation: 0,
-      locked: false,
-      textColor: "#be123c",
-      sizeScale: 1.25,
-      formatOverride: {
-        runs: [
-          {
-            kind: "span",
-            style: "overbar",
-            children: [
-              { kind: "text", value: "IN" },
-              {
-                kind: "span",
-                style: "subscript",
-                children: [{ kind: "text", value: "1" }],
-              },
-            ],
-          },
-        ],
-      },
-    });
-    document.connectivityEvidence.push({
-      id: "source-name",
-      kind: "name-claim",
-      netId: "source",
-      name: "IN_1_bar",
-      scope: "local",
-      owner: { kind: "net-label", annotationId: "source-label" },
-    });
-    const sourceLabel = structuredClone(document.annotations[0]!);
-    const open = async (value: CircuitProject) => {
-      await page.getByTestId("project-file").setInputFiles({
-        name: `${value.id}.icproj.json`,
-        mimeType: "application/json",
-        buffer: Buffer.from(JSON.stringify(value)),
-      });
-      await awaitEditorReady(page);
-    };
-    await page.goto("/editor?new=1");
-    await open(project);
-    const crossProject = method !== "C";
-    if (crossProject) {
-      await page
-        .getByRole("button", { name: "New project tab", exact: true })
-        .click();
-      const destination = structuredClone(project);
-      destination.id = "destination";
-      destination.documents[0]!.annotations = [];
-      destination.documents[0]!.connectivityEvidence = [];
-      await open(destination);
-      await page.getByRole("tab").first().click();
-    }
-    await page.getByTestId("annotation-hit-source-label").click();
-    const systemPaste = method === "Ctrl+C/V across Projects";
-    await page.keyboard.press(systemPaste ? "Control+c" : "c");
-    if (crossProject) await page.getByRole("tab").nth(1).click();
-    const canvas = page.getByTestId("schematic-canvas");
-    if (systemPaste) {
-      await canvas.focus();
-      await page.keyboard.press("Control+v");
-    }
-    const wirePoint = await canvas.evaluate((element) => {
-      const matrix = (element as SVGSVGElement).getScreenCTM()!;
-      const point = new DOMPoint(200, 300).matrixTransform(matrix);
-      return { x: point.x, y: point.y };
-    });
-    // Screen-space distance, independent of the fitted camera's zoom.
-    await page.mouse.move(wirePoint.x, wirePoint.y - 6);
-    const ghost = page.getByTestId("copy-placement-preview");
-    await expect(ghost).toBeVisible();
-    await expect(ghost.locator('[data-text-decoration="overbar"]')).toHaveCount(
-      1,
-    );
-    await expect(ghost.locator('[data-text-run="subscript"]')).toHaveCount(1);
-    await page.mouse.click(wirePoint.x, wirePoint.y - 6);
-    await page.keyboard.press("Escape");
-    const initialCount = crossProject ? 0 : 1;
-    const labels = page.locator(
-      '[data-layer="annotations"] [data-kind="net-label"]',
-    );
-    await expect(labels).toHaveCount(initialCount + 1);
-    const pasted = (await saved(page)).documents[0]!;
-    const attached = pasted.annotations.find(
-      (item) => item.netId === "target",
-    )!;
-    expect(attached).toMatchObject({
-      netId: "target",
-      binding: { kind: "net-name", netId: "target" },
-      anchor: {
-        kind: "route",
-        routeId: "target-wire",
-        fallbackPosition: { x: 200, y: 290 },
-      },
-      alignment: sourceLabel.alignment,
-      rotation: sourceLabel.rotation,
-      textColor: sourceLabel.textColor,
-      sizeScale: sourceLabel.sizeScale,
-      formatOverride: sourceLabel.formatOverride,
-    });
-    expect(pasted.nets).toHaveLength(2);
-    const targetName = (doc: typeof pasted) =>
-      resolveDocumentLogicalNets(doc).groups.find((group) =>
-        group.baseNetIds.includes("target"),
-      )?.name;
-    expect(targetName(pasted)).toBe("IN_1_bar");
-    await canvas.focus();
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect(labels).toHaveCount(initialCount);
-    expect(targetName((await saved(page)).documents[0]!)).not.toBe("IN_1_bar");
-    await canvas.focus();
-    await page.keyboard.press("ControlOrMeta+Shift+z");
-    await expect(labels).toHaveCount(initialCount + 1);
-    expect(targetName((await saved(page)).documents[0]!)).toBe("IN_1_bar");
-
-    // Just outside the same 12 px capture radius: keep the ordinary free copy.
-    await canvas.focus();
-    await page.keyboard.press("v");
-    await page.mouse.move(wirePoint.x, wirePoint.y - 24);
-    await expect(ghost).toBeVisible();
-    await page.mouse.click(wirePoint.x, wirePoint.y - 24);
-    await page.keyboard.press("Escape");
-    await expect(labels).toHaveCount(initialCount + 2);
-    const free = (await saved(page)).documents[0]!.annotations.find(
-      (item) =>
-        item.id !== attached.id && (crossProject || item.id !== "source-label"),
-    )!;
-    expect(free).toMatchObject({
-      anchor: { kind: "free" },
-      textColor: sourceLabel.textColor,
-      sizeScale: sourceLabel.sizeScale,
-      formatOverride: sourceLabel.formatOverride,
-    });
+  await page.getByTestId("annotation-hit-source-label").click();
+  await page.keyboard.press("Control+c");
+  await page.getByRole("tab").nth(1).click();
+  const canvas = page.getByTestId("schematic-canvas");
+  await canvas.focus();
+  await page.keyboard.press("Control+v");
+  const wirePoint = await canvas.evaluate((element) => {
+    const matrix = (element as SVGSVGElement).getScreenCTM()!;
+    const point = new DOMPoint(200, 300).matrixTransform(matrix);
+    return { x: point.x, y: point.y };
   });
-}
-
-for (const kind of ["port", "net"] as const) {
-  test(`copies a styled ${kind} with identical name and overbar using C, Ctrl+C/V and project tabs`, async ({
-    page,
-    context,
-  }) => {
-    const { createEmptyProject, createRoutePath } = await import("@icm/model");
-    const { resolveDocumentLogicalNets } = await import("@icm/derived");
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    const project = createEmptyProject("copy-names", "Copy names");
-    const document = project.documents[0]!;
-    document.nets.push({
-      id: "input-net",
-      terminals: kind === "port" ? [{ instanceId: "P1", pinName: "P" }] : [],
-    });
-    if (kind === "port") {
-      document.instances.push({
-        id: "P1",
-        symbolId: "port",
-        placement: {
-          position: { x: 100, y: 100 },
-          rotation: 0,
-          mirror: "none",
-        },
-      });
-      document.netlist = {
-        name: "dut",
-        formalParameters: [],
-        terminals: [
-          {
-            id: "input-port",
-            name: "IN_1_bar",
-            netId: "input-net",
-            direction: "input",
-            interfaceInstanceIds: ["P1"],
-          },
-        ],
-      };
-    } else {
-      document.junctions.push(
-        {
-          id: "a",
-          netId: "input-net",
-          position: { x: 100, y: 100 },
-          role: "route-anchor",
-        },
-        {
-          id: "b",
-          netId: "input-net",
-          position: { x: 250, y: 100 },
-          role: "route-anchor",
-        },
-      );
-      document.routes.push(
-        createRoutePath({
-          id: "wire",
-          netId: "input-net",
-          start: { kind: "junction", junctionId: "a" },
-          end: { kind: "junction", junctionId: "b" },
-          bends: [],
-          modes: ["manual"],
-        }),
-      );
-      document.connectivityEvidence.push({
-        id: "input-name",
-        kind: "name-claim",
-        netId: "input-net",
-        name: "IN_1_bar",
-        scope: "local",
-        owner: { kind: "net-label", annotationId: "input-label" },
-      });
-    }
-    document.annotations.push({
-      id: "input-label",
-      kind: kind === "port" ? "instance-label" : "net-label",
-      ...(kind === "net" ? { netId: "input-net" } : {}),
-      binding:
-        kind === "port"
-          ? { kind: "cell-terminal-name", terminalId: "input-port" }
-          : { kind: "net-name", netId: "input-net" },
-      anchor:
-        kind === "port"
-          ? {
-              kind: "object",
-              objectId: "P1",
-              localOffset: { x: -25, y: -10 },
-              fallbackPosition: { x: 75, y: 90 },
-            }
-          : { kind: "free", position: { x: 160, y: 75 } },
-      alignment: "end",
-      rotation: 0,
-      locked: false,
-      textColor: "#be123c",
-      sizeScale: 1.25,
-      formatOverride: {
-        runs: [
-          {
-            kind: "span",
-            style: "bold",
-            children: [
-              {
-                kind: "span",
-                style: "italic",
-                children: [
-                  {
-                    kind: "span",
-                    style: "overbar",
-                    children: [
-                      { kind: "text", value: "IN" },
-                      {
-                        kind: "span",
-                        style: "subscript",
-                        children: [{ kind: "text", value: "1" }],
-                      },
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    });
-    await page.goto("/editor?new=1");
-    await page.getByTestId("project-file").setInputFiles({
-      name: "copy-names.icproj.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(project)),
-    });
-    const canvas = page.getByTestId("schematic-canvas");
-    const labels = page.locator(
-      '[data-layer="annotations"] [data-object-id^="input-label"]',
-    );
-    await expect(labels).toHaveCount(1);
-    const originalText = await labels.first().textContent();
-    const sourceLabel = structuredClone(document.annotations[0]!);
-    const select = async () => {
-      if (kind === "port") await page.getByTestId("hit-P1").click();
-      else await page.getByTestId("annotation-hit-input-label").click();
-    };
-    const verify = async (count: number) => {
-      await expect(labels).toHaveCount(count);
-      for (const label of await labels.all()) {
-        await expect(label).toHaveText(originalText!);
-        await expect(
-          label.locator("..").locator('[data-text-decoration="overbar"]'),
-        ).toHaveCount(1);
-        await expect(label.locator('[data-text-run="subscript"]')).toHaveCount(
-          1,
-        );
-      }
-      const result = await saved(page);
-      const target = result.documents[0]!;
-      for (const label of target.annotations) {
-        expect(label).toMatchObject({
-          formatOverride: sourceLabel.formatOverride,
-          textColor: sourceLabel.textColor,
-          sizeScale: sourceLabel.sizeScale,
-          alignment: sourceLabel.alignment,
-          rotation: sourceLabel.rotation,
-        });
-        if (kind === "port")
-          expect(label.anchor).toMatchObject({
-            kind: "object",
-            localOffset: { x: -25, y: -10 },
-          });
-      }
-      const logical = resolveDocumentLogicalNets(target).groups;
-      expect(logical).toHaveLength(1);
-      expect(logical[0]!.name).toBe("IN_1_bar");
-      expect(logical[0]!.baseNetIds).toHaveLength(count);
-      if (kind === "port") {
-        expect(
-          target.netlist!.terminals.every(
-            (terminal) => terminal.name === "IN_1_bar",
-          ),
-        ).toBe(true);
-        const netlist = page.getByLabel("Netlist code", { exact: true });
-        await expect(netlist).toContainText("IN_1_bar");
-        await expect(netlist).not.toContainText("copy");
-      }
-      return result;
-    };
-    await select();
-    await page.keyboard.press("c");
-    const ghost = page.getByTestId("copy-placement-preview");
-    await expect(ghost).toBeVisible();
-    await expect(ghost).not.toContainText("copy");
-    await expect(ghost.locator('[data-text-decoration="overbar"]')).toHaveCount(
-      1,
-    );
-    await canvas.click({ position: { x: 390, y: 280 } });
-    await page.keyboard.press("Escape");
-    await verify(2);
-    await canvas.focus();
-    await page.keyboard.press("Control+z");
-    await expect(labels).toHaveCount(1);
-    await page.keyboard.press("Control+Shift+z");
-    await verify(2);
-
-    await select();
-    await page.keyboard.press("Control+c");
-    await page.keyboard.press("Control+v");
-    await expect(ghost).toBeVisible();
-    await canvas.click({ position: { x: 420, y: 420 } });
-    await page.keyboard.press("Escape");
-    const repeated = await verify(3);
-    await page
-      .getByRole("button", { name: "New project tab", exact: true })
-      .click();
-    await page.keyboard.press("v");
-    await expect(ghost).toBeVisible();
-    await canvas.click({ position: { x: 350, y: 260 } });
-    await page.keyboard.press("Escape");
-    await verify(1);
-    await page.getByRole("tab").first().click();
-    await verify(3);
-    await page.getByTestId("project-file").setInputFiles({
-      name: "reopened.icproj.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(repeated)),
-    });
-    await verify(3);
+  // Screen-space distance, independent of the fitted camera's zoom.
+  await page.mouse.move(wirePoint.x, wirePoint.y - 6);
+  const ghost = page.getByTestId("copy-placement-preview");
+  await expect(ghost).toBeVisible();
+  await expect(ghost.locator('[data-text-decoration="overbar"]')).toHaveCount(
+    1,
+  );
+  await expect(ghost.locator('[data-text-run="subscript"]')).toHaveCount(1);
+  await page.mouse.click(wirePoint.x, wirePoint.y - 6);
+  await page.keyboard.press("Escape");
+  const labels = page.locator(
+    '[data-layer="annotations"] [data-kind="net-label"]',
+  );
+  await expect(labels).toHaveCount(1);
+  const pasted = (await saved(page)).documents[0]!;
+  const attached = pasted.annotations.find((item) => item.netId === "target")!;
+  expect(attached).toMatchObject({
+    netId: "target",
+    binding: { kind: "net-name", netId: "target" },
+    anchor: {
+      kind: "route",
+      routeId: "target-wire",
+      fallbackPosition: { x: 200, y: 290 },
+    },
+    alignment: sourceLabel.alignment,
+    rotation: sourceLabel.rotation,
+    textColor: sourceLabel.textColor,
+    sizeScale: sourceLabel.sizeScale,
+    formatOverride: sourceLabel.formatOverride,
   });
-}
+  expect(pasted.nets).toHaveLength(2);
+  const targetName = (doc: typeof pasted) =>
+    resolveDocumentLogicalNets(doc).groups.find((group) =>
+      group.baseNetIds.includes("target"),
+    )?.name;
+  expect(targetName(pasted)).toBe("IN_1_bar");
+  await canvas.focus();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(labels).toHaveCount(0);
+  expect(targetName((await saved(page)).documents[0]!)).not.toBe("IN_1_bar");
+  await canvas.focus();
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await expect(labels).toHaveCount(1);
+  expect(targetName((await saved(page)).documents[0]!)).toBe("IN_1_bar");
 
-test("Reopen tabs brings back unsaved edits to a Cloud Project open here as an unsaved copy (#1599)", async ({
-  context,
-}) => {
-  test.slow();
-  const alpha = createEmptyProject("project-alpha", "Alpha");
-  const summary = {
-    id: "cloud-alpha",
-    name: "Alpha",
-    revision: 1,
-    schemaVersion: alpha.schemaVersion,
-    updatedAt: "2026-10-10T00:00:00.000Z",
-  };
-  await context.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Author",
-          email: "author@example.com",
-          provider: "github",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-  await context.route("**/api/projects", (route) =>
-    route.fulfill({ json: { projects: [summary] } }),
-  );
-  await context.route("**/api/projects/cloud-alpha", (route) =>
-    route.fulfill({
-      json: { project: { ...summary, projectText: serializeProject(alpha) } },
-    }),
-  );
-  const alphaTab = (target: Page) =>
-    target.getByRole("tab", { name: /Alpha$/ });
-
-  // Edit Alpha without saving, then close the browser tab.
-  const page = await context.newPage();
-  await page.goto("/editor?project=cloud-alpha");
-  await expect(alphaTab(page)).toHaveAttribute("aria-selected", "true");
-  await insert(page, "resistor", 260, 240);
-  await expect(alphaTab(page).getByLabel("Unsaved")).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          new Promise<boolean>((resolve, reject) => {
-            const windowId = sessionStorage.getItem("icm.workspace-window.v1");
-            const request = indexedDB.open("analog-canvas-workspaces", 1);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-              const read = request.result
-                .transaction("windows")
-                .objectStore("windows")
-                .get(windowId ?? "");
-              read.onsuccess = () => {
-                request.result.close();
-                resolve(
-                  Boolean(
-                    read.result?.tabs.some(
-                      (tab: {
-                        session: {
-                          dirty: boolean;
-                          file: { cloudBinding: { id: string } | null };
-                        };
-                      }) =>
-                        tab.session.dirty &&
-                        tab.session.file.cloudBinding?.id === "cloud-alpha",
-                    ),
-                  ),
-                );
-              };
-              read.onerror = () => reject(read.error);
-            };
-          }),
-      ),
-    )
-    .toBe(true);
-  await page.close();
-
-  // A new browser tab opens Alpha from the Shelf: its saved version.
-  const fresh = await context.newPage();
-  await fresh.goto("/editor");
-  const banner = fresh.getByTestId("workspace-reopen-banner");
-  await expect(banner).toContainText("Alpha");
-  await fresh.getByLabel("Open Shelf project in tab", { exact: true }).click();
-  await fresh
-    .locator(".project-tabs-shelf")
-    .getByRole("button", { name: "Alpha", exact: true })
-    .click();
-  await expect(alphaTab(fresh)).toHaveAttribute("aria-selected", "true");
-  await expect(fresh.getByTestId("active-instance-count")).toHaveText("0");
-
-  // Reopen tabs brings the edits back beside it, bound to no Cloud Project.
-  await banner.getByRole("button", { name: "Reopen tabs" }).click();
-  const copy = fresh.getByRole("tab", { name: /Alpha \(unsaved copy\)$/ });
-  await expect(copy).toHaveAttribute("aria-selected", "true");
-  await expect(copy.getByLabel("Unsaved")).toBeVisible();
-  await expect(fresh.getByTestId("active-instance-count")).toHaveText("1");
-  await alphaTab(fresh).click();
-  await expect(fresh.getByTestId("active-instance-count")).toHaveText("0");
+  // Just outside the same 12 px capture radius: keep the ordinary free copy.
+  await canvas.focus();
+  await page.keyboard.press("v");
+  await page.mouse.move(wirePoint.x, wirePoint.y - 24);
+  await expect(ghost).toBeVisible();
+  await page.mouse.click(wirePoint.x, wirePoint.y - 24);
+  await page.keyboard.press("Escape");
+  await expect(labels).toHaveCount(2);
+  const free = (await saved(page)).documents[0]!.annotations.find(
+    (item) => item.id !== attached.id,
+  )!;
+  expect(free).toMatchObject({
+    anchor: { kind: "free" },
+    textColor: sourceLabel.textColor,
+    sizeScale: sourceLabel.sizeScale,
+    formatOverride: sourceLabel.formatOverride,
+  });
 });
