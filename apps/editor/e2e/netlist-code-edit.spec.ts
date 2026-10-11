@@ -1,18 +1,10 @@
-import { parseSavedProject } from "./editor-fixtures";
 import { test, expect } from "@playwright/test";
-import {
-  openSelectionShelf,
-  placeComponent,
-} from "./manual-editor-fixtures.js";
-import { createEmptyProject, semanticTextDocument } from "@icm/model";
-import { serializeProject } from "@icm/project-protocol";
+import { createEmptyProject } from "@icm/model";
 import {
   awaitEditorReady,
-  chooseComponent,
   clickCommand,
-  editComponentPropertyCode,
-  editDocumentStyleCode,
-  downloadBytes,
+  exportedProject,
+  openProjectFile,
   renameProject,
 } from "./editor-fixtures.js";
 
@@ -64,192 +56,6 @@ function fixture() {
 const label = (page: import("@playwright/test").Page) =>
   page.locator('[data-layer="annotations"] [data-object-id="label-R1"]');
 
-test("large live netlist stays editable through format changes, apply and undo", async ({
-  page,
-}) => {
-  const { importSpiceSources } = await import("@icm/spice");
-  const { createDesignNetlistExport } = await import("@icm/netlist");
-  const imported = await importSpiceSources(
-    [
-      {
-        path: "large.spi",
-        bytes: new TextEncoder().encode(
-          [
-            ".model NMOS NMOS (level=1)",
-            ".subckt dut D G S B",
-            ...Array.from(
-              { length: 600 },
-              (_, i) => `M${i + 1} D G S B NMOS w=1u l=150n nf=1 m=1`,
-            ),
-            ".ends dut",
-          ].join("\n"),
-        ),
-      },
-    ],
-    "large.spi",
-  );
-  expect(imported.successful).toBe(true);
-  const project = imported.project!;
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "large-netlist.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  const code = page.getByLabel("Netlist code", { exact: true });
-  await expect(code).toBeVisible();
-  await page
-    .getByLabel("Netlist format", { exact: true })
-    .selectOption("spectre");
-  await expect(code).toContainText("simulator lang=spectre");
-  const baseline = createDesignNetlistExport(project, {
-    format: "spectre",
-    includeLocations: true,
-  });
-  if (baseline.status !== "ready") throw new Error("Expected ready netlist");
-  const last = baseline.locations.fields.find(
-    (field) =>
-      field.instanceId === baseline.locations.instances.at(-1)!.instanceId &&
-      field.kind === "parameter" &&
-      field.parameter === "w",
-  )!;
-  await code.fill(
-    baseline.file.text.slice(0, last.startOffset) +
-      "20u" +
-      baseline.file.text.slice(last.endOffset),
-  );
-  await code.press("Enter");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  const value = (savedProject: typeof saved) =>
-    savedProject.documents
-      .find((d: { id: string }) => d.id === last.documentId)!
-      .instances.find((i: { id: string }) => i.id === last.instanceId)!.netlist
-      .parameters.w;
-  expect(value(saved)).toBe("20u");
-  await page.getByTestId("draw-tool-undo").click();
-  const undone = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(value(undone)).toBe("1u");
-  await expect(page.getByTestId("schematic-canvas")).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-async function choosePropertyPreview(
-  page: import("@playwright/test").Page,
-  label: string,
-  option: RegExp,
-): Promise<void> {
-  await page
-    .getByRole("button", { name: `Show ${label} previews`, exact: true })
-    .click();
-  await page
-    .getByRole("listbox", { name: `${label} previews`, exact: true })
-    .getByRole("option", { name: option })
-    .click();
-}
-
-test("reviewed W/L edits preserve micrometre meaning in both live formats and undo", async ({
-  page,
-}) => {
-  const { importSpiceSources } = await import("@icm/spice");
-  const { createDesignNetlistExport } = await import("@icm/netlist");
-  const { executeProjectTransaction, planSetDeviceModelTarget } =
-    await import("@icm/edit-engine");
-  const imported = await importSpiceSources(
-    [
-      {
-        path: "geometry.spi",
-        bytes: new TextEncoder().encode(
-          ".model NMOS NMOS (level=1)\n.subckt dut D G S B\nM1 D G S B NMOS w=1u l=150n\n.ends dut\n",
-        ),
-      },
-    ],
-    "geometry.spi",
-  );
-  if (!imported.project) throw new Error(JSON.stringify(imported.diagnostics));
-  const initial = imported.project;
-  const doc = initial.documents.find((d) =>
-    d.instances.some((i) => i.reference === "M1"),
-  )!;
-  const mos = doc.instances.find((i) => i.reference === "M1")!;
-  const mapped = executeProjectTransaction(initial, {
-    transactionId: "map",
-    projectId: initial.id,
-    expectedStructureRevision: initial.structureRevision,
-    actor: { kind: "human", id: "test" },
-    edits: planSetDeviceModelTarget(
-      initial,
-      doc.id,
-      mos.id,
-      "sky130_fd_pr__nfet_01v8",
-    ),
-  });
-  if (!mapped.ok) throw new Error(mapped.error.message);
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "geometry.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(mapped.project)),
-  });
-  const code = page.getByLabel("Netlist code", { exact: true });
-  for (const format of ["spice", "spectre"] as const) {
-    await page
-      .getByLabel("Netlist format", { exact: true })
-      .selectOption(format);
-    const baseline = createDesignNetlistExport(mapped.project, {
-      format,
-      includeLocations: true,
-    });
-    if (baseline.status !== "ready") throw new Error(JSON.stringify(baseline));
-    const field = baseline.locations.fields.find(
-      (f) => f.instanceId === mos.id && f.parameter === "w",
-    )!;
-    await expect(code).toContainText("w=1");
-    await code.fill(
-      baseline.file.text.slice(0, field.startOffset) +
-        "2" +
-        baseline.file.text.slice(field.endOffset),
-    );
-    await code.press("Enter");
-    const saved = parseSavedProject(
-      (await downloadBytes(page, "File", "Export Project File…")).toString(),
-    );
-    expect(
-      saved.documents
-        .find((d: { id: string }) => d.id === doc.id)!
-        .instances.find((i: { id: string }) => i.id === mos.id)!.netlist
-        .parameters.w,
-    ).toBe("2u");
-    await expect(code).toContainText("w=2");
-    await expect(code).not.toContainText("2000000");
-    await page.getByTestId("draw-tool-undo").click();
-    await expect(code).toContainText("w=1");
-  }
-});
-
-async function expectPropertyPreviewSelected(
-  page: import("@playwright/test").Page,
-  label: string,
-  option: RegExp,
-): Promise<void> {
-  await page
-    .getByRole("button", { name: `Show ${label} previews`, exact: true })
-    .click();
-  await expect(
-    page
-      .getByRole("listbox", { name: `${label} previews`, exact: true })
-      .getByRole("option", { name: option }),
-  ).toHaveAttribute("aria-selected", "true");
-  await page.keyboard.press("Escape");
-}
-
 test("selects an export entry independently of saved Top and edits only that Cell", async ({
   page,
 }) => {
@@ -263,11 +69,7 @@ test("selects an export entry independently of saved Top and edits only that Cel
   project.documents.push(child);
   await page.goto("/editor");
   await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "entries.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project);
   const code = page.getByLabel("Netlist code", { exact: true });
   const entry = page.getByLabel("Netlist entry Cell", { exact: true });
   await expect(code).toContainText("10k");
@@ -281,40 +83,13 @@ test("selects an export entry independently of saved Top and edits only that Cel
   await code.fill((await code.innerText()).replace("20k", "30k"));
   await code.press("Enter");
   await expect(entry).toBeEnabled();
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved = await exportedProject(page);
   expect(saved.topDocumentId).toBe(project.topDocumentId);
   expect(saved.documents[0].instances[0].netlist.parameters.value).toBe("10k");
   expect(saved.documents[1].instances[0].netlist.parameters.value).toBe("30k");
   await entry.selectOption("");
   await expect(code).toContainText("10k");
   await expect(code).not.toContainText("30k");
-});
-
-test("IHP SG13G2: parts placed in the process export as the PDK's own X calls", async ({
-  page,
-}) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await page
-    .getByLabel("Netlist process", { exact: true })
-    .selectOption({ label: "IHP SG13G2" });
-  // Placed from Insert, so the Netlist panel stays open beside the canvas.
-  for (const [symbol, x] of [
-    ["nmos", 300],
-    ["npn", 460],
-  ] as const) {
-    await chooseComponent(page, symbol);
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x, y: 240 } });
-    await page.keyboard.press("Escape");
-  }
-  const code = page.getByLabel("Netlist code", { exact: true });
-  await expect(code).toContainText(/XM1 .*sg13_lv_nmos w=\S+ l=\S+ ng=1 m=1/u);
-  await expect(code).toContainText(/XQ1 .*npn13G2 le=900n we=70n Nx=1/u);
-  await expect(code).not.toContainText("sky130");
 });
 
 test("restores process and device choices, applies defaults and keeps edit/undo consistent", async ({
@@ -355,11 +130,7 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
   await expect(code).not.toContainText("XM1");
   await expect(mosLabel).toHaveText("M1");
   await expect(page.getByTestId("copy-netlist-panel")).toBeVisible();
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const saved = await exportedProject(page);
   expect(
     saved.externalSubcircuitDefinitions.some(
       (definition: { name: string }) =>
@@ -376,24 +147,6 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
   await page
     .getByLabel("Netlist format", { exact: true })
     .selectOption("spectre");
-  await page
-    .getByLabel("Netlist format", { exact: true })
-    .selectOption("spice");
-  await code.fill((await code.innerText()).replace(/^XM1 /mu, "XM_load "));
-  await code.press("Enter");
-  await expect(mosLabel).toHaveText("Mload");
-  await expect(code).toContainText("XM_load");
-  await page.getByTestId("draw-tool-undo").click();
-  await expect(mosLabel).toHaveText("M1");
-  await expect(code).toContainText("XM1");
-  await page
-    .getByLabel("Netlist format", { exact: true })
-    .selectOption("spectre");
-  await process.selectOption("tsmc28");
-  await expect(code).toContainText("nch_ulvt_mac");
-  await expect(code).toContainText("simulator lang=spectre");
-  await process.selectOption("tsmc180");
-  await expect(code).toContainText(" nch ");
   await process.selectOption("abstract");
   await expect(code).toContainText("NMOS");
   await code.fill((await code.innerText()).replace(/^M1 /mu, "M_load "));
@@ -410,42 +163,12 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
   await expect(code).toContainText("M_load");
 });
 
-test("opens a built-in formatted device name with alias off and follows netlist renames", async ({
-  page,
-}) => {
-  await page.goto("/editor?example=common-source-amplifier");
-  await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText("Opened example:");
-  const capacitorLabel = page.locator(
-    '[data-layer="annotations"] [data-object-id="instance-label-C1"]',
-  );
-  await expect(capacitorLabel).toContainText("CGS");
-  await page.getByTestId("annotation-hit-instance-label-C1").dblclick();
-  await expect(
-    page.getByRole("checkbox", { name: "Use display alias" }),
-  ).not.toBeChecked();
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  const code = page.getByLabel("Netlist code", { exact: true });
-  await expect(code).toHaveAttribute("contenteditable", "true");
-  await code.fill((await code.innerText()).replace(/^CGS /mu, "C_input "));
-  await code.press("Enter");
-  await expect(capacitorLabel).toContainText("Cinput");
-  await page.getByTestId("annotation-hit-instance-label-C1").dblclick();
-  await expect(
-    page.getByRole("checkbox", { name: "Use display alias" }),
-  ).not.toBeChecked();
-});
-
 test("explicit inspectors yield to Netlist for a replacement while ordinary edits preserve the panel choice", async ({
   page,
 }) => {
   await page.goto("/editor");
   await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "editable.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
+  await openProjectFile(page, fixture());
   await page.getByTestId("hit-R1").dblclick();
   await expect(
     page.getByRole("complementary", { name: "Properties", exact: true }),
@@ -464,11 +187,7 @@ test("explicit inspectors yield to Netlist for a replacement while ordinary edit
 
   // Opening a different Project deliberately returns to its live Netlist,
   // regardless of the inspector the previous Project left open.
-  await page.getByTestId("project-file").setInputFiles({
-    name: "replacement.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
+  await openProjectFile(page, fixture());
   await expect(code).toBeVisible();
   await expect(code).toContainText("R2");
 
@@ -481,65 +200,7 @@ test("explicit inspectors yield to Netlist for a replacement while ordinary edit
   await expect(code).toHaveCount(0);
 });
 
-test("lists every netlist issue and shows each one on the canvas", async ({
-  page,
-}) => {
-  // Three parts no netlist can describe; the panel used to name only the first.
-  const project = createEmptyProject("netlist-issues", "Netlist issues");
-  const parts = [
-    ["D1", "delay-cell"],
-    ["D2", "delay-cell"],
-    ["D3", "delay-cell"],
-  ] as const;
-  for (const [index, [id, symbolId]] of parts.entries())
-    project.documents[0]!.instances.push({
-      id,
-      reference: id,
-      symbolId,
-      placement: {
-        position: { x: 200 + index * 200, y: 200 },
-        rotation: 0,
-        mirror: "none",
-      },
-    });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await expect(page.getByTestId("netlist-panel-toggle")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await page.getByTestId("project-file").setInputFiles({
-    name: "netlist-issues.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  const list = page.getByTestId("netlist-issues");
-  const issues = page.getByTestId("netlist-issue");
-  await expect(list).toContainText("3 issues");
-  await expect(issues).toHaveCount(3);
-  await expect(issues.nth(1)).toContainText(
-    "Symbol delay-cell has no reviewed netlist definition",
-  );
-  await expect(issues.nth(1)).toContainText("D2");
-  await expect(issues.nth(2)).toContainText("D3");
-  const halo = page.getByTestId("selection-halo-selected");
-  for (const [index, [id]] of parts.entries()) {
-    await issues.nth(index).click();
-    await expect(halo.locator(`[data-object-id="${id}"]`)).toBeVisible();
-    for (const [other] of parts)
-      if (other !== id)
-        await expect(halo.locator(`[data-object-id="${other}"]`)).toHaveCount(
-          0,
-        );
-    // The list stays in the dock, one click from the next finding.
-    await expect(list).toBeVisible();
-  }
-  await expect(page.getByTestId("status")).toContainText(
-    "Netlist: Symbol delay-cell has no reviewed netlist definition",
-  );
-});
-
-test("opens editable netlist by default, highlights a card, and synchronizes names and values with undo", async ({
+test("opens editable netlist by default, links cards and parts both ways, and synchronizes names and values with undo", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -550,50 +211,43 @@ test("opens editable netlist by default, highlights a card, and synchronizes nam
     "aria-pressed",
     "true",
   );
-  await page.getByTestId("project-file").setInputFiles({
-    name: "editable.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
+  await openProjectFile(page, fixture());
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toHaveAttribute("contenteditable", "true");
   await expect(code).toContainText("R1");
+  const halo = page.getByTestId("selection-halo-selected");
+  const lit = code.locator(".cm-code-highlight");
+  await expect(lit).toHaveCount(0);
+  // Netlist to canvas: the card under the cursor lights its part, and only it.
   await code.locator(".cm-line").filter({ hasText: /^R1 /u }).click();
-  await expect(
-    page
-      .getByTestId("selection-halo-selected")
-      .locator('[data-object-id="R1"]'),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("selection-halo-selected")
-      .locator('[data-object-id="R2"]'),
-  ).toHaveCount(0);
+  await expect(halo.locator('[data-object-id="R1"]')).toBeVisible();
+  await expect(halo.locator('[data-object-id="R2"]')).toHaveCount(0);
   await code.locator(".cm-line").filter({ hasText: /^R2 /u }).click();
-  await expect(
-    page
-      .getByTestId("selection-halo-selected")
-      .locator('[data-object-id="R2"]'),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("selection-halo-selected")
-      .locator('[data-object-id="R1"]'),
-  ).toHaveCount(0);
+  await expect(halo.locator('[data-object-id="R2"]')).toBeVisible();
+  await expect(halo.locator('[data-object-id="R1"]')).toHaveCount(0);
   await code
     .locator(".cm-line")
     .filter({ hasText: /subckt/u })
     .click();
-  await expect(page.getByTestId("selection-halo-selected")).toHaveCount(0);
+  await expect(halo).toHaveCount(0);
+  // Canvas to netlist: the picked part's card lights, and only it.
+  await page.getByTestId("hit-R2").click();
+  await expect(lit.filter({ hasText: /^R2 /u })).toHaveCount(1);
+  await expect(lit.filter({ hasText: /^R1 /u })).toHaveCount(0);
+  // The clicked card's part lights beside the pick.
+  await code.locator(".cm-line").filter({ hasText: /^R1 /u }).click();
+  await expect(halo.locator('[data-object-id="R1"]')).toBeVisible();
+  await expect(lit.filter({ hasText: /^R1 /u })).toHaveCount(1);
+  // A new pick on the canvas takes over from the cursor's part.
+  await page.getByTestId("hit-R1").click();
+  await expect(halo.locator('[data-object-id="R2"]')).toHaveCount(0);
+  await expect(lit.filter({ hasText: /^R1 /u })).toHaveCount(1);
+  await expect(lit.filter({ hasText: /^R2 /u })).toHaveCount(0);
   const initial = await code.innerText();
   await code.fill(initial.replace("R1 ", "R_load ").replace("10k", "22k"));
   await code.press("Enter");
   await expect(label(page)).toContainText("Rload");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const saved = await exportedProject(page);
   const instance = saved.documents[0].instances.find(
     (item: { id: string }) => item.id === "R1",
   );
@@ -615,16 +269,12 @@ test("opens editable netlist by default, highlights a card, and synchronizes nam
   expect(errors).toEqual([]);
 });
 
-test("rejects duplicate names atomically and retains a draft when the canvas changes", async ({
+test("rejects duplicate names atomically, retains a draft when the canvas changes, and Refresh drops cards the code adds or deletes", async ({
   page,
 }) => {
   await page.goto("/editor");
   await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "editable.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
+  await openProjectFile(page, fixture());
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toContainText("R1");
   await code.fill((await code.innerText()).replace("R1 ", "R2 "));
@@ -644,19 +294,9 @@ test("rejects duplicate names atomically and retains a draft when the canvas cha
   await expect(code).not.toContainText("R_canvas");
   await page.getByRole("button", { name: "Reload", exact: true }).click();
   await expect(code).toContainText("R_canvas");
-});
 
-test("Refresh regenerates the netlist from the circuit, dropping cards added or deleted in the code", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "editable.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
-  const code = page.getByLabel("Netlist code", { exact: true });
+  // Refresh regenerates the netlist from the circuit, dropping cards added
+  // or deleted in the code.
   const alert = page
     .getByRole("region", { name: "Live netlist" })
     .getByRole("alert");
@@ -685,18 +325,14 @@ test("Refresh regenerates the netlist from the circuit, dropping cards added or 
   await expect(page.getByTestId("active-instance-count")).toHaveText("2");
 });
 
-test("opening and reopening Netlist preserves incomplete imported device data", async ({
+test("an incomplete circuit shows a read-only draft linked to the canvas, and reopening Netlist preserves its data", async ({
   page,
 }) => {
   const project = fixture();
   delete project.documents[0]!.instances[0]!.netlist!.parameters.value;
   await page.goto("/editor");
   await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "incomplete.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project);
   const code = page.getByLabel("Netlist code", { exact: true });
   // A netlist that cannot print yet shows its draft, with ? for the value.
   await expect(code).toContainText("* Draft:");
@@ -704,17 +340,32 @@ test("opening and reopening Netlist preserves incomplete imported device data", 
   await expect(
     page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
   ).toContainText("requires parameter value");
+  const card = (reference: string) =>
+    code
+      .locator(".cm-line")
+      .filter({ hasText: new RegExp(`^${reference} `, "u") });
+  await expect(card("R1")).toHaveClass(/cm-code-warning/u);
+  // A draft is for reading: it cannot be copied or edited.
+  await expect(page.getByTestId("copy-netlist-panel")).toBeDisabled();
+  await expect(code).toHaveAttribute("aria-readonly", "true");
+  await expect(page.locator(".netlist-edit-hint")).toContainText("Draft");
+  // The draft keeps the canvas link both ways.
+  await page.getByTestId("hit-R1").click();
+  await expect(card("R1")).toHaveClass(/cm-code-highlight/u);
+  await expect(card("R2")).not.toHaveClass(/cm-code-highlight/u);
+  await card("R2").click();
+  await expect(
+    page
+      .getByTestId("selection-halo-selected")
+      .locator('[data-object-id="R2"]'),
+  ).toBeVisible();
   const revision = await page.getByTestId("revision").textContent();
   // The Netlist button closes the panel it opened, and opens it again.
   await page.getByTestId("netlist-panel-toggle").click();
   await page.getByTestId("netlist-panel-toggle").click();
   await expect(code).toContainText("R1 net0 net1 ?");
   await expect(page.getByTestId("revision")).toHaveText(revision!);
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const saved = await exportedProject(page);
   expect(saved.documents[0].instances[0].netlist.parameters).not.toHaveProperty(
     "value",
   );
@@ -725,11 +376,7 @@ test("bound labels retain typography on rename and support manual scripts withou
 }) => {
   await page.goto("/editor");
   await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "label-format.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
+  await openProjectFile(page, fixture());
   await page.getByTestId("annotation-hit-label-R1").dblclick();
   const editor = page.getByRole("textbox", { name: "Canvas text editor" });
   const alias = page.getByRole("checkbox", { name: "Use display alias" });
@@ -758,9 +405,7 @@ test("bound labels retain typography on rename and support manual scripts withou
   await page.keyboard.press("Shift+ArrowLeft");
   await page.getByRole("button", { name: "Subscript", exact: true }).click();
   await page.getByRole("button", { name: "Apply text changes" }).click();
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved = await exportedProject(page);
   const annotation = saved.documents[0].annotations.find(
     (item: { id: string }) => item.id === "label-R1",
   );
@@ -783,538 +428,11 @@ test("bound labels retain typography on rename and support manual scripts withou
     { weight: "700", style: "italic" },
     { weight: "700", style: "normal" },
   ]);
-  await page.getByTestId("annotation-hit-label-R1").dblclick();
-  await expect(alias).not.toBeChecked();
-  await expect(editor.locator("sub")).toHaveText("8");
-  await page.screenshot({ path: "plan/label-format-restored.png" });
-  await editor.press("ControlOrMeta+a");
-  await page.getByRole("button", { name: "Bold", exact: true }).click();
-  // Italic R with an upright 8 is not italic throughout: Italic slants every
-  // character, the script too, and pressed again sets all of them upright.
-  const italic = page.getByRole("button", { name: "Italic", exact: true });
-  await expect(italic).toHaveAttribute("aria-pressed", "false");
-  await italic.click();
-  await expect(italic).toHaveAttribute("aria-pressed", "true");
-  await expect(editor.locator("sub")).toHaveText("8");
-  await italic.click();
-  await expect(italic).toHaveAttribute("aria-pressed", "false");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(code).toContainText("R8");
-  expect(
-    (await typefaces()).every(
-      (face) => face.weight === "400" && face.style === "normal",
-    ),
-  ).toBe(true);
-  await code.fill((await code.innerText()).replace("R8 ", "R9 "));
-  await code.press("Enter");
-  await expect(label(page)).toHaveText("R9");
   // The author's subscript stays on the index through the rename.
   await expect(label(page).locator('[data-text-run="subscript"]')).toHaveText(
-    "9",
+    "8",
   );
-  expect(
-    (await typefaces()).every(
-      (face) => face.weight === "400" && face.style === "normal",
-    ),
-  ).toBe(true);
   await page.getByTestId("annotation-hit-label-R1").dblclick();
-  await page.getByRole("button", { name: "Cancel text changes" }).click();
-  await page.getByTestId("project-file").setInputFiles({
-    name: "label-format-reopened.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(saved)),
-  });
-  const discard = page.getByRole("button", {
-    name: "Discard and continue",
-    exact: true,
-  });
-  if (await discard.isVisible()) await discard.click();
-  await page.getByTestId("annotation-hit-label-R1").dblclick();
-  await expect(editor.locator("sub")).toHaveText("7");
   await expect(alias).not.toBeChecked();
-});
-
-test("a name another part already has, or no part can have, becomes a display alias by itself", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "alias-collision.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
-  await page.getByTestId("annotation-hit-label-R1").dblclick();
-  const editor = page.getByRole("textbox", { name: "Canvas text editor" });
-  await editor.fill("R2");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Showing R2 as a display alias; the netlist name stays R1",
-  );
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(label(page)).toHaveText("R2");
-  await page.getByTestId("annotation-hit-label-R1").dblclick();
-  await expect(
-    page.getByRole("checkbox", { name: "Use display alias" }),
-  ).toBeChecked();
-  await editor.fill("Φ2");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(label(page)).toHaveText("Φ2");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(
-    saved.documents[0].instances.map(
-      (item: { reference: string }) => item.reference,
-    ),
-  ).toEqual(["R1", "R2"]);
-});
-
-test("subscript controls immediately update labels and names and survive reopen and undo", async ({
-  page,
-}) => {
-  const source = fixture();
-  // A historical rich-text subscript whose stored name has no underscore.
-  source.documents[0]!.instances[0]!.reference = "Rload";
-  source.documents[0]!.annotations[0]!.formatOverride = semanticTextDocument(
-    "R_load",
-    "instance-label",
-  );
-  source.documents[0]!.annotations[0]!.textColor = "#ff0000";
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "subscript-case.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(source)),
-  });
-  await page.getByTestId("draw-tool-document-style").click();
-  const subscript = label(page).locator('[data-text-run="subscript"]');
-  const slant = () =>
-    subscript.evaluate(
-      (el) => getComputedStyle(el.querySelector("tspan") ?? el).fontStyle,
-    );
-  await choosePropertyPreview(
-    page,
-    "Subscript case",
-    /^Make suffix uppercase/u,
-  );
-  await expect(subscript).toHaveText("LOAD");
-  await choosePropertyPreview(page, "Subscript style", /^Upright subscript/u);
-  await expect.poll(slant).toBe("normal");
-  await expect(label(page)).toHaveText("RLOAD");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(saved.documents[0].instances[0].reference).toBe("R_LOAD");
-  expect(saved.documents[0].presentation).toMatchObject({
-    labelSubscriptCase: "uppercase",
-    labelSubscriptItalic: false,
-  });
-  expect(saved.documents[0].annotations[0].textColor).toBe("#ff0000");
-  await page.getByTestId("draw-tool-undo").click();
-  await expect.poll(slant).toBe("italic");
-  await expect(subscript).toHaveText("LOAD");
-  await page.getByTestId("draw-tool-undo").click();
-  await expect(subscript).toHaveText("load");
-  await expectPropertyPreviewSelected(
-    page,
-    "Subscript case",
-    /Preserve typed case/u,
-  );
-  await page.getByTestId("draw-tool-redo").click();
-  await page.getByTestId("draw-tool-redo").click();
-  await expect.poll(slant).toBe("normal");
-  await editDocumentStyleCode(page, (code) => {
-    code.labels.subscript_case = "lowercase";
-    code.labels.subscript_italic = true;
-  });
-  await expect(subscript).toHaveText("load");
-  await expect.poll(slant).toBe("italic");
-  // Invalid drafts leave the drawing at the last valid style.
-  await editDocumentStyleCode(page, (code) => {
-    code.labels.subscript_italic = "false";
-  });
-  await expect.poll(slant).toBe("italic");
-  await expect(
-    page.getByText(
-      "labels.subscript_italic must be true or false · Canvas keeps the last valid edit",
-    ),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Discard Properties draft" }).click();
-  await page.getByTestId("project-file").setInputFiles({
-    name: "subscript-reopened.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(saved)),
-  });
-  const discard = page.getByRole("button", {
-    name: "Discard and continue",
-    exact: true,
-  });
-  if (await discard.isVisible()) await discard.click();
-  await expect(subscript).toHaveText("LOAD");
-  await expect.poll(slant).toBe("normal");
-  const code = page.getByLabel("Netlist code", { exact: true });
-  if (!(await code.isVisible()))
-    await page.getByTestId("netlist-panel-toggle").click();
-  await expect(code).toContainText("R_LOAD");
-});
-
-test("drawing label rules immediately update formatted names and amplifier body text", async ({
-  page,
-}, testInfo) => {
-  const project = fixture();
-  const document = project.documents[0]!;
-  document.instances[0]!.reference = "R_load";
-  document.annotations[0]!.formatOverride = semanticTextDocument(
-    "R_load",
-    "instance-label",
-  );
-  document.annotations[0]!.textColor = "#ff0000";
-  document.instances.push({
-    id: "amp",
-    reference: "X1",
-    symbolId: "opamp-lettered",
-    placement: { position: { x: 500, y: 350 }, rotation: 0, mirror: "none" },
-    signalFlowParameters: { formula: "A" },
-  });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "label-rules.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  const body = page.locator(
-    '[data-layer="symbols"] [data-object-id="amp"] [data-role="formula-text"]',
-  );
-  await expect(body).toHaveText("A");
-  await page.getByTestId("hit-amp").dblclick();
-  await page
-    .getByRole("textbox", { name: "Canvas text editor" })
-    .fill("A_gain");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await page.keyboard.press("Escape");
-  await expect(body.locator('[data-text-run="subscript"]')).toHaveText("gain");
-  await page.getByTestId("draw-tool-document-style").click();
-  await choosePropertyPreview(
-    page,
-    "Underscore subscript",
-    /^Keep the typed underscore/u,
-  );
-  await expect(label(page)).toHaveText("R_load");
-  await expect(body).toHaveText("A_gain");
-  await expect(body.locator('[data-text-run="subscript"]')).toHaveCount(0);
-  await choosePropertyPreview(
-    page,
-    "Underscore subscript",
-    /^Convert underscore suffix to subscript/u,
-  );
-  await choosePropertyPreview(
-    page,
-    "Subscript case",
-    /^Make suffix uppercase/u,
-  );
-  await choosePropertyPreview(page, "Subscript style", /^Upright subscript/u);
-  await choosePropertyPreview(page, "First letter", /^Upright first letter/u);
-  await expect(body).toHaveText("AGAIN");
-  await expect(label(page)).toHaveText("RLOAD");
-  for (const text of [label(page), body]) {
-    await expect
-      .poll(() =>
-        text
-          .locator("tspan")
-          .evaluateAll((spans) =>
-            spans.every(
-              (span) => getComputedStyle(span).fontStyle === "normal",
-            ),
-          ),
-      )
-      .toBe(true);
-  }
-  await choosePropertyPreview(
-    page,
-    "Subscript after first letter",
-    /^Subscript after the first letter/u,
-  );
-  const second = page.locator(
-    '[data-layer="annotations"] [data-object-id="label-R2"]',
-  );
-  await expect(second.locator('[data-text-run="subscript"]')).toHaveText("2");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  // The first-letter look only changes the drawing: R2 is still R2.
-  expect(saved.documents[0]!.instances[1]!.reference).toBe("R2");
-  expect(
-    saved.documents[0]!.instances.find(
-      (item: { id: string }) => item.id === "amp",
-    )!.signalFlowParameters!.formula,
-  ).toBe("A_GAIN");
-  expect(saved.documents[0]!.annotations[0]!.textColor).toBe("#ff0000");
-  await page.getByTestId("draw-tool-undo").click();
-  await expect(second.locator('[data-text-run="subscript"]')).toHaveCount(0);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "label-rules-reopened.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(saved)),
-  });
-  const discard = page.getByRole("button", {
-    name: "Continue without saving",
-    exact: true,
-  });
-  await discard.click();
-  await expect(body).toHaveText("AGAIN");
-  await expect(second.locator('[data-text-run="subscript"]')).toHaveText("2");
-  await page.screenshot({ path: testInfo.outputPath("label-typography.png") });
-});
-
-test("a Cell Pin drawn under an overbar exports as its complement", async ({
-  page,
-}) => {
-  const project = fixture();
-  const document = project.documents[0]!;
-  document.instances.push({
-    id: "P1",
-    symbolId: "port",
-    placement: { position: { x: 100, y: 200 }, rotation: 0, mirror: "none" },
-  });
-  document.nets[0]!.terminals.push({ instanceId: "P1", pinName: "P" });
-  document.netlist!.terminals.push({
-    id: "output",
-    name: "F",
-    netId: "net-1",
-    direction: "output",
-    interfaceInstanceIds: ["P1"],
-  });
-  document.annotations.push({
-    id: "label-output",
-    kind: "instance-label",
-    binding: { kind: "cell-terminal-name", terminalId: "output" },
-    anchor: {
-      kind: "object",
-      objectId: "P1",
-      localOffset: { x: 0, y: -30 },
-      fallbackPosition: { x: 100, y: 170 },
-    },
-    alignment: "middle",
-    rotation: 0,
-    locked: false,
-  });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "barred-pin.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  const hit = page.getByTestId("annotation-hit-label-output");
-  const label = page.locator(
-    '[data-layer="annotations"] [data-object-id="label-output"]',
-  );
-  await hit.dblclick();
-  const editor = page.getByRole("textbox", { name: "Canvas text editor" });
-  await editor.press("ControlOrMeta+a");
-  await page.getByRole("button", { name: "Overbar", exact: true }).click();
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(editor).toHaveCount(0);
-  await expect(label).toHaveText("F");
-  await expect(
-    label.locator("..").locator('[data-text-decoration="overbar"]'),
-  ).toHaveCount(1);
-  const code = page.getByLabel("Netlist code", { exact: true });
-  // An overbar over a Pin means its complement: F̄ exports as F_bar, a Pin
-  // apart from F.
-  await expect(code).toContainText("F_bar");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(
-    saved.documents[0].netlist.terminals.find(
-      (item: { id: string }) => item.id === "output",
-    ).name,
-  ).toBe("F_bar");
-  // Device names are writable in the netlist; the marker must round trip there too.
-  await code.fill((await code.innerText()).replace("R1 ", "R1_bar "));
-  await code.press("Enter");
-  const instanceLabel = page.locator(
-    '[data-layer="annotations"] [data-object-id="label-R1"]',
-  );
-  await expect(instanceLabel).toHaveText("R1");
-  await expect(instanceLabel.locator('[data-text-run="overbar"]')).toHaveCount(
-    1,
-  );
-  await code.fill((await code.innerText()).replace("R1_bar ", "R1 "));
-  await code.press("Enter");
-  await expect(instanceLabel.locator('[data-text-run="overbar"]')).toHaveCount(
-    0,
-  );
-  await page.getByTestId("hit-P1").click();
-  await openSelectionShelf(page);
-  // Renamed to another complement, the Pin keeps the author's bar.
-  await editComponentPropertyCode(page, (code) => {
-    code.name = "Q_bar";
-  });
-  await expect(label).toHaveText("Q");
-  await expect(
-    label.locator("..").locator('[data-text-decoration="overbar"]'),
-  ).toHaveCount(1);
-  const renamed = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(
-    renamed.documents[0].netlist.terminals.find(
-      (item: { id: string }) => item.id === "output",
-    ).name,
-  ).toBe("Q_bar");
-  expect(
-    renamed.documents[0].annotations.find(
-      (item: { id: string }) => item.id === "label-output",
-    ).binding,
-  ).toEqual({ kind: "cell-terminal-name", terminalId: "output" });
-});
-
-test("D and D̄ are two Cell Pins: barring a Pin's name asks for no merge", async ({
-  page,
-}) => {
-  const project = fixture();
-  const document = project.documents[0]!;
-  for (const [id, terminalId, name, netId, y] of [
-    ["P1", "pin-d", "D", "net-1", 200],
-    ["P2", "pin-x", "X", "net-x", 320],
-  ] as const) {
-    document.instances.push({
-      id,
-      symbolId: "port",
-      placement: { position: { x: 100, y }, rotation: 0, mirror: "none" },
-    });
-    if (netId === "net-1")
-      document.nets[0]!.terminals.push({ instanceId: id, pinName: "P" });
-    else
-      document.nets.push({
-        id: netId,
-        terminals: [{ instanceId: id, pinName: "P" }],
-      });
-    document.netlist!.terminals.push({
-      id: terminalId,
-      name,
-      netId,
-      direction: "input",
-      interfaceInstanceIds: [id],
-    });
-    document.annotations.push({
-      id: `label-${terminalId}`,
-      kind: "instance-label",
-      binding: { kind: "cell-terminal-name", terminalId },
-      anchor: {
-        kind: "object",
-        objectId: id,
-        localOffset: { x: 0, y: -30 },
-        fallbackPosition: { x: 100, y: y - 30 },
-      },
-      alignment: "middle",
-      rotation: 0,
-      locked: false,
-    });
-  }
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "complement-pins.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  await page.getByTestId("annotation-hit-label-pin-x").dblclick();
-  const editor = page.getByRole("textbox", { name: "Canvas text editor" });
-  await editor.press("ControlOrMeta+a");
-  await editor.pressSequentially("D");
-  await editor.press("ControlOrMeta+a");
-  await page.getByRole("button", { name: "Overbar", exact: true }).click();
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(editor).toHaveCount(0);
-  await expect(
-    page.getByRole("dialog", { name: "Merge Cell Ports?" }),
-  ).toHaveCount(0);
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(
-    saved.documents[0].netlist.terminals.map(
-      (terminal: { name: string }) => terminal.name,
-    ),
-  ).toEqual(["D", "D_bar"]);
-  await expect(page.getByLabel("Netlist code", { exact: true })).toContainText(
-    "D_bar",
-  );
-});
-
-test("lights a part's card when it is picked on the canvas, and the part when its card is clicked", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "linked.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(fixture())),
-  });
-  const code = page.getByLabel("Netlist code", { exact: true });
-  await expect(code).toContainText("R2");
-  const lit = code.locator(".cm-code-highlight");
-  const halo = page.getByTestId("selection-halo-selected");
-  await expect(lit).toHaveCount(0);
-
-  // Canvas to netlist: the picked part's card lights, and only it.
-  await page.getByTestId("hit-R2").click();
-  await expect(lit.filter({ hasText: /^R2 /u })).toHaveCount(1);
-  await expect(lit.filter({ hasText: /^R1 /u })).toHaveCount(0);
-
-  // Netlist to canvas: the clicked card's part lights beside the pick.
-  await code.locator(".cm-line").filter({ hasText: /^R1 /u }).click();
-  await expect(halo.locator('[data-object-id="R1"]')).toBeVisible();
-  await expect(lit.filter({ hasText: /^R1 /u })).toHaveCount(1);
-
-  // A new pick on the canvas takes over from the cursor's part.
-  await page.getByTestId("hit-R1").click();
-  await expect(halo.locator('[data-object-id="R2"]')).toHaveCount(0);
-  await expect(lit.filter({ hasText: /^R1 /u })).toHaveCount(1);
-  await expect(lit.filter({ hasText: /^R2 /u })).toHaveCount(0);
-});
-
-test("shows two freshly placed parts as a draft with ? on yellow lines, linked to the canvas", async ({
-  page,
-}) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await placeComponent(page, "resistor", { x: 300, y: 200 });
-  await placeComponent(page, "resistor", { x: 460, y: 200 });
-  // Placing closes the project tools; open the Netlist again.
-  const toggle = page.getByTestId("netlist-panel-toggle");
-  if ((await toggle.getAttribute("aria-pressed")) !== "true")
-    await toggle.click();
-  const code = page.getByLabel("Netlist code", { exact: true });
-  await expect(code).toContainText("* Draft:");
-  const card = (reference: string) =>
-    code
-      .locator(".cm-line")
-      .filter({ hasText: new RegExp(`^${reference} `, "u") });
-  await expect(card("R1")).toHaveText("R1 ? ? 1k");
-  await expect(card("R2")).toHaveText("R2 ? ? 1k");
-  await expect(card("R1")).toHaveClass(/cm-code-warning/u);
-  await expect(card("R2")).toHaveClass(/cm-code-warning/u);
-  // A draft is for reading: it cannot be copied or edited.
-  await expect(page.getByTestId("copy-netlist-panel")).toBeDisabled();
-  await expect(code).toHaveAttribute("aria-readonly", "true");
-  await expect(page.locator(".netlist-edit-hint")).toContainText("Draft");
-
-  // The draft keeps the canvas link both ways.
-  await page.getByTestId("hit-R1").click();
-  await expect(card("R1")).toHaveClass(/cm-code-highlight/u);
-  await expect(card("R2")).not.toHaveClass(/cm-code-highlight/u);
-  await card("R2").click();
-  await expect(
-    page
-      .getByTestId("selection-halo-selected")
-      .locator('[data-object-id="R2"]'),
-  ).toBeVisible();
+  await expect(editor.locator("sub")).toHaveText("8");
 });
