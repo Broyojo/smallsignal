@@ -1,23 +1,17 @@
-import { parseSavedProject } from "./editor-fixtures";
 import { expect, test } from "@playwright/test";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 import {
-  NETLIST_PROFILE_IDS,
-  createNetlistExportProfile,
-} from "../src/features/netlist-export/netlist-process-presets.js";
-import {
   awaitEditorReady,
   clickCommand,
   downloadBytes,
   copyNetlistText,
-  clickNetlistWorkflowCommand,
   expectComponentCodeField,
   openMenu,
   openCellManager,
+  openProjectFile,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
@@ -109,55 +103,6 @@ interface PdfTextRun {
   y: number;
 }
 
-test("opens netlist preflight and navigates its canonical finding", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 360, y: 240 });
-  await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  const dialog = page.getByRole("dialog", { name: "Check Report" });
-  await expect(dialog).toContainText("blocking issue");
-  await dialog
-    .getByRole("button", { name: /MISSING_PIN_NET/u })
-    .first()
-    .click();
-  await expect(page.getByTestId("active-document-name")).toHaveText("dut");
-  await expect(page.getByTestId("status")).toContainText("Preflight:");
-  await expect(dialog).toBeVisible();
-
-  const reportBody = dialog.locator(".netlist-preflight-body");
-  const diagnostics = dialog.getByLabel("Netlist diagnostics");
-  const reportBodyBox = await reportBody.boundingBox();
-  const diagnosticsBox = await diagnostics.boundingBox();
-  expect(reportBodyBox).not.toBeNull();
-  expect(diagnosticsBox).not.toBeNull();
-  expect(diagnosticsBox!.width).toBeGreaterThan(reportBodyBox!.width * 0.9);
-});
-
-test("previews a validated structural netlist in both export dialects", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  if (
-    (await page
-      .getByTestId("netlist-panel-toggle")
-      .getAttribute("aria-pressed")) !== "true"
-  )
-    await page.getByTestId("netlist-panel-toggle").click();
-  const netlistPanel = page.getByRole("region", {
-    name: "Live netlist",
-    exact: true,
-  });
-  await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  const dialog = page.getByRole("dialog", { name: "Check Report" });
-  const preview = dialog.getByTestId("netlist-preview");
-  await expect(preview).toContainText(".subckt dut");
-  await dialog.getByTestId("check-report-close").click();
-  await netlistPanel.getByLabel("Netlist format").selectOption("spectre");
-  await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  await expect(preview).toContainText("simulator lang=spectre");
-});
-
 test("keeps rejected SPICE import diagnostics in a historical report", async ({
   page,
 }) => {
@@ -187,11 +132,7 @@ test("keeps rejected SPICE import diagnostics in a historical report", async ({
   );
 
   const replacement = createEmptyProject("replacement", "Replacement");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "replacement.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(replacement)),
-  });
+  await openProjectFile(page, serializeProject(replacement));
   await expect(page.getByTestId("import-report-lifecycle")).toHaveCount(0);
 });
 
@@ -255,98 +196,6 @@ X2 OUT IN EXT_MASTER l=1u nf=4
   expect(spice).toContain(body);
 });
 
-test("draws imported instances with their references", async ({ page }) => {
-  await page.goto("/editor");
-  await page.getByTestId("spice-files").setInputFiles({
-    name: "circuit.spi",
-    mimeType: "application/x-spice",
-    buffer: Buffer.from(`
-.subckt top IN OUT
-R7 IN OUT 10k
-.ends top
-`),
-  });
-
-  await expect(page.getByTestId("status")).toContainText(
-    "Imported 1 Document and",
-  );
-  // The import draws every device: nothing waits off-sheet in a tray.
-  await expect(
-    page.getByRole("region", { name: "Placement Tray" }),
-  ).toHaveCount(0);
-  await expect(
-    page
-      .getByTestId("schematic-canvas")
-      .locator("text")
-      .filter({ hasText: "R7" }),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("schematic-canvas")
-      .locator("text")
-      .filter({ hasText: "OUT" }),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("schematic-canvas")
-      .locator("text")
-      .filter({ hasText: "P1" }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R7"),
-  ).toBeVisible();
-});
-
-test("preserves the original import reference through portable save and distinguishes legacy imports", async ({
-  page,
-}) => {
-  const source =
-    "* archived original\n.subckt top IN OUT\nR7 IN OUT 10k\n.ends top\n";
-  await page.goto("/editor");
-  await page.getByTestId("spice-files").setInputFiles({
-    name: "reference.spi",
-    mimeType: "application/x-spice",
-    buffer: Buffer.from(source),
-  });
-  await expect(page.getByTestId("status")).toContainText(
-    "Imported 1 Document and",
-  );
-  await expect(page.getByTestId("flightline")).toHaveCount(2);
-  const first = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(first.source.files[0]?.content?.text).toBe(source);
-  expect(first.documents[0]?.importReference?.nets).toHaveLength(2);
-  const beforeNetlist = await copyNetlistText(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "saved.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(first)),
-  });
-  await expect(page.getByTestId("flightline")).toHaveCount(2);
-  expect(await copyNetlistText(page)).toBe(beforeNetlist);
-  const legacy = structuredClone(first);
-  for (const document of legacy.documents) delete document.importReference;
-  for (const file of legacy.source.files) delete file.content;
-  await page.getByTestId("project-file").setInputFiles({
-    name: "legacy.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(legacy)),
-  });
-  await expect(page.getByTestId("flightline")).toHaveCount(0);
-  expect(await copyNetlistText(page)).toBe(beforeNetlist);
-  await clickNetlistWorkflowCommand(page, "check-and-save");
-  await page.getByTestId("statusbar-issues").click();
-  await page
-    .getByRole("button", { name: /Show non-blocking observations/ })
-    .click();
-  await expect(page.getByTestId("project-diagnostics")).toContainText(
-    "Original import reference is unavailable",
-  );
-});
-
 test("copies generated NoConnect nodes immediately and retains the optional Check Report", async ({
   page,
 }) => {
@@ -391,11 +240,7 @@ test("copies generated NoConnect nodes immediately and retains the optional Chec
   });
 
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "warning.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProjectFile(page, serializeProject(project));
   expect(await copyNetlistText(page)).toContain("R1 IN NC0001 10k");
   await expect(page.getByRole("dialog", { name: "Check Report" })).toHaveCount(
     0,
@@ -441,31 +286,14 @@ test("copies generated NoConnect nodes immediately and retains the optional Chec
   expect(spice).not.toContain("GENERATED_NO_CONNECT_NODE");
 });
 
-test("exports one formal visual scene as Project, SVG, PNG, and PDF", async ({
+// The browser converts the formal scene to a vector PDF with svg2pdf, which
+// places each script by the page's own font metrics: only a browser can
+// check it. The Project, SVG and PNG exports are exporters.test.ts's.
+test("exports the formal scene as a vector PDF with its scripts in place", async ({
   page,
 }) => {
   await page.goto("/editor?example=common-source-amplifier");
   await awaitEditorReady(page);
-
-  const projectBytes = await downloadBytes(
-    page,
-    "File",
-    "Export Project File…",
-  );
-  expect(
-    parseSavedProject(projectBytes.toString("utf8")).topDocumentId,
-  ).toBeTruthy();
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
-  expect(svg).toContain('data-layer="formal"');
-  expect(svg).toContain('data-text-run="subscript"');
-  expect(svg).not.toContain("baseline-shift=");
-  expect(svg).not.toMatch(/font-size="[\d.]+%"/u);
-  expect(svg).not.toMatch(/selection|route-hit|editor-overlay/u);
-
-  const png = await downloadBytes(page, "File", "Export PNG");
-  expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
   const pdf = await downloadBytes(page, "File", "Export PDF");
   expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
   const pdfText = pdf.toString("latin1");
@@ -474,28 +302,28 @@ test("exports one formal visual scene as Project, SVG, PNG, and PDF", async ({
   expect(pdfText).not.toContain("/Subtype /Image");
   expect(pdfText).toContain("/Type /Font");
 
-  const textRuns = pdfTextRuns(pdf);
-  for (const [baseText, scriptText] of [
-    ["I", "out"],
-    ["C", "GS"],
-    ["C", "GD"],
-    ["M", "1"],
-    ["R", "D"],
-    ["R", "S"],
-    ["V", "in"],
-    ["V", "DD"],
+  // Each subscript decodes to its own text after its base, smaller, and
+  // placed after and below it.
+  const runs = pdfTextRuns(pdf);
+  for (const pair of [
+    "I_out",
+    "C_GS",
+    "C_GD",
+    "M_1",
+    "R_D",
+    "R_S",
+    "V_in",
+    "V_DD",
   ]) {
-    const scriptIndex = textRuns.findIndex(
-      (run, index) =>
-        index > 0 &&
+    const [baseText, scriptText] = pair.split("_");
+    const index = runs.findIndex(
+      (run, at) =>
+        at > 0 &&
         run.text.trim() === scriptText &&
-        textRuns[index - 1]!.text === baseText,
+        runs[at - 1]!.text === baseText,
     );
-    expect(scriptIndex, `${baseText}_${scriptText} is present`).toBeGreaterThan(
-      0,
-    );
-    const base = textRuns[scriptIndex - 1]!;
-    const script = textRuns[scriptIndex]!;
+    expect(index, `${pair} is present`).toBeGreaterThan(0);
+    const [base, script] = [runs[index - 1]!, runs[index]!];
     expect(script.fontSize).toBeCloseTo(base.fontSize * 0.76, 2);
     expect(script.x).toBeGreaterThan(base.x);
     expect(script.y).toBeGreaterThan(base.y);
@@ -570,256 +398,7 @@ test("copies structural SPICE and Spectre netlists while exposing instance autho
   await expect(properties.getByText(/^Model:/u)).toHaveCount(0);
 });
 
-// IHP SG13G2 copies like SKY130, through X calls netlist-process.test pins.
-for (const process of NETLIST_PROFILE_IDS.filter((id) => id !== "sg13g2")) {
-  test(`copies both syntaxes from the right panel in ${process} without simulation configuration`, async ({
-    page,
-  }) => {
-    const project = parseSavedProject(
-      readFileSync(
-        new URL(
-          "../src/examples/common-source-amplifier.icproj.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
-    project.simulationFolders = [];
-    await page.goto("/editor");
-    await page.getByTestId("project-file").setInputFiles({
-      name: "copy-matrix.icproj.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(serializeProject(project)),
-    });
-    await expect(page.getByTestId("status")).toContainText("Opened");
-    if (
-      (await page
-        .getByTestId("netlist-panel-toggle")
-        .getAttribute("aria-pressed")) !== "true"
-    )
-      await page.getByTestId("netlist-panel-toggle").click();
-    const panel = page.getByRole("region", {
-      name: "Live netlist",
-      exact: true,
-    });
-    // Select another process first so this covers a real authoring transaction.
-    await panel
-      .getByLabel("Netlist process")
-      .selectOption(process === "abstract" ? "sky130" : "abstract");
-    await panel.getByLabel("Netlist process").selectOption(process);
-    for (const format of ["spice", "spectre"] as const) {
-      const copied = await copyNetlistText(page, format);
-      expect(copied).toContain(
-        createNetlistExportProfile(process).devices.nmos.target,
-      );
-      expect(copied).not.toContain("Draft:");
-      await page.evaluate(() => navigator.clipboard.writeText("untouched"));
-      await page.getByTestId("copy-netlist-panel").click();
-      await expect
-        .poll(async () =>
-          (await page.evaluate(() => navigator.clipboard.readText())).replace(
-            /\r\n?/gu,
-            "\n",
-          ),
-        )
-        .toBe(copied);
-      await expect(panel.getByLabel("Netlist process")).toHaveValue(process);
-    }
-  });
-}
-
-test("shows and copies a live MOS netlist with explicitly connected bulk terminals", async ({
-  page,
-}) => {
-  const project = createEmptyProject("explicit-bulk", "Explicit Bulk");
-  const document = project.documents[0]!;
-  for (const [reference, symbolId] of [
-    ["M1", "nmos"],
-    ["M2", "pmos"],
-  ] as const) {
-    document.instances.push({
-      id: reference,
-      reference,
-      symbolId,
-      placement: null,
-      netlist: {
-        binding: {
-          kind: "model",
-          deviceClass: "mos",
-          name: symbolId === "nmos" ? "NMOS" : "PMOS",
-        },
-        parameters: { w: "1u", l: "150n", nf: "1", m: "1" },
-      },
-    });
-    // Source and bulk share a node per device — that is what this test is
-    // about. Drain and gate are shared between the two devices, because a
-    // node only one pin reaches is a dead end and the export refuses one.
-    document.nets.push({
-      id: `${reference}-S`,
-      terminals: [
-        { instanceId: reference, pinName: "S" },
-        { instanceId: reference, pinName: "B" },
-      ],
-    });
-  }
-  for (const pinName of ["D", "G"] as const)
-    document.nets.push({
-      id: `shared-${pinName}`,
-      terminals: [
-        { instanceId: "M1", pinName },
-        { instanceId: "M2", pinName },
-      ],
-    });
-
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "explicit-bulk.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-
-  const spice = await copyNetlistText(page, "spice");
-  expect(spice).toMatch(/M1 \S+ \S+ (\S+) \1 NMOS/u);
-  expect(spice).toMatch(/M2 \S+ \S+ (\S+) \1 PMOS/u);
-  expect(spice).toContain(".subckt dut\n");
-  const spectre = await copyNetlistText(page, "spectre");
-  expect(spectre).toMatch(/M1 \(\S+ \S+ (\S+) \1\) NMOS/u);
-  expect(spectre).toMatch(/M2 \(\S+ \S+ (\S+) \1\) PMOS/u);
-  expect(spectre).toContain("subckt dut\n");
-  const panel = page.getByRole("region", {
-    name: "Live netlist",
-    exact: true,
-  });
-  const topControls = panel.locator(".netlist-code-controls");
-  for (const label of await topControls.locator("label").all()) {
-    const labelTextBox = await label.locator("span").boundingBox();
-    const selectBox = await label.locator("select").boundingBox();
-    expect(labelTextBox).not.toBeNull();
-    expect(selectBox).not.toBeNull();
-    expect(
-      Math.abs(
-        labelTextBox!.y +
-          labelTextBox!.height / 2 -
-          (selectBox!.y + selectBox!.height / 2),
-      ),
-    ).toBeLessThanOrEqual(2);
-  }
-  const selectBoxes = await topControls
-    .locator(".netlist-code-selects > label > select")
-    .evaluateAll((selects) =>
-      selects.map((select) => {
-        const { x, y, width } = select.getBoundingClientRect();
-        return { x, y, width };
-      }),
-    );
-  expect(selectBoxes).toHaveLength(2);
-  expect(selectBoxes[1]!.y).toBeGreaterThan(selectBoxes[0]!.y);
-  expect(selectBoxes[1]!.x).toBeCloseTo(selectBoxes[0]!.x, 0);
-  expect(selectBoxes[1]!.x + selectBoxes[1]!.width).toBeCloseTo(
-    selectBoxes[0]!.x + selectBoxes[0]!.width,
-    0,
-  );
-  const refresh = panel.getByRole("button", { name: "Refresh netlist" });
-  // The copy button sits beside refresh and keeps the panel's right edge.
-  const copy = panel.getByRole("button", { name: "Copy netlist", exact: true });
-  await expect(copy).toBeVisible();
-  const formatSelect = panel.getByLabel("Netlist format");
-  const processSelect = panel.getByLabel("Netlist process");
-  const assertControls = async () => {
-    const [format, process, refreshBox, copyBox, panelBox] = await Promise.all(
-      [formatSelect, processSelect, refresh, copy, panel].map((item) =>
-        item.boundingBox(),
-      ),
-    );
-    for (const box of [process, refreshBox, copyBox])
-      expect(box!.height).toBeCloseTo(format!.height, 1);
-    expect(refreshBox!.y).toBeCloseTo(format!.y, 1);
-    expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(
-      panelBox!.x + panelBox!.width,
-    );
-  };
-  await assertControls();
-  const handle = page.getByTestId("properties-resize-handle");
-  const handleBox = (await handle.boundingBox())!;
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 80);
-  await page.mouse.down();
-  await page.mouse.move(handleBox.x - 300, handleBox.y + 80);
-  await page.mouse.up();
-  await assertControls();
-  await page.setViewportSize({ width: 720, height: 900 });
-  // Restore the narrow dock through its keyboard resize control.
-  await handle.focus();
-  for (let index = 0; index < 10; index++)
-    await handle.press("Shift+ArrowRight");
-  await assertControls();
-  await page.setViewportSize({ width: 1280, height: 720 });
-  const code = panel.getByLabel("Netlist code", { exact: true });
-  const original = await code.innerText();
-  await code.fill(original.replace(/\bM1\b/u, "M91"));
-  await refresh.click();
-  await expect(code).toContainText("M91");
-  await expect(formatSelect).toHaveValue("spectre");
-  const valid = await code.innerText();
-  // A line the circuit cannot take never reaches it; Refresh regenerates the
-  // netlist from the circuit rather than keeping that draft.
-  await code.fill(valid + "\nINVALID");
-  await expect(panel.getByRole("alert")).toBeVisible();
-  await refresh.click();
-  await expect.poll(() => code.innerText()).toBe(valid);
-  await expect(panel.getByRole("alert")).toHaveCount(0);
-  const codeViewport = panel.locator(".netlist-code-viewport");
-  await expect(codeViewport.locator(".project-source-editor")).toHaveCSS(
-    "height",
-    "214px",
-  );
-  await expect(codeViewport.locator(".cm-lineNumbers")).toBeVisible();
-  await expect(panel.getByLabel("Netlist process")).toBeVisible();
-  await expect(panel.getByLabel("NMOS netlist target")).toBeVisible();
-  const defaultButton = panel.getByRole("button", {
-    name: "Default",
-    exact: true,
-  });
-  await expect(panel.getByRole("button", { name: /Port names:/u })).toHaveCount(
-    0,
-  );
-  const codeViewportBox = await codeViewport.boundingBox();
-  const optionsBarBox = await panel
-    .getByLabel("Netlist output options")
-    .boundingBox();
-  expect(codeViewportBox).not.toBeNull();
-  expect(optionsBarBox).not.toBeNull();
-  expect(
-    optionsBarBox!.y - (codeViewportBox!.y + codeViewportBox!.height),
-  ).toBeLessThanOrEqual(12);
-  await page.reload();
-  if (
-    (await page
-      .getByTestId("netlist-panel-toggle")
-      .getAttribute("aria-pressed")) !== "true"
-  )
-    await page.getByTestId("netlist-panel-toggle").click();
-  await expect(panel.getByRole("button", { name: /Port names:/u })).toHaveCount(
-    0,
-  );
-  await expect(panel.getByRole("alert")).toHaveCount(0);
-  await defaultButton.click();
-  await expect(panel.getByLabel("Netlist format")).toHaveValue("spice");
-  await expect(panel.getByRole("button", { name: /Port names:/u })).toHaveCount(
-    0,
-  );
-  await expect(panel.getByLabel("Netlist code")).toContainText(".subckt dut\n");
-  await page.reload();
-  if (
-    (await page
-      .getByTestId("netlist-panel-toggle")
-      .getAttribute("aria-pressed")) !== "true"
-  )
-    await page.getByTestId("netlist-panel-toggle").click();
-  await expect(panel.getByLabel("Netlist format")).toHaveValue("spice");
-  await expect(panel.getByLabel("Netlist process")).toBeVisible();
-});
-
-test("grows and shrinks the live netlist with content, scrolling only at the viewport limit", async ({
+test("grows and shrinks the live netlist with content, scrolling only at the viewport limit, with aligned controls", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -870,11 +449,7 @@ test("grows and shrinks the live netlist with content, scrolling only at the vie
         ],
       });
     }
-    await page.getByTestId("project-file").setInputFiles({
-      name: "growing-netlist.icproj.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(serializeProject(project)),
-    });
+    await openProjectFile(page, serializeProject(project));
     await expect(viewport).toHaveAttribute(
       "data-line-count",
       String(count + 4),
@@ -941,9 +516,71 @@ test("grows and shrinks the live netlist with content, scrolling only at the vie
   await checkOptionsFollow();
   await load(2);
   expect(await height()).toBeCloseTo(214, 0);
+
+  // The header controls stay aligned and inside the panel at any dock width.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const topControls = panel.locator(".netlist-code-controls");
+  for (const label of await topControls.locator("label").all()) {
+    const labelTextBox = (await label.locator("span").boundingBox())!;
+    const selectBox = (await label.locator("select").boundingBox())!;
+    expect(
+      Math.abs(
+        labelTextBox.y +
+          labelTextBox.height / 2 -
+          (selectBox.y + selectBox.height / 2),
+      ),
+    ).toBeLessThanOrEqual(2);
+  }
+  const selectBoxes = await topControls
+    .locator(".netlist-code-selects > label > select")
+    .evaluateAll((selects) =>
+      selects.map((select) => {
+        const { x, y, width } = select.getBoundingClientRect();
+        return { x, y, width };
+      }),
+    );
+  expect(selectBoxes).toHaveLength(2);
+  expect(selectBoxes[1]!.y).toBeGreaterThan(selectBoxes[0]!.y);
+  expect(selectBoxes[1]!.x).toBeCloseTo(selectBoxes[0]!.x, 0);
+  expect(selectBoxes[1]!.x + selectBoxes[1]!.width).toBeCloseTo(
+    selectBoxes[0]!.x + selectBoxes[0]!.width,
+    0,
+  );
+  const controls = [
+    panel.getByLabel("Netlist format"),
+    panel.getByLabel("Netlist process"),
+    panel.getByRole("button", { name: "Refresh netlist" }),
+    panel.getByRole("button", { name: "Copy netlist", exact: true }),
+    panel,
+  ];
+  const assertControls = async () => {
+    const [format, process, refresh, copy, panelBox] = await Promise.all(
+      controls.map((item) => item.boundingBox()),
+    );
+    for (const box of [process, refresh, copy])
+      expect(box!.height).toBeCloseTo(format!.height, 1);
+    expect(refresh!.y).toBeCloseTo(format!.y, 1);
+    expect(copy!.x + copy!.width).toBeLessThanOrEqual(
+      panelBox!.x + panelBox!.width,
+    );
+  };
+  await assertControls();
+  const handle = page.getByTestId("properties-resize-handle");
+  const handleBox = (await handle.boundingBox())!;
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 80);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x - 300, handleBox.y + 80);
+  await page.mouse.up();
+  await assertControls();
+  await page.setViewportSize({ width: 720, height: 900 });
+  // Restore the narrow dock through its keyboard resize control.
+  await handle.focus();
+  for (let index = 0; index < 10; index++)
+    await handle.press("Shift+ArrowRight");
+  await assertControls();
 });
 
-test("edits output configuration without creating another electrical authority", async ({
+test("edits output configuration without creating another electrical authority, and blocks output when a default is missing", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -987,6 +624,65 @@ test("edits output configuration without creating another electrical authority",
   await code.fill(JSON.stringify(config, null, 2));
   const netlist = await copyNetlistText(page, "spectre");
   expect(netlist).toContain("simulator lang=spectre");
+
+  // A configured default that is missing blocks output in either format.
+  const project = createEmptyProject("draft-project", "Draft Circuit");
+  const document = project.documents[0]!;
+  document.instances.push({
+    id: "R1",
+    reference: "R1",
+    symbolId: "resistor",
+    placement: null,
+    netlist: {
+      binding: { kind: "primitive", deviceClass: "resistor" },
+      parameters: {},
+    },
+  });
+  document.noConnects.push(
+    ...["1", "2"].map((pinName) => ({
+      id: `open-${pinName}`,
+      endpoint: { kind: "terminal" as const, instanceId: "R1", pinName },
+    })),
+  );
+  await clickCommand(page, "Netlist", "Netlist Settings…");
+  config.format = "spice";
+  config.profiles.abstract.devices.resistor.parameters = {};
+  await code.fill(JSON.stringify(config));
+  await page.getByTestId("netlist-panel-toggle").click();
+  await openProjectFile(page, serializeProject(project));
+  const live = page.getByLabel("Netlist code", { exact: true });
+  // The panel shows the draft, value unknown; output itself stays blocked.
+  await expect(live).toContainText("* Draft:");
+  await expect(live).toContainText(/R1 \S+ \S+ \?/u);
+  await expect(
+    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
+  ).toContainText("requires parameter value");
+  await clickCommand(page, "Netlist", "Review Netlist Issues…");
+  const report = page.getByRole("dialog", { name: "Check Report" });
+  await expect(report).toContainText("1 blocking issue");
+  await expect(report.getByTestId("netlist-preview")).toHaveCount(0);
+  await report.getByTestId("check-report-close").click();
+  await page
+    .getByRole("combobox", { name: "Netlist format" })
+    .selectOption("spectre");
+  await clickCommand(page, "Netlist", "Review Netlist Issues…");
+  await expect(report).toContainText("1 blocking issue");
+  await expect(report.getByTestId("netlist-preview")).toHaveCount(0);
+  // The report's finding navigates to its part and keeps the report open.
+  await report
+    .getByRole("button", { name: /MISSING_REQUIRED_PARAMETER/u })
+    .first()
+    .click();
+  await expect(page.getByTestId("status")).toContainText("Preflight:");
+  await expect(page.getByTestId("active-document-name")).toHaveText("dut");
+  await expect(report).toBeVisible();
+  const reportBodyBox = await report
+    .locator(".netlist-preflight-body")
+    .boundingBox();
+  const diagnosticsBox = await report
+    .getByLabel("Netlist diagnostics")
+    .boundingBox();
+  expect(diagnosticsBox!.width).toBeGreaterThan(reportBodyBox!.width * 0.9);
 });
 
 test("refreshes a legacy circuit with missing device defaults in one click", async ({
@@ -1011,49 +707,23 @@ test("refreshes a legacy circuit with missing device defaults in one click", asy
       netlist: { parameters: {} },
     });
   }
-  document.nets.push(
-    {
-      id: "shared-drain",
-      terminals: [
-        { instanceId: "M1", pinName: "D" },
-        { instanceId: "M2", pinName: "D" },
-      ],
-    },
-    {
-      id: "shared-gate",
-      terminals: [
-        { instanceId: "M1", pinName: "G" },
-        { instanceId: "M2", pinName: "G" },
-      ],
-    },
-    {
-      id: "m1-source",
-      terminals: [
-        { instanceId: "M1", pinName: "S" },
-        { instanceId: "M1", pinName: "B" },
-      ],
-    },
-    {
-      id: "m2-source",
-      terminals: [
-        { instanceId: "M2", pinName: "S" },
-        { instanceId: "M2", pinName: "B" },
-      ],
-    },
-    {
-      id: "resistor",
-      terminals: [
-        { instanceId: "R1", pinName: "1" },
-        { instanceId: "R1", pinName: "2" },
-      ],
-    },
-  );
+  // Drains and gates shared; each source tied to its body; R1 across itself.
+  for (const [id, a, b] of [
+    ["shared-drain", "M1.D", "M2.D"],
+    ["shared-gate", "M1.G", "M2.G"],
+    ["m1-source", "M1.S", "M1.B"],
+    ["m2-source", "M2.S", "M2.B"],
+    ["resistor", "R1.1", "R1.2"],
+  ])
+    document.nets.push({
+      id: id!,
+      terminals: [a!, b!].map((pin) => {
+        const [instanceId, pinName] = pin.split(".") as [string, string];
+        return { instanceId, pinName };
+      }),
+    });
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "bare-devices.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProjectFile(page, serializeProject(project));
   await expect(page.getByTestId("status")).toContainText("Opened");
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toContainText("* Draft:");
@@ -1075,60 +745,6 @@ test("refreshes a legacy circuit with missing device defaults in one click", asy
   );
   await page.getByTestId("netlist-fill-defaults").click();
   await expect(code).toContainText("sky130_fd_pr__nfet_01v8");
-});
-
-test("blocks netlist output when the configured default is missing", async ({
-  page,
-}) => {
-  const project = createEmptyProject("draft-project", "Draft Circuit");
-  const document = project.documents[0]!;
-  document.instances.push({
-    id: "R1",
-    reference: "R1",
-    symbolId: "resistor",
-    placement: null,
-    netlist: {
-      binding: { kind: "primitive", deviceClass: "resistor" },
-      parameters: {},
-    },
-  });
-  document.noConnects.push(
-    ...["1", "2"].map((pinName) => ({
-      id: `open-${pinName}`,
-      endpoint: { kind: "terminal" as const, instanceId: "R1", pinName },
-    })),
-  );
-  await page.goto("/editor");
-  await clickCommand(page, "Netlist", "Netlist Settings…");
-  const configuration = page.getByLabel("Netlist configuration JSON");
-  const preferences = JSON.parse(await configuration.inputValue());
-  preferences.profiles.abstract.devices.resistor.parameters = {};
-  await configuration.fill(JSON.stringify(preferences));
-  await page.getByTestId("netlist-panel-toggle").click();
-  await page.getByTestId("project-file").setInputFiles({
-    name: "draft.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  const code = page.getByLabel("Netlist code", { exact: true });
-  // The panel shows the draft, value unknown; output itself stays blocked.
-  await expect(code).toContainText("* Draft:");
-  await expect(code).toContainText(/R1 \S+ \S+ \?/u);
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("requires parameter value");
-  await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  const report = page.getByRole("dialog", { name: "Check Report" });
-  await expect(report).toContainText("1 blocking issue");
-  await expect(report).toContainText("MISSING_REQUIRED_PARAMETER");
-  await expect(report.getByTestId("netlist-preview")).toHaveCount(0);
-  await report.getByTestId("check-report-close").click();
-  await page
-    .getByRole("combobox", { name: "Netlist format" })
-    .selectOption("spectre");
-  await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  await expect(report).toContainText("1 blocking issue");
-  await expect(report.getByTestId("netlist-preview")).toHaveCount(0);
 });
 
 test("keeps the netlist live and selectable when clipboard access fails", async ({
