@@ -40,21 +40,17 @@ The report uses only Python's standard library and the copied report helpers.
 
 ## Acceptance
 
-`containers/vacask/starter-journey.test.mjs` always checks all four bundled
-source folders against these recipes and the native compiler. With explicit
-`VACASK_BIN`, `VACASK_MODULES`, `ICM_PYTHON`, `ICM_PYTHON_LIBRARIES` (and Linux
-loader paths when required), it runs the exact Project through the public local
-Simulation service, actual native process, paged File API and CSV export.
+`containers/vacask/starter-journey.test.mjs` checks all four bundled
+source folders against these recipes and the native compiler. The opt-in
+runs against a real VACASK binary were removed in #1646; nothing set their
+environment, so they never ran in CI.
 
-The numerical reference is the analytical first-order RC response, including
+Those runs compared against the analytical first-order RC response, including
 the finite 100 ns ramp. Complex AC component error must be below 1e-7; the
 sampled cutoff dB interpolation error below 0.002 dB; the two step measurement
 errors below 10 uV. The scalar interpolation limits are not model tolerances.
 No MOS, foundry corner, hosted isolation or production qualification is claimed.
 
-Use the existing native harness environment instructions in
-[containers/vacask/README.md](../../containers/vacask/README.md). Retain a Vitest
-JSON report to record the real environment/input metadata and measurements.
 The example export command now reads these reviewed bundled Projects, rather
 than rebuilding a separate circuit/program. See the
 [export instructions](../../apps/editor/src/examples/SIMULATION.md).

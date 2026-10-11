@@ -16,8 +16,9 @@ refuses to replay them for a different source. Its callers,
 real mode, so ordinary browser runs do not exercise the replay.
 `apps/editor/e2e/agent-simulation.spec.ts` now uses captured ngspice records
 from `fixtures/ngspice-rawfile/`, not this fixture.
-`containers/vacask/entrypoint-cli.test.mjs` runs `agent.sim` through the
-standalone harness when `VACASK_BIN` and `VACASK_MODULES` are set.
+The opt-in test that ran `agent.sim` through the standalone harness
+(`containers/vacask/entrypoint-cli.test.mjs`) was removed in #1646; nothing set
+its environment, so it never ran in CI.
 
 To execute actual VACASK in the browser GUI journey, build service dependencies
 and run from the repository root:
