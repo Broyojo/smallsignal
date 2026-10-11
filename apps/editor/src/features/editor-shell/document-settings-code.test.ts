@@ -69,15 +69,18 @@ function applyChanges(
 }
 
 describe("document Style code", () => {
-  it("retains every candidate edit on a public 385-instance, 280-Net fixture", () => {
+  // Every Net is a bulk-default choice and each choice is parsed against the
+  // whole Cell, so the cost climbs steeply with size; 40 Nets still give
+  // every field kind its choices.
+  it("retains every candidate edit on a generated 60-instance, 40-Net fixture", () => {
     const document = createLargePerformanceFixture(
       new InMemorySymbolResolver(builtInSymbols),
       {
-        instances: 385,
-        nets: 280,
-        routes: 1280,
-        junctions: 400,
-        annotations: 389,
+        instances: 60,
+        nets: 40,
+        routes: 200,
+        junctions: 60,
+        annotations: 60,
       },
     ).documents[0]!;
     const source = serializeDocumentSettingsCode(

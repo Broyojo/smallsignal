@@ -1,14 +1,19 @@
 import type { Plugin } from "vite";
 import { EXAMPLE_HOSTS, LOCAL_GALLERY_REPLICA } from "../src/gallery-source";
 
-/** Discover hashed resources from the build, never guess filenames at runtime. */
+/**
+ * Discover hashed resources from the build, never guess filenames at runtime.
+ * The script goes before the first stylesheet or entry script: an inline
+ * script waits for every stylesheet above it, which held the route's preloads
+ * back a round trip on a first visit (#1645).
+ */
 export function editorPreload(): Plugin {
   return {
     name: "editor-route-preload",
     apply: "build",
     transformIndexHtml: {
       order: "post",
-      handler(_html, context) {
+      handler(html, context) {
         const bundle = context.bundle;
         if (!bundle) return;
         const editorEntry = Object.values(bundle).find(
@@ -55,13 +60,15 @@ export function editorPreload(): Plugin {
         }
         const editorResources = resourcesFor(editorEntry.fileName);
         const galleryResources = resourcesFor(galleryEntry.fileName);
-        return [
-          {
-            tag: "script",
-            injectTo: "head",
-            children: `const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const resources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? editorResources : []; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = "style"; document.head.appendChild(link); }`,
-          },
-        ];
+        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const resources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? editorResources : []; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = "style"; document.head.appendChild(link); }</script>`;
+        const first = html.search(
+          /<(?:link\b[^>]*\brel="stylesheet"|script\b[^>]*\btype="module")/u,
+        );
+        if (first === -1)
+          throw new Error(
+            "Editor preload could not find a stylesheet or entry script",
+          );
+        return `${html.slice(0, first)}${script}\n    ${html.slice(first)}`;
       },
     },
   };

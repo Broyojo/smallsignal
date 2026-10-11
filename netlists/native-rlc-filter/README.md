@@ -36,8 +36,8 @@ the [native runtime instructions](../../containers/vacask/README.md).
 ## Acceptance
 
 `containers/vacask/starter-journey.test.mjs` checks all three source
-folders and, with explicit native environment paths, executes their actual
-Canvas-bound inputs through Prepare/Start/Read, paged artifacts and CSV.
+folders. The opt-in runs against a real VACASK binary were removed in #1646;
+nothing set their environment, so they never ran in CI. They used these references.
 
 The frequency reference is `1/(1 - omega^2*L*C + j*omega*R*C)`. The transient
 reference integrates the analytical RLC step response over the finite 100 ns
@@ -45,7 +45,7 @@ source ramp, covering under-, critically- and over-damped poles. The saved
 critical resistance is rounded; its continuous critical limit avoids unstable
 subtraction of nearly equal roots (about 5e-11 relative parameter difference).
 
-Frozen bounds before execution: complex AC component error below 1e-7,
+Their bounds: complex AC component error below 1e-7,
 transient voltage error below 10 uV and inductor-current error below 100 nA
 at every native sample. Reported peak/final measurements must agree with their
 returned arrays. These ideal-passive checks do not qualify foundry MOS models,

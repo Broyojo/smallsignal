@@ -51,14 +51,12 @@ VACASK executor.
 
 ## Acceptance boundary
 
-`containers/vacask/starter-journey.test.mjs` compiles all eight folders and uses
-the public Prepare/Start/Read and paged File resources for actual native runs.
-Set `VACASK_BIN`, `VACASK_MODULES`, `ICM_PYTHON`, `ICM_PYTHON_LIBRARIES`, and the
-explicit `ICM_VACASK_SECTIONED_MANIFEST` package-manifest path. Optional
-`ICM_VACASK_EVIDENCE_DIR` preserves fresh per-folder public artifacts and executed
-inputs, rather than replacing previous observations.
+`containers/vacask/starter-journey.test.mjs` compiles all eight folders and
+checks their source, corner selection and OP acquisitions. The opt-in runs
+against a real VACASK binary were removed in #1646; nothing set their
+environment, so they never ran in CI.
 
-Checks cover all 54 OP outputs, 81 DC inputs, 541 AC points in each corner,
+Those earlier native runs covered all 54 OP outputs, 81 DC inputs, 541 AC points in each corner,
 271 noise points, both distinct pulse stimuli, authored measurements recomputed
 from arrays, and CSV availability. All 19 starter programs are exercised because
 the report is shared. This is native source/result fidelity, as required by the

@@ -79,7 +79,7 @@ export const AGENT_EDIT_KINDS = Object.freeze([
   "wire",
 ]);
 
-export const DEFAULT_AGENT_LIMITS: AgentLimits = {
+const DEFAULT_AGENT_LIMITS: AgentLimits = {
   maxSnapshotBytes: 4_000_000,
   maxTransactionEdits: 64,
   maxRenderBytes: 1_000_000,
