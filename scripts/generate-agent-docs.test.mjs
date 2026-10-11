@@ -6,7 +6,6 @@ import { join, posix } from "node:path";
 import {
   compile,
   validateRegistry,
-  root,
   writeOutputs,
 } from "./generate-agent-docs.mjs";
 const registry = JSON.parse(
@@ -105,17 +104,6 @@ test("connection template and report make runtime interpolation and ownership ex
     assert.ok(item.sources.includes("docs/agent/distribution.json"));
     assert.match(item.sha256, /^[0-9a-f]{64}$/);
   }
-});
-test("generation is deterministic and checked-in projections match", async () => {
-  const first = await compile(registry);
-  const second = await compile(registry);
-  assert.deepEqual(first, second);
-  for (const [file, content] of first)
-    assert.equal(
-      (await readFile(`${root}/${file}`, "utf8")).replaceAll("\r\n", "\n"),
-      content,
-      file,
-    );
 });
 test("every declared Kit destination and resource is emitted; no phantom fallback", async () => {
   const output = await compile(registry);

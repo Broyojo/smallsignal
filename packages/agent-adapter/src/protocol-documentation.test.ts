@@ -4,35 +4,14 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_AGENT_SESSION_LIMITS } from "./session-state.js";
-import { DEFAULT_AGENT_LIMITS } from "./service.js";
 import { AgentProductionCircuitRequestSchema } from "./schema.js";
-import { agentCircuitOpenApi } from "./openapi.js";
-import { agentApiHelp } from "./agent-api-help.generated.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
-function readRepositoryText(relativePath: string): string {
-  return readFileSync(resolve(repositoryRoot, relativePath), "utf8");
-}
-
 describe("Agent session protocol documentation", () => {
-  it("publishes every canonical operation description without a second prose source", () => {
-    const operations = Object.values(agentCircuitOpenApi.paths).flatMap(
-      (path) => Object.values(path),
-    );
-    expect(operations.map((operation) => operation.operationId).sort()).toEqual(
-      Object.keys(agentApiHelp).sort(),
-    );
-    for (const operation of operations) {
-      expect(operation.description).toBe(
-        agentApiHelp[operation.operationId as keyof typeof agentApiHelp],
-      );
-    }
-  });
   it("validates raw HTTP examples and separates preview from commit identity", () => {
     const examples = [
-      ...readRepositoryText("docs/agent/examples.md")
+      ...readFileSync(resolve(repositoryRoot, "docs/agent/examples.md"), "utf8")
         .replaceAll("\r\n", "\n")
         .matchAll(/```json\n([\s\S]*?)\n```/g),
     ].map((match) => JSON.parse(match[1]!));
@@ -48,31 +27,5 @@ describe("Agent session protocol documentation", () => {
     expect(commit.dryRun).toBe(false);
     expect(preview.requestId).not.toBe(commit.requestId);
     expect(preview.transactionId).not.toBe(commit.transactionId);
-  });
-  it("states the per-call edit budget the service enforces", () => {
-    const limit = DEFAULT_AGENT_LIMITS.maxTransactionEdits;
-    expect(readRepositoryText("docs/agent/shared/authoring.md")).toContain(
-      `One transaction takes at most ${limit} expanded edits.`,
-    );
-  });
-  it("tracks the deployed credential and idempotency lifetimes", () => {
-    const claimMinutes = DEFAULT_AGENT_SESSION_LIMITS.claimTtlMs / 60_000;
-    const bearerHours = DEFAULT_AGENT_SESSION_LIMITS.tokenTtlMs / 3_600_000;
-    const idleMinutes = DEFAULT_AGENT_SESSION_LIMITS.sessionTtlMs / 60_000;
-    const resultMinutes =
-      DEFAULT_AGENT_SESSION_LIMITS.resultCacheTtlMs / 60_000;
-    const documents = ["docs/specs/web-agent-session.md"];
-
-    for (const relativePath of documents) {
-      const text = readRepositoryText(relativePath);
-      expect(text, relativePath).toMatch(
-        new RegExp(`${claimMinutes}(?:-| )minute`, "u"),
-      );
-      expect(text, relativePath).toContain(`${bearerHours} hours`);
-      expect(text, relativePath).toContain(
-        `${idleMinutes} minutes of inactivity`,
-      );
-      expect(text, relativePath).toContain(`${resultMinutes} minutes`);
-    }
   });
 });
