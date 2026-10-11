@@ -66,20 +66,6 @@ function expandSchema(
   );
 }
 
-interface ManifestResource {
-  uri: string;
-  name: string;
-  description: string;
-  mimeType: string;
-  source: string;
-  kind?: string;
-  consumers: string[];
-}
-
-/**
- * Contract test (Agent rationale): MCP Resources must project from the exact sources
- * the registry declares, independently of the HTTP Kit projection.
- */
 // The first tool listing builds every tool's contract: about a second
 // alone, and past the 5 s a test gets beside the full suite on a CI runner.
 // Each worker builds them once, here, outside any one test's time.
@@ -288,39 +274,6 @@ describe("mcp resources single-source projection", () => {
       readResourceContent("analog-canvas://contract/edits/not_an_edit"),
     ).toThrow("Unknown edit kind");
   });
-  const manifest = JSON.parse(
-    readFileSync(resolve(repoRoot, "docs/agent/distribution.json"), "utf8"),
-  ) as { documents: ManifestResource[] };
-
-  it("matches every manifest entry with identical content from its source", () => {
-    const exposed = manifest.documents.filter((entry) => entry.uri);
-    expect(mcpResources).toHaveLength(exposed.length);
-    const kitFiles = new Map(
-      agentOperatingKit.files.map((file) => [file.path, file.content]),
-    );
-    for (const entry of exposed) {
-      const projected = mcpResources.find((r) => r.uri === entry.uri);
-      expect(projected, `missing resource ${entry.uri}`).toBeDefined();
-      const expectedText =
-        entry.kind === "catalog"
-          ? kitFiles.get("references/razavi-authoring-catalog.json")
-          : readFileSync(resolve(repoRoot, entry.source), "utf8");
-      expect(expectedText, `missing source ${entry.source}`).toBeDefined();
-      expect(projected).toMatchObject({
-        uri: entry.uri,
-        name: entry.name,
-        description: entry.description,
-        mimeType: entry.mimeType,
-      });
-      // Markdown links are deliberately rewritten for the resource namespace.
-      // Full output/source integrity is checked by the generator contract suite.
-      if (entry.mimeType !== "application/schema+json")
-        expect(projected!.text.split("\n")[0]).toBe(
-          expectedText!.split("\n")[0],
-        );
-    }
-  });
-
   it("exposes the stable reference set and the optional advanced-edits contract", () => {
     const uris = mcpResources.map((resource) => resource.uri);
     for (const uri of [

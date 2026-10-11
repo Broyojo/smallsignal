@@ -31,8 +31,6 @@ entrypoint and workspace dependencies into one Node 24 ESM file, with a SHA-256
 manifest; it refuses existing output directories. No models, simulator binary,
 Python, operator configuration or credentials are embedded. The artifact is not
 an image or deployment, and its manifest does not replace the runtime lock.
-The real CLI journey accepts `ICM_VACASK_HARNESS_ENTRY` to exercise that artifact
-from a scratch working directory, without workspace module resolution.
 
 For a flattened native model artifact, derive read-only symbol evidence with
 `node scripts/vacask-model-symbols.mjs --library <file> --dependency-id <id> --master <wrapper> --output <new-json-file>`
@@ -227,10 +225,7 @@ remain available through File APIs. This is output provenance, not a new
 Project schema or saved input protocol.
 
 The helper deliberately supplies neither a numeric evaluator nor a rawfile
-writer: authors use their program/library. The real local journey test below
-now reads actual native AC arrays, computes a complex expression in Python,
-writes a new record, and checks result arrays, provenance, units and CSV export.
-It is not full GUI/MCP simulation-journey or hosted acceptance. Shared helper
+writer: authors use their program/library. Shared helper
 discovery is available above; qualified Python libraries and hosted isolation
 remain migration work.
 
@@ -280,59 +275,14 @@ console/source artifacts remain available. A program that fails before
 reporting cannot be used to infer an expected name, value or successful
 measurement.
 
-The real local service/process test also uses the shared helper and reads an
-actual OP artifact before reporting; it verifies failure recovery, repeated
-reports and File Resource export. Run it with explicit `VACASK_BIN`,
-`VACASK_MODULES`, an absolute `ICM_PYTHON` interpreter path, and
-`ICM_PYTHON_LIBRARIES` containing the declared library directories and external
-target files, separated by the host path delimiter (`:` on Linux, `;` on Windows):
-
-```sh
-pnpm test:local containers/vacask/native-measurement-journey.test.mjs
-```
-
-This is not a hosted Python/sandbox qualification or a complete GUI/MCP
-simulation journey. Derived curves can be reported as described above; reusable
+Derived curves can be reported as described above; reusable
 numeric computation/writing libraries and richer measurement recipes remain
 separate migration work, not features of the declaration helper.
 
-## Real hierarchical OTA journey
+## Large results
 
-After the dependency build, run the original shipped OTA through Prepare/Start,
-the local-host HTTP adapter, the actual native process and the shared File Resource:
-
-```sh
-VACASK_BIN=/absolute/vacask/bin/vacask \
-VACASK_MODULES=/absolute/vacask/lib/vacask/mod \
-ICM_VACASK_CONVERTED_TT=/absolute/converted/tt.sim \
-pnpm test:local containers/vacask/sky130-public-journey.test.mjs
-```
-
-The test skips without these explicit inputs. The TT file must match the captured
-dependency digest in `netlists/vacask-sky130/model-symbols-tt.json`; substituting a
-different model without updating and verifying its evidence is rejected. Linux
-packages needing additional shared libraries can explicitly supply the existing
-operator-owned `ICM_VACASK_LIBRARY_PATH`. No implicit PDK discovery is performed.
-
-The fixture keeps the shipped Canvas topology and dimensions. Its model-loading
-policy declares `defaultScale: 1e-6`, matching the candidate model's micrometre-valued
-wrapper parameters and existing reference decks. Prepare inserts an inspectable
-initial `options scale` in the first reached control block; authored source needs
-no scale patch. Later authored options and `clear options` retain native semantics.
-This is not a hidden geometry rewrite or a globally qualified Profile. The test
-reads complete result artifacts in pages, checks OP/DC/AC/TRAN/Noise
-records, nine M1 model-parameter mappings, CSV/raw exports and scratch cleanup.
-Its authored program switches VINP to DC for the transfer sweep, restores
-the nominal bias for AC/Noise, and restores pulse mode for TRAN. It requests
-explicit high precision, with a 1 pA transient current floor: the tighter
-1 fA floor caused NR timestep collapse at the 1 ns edge even with more
-iterations or Gear2. No product solver defaults or foundry values change.
-The transient capture requires more than 1 MB, so this test advertises an
-8 MiB output cap and still reads the same paged File Resource. Optional
-`ICM_VACASK_EVIDENCE_DIR` retains exact prepared/input/result artifacts in a
-fresh `ota-public-*` directory, including failed-run evidence. Those artifacts
-are observations, not auto-approved numerical baselines.
-The serialized executor envelope allows 256 MiB when an updated caller requests
+A native transient capture can exceed 1 MB of output; the shipped SKY130 OTA's
+did. The serialized executor envelope allows 256 MiB when an updated caller requests
 `x-analog-execution-transfer: receipt-v1`; legacy buffered readers keep the
 8 MiB ceiling. The native Worker and local forwarder negotiate this explicitly.
 The isolated native gateway forwards the opt-in and sets
@@ -342,8 +292,12 @@ the local example above budgets 64 MiB. Raw budgets exclude JSON escaping and
 parsed-result duplication, so they must leave envelope headroom. Oversized
 responses still fail explicitly without automatic re-execution. None of these
 configuration changes deploys or modifies an already running operator host.
-A passing run proves this local integration only: it does not certify model
-accuracy, all analyses/corners, GUI/public MCP transport or hosted isolation.
+
+The opt-in tests that ran the Python measurement helper and the shipped OTA
+through a real VACASK binary (`native-measurement-journey.test.mjs`,
+`sky130-public-journey.test.mjs`), and the standalone CLI and executor checks
+(`entrypoint-cli.test.mjs`, `execute.test.mjs`), were removed in #1646: nothing
+set their environment, so they never ran in CI.
 
 ## Transport and shutdown
 

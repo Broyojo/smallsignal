@@ -92,26 +92,13 @@ passing Project receipt; other available evidence is still collected. An active
 batch is cancelled on interrupted acceptance before disconnecting its MCP.
 Runner receipts cover this GUI/MCP batch only, not full M6 or model qualification.
 
-For current local native execution, `containers/vacask/starter-journey.test.mjs`
-runs the actual Prepare/Run/Read/File service against a configured VACASK binary,
-modules, Python and matching model artifacts. Set `ICM_VACASK_STARTER_SANITY=1`
-when running the **whole** file to additionally check all 31 experiments together.
-Set `ICM_VACASK_SECTIONED_MANIFEST` to the generated model package manifest;
-the binary, modules and Python paths must also be explicitly configured:
-
-```powershell
-$env:ICM_VACASK_STARTER_SANITY = "1"
-pnpm test:local containers/vacask/starter-journey.test.mjs
-```
-
-Missing runtime/model configuration cannot produce a passing aggregate. Optional
-`ICM_VACASK_EVIDENCE_DIR` retains per-run result artifacts and a fresh
-`starter-sanity-*/acceptance.json`. This is local service/numerical evidence, not
-GUI/MCP or isolated-cloud acceptance. The migration does not require numerical
+The opt-in local runs of the starters against a real VACASK binary in
+`containers/vacask/starter-journey.test.mjs` were removed in #1646; nothing set
+their environment, so they never ran in CI. The migration does not require numerical
 equivalence to an ngspice reference; see the
 [native acceptance decision](../../docs/roadmap/vacask-migration.md#environment-and-electrical-acceptance).
 
-`scripts/lib/native-example-acceptance.mjs` supplies those same checks to the
+`scripts/lib/native-example-acceptance.mjs` supplies the acceptance checks to the
 offline `analyze-native-simulation-examples.mjs` command. The CLI additionally
 requires complete live receipts, hashed nested `executed/` and `raw/` artifacts,
 matching Profile-projected Prepare input (using retained receipt capabilities)

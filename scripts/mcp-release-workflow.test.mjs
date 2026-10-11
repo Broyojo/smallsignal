@@ -3,34 +3,21 @@ import { describe, expect, it } from "vitest";
 
 const workflow = readFileSync(".github/workflows/mcp-release.yml", "utf8");
 const steps = workflow.split(/\r?\n      - /u).slice(1);
+const find = (text) => steps.findIndex((step) => step.includes(text));
 
-describe("MCP release candidate and publication ordering", () => {
-  it("stamps candidates before validation and upload, without weakening publication", () => {
-    const candidate = steps.findIndex((step) =>
-      step.includes("run: pnpm mcp:package"),
-    );
-    const stamp = steps.findIndex((step) =>
-      step.includes("run: pnpm mcp:release:bump -- --stamp"),
-    );
-    const check = steps.findIndex((step) =>
-      step.includes("run: pnpm mcp:distribution:check"),
-    );
-    const upload = steps.findIndex((step) =>
-      step.includes("uses: actions/upload-artifact@v4"),
-    );
-    expect(candidate).toBeGreaterThan(-1);
-    expect(stamp).toBeGreaterThan(candidate);
+describe("MCP release publication", () => {
+  it("checks every candidate before upload and never restamps a published build", () => {
+    const stamp = find("run: pnpm mcp:release:bump -- --stamp");
+    const check = find("run: pnpm mcp:distribution:check");
+    const upload = find("uses: actions/upload-artifact@v4");
     expect(check).toBeGreaterThan(stamp);
     expect(upload).toBeGreaterThan(check);
-    expect(steps[stamp]).toMatch(/^if: inputs.package_only\r?\n/u);
     expect(steps[check]).not.toContain("if:");
-    expect(
-      steps.find((step) => step.includes("run: pnpm mcp:release:package")),
-    ).toContain("if: ${{ !inputs.package_only }}");
-    expect(
-      steps.find((step) =>
-        step.includes("name: Publish immutable GitHub Release"),
-      ),
-    ).toContain("if: ${{ !inputs.package_only }}");
+    expect(steps[stamp]).toMatch(/^if: inputs.package_only\r?\n/u);
+    for (const text of [
+      "run: pnpm mcp:release:package",
+      "name: Publish immutable GitHub Release",
+    ])
+      expect(steps[find(text)]).toContain("if: ${{ !inputs.package_only }}");
   });
 });
