@@ -189,6 +189,24 @@ describe("CI validation planning", () => {
     });
   });
 
+  it("selects the Agent and simulation specs for their shared run fixtures (#1646)", () => {
+    for (const path of [
+      "apps/editor/e2e/simulation-e2e-fixtures.ts",
+      "apps/editor/e2e/native-simulation-executor.mjs",
+    ]) {
+      const plan = ciPlan([path]);
+      expect(plan.mode, path).toBe("focused");
+      expect(plan.e2eArgs, path).toEqual(
+        expect.arrayContaining([
+          "apps/editor/e2e/web-agent-session.spec.ts",
+          "apps/editor/e2e/agent-simulation.spec.ts",
+          "apps/editor/e2e/gui-native-simulation.spec.ts",
+          "apps/editor/e2e/simulation-batch.spec.ts",
+        ]),
+      );
+    }
+  });
+
   it("selects native MCP acceptance for MCP implementation and spec edits", () => {
     for (const path of [
       "apps/mcp-server/src/main.ts",

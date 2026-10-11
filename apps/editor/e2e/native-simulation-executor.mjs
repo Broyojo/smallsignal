@@ -18,16 +18,12 @@ export const agentNativeProfile = "agent-native-divider";
 // replays unedited native evidence, not fabricated numbers. Explicit real mode
 // executes the same prepared input and refuses missing executable configuration.
 // WebSocket Agent transport is still a test peer, not public MCP acceptance.
-export async function createAgentNativeExecutor({
-  largeTransient = false,
-} = {}) {
+export async function createAgentNativeExecutor() {
   const live = process.env.ICM_E2E_VACASK_REAL === "1";
-  if (largeTransient && !live)
-    throw new Error("Large transient requires real execution");
   const limits = {
     maxInputFiles: 24,
     maxInputBytes: 1048576,
-    maxOutputBytes: largeTransient ? 64 * 1024 * 1024 : 1048576,
+    maxOutputBytes: 1048576,
     maxLogBytes: 65536,
     maxRawFiles: 16,
     maxEntries: 256,
@@ -36,8 +32,8 @@ export async function createAgentNativeExecutor({
     configured: true,
     rawfileCollection: "native-multi-ascii",
     inputs: ["source"],
-    analyses: largeTransient ? ["op", "ac", "tran"] : ["op", "ac"],
-    parsedAnalyses: largeTransient ? ["op", "ac", "tran"] : ["op", "ac"],
+    analyses: ["op", "ac"],
+    parsedAnalyses: ["op", "ac"],
     profiles: [{ id: agentNativeProfile, corners: [] }],
     maxTimeoutMs: 15000,
     maxInputFiles: limits.maxInputFiles,

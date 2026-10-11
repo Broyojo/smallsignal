@@ -89,6 +89,44 @@ describe("Specification results", () => {
       expect(html).toContain(value);
     expect(html).not.toContain("0 s");
   });
+  it("leads with a failed judgment and scales an unconstrained Ohm value", () => {
+    const html = renderToStaticMarkup(
+      <SimulationSpecResults
+        report={{
+          ...report,
+          results: [
+            report.results[0]!,
+            {
+              ...report.results[0]!,
+              id: "slow:1",
+              name: "slow",
+              value: 2.5,
+              judgment: "failed",
+              reason: "outside-spec",
+            },
+            {
+              ...report.results[0]!,
+              id: "rin:1",
+              name: "rin",
+              value: 36.2705e6,
+              unit: "Ohm",
+              expected: null,
+              judgment: "unconstrained",
+              reason: "no-spec",
+            },
+          ],
+        }}
+        hasRun
+        stale={false}
+        onSource={() => {}}
+      />,
+    );
+    expect(html).toContain("Failed");
+    expect(html.indexOf("slow ·")).toBeGreaterThan(-1);
+    expect(html.indexOf("slow ·")).toBeLessThan(html.indexOf("peak ·"));
+    expect(html).toContain("36.2705");
+    expect(html).toContain("MΩ");
+  });
   it("does not treat a legacy report's absence as passing", () => {
     const html = renderToStaticMarkup(
       <SimulationSpecResults

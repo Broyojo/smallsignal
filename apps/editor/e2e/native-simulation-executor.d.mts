@@ -7,9 +7,7 @@ import type { SimulationEnvironmentMetadata } from "@icm/spice-run";
 
 export const agentNativeSource: string;
 export const agentNativeProfile: string;
-export function createAgentNativeExecutor(options?: {
-  largeTransient?: boolean;
-}): Promise<{
+export function createAgentNativeExecutor(): Promise<{
   capabilities: Capabilities;
   environment: SimulationEnvironmentMetadata;
   execute(input: ExecutionInput): Promise<

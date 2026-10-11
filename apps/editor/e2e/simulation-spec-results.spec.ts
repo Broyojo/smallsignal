@@ -63,6 +63,8 @@ test("Specs retain captured judgments and source navigation at narrow and maximi
       },
     });
   }, harnessModuleUrl("simulation-output-harness"));
+  // Judgments, values and units are simulation-spec-results.test.tsx; the
+  // browser keeps the disclosure, source navigation and the table's layout.
   const table = page
     .getByRole("region", { name: "Acceptance and issues" })
     .getByRole("table");
@@ -75,31 +77,10 @@ test("Specs retain captured judgments and source navigation at narrow and maximi
   await expect(
     other.getByRole("img", { name: "Z_{\\mathrm{in}}" }),
   ).toBeVisible();
-  await expect(other).toContainText("36.2705 MΩ");
-  await expect(other).toContainText("Measured only");
-  await expect(table.locator("tr[data-judgment]").first()).toHaveAttribute(
-    "data-judgment",
-    "failed",
-  );
   await expect(table.locator(".simulation-spec-number").first()).toHaveCSS(
     "text-align",
     "right",
   );
-  await expect(table.getByRole("columnheader")).toHaveText([
-    "Spec",
-    "Sim result",
-    "Expected",
-    "Judgment",
-  ]);
-  await expect(
-    table.getByRole("row").filter({ hasText: "peak" }),
-  ).toContainText("Pass");
-  await expect(
-    table.getByRole("row").filter({ hasText: "delay" }),
-  ).toContainText("Failed");
-  await expect(
-    table.getByRole("row").filter({ hasText: "missing" }),
-  ).toContainText("Not evaluated");
   await expect(
     page.getByText("Previous run · input has changed"),
   ).toBeVisible();
@@ -126,9 +107,5 @@ test("Specs retain captured judgments and source navigation at narrow and maximi
       );
     });
     expect(layout).toBe(true);
-    await page.screenshot({
-      path: test.info().outputPath(`spec-results-${width}.png`),
-    });
   }
-  await page.screenshot({ path: test.info().outputPath("spec-results.png") });
 });

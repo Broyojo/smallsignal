@@ -143,9 +143,6 @@ The version-pinned MCP package, OpenAPI and public help travel with the protocol
 
 Public store/service/HTTP/filesystem tests cover admission, exact identity,
 atomic failure/retry, shared and protected owners, leases, Range, reconstruction,
-failed deletion and verified local ACK. Browser tests cover cross-tab protection,
-50 consecutive Runs and a real Worker round trip of every supported analysis.
-`ICM_EVIDENCE_BENCHMARK=1` enables a synthetic 9,384-point, 145-signal bundle
-benchmark near the historical 85 MiB size. It records encode/read times, main
-thread heartbeats, long tasks and CDP JS heap; it excludes Worker/native memory
-and does not certify the user's circuit electrically.
+failed deletion, verified local ACK and 50 consecutive Runs within the byte
+budget. Browser tests cover cross-tab protection and a real Worker round trip of
+every supported analysis.

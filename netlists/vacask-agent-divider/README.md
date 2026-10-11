@@ -11,9 +11,9 @@ output captured on 2026-09-15 with an explicit comment-only startup TOML.
 
 `apps/editor/e2e/native-simulation-executor.mjs` replays these native records
 through the shared native result assembler unless real mode is requested. It
-refuses to replay them for a different source. Its callers,
-`gui-native-simulation.spec.ts` and the MCP journey below, currently run only in
-real mode, so ordinary browser runs do not exercise the replay.
+refuses to replay them for a different source. Its GUI caller,
+`gui-native-simulation.spec.ts`, replays them in ordinary browser runs; the MCP
+journey below runs only in real mode.
 `apps/editor/e2e/agent-simulation.spec.ts` now uses captured ngspice records
 from `fixtures/ngspice-rawfile/`, not this fixture.
 The opt-in test that ran `agent.sim` through the standalone harness
@@ -37,14 +37,13 @@ PowerShell users set the same variables with `$env:NAME = 'value'`. Optional
 Real mode refuses missing executable/module settings; it never falls back to
 captured records. Each scenario owns a temporary runtime root and waits for
 process cleanup. No production endpoint is contacted or modified.
-Each native journey attaches its result and transport to the test report, with
+The MCP journey attaches its result and transport to the test report, with
 the measured runtime identity rather than the replay identity.
 
-The GUI case runs the bundled RC low-pass AC folder (Python report removed, OP
-added), not `agent.sim`. Its simulation HTTP boundary is test-controlled unless
-`ICM_E2E_NATIVE_TRANSPORT=vite` selects the development transport; it does not
-prove the public MCP transport, cross-Project DUT import, qualified SKY130 scope
-or cloud isolation. Those remain separate exits in the
+The GUI case runs `agent.sim` and opens its measurement's Console evidence. Its
+simulation HTTP boundary is test-controlled; it does not prove the public MCP
+transport, cross-Project DUT import, qualified SKY130 scope or cloud isolation.
+Those remain separate exits in the
 [migration roadmap](../../docs/roadmap/vacask-migration.md).
 
 ## Real MCP transport journey

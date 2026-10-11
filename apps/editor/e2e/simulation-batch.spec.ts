@@ -5,18 +5,56 @@ import {
 } from "@icm/model";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import {
-  createSimulationEnvironmentMetadata,
-  createSimulationInputMetadata,
-} from "@icm/spice-run";
 import { parseProject } from "@icm/project-protocol";
 
-import { clickNetlistWorkflowCommand } from "./editor-fixtures.js";
-import { ota, profile, editSimulationFile } from "./simulation-e2e-fixtures.js";
-test("a saved-folder batch prepares first and exposes each ordinary run", async ({
+import {
+  clickNetlistWorkflowCommand,
+  openProjectFile,
+} from "./editor-fixtures.js";
+import {
+  completedNgspiceRun,
+  editSimulationFile,
+  ngspiceCapabilities,
+  ota,
+  profile,
+} from "./simulation-e2e-fixtures.js";
+
+// Both batch entries are GUI wiring: a saved Run Plan and a multi-selection of
+// saved folders. Their expansion and sequential execution are
+// mcp-simulation-live's "prepares and runs saved folders as ordinary
+// sequential runs" and the simulation-service tests.
+test("a Run Plan prepares without executing, and saved folders run as one batch of ordinary runs", async ({
   page,
 }) => {
   const project = parseProject(JSON.stringify(ota));
+  let plan = project.simulationFolders[0]!;
+  const parsed = readSimulationExperimentConfig(plan);
+  if (!parsed.ok) throw Error(parsed.message);
+  const config = parsed.config;
+  config.outputs = [];
+  config.runPlan = {
+    mode: "sweep",
+    axes: [
+      { kind: "variable", variableId: "input-level", values: ["0.89", "0.9"] },
+    ],
+  };
+  config.variables = [
+    {
+      id: "input-level",
+      name: "VIN",
+      sourcePath: plan.input.entry,
+      bindings: [
+        {
+          documentId: project.topDocumentId,
+          instanceId: "VINP",
+          parameter: "low",
+        },
+      ],
+    },
+  ];
+  plan = replaceSimulationExperimentConfig(plan, config);
+  plan.input.files.find((f) => f.path === plan.input.entry)!.text =
+    '* Run plan\n.param VIN=0.9\n.include "circuit.spice"\n.control\nset filetype=ascii\nop\nwrite out.raw\n.endc\n.end\n';
   const deck = readFileSync(
     new URL(
       "../../../fixtures/ngspice-rawfile/divider-op.deck.spi",
@@ -24,93 +62,72 @@ test("a saved-folder batch prepares first and exposes each ordinary run", async 
     ),
     "utf8",
   );
-  const rawfile = readFileSync(
-    new URL(
-      "../../../fixtures/ngspice-rawfile/divider-op.raw",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  project.simulationFolders = ["TT", "FF"].map((name) => {
-    const folder = createSimulationFolder({
-      id: "folder-" + name.toLowerCase(),
-      name,
-      profileId: profile.id,
-    });
-    folder.input.files.find((f) => f.path === folder.input.entry)!.text = deck;
-    return folder;
-  });
-  let executions = 0;
+  project.simulationFolders = [
+    plan,
+    ...["TT", "FF"].map((name) => {
+      const folder = createSimulationFolder({
+        id: "folder-" + name.toLowerCase(),
+        name,
+        profileId: profile.id,
+      });
+      folder.input.files.find((f) => f.path === folder.input.entry)!.text =
+        deck;
+      return folder;
+    }),
+  ];
   const executedDecks: string[] = [];
   await page.route("**/api/simulate", async (route) => {
     const body = route.request().postDataJSON();
     if (body.operation === "capabilities")
-      return route.fulfill({
-        json: {
-          configured: true,
-          rawfileCollection: "declared-single-ascii",
-          maxOutputBytes: 1048576,
-          inputs: ["structured", "raw"],
-          analyses: ["op", "dc", "ac", "tran", "noise"],
-          parsedAnalyses: ["op", "dc", "ac", "tran", "noise"],
-          profiles: [
-            {
-              id: profile.id,
-              corners: ["tt"],
-              dependencies: [
-                { id: profile.models.id, sha256: profile.models.contentSha256 },
-              ],
-            },
-          ],
-          maxTimeoutMs: 120000,
-          maxInputBytes: 1048576,
-          cancel: true,
-        },
-      });
-    executions++;
+      return route.fulfill({ json: ngspiceCapabilities() });
     executedDecks.push(body.preparedDeck);
-    return route.fulfill({
-      json: {
-        outcome: { status: "completed" },
-        diagnostics: [],
-        log: "ngspice OP",
-        durationMs: 1,
-        rawfile,
-        executedDeck: body.preparedDeck,
-        metadata: {
-          schemaVersion: 1,
-          input: await createSimulationInputMetadata({
-            inputRevision: body.inputRevision,
-            netlist: body.netlist,
-            testbench: body.testbench,
-            deck: body.preparedDeck,
-          }),
-          configuration: { modelLibrary: null },
-          environment: await createSimulationEnvironmentMetadata({
-            executor: "local-host",
-            reproducibility: "observed",
-            profileId: profile.id,
-            platform: "linux/x64",
-            simulator: {
-              name: "ngspice",
-              version: profile.simulator.version,
-              binarySha256: null,
-            },
-            models: null,
-            startupSha256: null,
-          }),
-        },
-      },
-    });
+    return route.fulfill({ json: await completedNgspiceRun(body) });
   });
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "batch.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "batch.icproj.json");
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
+  const batch = panel.locator(".simulation-batch-menu-popover");
+
+  config.runPlan = {
+    mode: "sweep",
+    axes: [
+      { kind: "variable", variableId: "input-level", values: ["0.89", "0.9"] },
+      { kind: "temperature", values: [-20, 0, 25.5] },
+    ],
+  };
+  await editSimulationFile(
+    page,
+    "experiment.json",
+    JSON.stringify(config, null, 2),
+  );
+  await panel
+    .getByRole("treeitem", { name: "Run", exact: true })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Preview input netlist…" }).click();
+  await panel.getByTitle("Batch queue", { exact: true }).click();
+  await expect(batch).toContainText("Batch · prepared");
+  await expect(panel.getByLabel("Prepare temporary files")).toHaveCount(0);
+  await expect(panel.getByRole("tab", { name: /prepared\.cir/ })).toBeVisible();
+  expect(executedDecks).toHaveLength(0);
+  await panel.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(batch).toContainText("Batch · finished");
+  expect(executedDecks).toHaveLength(6);
+  await panel.locator(".simulation-run-history > summary").click();
+  const history = panel.getByRole("region", {
+    name: "Project runs",
+    exact: true,
+  });
+  // A finished run's row reads as its outcome.
+  await expect(
+    history.getByRole("listitem").filter({ hasText: "completed" }),
+  ).toHaveCount(6);
+  await expect(
+    history.getByRole("button", { name: "Open result" }).last(),
+  ).toBeEnabled();
+  await panel.locator(".simulation-run-history > summary").click();
+
+  // Unsaved drafts of two selected folders run, each as an ordinary run.
   const openEntry = async (name: string, folderId: string) => {
     const folder = panel.getByRole("treeitem", {
       name: `Folder ${name}`,
@@ -129,18 +146,14 @@ test("a saved-folder batch prepares first and exposes each ordinary run", async 
       panel.getByRole("button", { name: "Run", exact: true }),
     ).toHaveAttribute("title", `Run ${name} / run.cir`);
   };
-  await openEntry("TT", "folder-tt");
-  await editSimulationFile(
-    page,
-    "run.cir",
-    deck.replace("divider", "divider TT draft"),
-  );
-  await openEntry("FF", "folder-ff");
-  await editSimulationFile(
-    page,
-    "run.cir",
-    deck.replace("divider", "divider FF draft"),
-  );
+  for (const name of ["TT", "FF"]) {
+    await openEntry(name, `folder-${name.toLowerCase()}`);
+    await editSimulationFile(
+      page,
+      "run.cir",
+      deck.replace("divider", `divider ${name} draft`),
+    );
+  }
   await panel.getByRole("treeitem", { name: "Folder TT", exact: true }).click();
   await panel
     .getByRole("treeitem", { name: "Folder FF", exact: true })
@@ -151,180 +164,22 @@ test("a saved-folder batch prepares first and exposes each ordinary run", async 
   await page
     .getByRole("menuitem", { name: "Run selected folders (2)" })
     .click();
-  await panel.getByTitle("Batch queue", { exact: true }).click();
-  const batch = panel.locator(".simulation-batch-menu-popover");
-  await expect(batch).toContainText("Batch · finished");
+  if (!(await batch.isVisible()))
+    await panel.getByTitle("Batch queue", { exact: true }).click();
   await expect(
     batch.getByRole("button", { name: /TT finished/ }),
   ).toBeEnabled();
   await expect(
     batch.getByRole("button", { name: /FF finished/ }),
   ).toBeEnabled();
-  expect(executions).toBe(2);
+  expect(executedDecks).toHaveLength(8);
   expect(executedDecks.some((text) => text.includes("TT draft"))).toBe(true);
   expect(executedDecks.some((text) => text.includes("FF draft"))).toBe(true);
   await batch.getByRole("button", { name: /FF finished/ }).click();
-  await expect(
-    panel.getByRole("treeitem", { name: "Folder FF", exact: true }),
-  ).toBeVisible();
   await expect(
     panel.getByRole("button", { name: "Run", exact: true }),
   ).toHaveAttribute("title", "Run FF / run.cir");
   await expect(panel.getByRole("status").first()).toContainText(
     "Batch finished",
   );
-});
-
-test("a saved Run Plan prepares without executing and Run starts its ordinary batch", async ({
-  page,
-}) => {
-  const project = parseProject(JSON.stringify(ota));
-  let folder = project.simulationFolders[0]!;
-  const parsed = readSimulationExperimentConfig(folder);
-  if (!parsed.ok) throw Error(parsed.message);
-  const config = parsed.config;
-  config.outputs = [];
-  config.runPlan = {
-    mode: "sweep",
-    axes: [
-      { kind: "variable", variableId: "input-level", values: ["0.89", "0.9"] },
-    ],
-  };
-  config.variables = [
-    {
-      id: "input-level",
-      name: "VIN",
-      sourcePath: folder.input.entry,
-      bindings: [
-        {
-          documentId: project.topDocumentId,
-          instanceId: "VINP",
-          parameter: "low",
-        },
-      ],
-    },
-  ];
-  folder = replaceSimulationExperimentConfig(folder, config);
-  folder.input.files.find((f) => f.path === folder.input.entry)!.text =
-    '* Run plan\n.param VIN=0.9\n.include "circuit.spice"\n.control\nset filetype=ascii\nop\nwrite out.raw\n.endc\n.end\n';
-  project.simulationFolders = [folder];
-  const rawfile = readFileSync(
-    new URL(
-      "../../../fixtures/ngspice-rawfile/divider-op.raw",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  let executions = 0;
-  await page.route("**/api/simulate", async (route) => {
-    const body = route.request().postDataJSON();
-    if (body.operation === "capabilities")
-      return route.fulfill({
-        json: {
-          configured: true,
-          rawfileCollection: "declared-single-ascii",
-          maxOutputBytes: 1048576,
-          inputs: ["structured", "raw"],
-          analyses: ["op"],
-          parsedAnalyses: ["op"],
-          profiles: [
-            {
-              id: profile.id,
-              corners: ["tt"],
-              dependencies: [
-                { id: profile.models.id, sha256: profile.models.contentSha256 },
-              ],
-            },
-          ],
-          maxTimeoutMs: 120000,
-          maxInputBytes: 1048576,
-          cancel: true,
-        },
-      });
-    executions += 1;
-    return route.fulfill({
-      json: {
-        outcome: { status: "completed" },
-        diagnostics: [],
-        log: "ngspice OP",
-        durationMs: 1,
-        rawfile,
-        executedDeck: body.preparedDeck,
-        metadata: {
-          schemaVersion: 1,
-          input: await createSimulationInputMetadata({
-            inputRevision: body.inputRevision,
-            netlist: body.netlist,
-            testbench: body.testbench,
-            deck: body.preparedDeck,
-          }),
-          configuration: { modelLibrary: null },
-          environment: await createSimulationEnvironmentMetadata({
-            executor: "local-host",
-            reproducibility: "observed",
-            profileId: profile.id,
-            platform: "linux/x64",
-            simulator: {
-              name: "ngspice",
-              version: profile.simulator.version,
-              binarySha256: null,
-            },
-            models: null,
-            startupSha256: null,
-          }),
-        },
-      },
-    });
-  });
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "run-plan.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  const panel = page.getByRole("region", { name: "Analog simulation" });
-  config.runPlan = {
-    mode: "sweep",
-    axes: [
-      { kind: "variable", variableId: "input-level", values: ["0.89", "0.9"] },
-      { kind: "temperature", values: [-20, 0, 25.5] },
-    ],
-  };
-  await editSimulationFile(
-    page,
-    "experiment.json",
-    JSON.stringify(config, null, 2),
-  );
-  await panel
-    .getByRole("treeitem", { name: "Run", exact: true })
-    .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Preview input netlist…" }).click();
-  await panel.getByTitle("Batch queue", { exact: true }).click();
-  await expect(panel.locator(".simulation-batch-menu-popover")).toContainText(
-    "Batch · prepared",
-  );
-  await expect(panel.getByLabel("Prepare temporary files")).toHaveCount(0);
-  await expect(panel.getByRole("tab", { name: /prepared\.cir/ })).toBeVisible();
-  expect(executions).toBe(0);
-  await panel.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(panel.locator(".simulation-batch-menu-popover")).toContainText(
-    "Batch · finished",
-  );
-  expect(executions).toBe(6);
-  await panel.locator(".simulation-run-history > summary").click();
-  const history = panel.getByRole("region", {
-    name: "Project runs",
-    exact: true,
-  });
-  await expect(
-    history.getByRole("button", { name: "Open result" }),
-  ).toHaveCount(6);
-  // A finished run's row reads as its outcome.
-  await expect(
-    history.getByRole("listitem").filter({ hasText: "completed" }),
-  ).toHaveCount(6);
-  await expect(
-    history.getByRole("button", { name: "Open result" }).last(),
-  ).toBeEnabled();
 });

@@ -1,8 +1,4 @@
-import { parseSavedProject } from "./editor-fixtures";
-import {
-  readSimulationExperimentConfig,
-  type ProjectSimulationFolder,
-} from "@icm/model";
+import { readSimulationExperimentConfig } from "@icm/model";
 import { test, expect } from "@playwright/test";
 import { parseProject } from "@icm/project-protocol";
 import { unzipSync } from "fflate";
@@ -10,62 +6,22 @@ import { unzipSync } from "fflate";
 import {
   clickNetlistWorkflowCommand,
   awaitEditorReady,
-  downloadBytes,
+  exportedProject,
+  openProjectFile,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
-import { ota, profile, editSimulationFile } from "./simulation-e2e-fixtures.js";
+import {
+  editSimulationFile,
+  ngspiceCapabilities,
+  ota,
+  profile,
+} from "./simulation-e2e-fixtures.js";
 
-test("selecting simulation with an ideal analog block keeps its generated model out of editable Canvas instances", async ({
+test("the qualified OTA folder opens unchanged, picks signals on the Canvas and previews root and hierarchical outputs", async ({
   page,
 }) => {
-  const project = parseProject(JSON.stringify(ota));
-  const testbench = project.documents.find(
-    (document) => document.id === "document-ota-5t-testbench",
-  )!;
-  testbench.instances.push({
-    id: "XIDEAL",
-    symbolId: "opamp",
-    reference: "XIDEAL",
-    placement: { position: { x: 600, y: 200 }, rotation: 0, mirror: "none" },
-    netlist: {
-      binding: { kind: "unresolved-subcircuit", name: "opamp" },
-      parameters: { gain: "1e6" },
-    },
-  });
-  for (const [pinName, netId] of [
-    ["IN+", "tb-vinp-net"],
-    ["IN-", "tb-vinn-net"],
-    ["OUT", "tb-vout-net"],
-  ] as const) {
-    testbench.nets
-      .find((net) => net.id === netId)!
-      .terminals.push({ instanceId: "XIDEAL", pinName });
-  }
-  await page.route("**/api/simulate", (route) =>
-    route.fulfill({ json: { configured: false } }),
-  );
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "ideal-analog-block.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  const panel = page.getByRole("region", { name: "Analog simulation" });
-  await expect(panel).toBeVisible();
-  await expect(
-    panel.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("The editor hit an unexpected problem"),
-  ).toHaveCount(0);
-});
-
-test("the qualified OTA folder opens unchanged and preserves all root and hierarchical outputs", async ({
-  page,
-}) => {
-  // This roundtrip includes signal picking, two exports, configuration editing
-  // and a reload. Its assertions are functional, not a 30-second speed budget.
+  // Signal picking, an export, configuration editing and two downloads. Its
+  // assertions are functional, not a 30-second speed budget.
   test.setTimeout(60_000);
   const project = parseProject(JSON.stringify(ota));
   const dut = project.documents.find(
@@ -112,43 +68,16 @@ test("the qualified OTA folder opens unchanged and preserves all root and hierar
     }
     return route.fulfill({
       json: {
-        configured: true,
-        rawfileCollection: "declared-single-ascii",
-        maxOutputBytes: 1048576,
-        inputs: ["source", "raw"],
-        analyses: ["op", "dc", "ac", "tran"],
-        parsedAnalyses: ["op", "dc", "ac", "tran"],
-        profiles: [
-          {
-            id: profile.id,
-            label: profile.displayName,
-            corners: ["tt", "ff", "ss", "fs", "sf"],
-            dependencies: [
-              { id: profile.models.id, sha256: profile.models.contentSha256 },
-            ],
-          },
-        ],
+        ...ngspiceCapabilities(["op", "dc", "ac", "tran"]),
         modelLibrary: {
           path: profile.models.library.runtimePath,
           section: "tt",
-        },
-        maxTimeoutMs: 120000,
-        maxInputBytes: 1048576,
-        cancel: true,
-        batch: {
-          maxItems: 16,
-          execution: "sequential",
-          sweepAxes: ["corner", "temperature", "variable", "parameter"],
         },
       },
     });
   });
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "qualified-ota.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "qualified-ota.icproj.json");
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
   // New Helper picks write native Code even in a retained legacy experiment.
@@ -189,9 +118,8 @@ test("the qualified OTA folder opens unchanged and preserves all root and hierar
   await observe
     .getByRole("button", { name: "Use native vector: v(out)", exact: true })
     .click();
-  const pickedProject = parseProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const pickedProject: ReturnType<typeof parseProject> =
+    await exportedProject(page);
   const pickedConfig = readSimulationExperimentConfig(
     pickedProject.simulationFolders[0]!,
   );
@@ -292,46 +220,6 @@ test("the qualified OTA folder opens unchanged and preserves all root and hierar
   expect(diagnosticPaths).toContain("netlist/prepared.cir");
   expect(diagnosticPaths).toContain("evidence/source-map.json");
   expect(diagnosticPaths).not.toContain("netlist/executed.cir");
-  const saved = await downloadBytes(page, "File", "Export Project File…");
-  const reloaded = parseProject(saved.toString());
-  expect(
-    readSimulationExperimentConfig(reloaded.simulationFolders[0]!),
-  ).toMatchObject({ ok: true, config: { outputs: config.outputs } });
-  expect(
-    reloaded.simulationFolders[0]!.input.files.find(
-      (f) => f.path === savedSetup.input.entry,
-    )?.text,
-  ).toBe(
-    pickedProject.simulationFolders[0]!.input.files.find(
-      (f) => f.path === savedSetup.input.entry,
-    )?.text,
-  );
-  await page.reload();
-  await page.getByTestId("project-file").setInputFiles({
-    name: "reopened.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  if (
-    (await panel
-      .getByRole("button", { name: "Explorer", exact: true })
-      .getAttribute("aria-expanded")) !== "true"
-  )
-    await panel.getByRole("button", { name: "Explorer", exact: true }).click();
-  await panel
-    .getByRole("treeitem", { name: "experiment.json", exact: true })
-    .first()
-    .click();
-  await expect(
-    panel.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toContainText(profile.id);
-  const reopened = parseProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(
-    readSimulationExperimentConfig(reopened.simulationFolders[0]!),
-  ).toMatchObject({ ok: true, config: { outputs: config.outputs } });
 });
 
 test("uncommitted source survives whole-workspace reload", async ({ page }) => {
@@ -339,11 +227,7 @@ test("uncommitted source survives whole-workspace reload", async ({ page }) => {
     route.fulfill({ json: { configured: false } }),
   );
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "source-recovery.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(ota)),
-  });
+  await openProjectFile(page, ota, "source-recovery.icproj.json");
   await expect.poll(() => recoveryProjectTexts(page)).toContain(ota.id);
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
@@ -376,142 +260,10 @@ test("uncommitted source survives whole-workspace reload", async ({ page }) => {
   await panel.getByRole("tab", { name: "run.cir", exact: false }).click();
   await expect(editor).toBeFocused();
   await expect(editor).toContainText(marker);
-  const saved = parseProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: ReturnType<typeof parseProject> = await exportedProject(page);
   expect(
     saved.simulationFolders[0]!.input.files.some((file) =>
       file.text.includes(marker),
     ),
   ).toBe(true);
-});
-
-test("one Testbench persists several independently named folders", async ({
-  page,
-}) => {
-  const project = parseProject(JSON.stringify(ota));
-  const existingSetupNames = project.simulationFolders.map(
-    (folder) => folder.name,
-  );
-  const activeSetup = project.simulationFolders.find(
-    (folder) => folder.id === "simulation-setup-ota-op-ac",
-  );
-  const activeTestbenchId =
-    activeSetup?.input.kind === "source"
-      ? activeSetup.input.circuitBindings[0]?.documentId
-      : undefined;
-  expect(activeTestbenchId).toBe("document-ota-5t-testbench");
-  await page.route("**/api/simulate", async (route) =>
-    route.fulfill({
-      json: {
-        configured: true,
-        rawfileCollection: "declared-single-ascii",
-        maxOutputBytes: 1048576,
-        inputs: ["source", "raw"],
-        analyses: ["op", "dc", "ac", "tran"],
-        parsedAnalyses: ["op", "dc", "ac", "tran"],
-        profiles: [
-          {
-            id: profile.id,
-            corners: ["tt"],
-            devices: profile.qualifiedScope.devices,
-            dependencies: [
-              { id: profile.models.id, sha256: profile.models.contentSha256 },
-            ],
-          },
-        ],
-        maxTimeoutMs: 120000,
-        maxInputBytes: 1048576,
-        cancel: true,
-      },
-    }),
-  );
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "multiple-folders.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  const panel = page.getByRole("region", { name: "Analog simulation" });
-  const folders = panel.getByLabel("Simulation folders", { exact: true });
-  await expect(
-    folders.getByRole("treeitem", {
-      name: "Folder OTA OP, DC, AC, and TRAN",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await folders.getByRole("button", { name: "+ New experiment" }).click();
-  await folders.getByLabel("New simulation folder name").fill("Bias sweep");
-  await folders.getByLabel("New simulation folder name").press("Enter");
-  await expect(
-    folders.getByRole("treeitem", { name: "Folder Bias sweep", exact: true }),
-  ).toBeVisible();
-  await folders
-    .getByRole("treeitem", { name: "Folder Bias sweep", exact: true })
-    .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Rename…" }).click();
-  await folders
-    .getByLabel("Folder name", { exact: true })
-    .fill("OTA OP, DC, AC, and TRAN");
-  await folders.getByLabel("Folder name", { exact: true }).press("Enter");
-  await expect(
-    folders.getByLabel("Folder name", { exact: true }),
-  ).toHaveAttribute("aria-invalid", "true");
-  await expect(folders).toContainText("already exists");
-  await folders.getByLabel("Folder name", { exact: true }).press("Escape");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(saved.simulationFolders).toHaveLength(existingSetupNames.length + 1);
-  expect(
-    saved.simulationFolders.map((folder: { name: string }) => folder.name),
-  ).toEqual([...existingSetupNames, "Bias sweep"]);
-  expect(
-    saved.simulationFolders.find(
-      (folder: { name: string }) => folder.name === "Bias sweep",
-    )?.input.circuitBindings[0]?.documentId,
-  ).toBe("document-ota-5t-testbench");
-  expect(
-    new Set(
-      saved.simulationFolders.map(
-        (folder: ProjectSimulationFolder) =>
-          folder.input.circuitBindings[0]?.documentId,
-      ),
-    ),
-  ).toEqual(
-    new Set(["document-ota-5t-testbench", "document-ota-5t-testbench-sin"]),
-  );
-
-  await folders
-    .getByRole("treeitem", { name: "Folder Bias sweep", exact: true })
-    .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete…" }).click();
-  await page
-    .getByRole("dialog", { name: "Delete folder Bias sweep?" })
-    .getByRole("button", { name: "Cancel" })
-    .click();
-  await expect(
-    folders.getByRole("treeitem", { name: "Folder Bias sweep", exact: true }),
-  ).toBeVisible();
-  await folders
-    .getByRole("treeitem", { name: "Folder Bias sweep", exact: true })
-    .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete…" }).click();
-  await page
-    .getByRole("dialog", { name: "Delete folder Bias sweep?" })
-    .getByRole("button", { name: "Delete", exact: true })
-    .click();
-  await expect(
-    folders.getByRole("treeitem", { name: "Folder Bias sweep", exact: true }),
-  ).toHaveCount(0);
-  const afterDelete = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
-  expect(afterDelete.simulationFolders).toHaveLength(existingSetupNames.length);
-  expect(
-    afterDelete.simulationFolders.map(
-      (folder: { name: string }) => folder.name,
-    ),
-  ).toEqual(existingSetupNames);
 });

@@ -1187,9 +1187,16 @@ test("inline naming commits once on blur, cancels on Escape, and deletion uses a
   });
   await gamma.focus();
   await gamma.press("F2");
-  await workspace
-    .getByRole("textbox", { name: "Folder name", exact: true })
-    .fill("Renamed");
+  const folderName = workspace.getByRole("textbox", {
+    name: "Folder name",
+    exact: true,
+  });
+  // Another folder's name, in any case, is refused before any edit.
+  await folderName.fill("beta");
+  await folderName.press("Enter");
+  await expect(folderName).toHaveAttribute("aria-invalid", "true");
+  await expect(workspace).toContainText("already exists");
+  await folderName.fill("Renamed");
   // Renaming existing folders still commits on blur.
   await workspace
     .getByRole("treeitem", { name: "Folder Beta", exact: true })

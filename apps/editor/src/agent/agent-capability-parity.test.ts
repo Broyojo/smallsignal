@@ -339,6 +339,12 @@ it("translates free drafting text atomically, preserves fine placement, and reje
   });
   expect(added.ok, added.message).toBe(true);
   const text = controller.document.drafting!.objects[0]!;
+  // Placed with the GUI's insertion defaults.
+  expect(text).toMatchObject({
+    kind: "text",
+    alignment: "middle",
+    typographyToken: "label",
+  });
   const before = structuredClone(controller.project);
   const moved = await tool("circuit_selection", {
     actions: [
