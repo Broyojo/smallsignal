@@ -440,6 +440,20 @@ describe("component property code", () => {
     });
   });
 
+  it.each([null, [420], [420, "280"], [420, Number.POSITIVE_INFINITY]])(
+    "refuses the coordinate %j instead of moving the device",
+    (coordinate) => {
+      const decoded = JSON.parse(formatComponentPropertyCode(context));
+      decoded.placement.coordinate = coordinate;
+      expect(
+        parseComponentPropertyCode(JSON.stringify(decoded), context),
+      ).toEqual({
+        ok: false,
+        message: "placement.coordinate must be a finite [x, y] coordinate",
+      });
+    },
+  );
+
   it("accepts RGB authoring, persists hex, and displays fixed colors as compact RGB", () => {
     const decoded = JSON.parse(formatComponentPropertyCode(context));
     decoded.appearance.color = [255, 0, 128];

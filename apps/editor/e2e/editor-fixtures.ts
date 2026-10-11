@@ -464,3 +464,13 @@ export async function exportedProject(page: Page): Promise<any> {
     (await downloadBytes(page, "File", "Export Project File…")).toString(),
   );
 }
+
+/** Open the editor on a Project a test built. */
+export async function openProject(
+  page: Page,
+  project: object,
+  name?: string,
+): Promise<void> {
+  await page.goto("/editor");
+  await openProjectFile(page, project, name);
+}

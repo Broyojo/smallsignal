@@ -35,57 +35,7 @@ const width = async (page: Page): Promise<number> =>
     )[2],
   );
 
-const viewBox = async (page: Page) =>
-  (await page.getByTestId("schematic-canvas").getAttribute("viewBox"))!
-    .split(" ")
-    .map(Number) as [number, number, number, number];
-
-test("a wheel zooms and a trackpad pans, and the setting overrides both", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  expect(
-    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior,
-  ).toBe("auto");
-
-  // A detent-quantized signature zooms even though its deltaY is tiny —
-  // the case that made a slowly turned mouse wheel pan. Scrolling up
-  // zooms in, so the camera narrows.
-  const beforeWheel = await width(page);
-  await wheel(page, { deltaY: -4, wheelDeltaY: 120 });
-  await expect.poll(() => width(page)).toBeLessThan(beforeWheel);
-
-  // The trackpad's 3:1 ratio pans instead, leaving the zoom untouched.
-  const afterWheel = await width(page);
-  await wheel(page, { deltaY: 40, wheelDeltaY: -120 });
-  await expect.poll(() => width(page)).toBe(afterWheel);
-
-  // An explicit choice wins over any evidence: the same trackpad
-  // signature now zooms.
-  await editDocumentStyleCode(page, (code) => {
-    code.canvas.scrollBehavior = "zoom";
-  });
-  await wheel(page, { deltaY: -40, wheelDeltaY: 120 });
-  await expect.poll(() => width(page)).toBeLessThan(afterWheel);
-
-  // And a mouse detent pans once the person says the device is a surface.
-  await editDocumentStyleCode(page, (code) => {
-    code.canvas.scrollBehavior = "pan";
-  });
-  const beforePan = await width(page);
-  await wheel(page, { deltaY: -4, wheelDeltaY: 120 });
-  await expect.poll(() => width(page)).toBe(beforePan);
-
-  // The choice survives a reload.
-  await page.reload();
-  await awaitEditorReady(page);
-  expect(
-    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior,
-  ).toBe("pan");
-});
-
-test("arrow keys pan the camera by one stable screen-space step", async ({
+test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans, the setting overrides both, and a framed narrow view keeps full-speed pan and zoom range", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -125,34 +75,64 @@ test("arrow keys pan the camera by one stable screen-space step", async ({
   expect((down[1] - initial[1]) * initialScale).toBeCloseTo(48, 1);
   await page.keyboard.press("ArrowUp");
   await expect.poll(readViewBox).toEqual(initial);
-});
 
-test("a framed narrow view keeps full-speed pan and visual zoom range", async ({
-  page,
-}) => {
-  await page.goto("/editor");
+  expect(
+    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior,
+  ).toBe("auto");
+
+  // A detent-quantized signature zooms even though its deltaY is tiny —
+  // the case that made a slowly turned mouse wheel pan. Scrolling up
+  // zooms in, so the camera narrows.
+  const beforeWheel = await width(page);
+  await wheel(page, { deltaY: -4, wheelDeltaY: 120 });
+  await expect.poll(() => width(page)).toBeLessThan(beforeWheel);
+
+  // The trackpad's 3:1 ratio pans instead, leaving the zoom untouched.
+  const afterWheel = await width(page);
+  await wheel(page, { deltaY: 40, wheelDeltaY: -120 });
+  await expect.poll(() => width(page)).toBe(afterWheel);
+
+  // An explicit choice wins over any evidence: the same trackpad
+  // signature now zooms.
+  await editDocumentStyleCode(page, (code) => {
+    code.canvas.scrollBehavior = "zoom";
+  });
+  await wheel(page, { deltaY: -40, wheelDeltaY: 120 });
+  await expect.poll(() => width(page)).toBeLessThan(afterWheel);
+
+  // And a mouse detent pans once the person says the device is a surface.
+  await editDocumentStyleCode(page, (code) => {
+    code.canvas.scrollBehavior = "pan";
+  });
+  const beforePan = await width(page);
+  await wheel(page, { deltaY: -4, wheelDeltaY: 120 });
+  await expect.poll(() => width(page)).toBe(beforePan);
+
+  // The choice survives a reload.
+  await page.reload();
   await awaitEditorReady(page);
-  const canvas = page.getByTestId("schematic-canvas");
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
+  expect(
+    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior,
+  ).toBe("pan");
 
-  const beforeFrame = await viewBox(page);
+  // A framed narrow view keeps full-speed pan and the visual zoom range.
+  const beforeFrame = await readViewBox();
   const centerX = bounds!.x + bounds!.width / 2;
   const centerY = bounds!.y + bounds!.height / 2;
   await page.mouse.move(centerX - 30, centerY - 160);
   await page.mouse.down({ button: "right" });
   await page.mouse.move(centerX + 30, centerY + 160, { steps: 6 });
   await page.mouse.up({ button: "right" });
-  await expect.poll(() => viewBox(page)).not.toEqual(beforeFrame);
-  const framed = await viewBox(page);
+  await expect.poll(readViewBox).not.toEqual(beforeFrame);
+  const framed = await readViewBox();
   expect(framed[2] / framed[3]).toBeLessThan(0.5);
 
   await page.mouse.move(centerX, centerY);
   await page.mouse.down({ button: "middle" });
   await page.mouse.move(centerX + 120, centerY, { steps: 6 });
   await page.mouse.up({ button: "middle" });
-  await expect.poll(() => viewBox(page)).not.toEqual(framed);
-  const panned = await viewBox(page);
+  await expect.poll(readViewBox).not.toEqual(framed);
+  const panned = await readViewBox();
   const framedScale = Math.min(
     bounds!.width / framed[2],
     bounds!.height / framed[3],
@@ -179,7 +159,7 @@ test("a framed narrow view keeps full-speed pan and visual zoom range", async ({
   const maximumVisualScale = Math.min(bounds!.width / 120, bounds!.height / 80);
   await expect
     .poll(async () => {
-      const zoomed = await viewBox(page);
+      const zoomed = await readViewBox();
       return Math.min(bounds!.width / zoomed[2], bounds!.height / zoomed[3]);
     })
     .toBeCloseTo(maximumVisualScale, 1);

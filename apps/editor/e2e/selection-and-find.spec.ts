@@ -1,32 +1,19 @@
 // Finding and selecting what is drawn: Find, the Selection Filter, marquee
 // direction, Net highlight and ERC diagnostics.
 
-import { createRoutePath } from "@icm/model";
+import { createRoutePath, createEmptyProject } from "@icm/model";
 import { expect, test } from "@playwright/test";
-import type { Locator } from "@playwright/test";
-import { createEmptyProject } from "@icm/model";
 import {
   chooseComponent,
   clickDrawTool,
   clickNetlistWorkflowCommand,
+  openProject,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
 import { clickRoute } from "./canvas-fixtures.js";
-
-test("Ctrl+D deselects without allowing browser bookmarking", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 340, y: 220 });
-  await page.getByTestId("hit-R1").click();
-  await page.keyboard.press("Control+d");
-  await expect(page.getByTestId("status")).toHaveText("Selection cleared");
-  await page.keyboard.press("Delete");
-  await expect(page.getByTestId("hit-R1")).toBeVisible();
-});
 
 test("opens circuit Find with Ctrl+F and selects a matching component", async ({
   page,
@@ -44,7 +31,7 @@ test("opens circuit Find with Ctrl+F and selects a matching component", async ({
   await expect(page.getByTestId("project-search-input")).toHaveCount(0);
 });
 
-test("opens selectable-object choices with Ctrl+Shift+F and filters Select All", async ({
+test("opens selectable-object choices with Ctrl+Shift+F, filters Select All, and Ctrl+D deselects", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -69,6 +56,13 @@ test("opens selectable-object choices with Ctrl+Shift+F and filters Select All",
   await expect(page.getByTestId("route-hit-route-ui-1")).toHaveClass(
     /selected/,
   );
+  // Ctrl+D deselects without letting the browser bookmark the page, and
+  // Delete then has nothing to remove.
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("status")).toHaveText("Selection cleared");
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("route-hit-route-ui-1")).toHaveCount(1);
+  await page.keyboard.press("Control+a");
   await expect(page.getByTestId("hit-R1")).not.toHaveClass(/selected/);
   await expect(page.getByTestId("hit-R2")).not.toHaveClass(/selected/);
   await page.getByTestId("hit-R1").click();
@@ -132,48 +126,31 @@ test("Selection Filter blocks direct wire, junction, and shape operations", asyn
       },
     ],
   };
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "selection-policy.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project);
 
   await page.keyboard.press("Control+Shift+f");
   const filter = page.getByTestId("selection-filter-popover");
   await filter.getByRole("button", { name: "None" }).click();
   await filter.getByRole("button", { name: "Close" }).click();
 
-  const screenPoint = async (locator: Locator, pointIndex = 0) =>
-    locator.evaluate((element, index) => {
-      const svg = (element as SVGGraphicsElement).ownerSVGElement;
-      const matrix = (element as SVGGraphicsElement).getScreenCTM();
-      if (!svg || !matrix) throw new Error("SVG hit target is not measurable");
-      const point = svg.createSVGPoint();
-      if (element instanceof SVGCircleElement) {
-        point.x = element.cx.baseVal.value;
-        point.y = element.cy.baseVal.value;
-      } else {
-        const vertex = (element as SVGPolylineElement).points[index];
-        if (!vertex) throw new Error("SVG hit target has no point");
-        point.x = vertex.x;
-        point.y = vertex.y;
-      }
-      const screen = point.matrixTransform(matrix);
-      return { x: screen.x, y: screen.y };
-    }, pointIndex);
-
+  // The wire's middle, its left Junction and the rectangle's corner.
+  type Point = { x: number; y: number };
+  const [routeCenter, junctionPoint, shapeCorner] = (await page
+    .getByTestId("schematic-canvas")
+    .evaluate((element) => {
+      const matrix = (element as SVGSVGElement).getScreenCTM()!;
+      return [
+        { x: 340, y: 220 },
+        { x: 240, y: 220 },
+        { x: 260, y: 300 },
+      ].map((point) => {
+        const screen = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+        return { x: screen.x, y: screen.y };
+      });
+    })) as [Point, Point, Point];
   const route = page.getByTestId("route-hit-filtered-wire");
-  const routeStart = await screenPoint(route);
-  const routeEnd = await screenPoint(route, 1);
-  const routeCenter = {
-    x: (routeStart.x + routeEnd.x) / 2,
-    y: (routeStart.y + routeEnd.y) / 2,
-  };
   const shape = page.getByTestId("drafting-hit-filtered-shape");
-  const shapeCorner = await screenPoint(shape);
   const junction = page.getByTestId("junction-left");
-  const junctionPoint = await screenPoint(junction);
 
   for (const point of [routeCenter, junctionPoint, shapeCorner]) {
     await page.mouse.click(point.x, point.y);
@@ -210,35 +187,7 @@ test("Selection Filter blocks direct wire, junction, and shape operations", asyn
   await expect(route).not.toHaveClass(/selected/u);
 });
 
-test("highlights the complete current-document Net from a selected route", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 380, y: 260 });
-  await placeComponent(page, "resistor", { x: 600, y: 260 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
-  await clickRoute(page, "route-ui-1");
-  await openSelectionShelf(page);
-  await page.getByRole("button", { name: "Highlight Net (H)" }).click();
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveAttribute(
-    "data-net-id",
-    "net-ui-1",
-  );
-  await expect(
-    page.locator(".net-highlight-overlay .net-highlight-core"),
-  ).toHaveCount(1);
-  await expect(
-    page.locator(".net-highlight-overlay .net-highlight-endpoint"),
-  ).toHaveCount(2);
-  await expect(page.getByTestId("flightline")).toHaveCount(0);
-  await page.keyboard.press("h");
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
-});
-
-test("recomputes highlighted routed components after a Net Label is deleted", async ({
+test("highlights a selected route's whole Net and recomputes it after a Net Label is deleted", async ({
   page,
 }) => {
   const project = createEmptyProject(
@@ -247,96 +196,63 @@ test("recomputes highlighted routed components after a Net Label is deleted", as
     "main",
   );
   const document = project.documents[0]!;
-  document.nets = [
-    {
-      id: "net-historically-merged",
-
-      terminals: [],
-    },
-  ];
-  document.junctions = [
-    {
-      id: "left-a",
-      netId: "net-historically-merged",
-      position: { x: 180, y: 260 },
-    },
-    {
-      id: "left-b",
-      netId: "net-historically-merged",
-      position: { x: 320, y: 260 },
-    },
-    {
-      id: "right-a",
-      netId: "net-historically-merged",
-      position: { x: 480, y: 260 },
-    },
-    {
-      id: "right-b",
-      netId: "net-historically-merged",
-      position: { x: 620, y: 260 },
-    },
-  ];
-  document.routes = [
+  document.nets = [{ id: "net-historically-merged", terminals: [] }];
+  document.junctions = (
+    [
+      ["left-a", 180],
+      ["left-b", 320],
+      ["right-a", 480],
+      ["right-b", 620],
+    ] as const
+  ).map(([id, x]) => ({
+    id,
+    netId: "net-historically-merged",
+    position: { x, y: 260 },
+  }));
+  document.routes = (["left", "right"] as const).map((side) =>
     createRoutePath({
-      id: "route-left-label",
+      id: `route-${side}-label`,
       netId: "net-historically-merged",
-      start: { kind: "junction", junctionId: "left-a" },
-      end: { kind: "junction", junctionId: "left-b" },
+      start: { kind: "junction", junctionId: `${side}-a` },
+      end: { kind: "junction", junctionId: `${side}-b` },
       bends: [],
       modes: ["manual"],
     }),
-    createRoutePath({
-      id: "route-right-label",
-      netId: "net-historically-merged",
-      start: { kind: "junction", junctionId: "right-a" },
-      end: { kind: "junction", junctionId: "right-b" },
-      bends: [],
-      modes: ["manual"],
-    }),
-  ];
-  document.annotations = [
-    {
-      id: "label-left-component",
-      kind: "net-label",
-      content: { runs: [{ kind: "text", value: "SIGNAL" }] },
-      netId: "net-historically-merged",
-      anchor: { kind: "free", position: { x: 250, y: 250 } },
-      alignment: "middle",
-      rotation: 0,
-      locked: false,
-    },
-    {
-      id: "label-right-component",
-      kind: "net-label",
-      content: { runs: [{ kind: "text", value: "SIGNAL" }] },
-      netId: "net-historically-merged",
-      anchor: { kind: "free", position: { x: 550, y: 250 } },
-      alignment: "middle",
-      rotation: 0,
-      locked: false,
-    },
-  ];
+  );
+  document.annotations = (
+    [
+      ["left", 250],
+      ["right", 550],
+    ] as const
+  ).map(([side, x]) => ({
+    id: `label-${side}-component`,
+    kind: "net-label",
+    content: { runs: [{ kind: "text", value: "SIGNAL" }] },
+    netId: "net-historically-merged",
+    anchor: { kind: "free", position: { x, y: 250 } },
+    alignment: "middle",
+    rotation: 0,
+    locked: false,
+  }));
+  await openProject(page, project);
+  const cores = page.locator(".net-highlight-overlay .net-highlight-core");
 
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "label-highlight.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  await page.getByTestId("annotation-hit-label-left-component").click();
+  // Both same-name pieces belong to the Net the selected route is on.
+  await clickRoute(page, "route-left-label");
+  await openSelectionShelf(page);
+  await page.getByRole("button", { name: "Highlight Net (H)" }).click();
+  await expect(page.getByTestId("net-highlight-overlay")).toBeVisible();
+  await expect(cores).toHaveCount(2);
+  await expect(page.getByTestId("flightline")).toHaveCount(0);
   await page.keyboard.press("h");
-  await expect(
-    page.locator(".net-highlight-overlay .net-highlight-core"),
-  ).toHaveCount(2);
-  await page.keyboard.press("h");
+  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
 
+  // Without the right label, only the left piece is still on that Net.
   await page.getByTestId("annotation-hit-label-right-component").click();
   await page.keyboard.press("Delete");
   await clickRoute(page, "route-left-label");
   await page.keyboard.press("h");
-  await expect(
-    page.locator(".net-highlight-overlay .net-highlight-core"),
-  ).toHaveCount(1);
+  await expect(cores).toHaveCount(1);
   await expect(
     page.locator(
       '.net-highlight-overlay .net-highlight-core[points="180,260 320,260"]',
@@ -344,24 +260,23 @@ test("recomputes highlighted routed components after a Net Label is deleted", as
   ).toHaveCount(1);
 });
 
-test("surfaces and locates current-document ERC diagnostics", async ({
+test("surfaces, filters and locates current-document ERC and visual diagnostics", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 380, y: 260 });
+  // A lone part with open pins, and two parts drawn over each other.
+  await placeComponent(page, "resistor", { x: 420, y: 300 });
+  await placeComponent(page, "resistor", { x: 220, y: 300 });
+  await placeComponent(page, "resistor", { x: 220, y: 300 });
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expect(page.getByTestId("check-and-save")).toBeEnabled();
+  const diagnostics = page.getByTestId("project-diagnostics");
 
-  await expect(page.getByTestId("project-diagnostics")).toContainText(
-    "ERC_UNCONNECTED_PIN",
-  );
+  await expect(diagnostics).toContainText("ERC_UNCONNECTED_PIN");
   await expect(page.getByTestId("diagnostic-severity-error")).toHaveCount(0);
   await page.getByTestId("diagnostic-severity-warning").click();
-  await expect(page.getByTestId("project-diagnostics")).toContainText(
-    "ERC_UNCONNECTED_PIN",
-  );
-  await page
-    .getByTestId("project-diagnostics")
+  await expect(diagnostics).toContainText("ERC_UNCONNECTED_PIN");
+  await diagnostics
     .getByRole("button", { name: /ERC_UNCONNECTED_PIN/ })
     .first()
     .click();
@@ -369,6 +284,18 @@ test("surfaces and locates current-document ERC diagnostics", async ({
   await expect(
     page.getByRole("region", { name: "Endpoint actions" }),
   ).toBeVisible();
+
+  // Observations, such as two parts drawn on top of each other, are behind
+  // their own toggle and locate the same way.
+  await page.getByTestId("statusbar-issues").click();
+  await page.getByTestId("diagnostic-observations-toggle").click();
+  await expect(diagnostics).toContainText("VISUAL_SYMBOL_OVERLAP");
+  await diagnostics
+    .getByRole("button", { name: /VISUAL_SYMBOL_OVERLAP/ })
+    .click();
+  await expect(page.getByTestId("status")).toContainText(
+    "VISUAL VISUAL_SYMBOL_OVERLAP",
+  );
 });
 
 test("rechecks resolved diagnostics and invalidates them through undo", async ({
@@ -408,26 +335,6 @@ test("rechecks resolved diagnostics and invalidates them through undo", async ({
   );
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expect(diagnostics).not.toContainText("ERC_UNCONNECTED_PIN");
-});
-
-test("filters and navigates locator-backed visual diagnostics", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 420, y: 300 });
-  await placeComponent(page, "resistor", { x: 420, y: 300 });
-  await clickNetlistWorkflowCommand(page, "check-and-save");
-  await expect(page.getByTestId("check-and-save")).toBeEnabled();
-
-  await page.getByTestId("diagnostic-observations-toggle").click();
-  const diagnostics = page.getByTestId("project-diagnostics");
-  await expect(diagnostics).toContainText("VISUAL_SYMBOL_OVERLAP");
-  await diagnostics
-    .getByRole("button", { name: /VISUAL_SYMBOL_OVERLAP/ })
-    .click();
-  await expect(page.getByTestId("status")).toContainText(
-    "VISUAL VISUAL_SYMBOL_OVERLAP",
-  );
 });
 
 test("directional marquee: window needs full coverage, crossing selects on touch", async ({

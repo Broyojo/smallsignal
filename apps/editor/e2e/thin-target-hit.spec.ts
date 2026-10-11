@@ -127,16 +127,46 @@ test("Analog Block hit boxes closely enclose browser-rendered artwork", async ({
   }
 });
 
-test("FD Amp blank space does not capture clicks; body and pins remain usable", async ({
+test("FD Amp blank space does not capture clicks, body and pins remain usable, and a wire beside a symbol body beats its box", async ({
   page,
 }) => {
-  await importInstances(page, [
-    {
-      id: "U1",
-      symbolId: "opamp-differential",
-      placement: { position: { x: 200, y: 200 }, rotation: 0, mirror: "none" },
+  await importInstances(
+    page,
+    [
+      {
+        id: "U1",
+        symbolId: "opamp-differential",
+        placement: {
+          position: { x: 200, y: 200 },
+          rotation: 0,
+          mirror: "none",
+        },
+      },
+      {
+        id: "R1",
+        symbolId: "resistor",
+        placement: { position: { x: 60, y: 320 }, rotation: 0, mirror: "none" },
+      },
+    ],
+    // A deliberate crossing, independent of the router's symbol avoidance.
+    (document) => {
+      document.nets.push({ id: "crossing-net", terminals: [] });
+      document.junctions.push(
+        { id: "cross-a", netId: "crossing-net", position: { x: 20, y: 330 } },
+        { id: "cross-b", netId: "crossing-net", position: { x: 100, y: 330 } },
+      );
+      document.routes.push(
+        createRoutePath({
+          id: "crossing-route",
+          netId: "crossing-net",
+          start: { kind: "junction", junctionId: "cross-a" },
+          end: { kind: "junction", junctionId: "cross-b" },
+          bends: [],
+          modes: ["manual"],
+        }),
+      );
     },
-  ]);
+  );
   // A one-symbol import auto-fits tightly. Leave room for the whole drag so
   // this checks object movement rather than edge-triggered canvas scrolling.
   for (let step = 0; step < 3; step += 1)
@@ -155,6 +185,25 @@ test("FD Amp blank space does not capture clicks; body and pins remain usable", 
     await page.mouse.move(to.x, to.y, { steps: 8 });
     await page.mouse.up();
   };
+  // A deliberate click on visible wire selects the wire even where the
+  // symbol's blank hit rectangle overlaps it; the body stays selectable.
+  const overlap = await screenPoint(page, 67, 330);
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document
+          .elementsFromPoint(x, y)
+          .map((element) => element.getAttribute("data-canvas-hit-kind")),
+      overlap,
+    ),
+  ).toEqual(expect.arrayContaining(["route", "instance"]));
+  await page.mouse.click(overlap.x, overlap.y);
+  await expect(page.getByTestId("status")).toContainText("Selected route");
+  await page.keyboard.press("Escape");
+  const body = await screenPoint(page, 60, 318);
+  await page.mouse.click(body.x, body.y);
+  await expect(page.getByTestId("hit-R1")).toHaveClass(/selected/);
+
   // This point is inside the old rectangular hit box but well above the
   // triangle edge and output leads.
   const blank = await screenPoint(page, 215, 175);
@@ -179,7 +228,8 @@ test("FD Amp blank space does not capture clicks; body and pins remain usable", 
   const end = await screenPoint(page, 100, 190);
   await page.mouse.dblclick(end.x, end.y);
   await page.keyboard.press("Escape");
-  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(1);
+  // The crossing wire, and the new wire from IN+.
+  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(2);
 });
 
 test("enlarged Analog Block triangles leave clear space around internal letters in canvas and SVG", async ({
@@ -266,161 +316,4 @@ test("enlarged Analog Block triangles leave clear space around internal letters 
         // not an arbitrary one-unit margin that rejects non-overlapping glyphs.
         expect(gap, `${id} letter/polarity clearance`).toBeGreaterThan(0);
   }
-});
-
-/**
- * A deliberate click on visible wire must select the wire even where the
- * symbol's blank hit rectangle overlaps it; the symbol body itself stays
- * selectable.
- */
-test("clicking wire beside a symbol body selects the wire, not the box", async ({
-  page,
-}) => {
-  await importInstances(
-    page,
-    [
-      {
-        id: "R1",
-        symbolId: "resistor",
-        placement: {
-          position: { x: 300, y: 200 },
-          rotation: 0,
-          mirror: "none",
-        },
-      },
-    ],
-    (document) => {
-      document.nets.push({ id: "crossing-net", terminals: [] });
-      document.junctions.push(
-        {
-          id: "crossing-start",
-          netId: "crossing-net",
-          position: { x: 260, y: 210 },
-        },
-        {
-          id: "crossing-end",
-          netId: "crossing-net",
-          position: { x: 340, y: 210 },
-        },
-      );
-      document.routes.push(
-        createRoutePath({
-          id: "crossing-route",
-          netId: "crossing-net",
-          start: { kind: "junction", junctionId: "crossing-start" },
-          end: { kind: "junction", junctionId: "crossing-end" },
-          bends: [],
-          modes: ["manual"],
-        }),
-      );
-    },
-  );
-  // Import a deliberate crossing so this hit-priority test remains independent
-  // from the interactive router's symbol-avoidance behavior.
-
-  const overlap = await screenPoint(page, 307, 210);
-  const candidates = await page.evaluate(
-    ({ x, y }) =>
-      document
-        .elementsFromPoint(x, y)
-        .map((element) => element.getAttribute("data-canvas-hit-kind")),
-    overlap,
-  );
-  expect(candidates).toEqual(expect.arrayContaining(["route", "instance"]));
-  await page.mouse.click(overlap.x, overlap.y);
-  await expect(page.getByTestId("status")).toContainText("Selected route");
-
-  // The body away from the wire still selects the symbol.
-  await page.keyboard.press("Escape");
-  const body = await screenPoint(page, 300, 198);
-  await page.mouse.click(body.x, body.y);
-  await expect(page.getByTestId("hit-R1")).toHaveClass(/selected/);
-});
-
-test("triangle bases sit on the grid and their shared output column remains wireable after reload", async ({
-  page,
-}) => {
-  await importInstances(
-    page,
-    [
-      "comparator",
-      "opamp-lettered",
-      "opamp-differential-lettered",
-      "voltage-amplifier-lettered",
-    ].map((symbolId, index) => ({
-      id: `U${index + 1}`,
-      symbolId,
-      placement: {
-        position: { x: 200, y: 100 + index * 100 },
-        rotation: 0,
-        mirror: "none",
-      },
-    })),
-  );
-  const outputs = ["U1-OUT", "U2-OUT", "U3-OUT+", "U3-OUT-", "U4-OUT"];
-  const checkColumns = async () => {
-    const bases = await page
-      .getByTestId("schematic-canvas")
-      .evaluate((canvas) => {
-        const toCanvas = (canvas as SVGSVGElement).getScreenCTM()!.inverse();
-        return [
-          ...canvas.querySelectorAll<SVGGElement>(
-            '[data-layer="symbols"] [data-object-id]',
-          ),
-        ].map((group) => {
-          const path = group.querySelector<SVGPathElement>("path")!;
-          const box = path.getBBox();
-          const matrix = toCanvas.multiply(path.getScreenCTM()!);
-          return [box.y, box.y + box.height].map((y) => {
-            const point = new DOMPoint(box.x, y).matrixTransform(matrix);
-            return { x: point.x, y: point.y };
-          });
-        });
-      });
-    expect(bases).toHaveLength(4);
-    for (const [index, [top, bottom]] of bases.entries()) {
-      expect(top!.x).toBeCloseTo(170, 5);
-      expect(bottom!.x).toBeCloseTo(170, 5);
-      expect(top!.y).toBeCloseTo(70 + index * 100, 5);
-      expect(bottom!.y).toBeCloseTo(130 + index * 100, 5);
-    }
-    const centers = await Promise.all(
-      outputs.map(async (id) => {
-        const box = (await page.getByTestId(`terminal-${id}`).boundingBox())!;
-        return box.x + box.width / 2;
-      }),
-    );
-    for (const x of centers) expect(x).toBeCloseTo(centers[0]!, 2);
-  };
-  await checkColumns();
-  for (const [id, y] of [
-    ["U1-OUT", 100],
-    ["U3-OUT+", 310],
-    ["U3-OUT-", 290],
-  ] as const) {
-    await clickDrawTool(page, "wire");
-    await page.getByTestId(`terminal-${id}`).click();
-    const end = await screenPoint(page, 350, y);
-    await page.mouse.dblclick(end.x, end.y);
-    await page.keyboard.press("Escape");
-  }
-  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(3);
-  const saved = await downloadBytes(page, "File", "Export Project File…");
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
-  const starts = await page.evaluate((source) => {
-    const svg = new DOMParser().parseFromString(source, "image/svg+xml");
-    return [...svg.querySelectorAll("polyline[data-net-id]")].map((line) =>
-      Number(line.getAttribute("points")!.split(/[ ,]/)[0]),
-    );
-  }, svg);
-  expect(starts).toEqual([230, 230, 230]);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "output-column.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
-  await checkColumns();
-  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(3);
 });

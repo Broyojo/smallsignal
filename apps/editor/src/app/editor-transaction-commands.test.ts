@@ -91,38 +91,46 @@ describe("editor transaction commands", () => {
     expect(input.setStatus).not.toHaveBeenCalled();
   });
 
-  it("cancels an unrelated transient tool after a successful commit", () => {
-    const input = dependencies();
-    input.getCurrentInteractionKind.mockReturnValue("copy-placement");
-    input.transactDocument.mockReturnValue({
-      ok: true,
-      applied: true,
-      revision: 1,
-      proposedRevision: 1,
-      document: { ...input.document, revision: 1 },
-      diff: {
-        documentId: input.document.id,
-        fromRevision: 0,
-        toRevision: 1,
-        editKinds: ["set_presentation_style"],
-        changedObjectIds: [],
-      },
-      diagnostics: [],
-    });
-    const commands = createEditorTransactionCommands(input);
+  it.each([
+    ["copy-placement", "active tool cancelled"],
+    // Any commit while a Wire is being drawn, an Undo say, drops the Wire
+    // and says so.
+    ["wire", "Wire cancelled"],
+  ] as const)(
+    "cancels an unrelated %s after a successful commit",
+    (kind, said) => {
+      const input = dependencies();
+      input.getCurrentInteractionKind.mockReturnValue(kind);
+      input.transactDocument.mockReturnValue({
+        ok: true,
+        applied: true,
+        revision: 1,
+        proposedRevision: 1,
+        document: { ...input.document, revision: 1 },
+        diff: {
+          documentId: input.document.id,
+          fromRevision: 0,
+          toRevision: 1,
+          editKinds: ["set_presentation_style"],
+          changedObjectIds: [],
+        },
+        diagnostics: [],
+      });
+      const commands = createEditorTransactionCommands(input);
 
-    commands.transact([
-      {
-        kind: "set_presentation_style",
-        styleProfileId: "razavi-textbook-v1",
-      },
-    ]);
+      commands.transact([
+        {
+          kind: "set_presentation_style",
+          styleProfileId: "razavi-textbook-v1",
+        },
+      ]);
 
-    expect(input.cancelAllTransientInteraction).toHaveBeenCalledOnce();
-    expect(input.setStatus).toHaveBeenLastCalledWith(
-      "Committed revision 1; active tool cancelled because the circuit changed",
-    );
-  });
+      expect(input.cancelAllTransientInteraction).toHaveBeenCalledOnce();
+      expect(input.setStatus).toHaveBeenLastCalledWith(
+        `Committed revision 1; ${said} because the circuit changed`,
+      );
+    },
+  );
 
   it("converts wrapper exceptions into a typed rejection and clears interaction", () => {
     const input = dependencies();
