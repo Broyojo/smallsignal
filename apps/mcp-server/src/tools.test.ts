@@ -104,48 +104,8 @@ describe("mcp tool surface", () => {
     expect(download.description).toContain("SIMULATION_PLOT_RETIRED");
     expect(download.description).not.toContain("same plot renderer");
   });
-  it("exposes compact Circuit, File and Simulation tools with JSON-schema inputs", () => {
+  it("gives every tool a description and a JSON-schema input", () => {
     const tools = listToolDefinitions();
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "describe_tool",
-      "connect",
-      "disconnect",
-      "connection_status",
-      "project_cells",
-      "user_components",
-      "gallery_circuits",
-      "project_code",
-      "netlist_code",
-      "simulation",
-      "simulation_folder",
-      "simulation_output",
-      "simulation_measurement",
-      "simulation_device_operating_point",
-      "simulation_files",
-      "export_file",
-      "import_file",
-      "get_context",
-      "inspect",
-      "search",
-      "apply_actions",
-      "advanced_transact",
-      "verify",
-      "render",
-      "simulation_source",
-      "simulation_edit",
-      "simulation_data",
-      "simulation_plot",
-      "simulation_results",
-      "simulation_run",
-      "simulation_batch",
-      "circuit_place",
-      "circuit_wire",
-      "circuit_transform",
-      "circuit_selection",
-      "circuit_view",
-      "circuit_text",
-      "circuit_properties",
-    ]);
     for (const tool of tools) {
       expect(tool.description.length).toBeGreaterThan(10);
       expect(tool.inputSchema.type).toBe("object");

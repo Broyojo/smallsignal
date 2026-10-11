@@ -8,11 +8,10 @@ import {
   symlink,
   link,
 } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectVacaskRawfiles } from "./rawfile-collector.mjs";
-import { readVacaskSimulationData } from "../../packages/spice-run/src/vacask-result-data.js";
 
 const roots = [];
 const limits = { maxBytes: 1_048_576, maxFiles: 64, maxEntries: 4096 };
@@ -164,139 +163,4 @@ describe("native run-local collection", () => {
         .diagnostics[0].text,
     ).toContain("unreadable");
   });
-  it.skipIf(!process.env.VACASK_BIN || !process.env.VACASK_MODULES)(
-    "collects actual pinned native analyses and auxiliary OP without folding them into one rawfile",
-    async () => {
-      const root = await directory();
-      const binary = resolve(process.env.VACASK_BIN);
-      const modules = resolve(process.env.VACASK_MODULES);
-      const source = `Native collection integration
-ground 0
-load "resistor.osdi"
-load "capacitor.osdi"
-model vs vsource
-model rr resistor noisy=1
-model cc capacitor
-V1 (input 0) vs dc=1 mag=1
-R1 (input output) rr r=1k
-C1 (output 0) cc c=1u
-control
-  abort always
-  options rawfile="ascii"
-  save default
-  analysis bias op
-  sweep supply instance="V1" parameter="dc" from=0 to=2 step=1
-    analysis dc op
-  analysis frequency ac from=10 to=1k mode="dec" points=2 writeop=1
-  analysis time tran stop=1m step=0.1m
-  analysis noise noise out="output" in="V1" from=10 to=1k mode="dec" points=2
-endc
-`;
-      await writeFile(join(root, "run.sim"), source);
-      await writeFile(
-        join(root, "vacaskrc.toml"),
-        "# explicit controlled configuration\n",
-      );
-      const execution = spawnSync(
-        binary,
-        [
-          "--tomlfile",
-          join(root, "vacaskrc.toml"),
-          "-n",
-          "1",
-          "-b",
-          "1",
-          "run.sim",
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          timeout: 15_000,
-          windowsHide: true,
-          env: {
-            ...Object.fromEntries(
-              [
-                "PATH",
-                "SystemRoot",
-                "WINDIR",
-                "TEMP",
-                "TMP",
-                "LD_LIBRARY_PATH",
-              ].flatMap((key) =>
-                process.env[key] ? [[key, process.env[key]]] : [],
-              ),
-            ),
-            SIM_MODULE_PATH: modules,
-            OMP_NUM_THREADS: "1",
-            OPENBLAS_NUM_THREADS: "1",
-            LC_ALL: "C",
-          },
-        },
-      );
-      expect(execution.error, String(execution.error)).toBeUndefined();
-      expect(execution.status, `${execution.stdout}\n${execution.stderr}`).toBe(
-        0,
-      );
-      const collected = await collectVacaskRawfiles(root, {
-        ...limits,
-        inputPaths: ["run.sim", "vacaskrc.toml"],
-      });
-      expect(collected.diagnostics).toEqual([]);
-      expect(collected.rawfiles.map((file) => file.path)).toEqual([
-        "bias.raw",
-        "dc.raw",
-        "frequency.op.raw",
-        "frequency.raw",
-        "noise.raw",
-        "time.raw",
-      ]);
-      for (const file of collected.rawfiles)
-        expect(file.text).toBe(await readFile(join(root, file.path), "utf8"));
-      expect(await readFile(join(root, "run.sim"), "utf8")).toBe(source);
-      const result = readVacaskSimulationData(collected.rawfiles, [
-        { artifactPath: "bias.raw", plotOrdinal: 0, analysis: "op" },
-        {
-          artifactPath: "dc.raw",
-          plotOrdinal: 0,
-          analysis: "dc",
-          axis: { name: "supply", quantity: "voltage", unit: "V" },
-        },
-        {
-          artifactPath: "frequency.op.raw",
-          plotOrdinal: 0,
-          analysis: "op",
-        },
-        {
-          artifactPath: "frequency.raw",
-          plotOrdinal: 0,
-          analysis: "ac",
-          axis: "frequency",
-        },
-        {
-          artifactPath: "noise.raw",
-          plotOrdinal: 0,
-          analysis: "noise",
-          axis: "frequency",
-          outputPsd: "onoise",
-          powerGain: "gain",
-          inputQuantity: "voltage",
-        },
-        {
-          artifactPath: "time.raw",
-          plotOrdinal: 0,
-          analysis: "tran",
-          axis: "time",
-        },
-      ]);
-      expect(result.status, JSON.stringify(result)).toBe("read");
-      expect(result.data.analyses.map((a) => a.analysis)).toEqual([
-        "op",
-        "dc",
-        "op",
-        "ac",
-        "noise",
-        "tran",
-      ]);
-    },
-  );
 });

@@ -13,6 +13,16 @@ import {
 } from "./test-support/large-performance-fixture.js";
 
 const resolver = new InMemorySymbolResolver(builtInSymbols);
+// The legacy oracles walk every route for every Net, so the parity checks use
+// a smaller document of the same shape: equivalence does not depend on size,
+// and the timing at full size belongs to the browser benchmark.
+const parityCounts = {
+  instances: 100,
+  nets: 70,
+  routes: 220,
+  junctions: 90,
+  annotations: 100,
+};
 
 describe("large deterministic derived fixture", () => {
   it("is reproducible at the current large-project scale", () => {
@@ -31,7 +41,7 @@ describe("large deterministic derived fixture", () => {
   });
 
   it("keeps shared-context Connectivity byte-for-byte equivalent", () => {
-    const project = createLargePerformanceFixture(resolver);
+    const project = createLargePerformanceFixture(resolver, parityCounts);
     const document = project.documents[0]!;
     const legacy = [...document.nets]
       .sort((left, right) => left.id.localeCompare(right.id, "en"))
@@ -52,10 +62,12 @@ describe("large deterministic derived fixture", () => {
   }, 20_000);
 
   it("keeps indexed Diagnostics field-for-field equivalent", () => {
-    const legacyDocument =
-      createLargePerformanceFixture(resolver).documents[0]!;
-    const indexedDocument =
-      createLargePerformanceFixture(resolver).documents[0]!;
+    const legacyDocument = createLargePerformanceFixture(resolver, parityCounts)
+      .documents[0]!;
+    const indexedDocument = createLargePerformanceFixture(
+      resolver,
+      parityCounts,
+    ).documents[0]!;
 
     const legacy = diagnoseVisualQuality(legacyDocument, resolver, {
       candidateSearch: "legacy",

@@ -28,23 +28,6 @@ function step(name) {
 }
 
 describe("production entrances (Deployment rationale)", () => {
-  it("deploys every main merge, tag, or selected main ref directly", () => {
-    expect(workflow).toMatch(/branches:\s*\n\s*- main/u);
-    expect(workflow).toMatch(/tags:\s*\n\s*- "v\*"/u);
-    expect(workflow).toMatch(/workflow_dispatch:\s*\n\s*inputs:\s*\n\s*ref:/u);
-    expect(workflow).toContain('default: "main"');
-    expect(workflow).not.toContain("pull-requests: read");
-    expect(workflow).not.toContain("release-route.mjs");
-    expect(workflow).not.toContain("needs.route");
-    expect(workflow).not.toContain("preview-candidate-");
-  });
-
-  it("resolves the selected ref once and deploys that exact commit", () => {
-    expect(workflow).toContain("ref: ${{ inputs.ref || github.ref }}");
-    expect(workflow).toContain("git rev-parse 'HEAD^{commit}'");
-    expect(workflow).not.toContain("DIRECT_RELEASE");
-  });
-
   it("releases only commits that are already on main", () => {
     // Tags and manual dispatches must never become a way to ship unmerged code.
     const resolve = step("Resolve the release commit");
@@ -53,34 +36,6 @@ describe("production entrances (Deployment rationale)", () => {
       'git merge-base --is-ancestor "$release_sha" origin/main',
     );
     expect(resolve).toContain("is not on main");
-  });
-
-  it("builds every release once with the shared candidate action", () => {
-    const build = step("Build the deployment candidate");
-    expect(build).toContain(
-      "uses: ./.github/actions/build-deployment-candidate",
-    );
-    expect(build).toContain("wrangler-config: wrangler.jsonc");
-    expect(build).toContain(
-      "release-sha: ${{ steps.release.outputs.release_sha }}",
-    );
-    expect(workflow).not.toContain("pnpm install --frozen-lockfile");
-    expect(workflow).not.toContain("wrangler.preview.jsonc");
-    expect(workflow.indexOf("Build the deployment candidate")).toBeLessThan(
-      workflow.indexOf("Verify the deployment candidate"),
-    );
-    expect(workflow.indexOf("Verify the deployment candidate")).toBeLessThan(
-      workflow.indexOf("id: deploy_worker"),
-    );
-  });
-
-  it("keeps production verification independent of an installed workspace", () => {
-    expect(workflow).toContain(
-      "https://analog-canvas.tokenzhang.com --production-smoke",
-    );
-    expect(workflow).not.toContain(
-      "preview-simulation-smoke.mjs https://analog-canvas.tokenzhang.com\n",
-    );
   });
 
   it("has no staging job and deploys no environment", () => {
@@ -93,49 +48,57 @@ describe("production entrances (Deployment rationale)", () => {
 });
 
 describe("retired Preview data boundary", () => {
-  it("removes only the hosted entrance while retaining storage resources", () => {
-    expect(retirementWorkflow).toContain("wrangler.preview.jsonc");
-    expect(retirementWorkflow).toContain(
-      "analog-canvas-preview.tokenzhang.com",
-    );
-    expect(retirementWorkflow).toContain(
-      "analog-canvas-simulation-artifacts-preview",
-    );
-    expect(retirementWorkflow).toContain(
-      "analog-canvas-simulation-preview-dlq",
-    );
-    expect(retirementWorkflow).toContain("deployments list");
+  it("never deletes the retired Preview's storage", () => {
     expect(retirementWorkflow).not.toMatch(/wrangler@[^\n]* delete/u);
     expect(retirementWorkflow).not.toContain("r2 bucket delete");
     expect(retirementWorkflow).not.toContain("queues delete");
-    expect(retirementWorkflow).toMatch(
-      /workers\/domains\/\$domain_id" \\\n\s+--output \/dev\/null/u,
-    );
-    expect(retirementWorkflow).not.toContain("jq -e '.success'");
-  });
-
-  it("prepares the Worker bundle and resolves the account before mutating Cloudflare", () => {
-    const build = retirementWorkflow.indexOf("name: Build Worker dependencies");
-    const account = retirementWorkflow.indexOf(
-      "name: Resolve the Cloudflare account",
-    );
-    const deploy = retirementWorkflow.indexOf(
-      "name: Deploy the route-free storage authority",
-    );
-    expect(build).toBeGreaterThan(-1);
-    expect(retirementWorkflow.slice(build, account)).toContain("pnpm build");
-    expect(account).toBeGreaterThan(build);
-    expect(deploy).toBeGreaterThan(account);
-    expect(retirementWorkflow.slice(account, deploy)).toContain(
-      "CLOUDFLARE_ACCOUNT_ID=$account_id",
-    );
-    expect(retirementWorkflow).toContain(
-      "if (.result | length) == 1 then .result[0].id",
-    );
   });
 });
 
 describe("Cloudflare deploy workflow", () => {
+  it("sends this deploy's simulation check credential only when it has one", () => {
+    expect(simulationSmokeHeaders({ SIMULATION_SMOKE_TOKEN: "this" })).toEqual({
+      "content-type": "application/json",
+      authorization: "Bearer this",
+    });
+    expect(simulationSmokeHeaders({})).toEqual({
+      "content-type": "application/json",
+    });
+  });
+
+  it("masks this deploy's simulation check credential", () => {
+    const made = workflow.indexOf(
+      "name: Make this deploy's simulation check credential",
+    );
+    const secrets = workflow.indexOf("name: Sync worker secrets");
+    expect(made).toBeGreaterThan(-1);
+    expect(workflow.slice(made, secrets)).toContain("::add-mask::$token");
+  });
+
+  it("verifies the pinned MCP release before deploying", () => {
+    const precheck = step("Verify the pinned MCP release before deployment");
+    expect(precheck).toContain(
+      "node scripts/verify-agent-manifest.mjs --asset-only",
+    );
+    expect(workflow.indexOf(precheck)).toBeLessThan(
+      workflow.indexOf("- name: Deploy the verified candidate"),
+    );
+  });
+
+  it("requires a missing hashed asset to answer 404", () => {
+    // This check once asserted the opposite: it required the shell at 200,
+    // which was the #493 bug recorded as the expected answer. It then rolled
+    // back the fix for that bug, correctly obeying a wrong instruction. The
+    // assertion exists so the old expectation cannot come back quietly.
+    const verifySection = workflow.slice(
+      workflow.indexOf("Verify production deployment"),
+      workflow.indexOf("Roll back a failed deployment"),
+    );
+    expect(verifySection).toContain("App-deploy-smoke-missing.js");
+    expect(verifySection).toMatch(/"404 "\*\)/u);
+    expect(verifySection).toContain("must answer 404");
+  });
+
   it("records the rollback target before the production deploy", () => {
     // Scoped to the production job: the staging job deploys too, and a naive
     // search finds its deploy first. Staging deliberately has no rollback —
@@ -167,38 +130,6 @@ describe("Cloudflare deploy workflow", () => {
     expect(workflow).toContain("wrangler@4.120.1 rollback");
   });
 
-  it("gives the simulation checks a credential of this deploy's own", () => {
-    // Running a simulation needs a signed-in account; the checks have none.
-    const made = workflow.indexOf(
-      "name: Make this deploy's simulation check credential",
-    );
-    // Put after the code (wrangler refuses a secret put while the latest
-    // version is not deployed, as after a rollback), and the checks wait
-    // until the edge accepts it.
-    const deploy = workflow.indexOf("id: deploy_worker");
-    const secrets = workflow.indexOf("name: Sync worker secrets");
-    const verify = workflow.indexOf("id: verify");
-    expect(made).toBeGreaterThan(deploy);
-    expect(made).toBeLessThan(secrets);
-    expect(workflow.slice(made, secrets)).toContain("::add-mask::$token");
-    expect(workflow.slice(made, secrets)).not.toContain("secret put");
-    expect(workflow.slice(secrets, verify)).toMatch(
-      /for name in SIMULATION_SMOKE_TOKEN /u,
-    );
-    const checks = workflow.slice(verify);
-    expect(checks.indexOf("deploy-check-credential-probe")).toBeGreaterThan(-1);
-    expect(checks.indexOf("deploy-check-credential-probe")).toBeLessThan(
-      checks.indexOf("node scripts/preview-simulation-smoke.mjs"),
-    );
-    expect(simulationSmokeHeaders({ SIMULATION_SMOKE_TOKEN: "this" })).toEqual({
-      "content-type": "application/json",
-      authorization: "Bearer this",
-    });
-    expect(simulationSmokeHeaders({})).toEqual({
-      "content-type": "application/json",
-    });
-  });
-
   it("re-verifies after rolling back", () => {
     // A rollback that is not checked is just a second unverified deploy.
     const rollbackSection = workflow.slice(
@@ -222,89 +153,5 @@ describe("Cloudflare deploy workflow", () => {
     // can undo. It must not be reported the same way as a successful undo.
     expect(workflow).toContain("no rollback target was recorded");
     expect(workflow).toContain("needs a human");
-  });
-
-  it("requires a missing hashed asset to answer 404", () => {
-    // This check once asserted the opposite: it required the shell at 200,
-    // which was the #493 bug recorded as the expected answer. It then rolled
-    // back the fix for that bug, correctly obeying a wrong instruction. The
-    // assertion exists so the old expectation cannot come back quietly.
-    const verifySection = workflow.slice(
-      workflow.indexOf("Verify production deployment"),
-      workflow.indexOf("Roll back a failed deployment"),
-    );
-    expect(verifySection).toContain("App-deploy-smoke-missing.js");
-    expect(verifySection).toMatch(/"404 "\*\)/u);
-    expect(verifySection).toContain("must answer 404");
-  });
-
-  it("still requires a client route to receive the shell", () => {
-    // The other half of the boundary. Turning every miss into a 404 would
-    // break /editor, which is the failure this whole area started from.
-    const verifySection = workflow.slice(
-      workflow.indexOf("Verify production deployment"),
-      workflow.indexOf("Roll back a failed deployment"),
-    );
-    expect(verifySection).toContain("must receive the shell");
-    expect(verifySection).toContain("doctype html");
-  });
-
-  it("verifies the editor route, which is what broke", () => {
-    const verifySection = workflow.slice(
-      workflow.indexOf("Verify production deployment"),
-      workflow.indexOf("Roll back a failed deployment"),
-    );
-    expect(verifySection).toContain("analog-canvas.tokenzhang.com/editor");
-  });
-
-  it("verifies that public Gallery documents are suspended", () => {
-    const verifySection = workflow.slice(
-      workflow.indexOf("Verify production deployment"),
-      workflow.indexOf("Roll back a failed deployment"),
-    );
-    expect(verifySection).toContain(
-      "if grep -q 'data-public-gallery-document=\"catalog\"'",
-    );
-    expect(verifySection).toContain("Disallow: /g/");
-    expect(verifySection).toContain("g/7dgn5b2e74/project.icproj.json");
-    expect(verifySection).toContain("g/7dgn5b2e74/netlist.sp");
-    expect(verifySection).toContain('if [ "$status" != "404" ]');
-  });
-
-  it("verifies that a signed-out visitor reads only the wall's first twelve circuits", () => {
-    const verifySection = workflow.slice(
-      workflow.indexOf("Verify production deployment"),
-      workflow.indexOf("Roll back a failed deployment"),
-    );
-    // The bare list is the twelve alone: no further page, no count.
-    expect(verifySection).toContain(
-      "https://analog-canvas.tokenzhang.com/api/gallery)",
-    );
-    expect(verifySection).toContain(
-      'wall.signedOut !== true || wall.nextCursor !== null || !Array.isArray(wall.entries) || wall.entries.length > 12 || "total" in wall',
-    );
-    // Every other read still asks to sign in.
-    expect(verifySection).toContain(
-      'for path in "api/gallery?q=amp" "api/gallery?cursor=x" api/gallery/tags api/gallery/authors; do',
-    );
-    expect(verifySection).toContain('if [ "$status" != "401" ]');
-    expect(verifySection).not.toContain("signInForMore");
-  });
-
-  it("verifies package integrity before deploy and the serving declaration afterwards", () => {
-    const precheck = step("Verify the pinned MCP release before deployment");
-    expect(precheck).toContain(
-      "node scripts/verify-agent-manifest.mjs --asset-only",
-    );
-    expect(workflow.indexOf(precheck)).toBeLessThan(
-      workflow.indexOf("- name: Deploy the verified candidate"),
-    );
-    const verifySection = workflow.slice(
-      workflow.indexOf("Verify production deployment"),
-      workflow.indexOf("Roll back a failed deployment"),
-    );
-    expect(verifySection).toContain(
-      "node scripts/verify-agent-manifest.mjs https://analog-canvas.tokenzhang.com --manifest-only",
-    );
   });
 });

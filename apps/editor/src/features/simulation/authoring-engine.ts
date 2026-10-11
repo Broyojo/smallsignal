@@ -1,9 +1,11 @@
 import type { ProjectSimulationFolder } from "@icm/model";
+import type { Capabilities } from "@icm/simulation-service/contract";
+// The narrow entry keeps the service runtime (executors, managed runs) off the
+// Editor's first load; file-engine imports it when a run needs it (#1645).
 import {
   resolveSimulationEngine,
-  type Capabilities,
   type SimulationEngine,
-} from "@icm/simulation-service";
+} from "@icm/simulation-service/profile-engine";
 
 /** Editing is local. Discovery selects the execution engine, but an unavailable
  * executor must not prevent mapped edits to an unambiguous authored dialect.
