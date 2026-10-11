@@ -6,7 +6,8 @@ import { unzipSync } from "fflate";
 import {
   clickNetlistWorkflowCommand,
   awaitEditorReady,
-  downloadBytes,
+  exportedProject,
+  openProjectFile,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
 import {
@@ -76,11 +77,7 @@ test("the qualified OTA folder opens unchanged, picks signals on the Canvas and 
     });
   });
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "qualified-ota.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "qualified-ota.icproj.json");
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
   // New Helper picks write native Code even in a retained legacy experiment.
@@ -121,9 +118,8 @@ test("the qualified OTA folder opens unchanged, picks signals on the Canvas and 
   await observe
     .getByRole("button", { name: "Use native vector: v(out)", exact: true })
     .click();
-  const pickedProject = parseProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const pickedProject: ReturnType<typeof parseProject> =
+    await exportedProject(page);
   const pickedConfig = readSimulationExperimentConfig(
     pickedProject.simulationFolders[0]!,
   );
@@ -231,11 +227,7 @@ test("uncommitted source survives whole-workspace reload", async ({ page }) => {
     route.fulfill({ json: { configured: false } }),
   );
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "source-recovery.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(ota)),
-  });
+  await openProjectFile(page, ota, "source-recovery.icproj.json");
   await expect.poll(() => recoveryProjectTexts(page)).toContain(ota.id);
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
@@ -268,9 +260,7 @@ test("uncommitted source survives whole-workspace reload", async ({ page }) => {
   await panel.getByRole("tab", { name: "run.cir", exact: false }).click();
   await expect(editor).toBeFocused();
   await expect(editor).toContainText(marker);
-  const saved = parseProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: ReturnType<typeof parseProject> = await exportedProject(page);
   expect(
     saved.simulationFolders[0]!.input.files.some((file) =>
       file.text.includes(marker),

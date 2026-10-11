@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { parseProject } from "@icm/project-protocol";
 import { createSimulationFolder } from "@icm/model";
-import { downloadBytes } from "./editor-fixtures.js";
+import { exportedProject, openProjectFile } from "./editor-fixtures.js";
 import {
   agentNativeProfile,
   agentNativeSource,
@@ -52,11 +52,7 @@ test("GUI shows unruled VACASK measurements and opens their Console evidence", a
       return route.fulfill({ json: result });
     });
     await page.goto("/editor");
-    await page.getByTestId("project-file").setInputFiles({
-      name: "native-specs.icproj.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(project)),
-    });
+    await openProjectFile(page, project, "native-specs.icproj.json");
     await page.getByTestId("open-analog-simulation").click();
     const panel = page.getByRole("region", { name: "Analog simulation" });
     await panel.getByRole("button", { name: "Run", exact: true }).click();
@@ -114,11 +110,7 @@ test("GUI creates an offline experiment with the VACASK candidate identity", asy
     }),
   );
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "no-experiments.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "no-experiments.icproj.json");
   await page.getByTestId("open-analog-simulation").click();
   const panel = page.getByRole("region", { name: "Analog simulation" });
   await panel
@@ -135,9 +127,7 @@ test("GUI creates an offline experiment with the VACASK candidate identity", asy
       exact: true,
     }),
   ).toBeVisible();
-  const saved = parseProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: ReturnType<typeof parseProject> = await exportedProject(page);
   const folder = saved.simulationFolders[0]!;
   const config = JSON.parse(
     folder.input.files.find((f) => f.path === folder.input.configPath)!.text,

@@ -659,11 +659,17 @@ describe("persistent simulation evidence", () => {
     expect((await store.get("unpublished"))?.text).toBe("data");
     expect((await store.get("latest"))?.text).toBe("data");
     expect(await store.usage!()).toMatchObject({ byteLength: 16 });
-    await store.releaseSession!();
     const archives = createBrowserSimulationArchiveStore({
       idbFactory: factory,
       locks: navigator.locks,
     });
+    // Idle cleanup leaves the online producer's unowned file alone.
+    expect(await archives.cleanup("online-producer")).toEqual({
+      ok: true,
+      value: { deferred: false, files: 0, bytes: 0 },
+    });
+    expect((await store.get("unpublished"))?.text).toBe("data");
+    await store.releaseSession!();
     expect(await archives.cleanup("online-producer")).toMatchObject({
       ok: true,
       value: { deferred: false, bytes: 12 },

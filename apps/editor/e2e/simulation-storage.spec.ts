@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { parseProject } from "@icm/project-protocol";
+import { openProjectFile } from "./editor-fixtures.js";
 import { createSimulationFolder } from "@icm/model";
 import { unzipSync } from "fflate";
 import {
@@ -66,11 +67,7 @@ test("GUI retries failed evidence storage and downloads a complete run without e
       };
     });
     await page.goto("/editor");
-    await page.getByTestId("project-file").setInputFiles({
-      name: "storage-retry.icproj.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(project)),
-    });
+    await openProjectFile(page, project, "storage-retry.icproj.json");
     await page.getByTestId("open-analog-simulation").click();
     const panel = page.getByRole("region", { name: "Analog simulation" });
     await panel.getByRole("button", { name: "Run", exact: true }).click();
@@ -133,11 +130,7 @@ test("Run history can reveal browser results from other folders without changing
   );
   const folderId = project.simulationFolders[0]!.id;
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "history-folders.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "history-folders.icproj.json");
   await page.evaluate(
     async ({ projectId, folderId, archiveUrl }) => {
       const { createBrowserSimulationArchiveStore } = await import(archiveUrl);

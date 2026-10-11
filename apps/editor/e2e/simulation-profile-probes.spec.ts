@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { createSimulationFolder } from "@icm/model";
 import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
+import { openProjectFile } from "./editor-fixtures.js";
 import {
   nativeSimulationDevices,
   type NativeModelLibrarySymbols,
@@ -59,11 +60,7 @@ test("Profile-backed OP picker discovers an implicit library without writing its
     });
   });
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "profile-probes.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "profile-probes.icproj.json");
   await page.getByTestId("open-analog-simulation").click();
   await page.getByRole("button", { name: "Helper", exact: true }).click();
   await page

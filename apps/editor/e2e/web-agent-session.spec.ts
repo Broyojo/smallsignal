@@ -5,7 +5,6 @@ import { createHash } from "node:crypto";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
-import { AgentSessionScopeSchema } from "@icm/agent-adapter";
 import { AgentHttpClient, AgentSessionClient } from "@icm/agent-client";
 import { openGalleryEntry } from "../../mcp-server/src/file-operations.js";
 import {
@@ -298,9 +297,9 @@ async function controlledConnections(page: Page) {
   };
 }
 
-// The Claim's lifetime follows the relay's clock, not the computer's:
-// claim-clock.test.ts. These cases keep the hook's recovery and timeouts.
-test("an expired Claim keeps its explanation after socket recovery and can be replaced", async ({
+// A Claim's deadline is set from the relay's clock (claim-clock.test.ts) and
+// measured on the page's elapsed clock: a wall-clock jump does not expire it.
+test("a Claim survives a wall-clock jump, and once expired keeps its explanation after socket recovery and can be replaced", async ({
   page,
 }) => {
   await page.clock.install();
@@ -314,7 +313,15 @@ test("an expired Claim keeps its explanation after socket recovery and can be re
   await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
     /controlled-0\.claim/,
   );
-  await page.clock.runFor(4_100);
+  await page.clock.setSystemTime(
+    (await page.evaluate(() => Date.now())) + 24 * 60 * 60_000,
+  );
+  await page.clock.runFor(1_100);
+  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
+    /controlled-0\.claim/,
+  );
+  await expect(panel.getByTestId("agent-claim-expired")).toHaveCount(0);
+  await page.clock.runFor(3_000);
   await expect(panel.getByTestId("agent-claim-expired")).toBeVisible();
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
   await relay.socketRoutes[0]!.close({ code: 1012, reason: "relay restart" });
@@ -598,9 +605,24 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
       expect(body.projectId).toBe(initialProjectId);
       expect(body.projectSessionId).toBeTruthy();
       expect(body.documentIds).toEqual(["document-main"]);
-      // Every scope a person can grant, without a permission picker.
+      // Every scope, without a permission picker. Listed here, so a new
+      // scope a browser Agent gets is a decision this test records.
       expect([...body.scopes].sort()).toEqual(
-        [...AgentSessionScopeSchema.options].sort(),
+        [
+          "circuit.snapshot",
+          "circuit.render",
+          "circuit.source-spans",
+          "circuit.edit.geometry",
+          "circuit.edit.connectivity",
+          "circuit.edit.presentation",
+          "editor.semantic-control",
+          "gallery.publish",
+          "components.publish",
+          "project.download",
+          "project.import",
+          "visual.download",
+          "simulation.run",
+        ].sort(),
       );
       await route.fulfill({
         contentType: "application/json",
@@ -1190,6 +1212,9 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
     }),
   ).toMatchObject({ ok: true });
   await expect(page.getByTestId("active-instance-count")).toHaveText("2");
+  // In its own tab, the person undoes the Agent's background edit.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   await page
     .locator(".project-tab")
     .first()
@@ -1257,6 +1282,85 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   expect(
     await workspace("workspace-rename-blank", { action: "rename", name: " " }),
   ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+});
+
+// The old "rebinds" journey: an Agent-opened Project with the same Cell ID.
+test("after an Agent opens a Project with the same Cell ID, an unnamed write goes to the shown one and leaves the first intact", async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto("/editor?new=1");
+  const { client, session } = await pairAgent(page, baseURL!);
+  const documentId = session.documentIds[0]!;
+  const firstContext = client.contextRevision;
+  expect(
+    await client.circuit(
+      session.sessionId,
+      session.agentToken,
+      placeResistor(documentId, "first-place", "first-R"),
+    ),
+  ).toMatchObject({ ok: true, applied: true });
+  const bytes = Buffer.from(
+    serializeProject(createEmptyProject("binding-second", "Second Project")),
+  );
+  const staged = await client.files(session.sessionId, session.agentToken, {
+    apiVersion: "3.0",
+    requestId: "stage-second-project",
+    operation: "stage",
+    kind: "project",
+    files: [
+      {
+        name: "second.icproj.json",
+        mediaType: "application/json",
+        encoding: "base64",
+        data: bytes.toString("base64"),
+        byteLength: bytes.byteLength,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      },
+    ],
+  });
+  if (!staged.ok || staged.operation !== "stage")
+    throw new Error(JSON.stringify(staged));
+  expect(
+    await client.files(session.sessionId, session.agentToken, {
+      apiVersion: "3.0",
+      requestId: "open-second-project",
+      operation: "open",
+      candidateId: staged.candidate.candidateId,
+    }),
+  ).toMatchObject({ ok: true, operation: "open" });
+  await expect(page.getByTestId("active-instance-count")).toHaveText("0");
+  await expect
+    .poll(async () => {
+      await client.status(session.sessionId, session.agentToken);
+      return client.contextRevision;
+    })
+    .not.toBe(firstContext);
+  const current = await client.status(session.sessionId, session.agentToken);
+  expect(current.documentIds[0]).toBe(documentId);
+  expect(
+    await client.circuit(
+      session.sessionId,
+      session.agentToken,
+      placeResistor(documentId, "second-place", "second-R"),
+    ),
+  ).toMatchObject({ ok: true, applied: true });
+  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  const first = listed(
+    await workspaceOf(client, session)("list-first", { action: "list" }),
+  ).projects.find((project) => project.projectId === session.projectId)!;
+  client.workspaceId = first.workspaceId;
+  const snapshot = await client.circuit(session.sessionId, session.agentToken, {
+    apiVersion: "3.0",
+    requestId: "first-snapshot",
+    operation: "snapshot",
+    documentId,
+  });
+  if (!snapshot.ok || !("snapshot" in snapshot))
+    throw new Error(JSON.stringify(snapshot));
+  expect(snapshot.snapshot.document.instances.map(({ id }) => id)).toEqual([
+    "first-R",
+  ]);
 });
 
 test("workspace Cloud operations reuse GUI open validation, save conflicts and Save As", async ({

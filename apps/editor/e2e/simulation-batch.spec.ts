@@ -7,7 +7,10 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 
-import { clickNetlistWorkflowCommand } from "./editor-fixtures.js";
+import {
+  clickNetlistWorkflowCommand,
+  openProjectFile,
+} from "./editor-fixtures.js";
 import {
   completedNgspiceRun,
   editSimulationFile,
@@ -81,11 +84,7 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
     return route.fulfill({ json: await completedNgspiceRun(body) });
   });
   await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "batch.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "batch.icproj.json");
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
   const batch = panel.locator(".simulation-batch-menu-popover");

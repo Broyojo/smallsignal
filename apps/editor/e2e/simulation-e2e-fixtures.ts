@@ -43,7 +43,10 @@ export const dividerOpRawfile = readFileSync(
   "utf8",
 );
 
-/** What the simulation service advertises for the hosted ngspice Profile. */
+/**
+ * The capabilities a configured service advertises: one ngspice Profile with
+ * the hosted SKY130 identity, running the given analyses.
+ */
 export function ngspiceCapabilities(analyses: string[] = ["op"]) {
   return {
     configured: true,
@@ -69,17 +72,15 @@ export function ngspiceCapabilities(analyses: string[] = ["op"]) {
 
 /**
  * The simulation service's answer to one execution request: a completed run
- * that returns a captured ngspice rawfile. Only the simulator is a fixture.
+ * that returns the captured divider OP rawfile. Only the simulator is a fixture.
  */
-export async function completedNgspiceRun(
-  body: {
-    preparedDeck: string;
-    inputRevision: string;
-    netlist: string;
-    testbench: string;
-  },
-  rawfile = dividerOpRawfile,
-) {
+export async function completedNgspiceRun(body: {
+  preparedDeck: string;
+  inputRevision: string;
+  netlist: string;
+  testbench: string;
+}) {
+  const rawfile = dividerOpRawfile;
   const reading = readSimulationData(rawfile);
   if (reading.status !== "read") throw Error("Invalid rawfile fixture");
   return {

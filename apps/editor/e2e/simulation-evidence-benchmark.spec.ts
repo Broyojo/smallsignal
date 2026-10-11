@@ -104,6 +104,7 @@ test("Browser codec preserves complete OP/AC/DC/TRAN/Noise evidence", async ({
         retainSession: true,
       });
       const files = new SimulationFiles(Date.now, undefined, undefined, store);
+      // A timer that keeps firing shows the main thread stayed responsive.
       let beats = 0;
       const heartbeat = setInterval(() => {
         beats++;

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   clickNetlistWorkflowCommand,
   awaitEditorReady,
+  openProjectFile,
 } from "./editor-fixtures.js";
 import {
   completedNgspiceRun,
@@ -411,11 +412,7 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
   // the original dirty Project beside it, which a file would need approval
   // to replace.
   await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "http.icproj.json",
-    mimeType: "application/json",
-    buffer: bytes,
-  });
+  await openProjectFile(page, bytes, "http.icproj.json");
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   await page.locator(".simulation-run-history > summary").click();
   await expect(
