@@ -104,7 +104,7 @@ describe("capturing a public native component", () => {
     expect(compatible.project.modelSources).toHaveLength(2);
   });
 
-  it("reuses compatible applied resources for a fork's artwork and refuses conflicting artwork under the captured ID", () => {
+  it("reuses compatible applied resources for a fork's artwork and refuses conflicting artwork or a changed implementation under the captured IDs", () => {
     const { packaged } = published("finite");
     const original = capture(
       createEmptyProject("destination", "Destination"),
@@ -128,5 +128,10 @@ describe("capturing a public native component", () => {
     expect(() =>
       planCircuitComponentCapture(changed, packaged, "capture"),
     ).toThrow("conflicting artwork or Pin mapping");
+    const revised = structuredClone(packaged);
+    revised.circuit.source.files[0]!.text = body("finite").replace("1k", "2k");
+    expect(() =>
+      planCircuitComponentCapture(original.project, revised, "capture"),
+    ).toThrow("incompatible implementation or model dependencies");
   });
 });

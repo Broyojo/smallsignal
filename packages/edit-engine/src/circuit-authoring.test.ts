@@ -200,12 +200,9 @@ it.each([
 /** A native owner `amp` with its automatic symbol, as Apply in the GUI leaves it. */
 function nativeAmp() {
   const project = createEmptyProject("native-amp", "Native amp");
-  const applied = executeProjectTransaction(project, {
-    projectId: project.id,
-    expectedStructureRevision: 0,
-    transactionId: "apply-amp",
-    actor: { kind: "human", id: "test" },
-    edits: [
+  const applied = transact(
+    project,
+    [
       {
         kind: "apply_model_source",
         source: {
@@ -224,7 +221,8 @@ function nativeAmp() {
         definitions: [{ definitionId: "amp", entry: "amp" }],
       },
     ],
-  });
+    "human",
+  );
   if (!applied.ok) throw Error(applied.error.message);
   const owner = applied.project.externalSubcircuitDefinitions[0]!;
   const automatic = createProjectSymbolResolver(
@@ -349,7 +347,7 @@ describe("custom native artwork through the Project transaction", () => {
     expect(applied.project).toEqual(before);
   });
 
-  it("keeps a property supply mapping unless the caller is explicitly connected, and refuses collapsed ports", () => {
+  it("refuses dropping a caller's property supply mapping and refuses collapsed ports", () => {
     const { project, owner, custom, terminal } = placedCustomAmp(
       ({ automatic, terminal }) => ({
         symbol: {

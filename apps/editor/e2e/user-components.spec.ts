@@ -4,6 +4,7 @@ import {
   parseSavedProject,
   clickDrawTool,
   copyNetlistText,
+  downloadBytes,
   openCellManager,
 } from "./editor-fixtures";
 import { openSelectionShelf, placeComponent } from "./manual-editor-fixtures";
@@ -213,6 +214,21 @@ async function wire(page: Page, from: string, to: string) {
   await page.getByTestId(from).click();
   await page.getByTestId(to).click();
   await page.keyboard.press("Escape");
+}
+/** Pairs a real Agent session with this Editor: a concurrent Project writer. */
+async function pairAgent(page: Page, baseUrl: string) {
+  await page.getByTestId("open-agent").click();
+  const panel = page.getByTestId("connect-agent-panel");
+  const claim = panel.getByTestId("agent-copy-text");
+  await expect(claim).toHaveValue(/Claim: /, { timeout: 45_000 });
+  const client = new AgentSessionClient({
+    http: new AgentHttpClient({ baseUrl }),
+  });
+  await client.connect(
+    JSON.parse(/^Claim: (.+)$/mu.exec(await claim.inputValue())![1]!).claimCode,
+  );
+  await panel.getByRole("button", { name: "Close Agent dialog" }).click();
+  return client;
 }
 async function editWithKey(page: Page, reference: string) {
   await page.getByTestId(`hit-${reference}`).click();
@@ -1718,6 +1734,15 @@ test("publishes an applied native component and captures another user's complete
       revision: 2,
     });
     expect(await readProject(insertedPage)).toEqual(repeated);
+    // The exported file carries the captured revision without the library.
+    await openProjectFile(
+      insertedPage,
+      await downloadBytes(insertedPage, "File", "Export Project File…"),
+    );
+    await awaitEditorReady(insertedPage);
+    expect(resources(await readProject(insertedPage))).toEqual(
+      resources(repeated),
+    );
     await visitor.route("**/api/components**", (route) =>
       route.abort("internetdisconnected"),
     );
@@ -1762,6 +1787,7 @@ async function openNativeComponent(page: Page) {
 test("repairs a wired legacy custom component with explicit native port mapping in one undo", async ({
   page,
   context,
+  baseURL,
   service,
 }) => {
   await service.connect(context, "alice");
@@ -1814,10 +1840,11 @@ test("repairs a wired legacy custom component with explicit native port mapping 
     await wire(page, `terminal-${from}`, `terminal-${to}`);
   }
   await markNoConnect(page, "terminal-X1-drive");
-  const before = await readProject(page);
-  expect(createDesignNetlistExport(before, { format: "spice" }).status).toBe(
-    "blocked",
-  );
+  expect(
+    createDesignNetlistExport(await readProject(page), { format: "spice" })
+      .status,
+  ).toBe("blocked");
+  const client = await pairAgent(page, baseURL!);
   await editWithKey(page, "X1");
   const dialog = componentEditor(page);
   await authoringView(dialog, "Circuit");
@@ -1835,14 +1862,40 @@ test("repairs a wired legacy custom component with explicit native port mapping 
   await expect(
     dialog.getByText(/Unknown native terminal; repair the Pin mapping/).first(),
   ).toBeVisible();
-  for (const [old, next] of [
-    ["A", "IN"],
-    ["B", "OUT"],
-    ["GND", "VSS"],
-  ])
-    await dialog
-      .getByLabel(`Migrate legacy_gain.${old}`, { exact: true })
-      .selectOption(next!);
+  const migrate = async () => {
+    for (const [old, next] of [
+      ["A", "IN"],
+      ["B", "OUT"],
+      ["GND", "VSS"],
+    ])
+      await dialog
+        .getByLabel(`Migrate legacy_gain.${old}`, { exact: true })
+        .selectOption(next!);
+  };
+  await migrate();
+  // A concurrent Project edit while the editor is open refuses the repair.
+  const changed = await client.applyActions([
+    {
+      kind: "set-property",
+      target: { kind: "instance", reference: "V1" },
+      set: { dc: "0.2" },
+    },
+  ]);
+  expect(changed.ok, changed.message).toBe(true);
+  const live = (await client.refreshSnapshot()).snapshot.project;
+  await button(dialog, "Apply model").click();
+  await expect(dialog.locator(".cell-external-result")).toContainText(
+    "Project changed",
+  );
+  expect((await client.refreshSnapshot()).snapshot.project).toEqual(live);
+  await button(dialog, "Close component editor").click();
+  await button(dialog, "Discard changes").click();
+  const before = await readProject(page);
+  await editWithKey(page, "X1");
+  await authoringView(dialog, "Circuit");
+  await netlist(dialog).fill(finiteGainSource);
+  await entry(dialog).selectOption("finite_gain");
+  await migrate();
   await button(dialog, "Apply model").click();
   await expect(dialog.locator(".cell-external-result")).toContainText(
     "Applied",
@@ -2210,17 +2263,7 @@ test("native User Components bind an existing owner, guard unsaved text and keep
   let editor = await openFiniteGain(page);
   await button(editor, "Apply model").click();
   await editor.getByLabel("Close component editor", { exact: true }).click();
-  await page.getByTestId("open-agent").click();
-  const panel = page.getByTestId("connect-agent-panel");
-  const claim = panel.getByTestId("agent-copy-text");
-  await expect(claim).toHaveValue(/Claim: /, { timeout: 45_000 });
-  const client = new AgentSessionClient({
-    http: new AgentHttpClient({ baseUrl: baseURL! }),
-  });
-  await client.connect(
-    JSON.parse(/^Claim: (.+)$/mu.exec(await claim.inputValue())![1]!).claimCode,
-  );
-  await panel.getByRole("button", { name: "Close Agent dialog" }).click();
+  const client = await pairAgent(page, baseURL!);
   const before = await readProject(page);
   const owner = before.modelSources![0]!;
   editor = await openNativeComponent(page);
@@ -2265,6 +2308,9 @@ test("native User Components bind an existing owner, guard unsaved text and keep
   await expect(editor.getByRole("status")).toContainText(
     "The applied model changed",
   );
+  const refused = (await client.refreshSnapshot()).snapshot.project;
+  expect(refused.modelSources![0]!.files[0]!.text).toContain("gain=15");
+  expect(refused.externalSubcircuitDefinitions).toHaveLength(1);
   await button(editor, "Keep my draft on the latest version").click();
   await button(editor, "Apply model").click();
   await expect(editor.getByRole("status")).toContainText(
