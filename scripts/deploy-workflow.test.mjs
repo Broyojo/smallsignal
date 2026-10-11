@@ -66,6 +66,39 @@ describe("Cloudflare deploy workflow", () => {
     });
   });
 
+  it("masks this deploy's simulation check credential", () => {
+    const made = workflow.indexOf(
+      "name: Make this deploy's simulation check credential",
+    );
+    const secrets = workflow.indexOf("name: Sync worker secrets");
+    expect(made).toBeGreaterThan(-1);
+    expect(workflow.slice(made, secrets)).toContain("::add-mask::$token");
+  });
+
+  it("verifies the pinned MCP release before deploying", () => {
+    const precheck = step("Verify the pinned MCP release before deployment");
+    expect(precheck).toContain(
+      "node scripts/verify-agent-manifest.mjs --asset-only",
+    );
+    expect(workflow.indexOf(precheck)).toBeLessThan(
+      workflow.indexOf("- name: Deploy the verified candidate"),
+    );
+  });
+
+  it("requires a missing hashed asset to answer 404", () => {
+    // This check once asserted the opposite: it required the shell at 200,
+    // which was the #493 bug recorded as the expected answer. It then rolled
+    // back the fix for that bug, correctly obeying a wrong instruction. The
+    // assertion exists so the old expectation cannot come back quietly.
+    const verifySection = workflow.slice(
+      workflow.indexOf("Verify production deployment"),
+      workflow.indexOf("Roll back a failed deployment"),
+    );
+    expect(verifySection).toContain("App-deploy-smoke-missing.js");
+    expect(verifySection).toMatch(/"404 "\*\)/u);
+    expect(verifySection).toContain("must answer 404");
+  });
+
   it("records the rollback target before the production deploy", () => {
     // Scoped to the production job: the staging job deploys too, and a naive
     // search finds its deploy first. Staging deliberately has no rollback —
