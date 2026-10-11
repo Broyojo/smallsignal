@@ -124,6 +124,21 @@ test("project tabs append a partial selection and retain independent history, ca
   await canvas.click({ position: { x: 660, y: 380 } });
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("active-instance-count")).toHaveText("4");
+  // The other modifier gets no clipboard event from the browser; the editor
+  // runs the same copy and paste for it.
+  const alternate = await page.evaluate(() =>
+    /Mac|iPhone|iPad|iPod/u.test(navigator.platform) ? "Control" : "Meta",
+  );
+  await page.getByRole("tab").first().click();
+  await page.getByTestId("hit-M3").click();
+  await page.keyboard.press(`${alternate}+c`);
+  await page.getByRole("tab").nth(1).click();
+  await canvas.focus();
+  await page.keyboard.press(`${alternate}+v`);
+  await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
+  await canvas.click({ position: { x: 560, y: 440 } });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("active-instance-count")).toHaveText("5");
   // Unapplied invalid text cannot be discarded by switching projects.
   await page.getByTestId("project-code-toggle").click();
   const code = page.getByRole("textbox", { name: "Project code", exact: true });
@@ -955,15 +970,18 @@ test("tab names edit in place as one undoable change and commit to their own tab
   await expect(first).not.toContainText("revised");
   await expect(page.getByTestId("hit-R1")).toHaveCount(1);
 
-  // Close, clicked while a name commits, asks about that unsaved tab.
-  await first.dblclick();
+  // Close, clicked while a clean tab's name commits, asks about the edit
+  // the name just made.
+  await newTab.click();
+  await expect(tabs).toHaveCount(3);
+  await selected.dblclick();
   await name.fill("Another renamed circuit");
   await page
-    .getByRole("button", { name: "Close tab Project A", exact: true })
+    .getByRole("button", { name: "Close tab New Circuit", exact: true })
     .click();
   const decision = page.getByTestId("project-tab-close-decision");
   await expect(decision).toBeVisible();
-  await expect(tabs).toHaveCount(2);
+  await expect(tabs).toHaveCount(3);
   await page.getByRole("button", { name: "Keep open", exact: true }).click();
   await expect(selected).toContainText("Another renamed circuit");
 
@@ -975,7 +993,7 @@ test("tab names edit in place as one undoable change and commit to their own tab
   await page
     .getByRole("button", { name: "Close tab New Circuit", exact: true })
     .click();
-  await expect(tabs).toHaveCount(2);
+  await expect(tabs).toHaveCount(3);
   await expect(decision).toHaveCount(0);
   await expect(selected).toContainText("Edited project");
 });
