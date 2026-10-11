@@ -85,7 +85,7 @@ describe("validation gate planning", () => {
     ]);
   });
 
-  it("expands shared protocol changes to hierarchy and persistence", () => {
+  it("expands shared protocol changes to persistence, and Cell code to hierarchy", () => {
     const plan = planValidation(
       ["packages/project-protocol/src/persistence.ts"],
       catalog,
@@ -94,9 +94,15 @@ describe("validation gate planning", () => {
       "test-impact",
       "full-delivery",
     ]);
-    expect(plan.selectedGates.map((gate) => gate.id)).toEqual(
-      expect.arrayContaining(["hierarchy-browser", "project-file-browser"]),
-    );
+    const selected = plan.selectedGates.map((gate) => gate.id);
+    expect(selected).toContain("project-file-browser");
+    expect(selected).not.toContain("hierarchy-browser");
+    expect(
+      planValidation(
+        ["packages/edit-engine/src/hierarchy-planner.ts"],
+        catalog,
+      ).selectedGates.map((gate) => gate.id),
+    ).toContain("hierarchy-browser");
   });
 
   it("keeps canonical component definitions on the shared-core delivery gate", () => {

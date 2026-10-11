@@ -290,12 +290,31 @@ describe("CI validation planning", () => {
       browser: true,
       mode: "focused",
     });
-    expect(plan.e2eArgs).toEqual(
-      expect.arrayContaining([
+    expect(plan.e2eArgs).toContain("apps/editor/e2e/project-file.spec.ts");
+    expect(plan.e2eArgs).not.toContain("apps/editor/e2e/hierarchy.spec.ts");
+  });
+
+  it("runs the hierarchy contract only for Cell and hierarchy code (#1646)", () => {
+    for (const path of [
+      "packages/model/src/schema/project.ts",
+      "packages/model/src/cell-interface-projection.ts",
+      "packages/edit-engine/src/hierarchy-planner.ts",
+      "packages/edit-engine/src/cell-pin-planner.ts",
+      "packages/edit-engine/src/project-cell-import.ts",
+      "packages/symbols/src/hierarchical-block.ts",
+    ])
+      expect(ciPlan([path]).e2eArgs, path).toContain(
         "apps/editor/e2e/hierarchy.spec.ts",
-        "apps/editor/e2e/project-file.spec.ts",
-      ]),
-    );
+      );
+    for (const path of [
+      "packages/render-svg/src/symbol-render.ts",
+      "packages/symbols/src/razavi-catalog.ts",
+      "packages/edit-engine/src/transaction.ts",
+      "packages/project-protocol/src/load.ts",
+    ])
+      expect(ciPlan([path]).e2eArgs, path).not.toContain(
+        "apps/editor/e2e/hierarchy.spec.ts",
+      );
   });
 
   it("routes shared dialog styles and SPICE language sources to their owning browser contracts", () => {
