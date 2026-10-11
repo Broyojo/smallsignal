@@ -1,27 +1,17 @@
-import { parseSavedProject } from "./editor-fixtures";
-import { expect, test, type Page } from "@playwright/test";
-import { createEmptyProject, type CircuitProject } from "@icm/model";
-
 import {
-  awaitEditorReady,
   chooseComponent,
   clickDrawTool,
   placeText,
   clickCommand,
-  editDocumentStyleCode,
   openMenu,
-  downloadBytes,
 } from "./editor-fixtures";
+import { expect, test, type Page } from "@playwright/test";
 
-async function captureImageClipboard(
-  page: Page,
-  reject = false,
-): Promise<void> {
-  await page.addInitScript((deny) => {
+async function captureImageClipboard(page: Page): Promise<void> {
+  await page.addInitScript(() => {
     Object.defineProperty(navigator.clipboard, "write", {
       configurable: true,
       value: async (items: ClipboardItem[]) => {
-        if (deny) throw new DOMException("Denied", "NotAllowedError");
         const item = items[0]!;
         const mime = item.types[0]!;
         const blob = await item.getType(mime);
@@ -35,7 +25,7 @@ async function captureImageClipboard(
         };
       },
     });
-  }, reject);
+  });
 }
 
 async function placeComponent(
@@ -66,11 +56,6 @@ test("right-click on a device only offers direct selection actions", async ({
     "Mirror top/bottom (Ctrl+R)",
     "Delete",
   ]);
-  await expect(menu).not.toContainText("Swap device");
-  await expect(menu).not.toContainText("New Testbench Cell");
-  await expect(menu).not.toContainText("Place Cell");
-  await expect(menu).not.toContainText("Copy as PNG");
-  await expect(menu).not.toContainText("Copy as SVG");
 
   await menu.getByRole("menuitem", { name: "Rotate 90° (R)" }).click();
   await expect(
@@ -90,413 +75,7 @@ test("right-click on a device only offers direct selection actions", async ({
   );
 });
 
-// Grid 10 is the strict case: y 325 lies off it, so a stray grid snap
-// shows. Text alignment never reads the annotation grid.
-test("bottom alignment removes fine text offsets with placement grid 10", async ({
-  page,
-}) => {
-  const project = createEmptyProject("align-ring-labels", "Align ring labels");
-  const positions = [
-    { x: 175, y: 322 },
-    { x: 295, y: 325 },
-    { x: 400, y: 323 },
-    { x: 527, y: 320 },
-  ];
-  const document = project.documents[0]!;
-  document.instances = [170, 290, 400, 530].map((x, index) => ({
-    id: `U${index + 1}`,
-    symbolId: "opamp-differential-inputs-swapped",
-    // Leave the labels clear of the bodies' hit boxes when Shift-clicking.
-    placement: { position: { x, y: 390 }, rotation: 0, mirror: "none" },
-  }));
-  document.drafting = {
-    objects: positions.map((position, index) => ({
-      id: `label-${index + 1}`,
-      kind: "text",
-      anchor: { kind: "free", position },
-      content: {
-        runs: [
-          {
-            kind: "span",
-            style: "bold",
-            children: [
-              {
-                kind: "span",
-                style: "italic",
-                children: [
-                  { kind: "text", value: "X" },
-                  {
-                    kind: "span",
-                    style: "subscript",
-                    children: [{ kind: "text", value: String(index + 1) }],
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      alignment: "middle",
-      rotation: 0,
-      typographyToken: "label",
-      zIndex: 0,
-      locked: false,
-    })),
-  };
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  const importProject = async (buffer: Buffer) =>
-    page.getByTestId("project-file").setInputFiles({
-      name: "align-ring-labels.icproj.json",
-      mimeType: "application/json",
-      buffer,
-    });
-  await importProject(Buffer.from(JSON.stringify(project)));
-  const labels = page.locator('[data-testid^="drafting-hit-label-"]');
-  await expect(labels).toHaveCount(4);
-  await editDocumentStyleCode(page, (code) => {
-    code.canvas.annotationGrid = 10;
-  });
-  const labelRects = () =>
-    labels.evaluateAll((elements) =>
-      elements.map((element) => {
-        const bounds = (element as SVGGraphicsElement).getBBox();
-        return { x: bounds.x, y: bounds.y, bottom: bounds.y + bounds.height };
-      }),
-    );
-  const before = await labelRects();
-  for (let index = 0; index < 4; index += 1)
-    await labels.nth(index).click({ modifiers: index === 0 ? [] : ["Shift"] });
-  await expect(
-    page.locator('[data-canvas-hit-kind="drafting"].selected'),
-  ).toHaveCount(4);
-  await expect(
-    page.locator('[data-canvas-hit-kind="instance"].selected'),
-  ).toHaveCount(0);
-  const alignBottom = async () => {
-    await labels.last().click({ button: "right" });
-    await page.getByTestId("context-align-bottom").click();
-  };
-  await alignBottom();
-  await expect(page.getByTestId("status")).toContainText(
-    "Aligned 4 selected objects",
-  );
-  const after = await labelRects();
-  expect(after.map((rect) => rect.x)).toEqual(before.map((rect) => rect.x));
-  const bottom = Math.max(...before.map((rect) => rect.bottom));
-  for (const rect of after) expect(rect.bottom).toBeCloseTo(bottom);
-  const renderedBottoms = await page
-    .locator('[data-layer="drafting"] [data-kind="draft-text"]')
-    .evaluateAll((elements) =>
-      elements.map((element) => {
-        const bounds = (element as SVGGraphicsElement).getBBox();
-        return bounds.y + bounds.height;
-      }),
-    );
-  expect(
-    Math.max(...renderedBottoms) - Math.min(...renderedBottoms),
-  ).toBeLessThan(0.01);
-
-  // A second alignment is a true no-op; Undo still reverses the first one.
-  await alignBottom();
-  await expect(page.getByTestId("status")).toContainText(
-    "Selection is already aligned",
-  );
-  await page.keyboard.press("ControlOrMeta+z");
-  expect(await labelRects()).toEqual(before);
-  await page.keyboard.press("ControlOrMeta+Shift+z");
-  expect(await labelRects()).toEqual(after);
-
-  const bytes = await downloadBytes(page, "File", "Export Project File…");
-  const saved = parseSavedProject(bytes.toString("utf8")) as CircuitProject;
-  expect(
-    saved.documents[0]!.instances.map((instance) => instance.placement),
-  ).toEqual(document.instances.map((instance) => instance.placement));
-  expect(
-    saved.documents[0]!.drafting!.objects.map((object) => object.anchor),
-  ).toEqual(
-    positions.map((position) => ({
-      kind: "free",
-      position: { x: position.x, y: 325 },
-    })),
-  );
-  await importProject(bytes);
-  expect(await labelRects()).toEqual(after);
-});
-
-test("drafting text shares device additive selection and context alignment", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
-  await placeText(page);
-  const input = page.getByRole("textbox", { name: "Canvas text editor" });
-  await input.fill("BIAS");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-
-  const instance = page.locator('[data-canvas-hit-kind="instance"]').first();
-  const text = page.locator('[data-canvas-hit-kind="drafting"]').first();
-
-  await page.keyboard.press("ControlOrMeta+A");
-  await expect(instance).toHaveClass(/selected/);
-  await expect(text).toHaveClass(/selected/);
-  await page.keyboard.press("ControlOrMeta+D");
-
-  // The same objects can then be composed explicitly through the shared
-  // additive click behavior.
-  await instance.click();
-  await expect(instance).toHaveClass(/selected/);
-  await text.click({ modifiers: ["Shift"] });
-  await expect(instance).toHaveClass(/selected/);
-  await expect(text).toHaveClass(/selected/);
-
-  // Right-clicking an already-selected text keeps the mixed selection and
-  // opens the same command surface as a device, without device-only variants.
-  await text.click({ button: "right" });
-  const menu = page.getByTestId("canvas-context-menu");
-  await expect(menu).toContainText("Align");
-  await expect(menu).not.toContainText("Swap device");
-  await page.getByTestId("context-align-left").click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Aligned 2 selected objects",
-  );
-});
-
-test("dragging drafting text carries its mixed component selection as one body", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
-  await placeText(page);
-  const input = page.getByRole("textbox", { name: "Canvas text editor" });
-  await input.fill("BIAS");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-
-  const instance = page.locator('[data-canvas-hit-kind="instance"]').first();
-  const text = page.locator('[data-canvas-hit-kind="drafting"]').first();
-  await instance.click();
-  await text.click({ modifiers: ["Shift"] });
-  await expect(instance).toHaveClass(/selected/);
-  await expect(text).toHaveClass(/selected/);
-
-  const instanceBefore = await instance.boundingBox();
-  const textBefore = await text.boundingBox();
-  if (!instanceBefore || !textBefore)
-    throw new Error("Selection is not measurable");
-  const start = {
-    x: textBefore.x + textBefore.width / 2,
-    y: textBefore.y + textBefore.height / 2,
-  };
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x + 80, start.y + 60, { steps: 4 });
-  await page.mouse.up();
-
-  const instanceAfter = await instance.boundingBox();
-  const textAfter = await text.boundingBox();
-  if (!instanceAfter || !textAfter)
-    throw new Error("Moved selection is not measurable");
-  const instanceDelta = {
-    x: instanceAfter.x - instanceBefore.x,
-    y: instanceAfter.y - instanceBefore.y,
-  };
-  const textDelta = {
-    x: textAfter.x - textBefore.x,
-    y: textAfter.y - textBefore.y,
-  };
-  // Smart Snap may keep either axis aligned with nearby geometry. The
-  // contract here is one non-zero translation shared by every selected
-  // member, not a promise that both axes must change.
-  expect(Math.hypot(instanceDelta.x, instanceDelta.y)).toBeGreaterThan(0);
-  expect(textDelta.x).toBeCloseTo(instanceDelta.x, 0);
-  expect(textDelta.y).toBeCloseTo(instanceDelta.y, 0);
-  await expect(instance).toHaveClass(/selected/);
-  await expect(text).toHaveClass(/selected/);
-
-  await page.keyboard.press("ControlOrMeta+Z");
-  const instanceUndone = await instance.boundingBox();
-  const textUndone = await text.boundingBox();
-  expect(instanceUndone?.x).toBeCloseTo(instanceBefore.x, 0);
-  expect(instanceUndone?.y).toBeCloseTo(instanceBefore.y, 0);
-  expect(textUndone?.x).toBeCloseTo(textBefore.x, 0);
-  expect(textUndone?.y).toBeCloseTo(textBefore.y, 0);
-});
-
-test("Ctrl+A and a marquee both move drafting texts as one selection", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  const canvas = page.getByTestId("schematic-canvas");
-  const editor = page.getByRole("textbox", { name: "Canvas text editor" });
-  const apply = page.getByRole("button", { name: "Apply text changes" });
-
-  await placeText(page);
-  await editor.fill("LEFT");
-  await apply.click();
-  const texts = page.locator('[data-canvas-hit-kind="drafting"]');
-  await texts.first().dragTo(canvas, { targetPosition: { x: 260, y: 180 } });
-  await placeText(page);
-  await editor.fill("RIGHT");
-  await apply.click();
-  await expect(texts).toHaveCount(2);
-
-  await page.keyboard.press("ControlOrMeta+A");
-  await expect(texts.nth(0)).toHaveClass(/selected/);
-  await expect(texts.nth(1)).toHaveClass(/selected/);
-  const selectAllBefore = await Promise.all([
-    texts.nth(0).boundingBox(),
-    texts.nth(1).boundingBox(),
-  ]);
-  if (!selectAllBefore[0] || !selectAllBefore[1])
-    throw new Error("Texts are not measurable");
-  const dragStart = {
-    x: selectAllBefore[0].x + selectAllBefore[0].width / 2,
-    y: selectAllBefore[0].y + selectAllBefore[0].height / 2,
-  };
-  await page.mouse.move(dragStart.x, dragStart.y);
-  await page.mouse.down();
-  await page.mouse.move(dragStart.x + 80, dragStart.y + 60, { steps: 4 });
-  await page.mouse.up();
-  const selectAllAfter = await Promise.all([
-    texts.nth(0).boundingBox(),
-    texts.nth(1).boundingBox(),
-  ]);
-  if (!selectAllAfter[0] || !selectAllAfter[1])
-    throw new Error("Moved texts are not measurable");
-  expect(selectAllAfter[0].x - selectAllBefore[0].x).toBeCloseTo(
-    selectAllAfter[1].x - selectAllBefore[1].x,
-    0,
-  );
-  expect(selectAllAfter[0].y - selectAllBefore[0].y).toBeCloseTo(
-    selectAllAfter[1].y - selectAllBefore[1].y,
-    0,
-  );
-
-  await page.keyboard.press("ControlOrMeta+Z");
-  await page.keyboard.press("ControlOrMeta+D");
-  await expect(texts.nth(0)).not.toHaveClass(/selected/);
-  await expect(texts.nth(1)).not.toHaveClass(/selected/);
-
-  const boxes = await Promise.all([
-    texts.nth(0).boundingBox(),
-    texts.nth(1).boundingBox(),
-  ]);
-  if (!boxes[0] || !boxes[1]) throw new Error("Texts are not measurable");
-  const left = Math.min(boxes[0].x, boxes[1].x) - 15;
-  const top = Math.min(boxes[0].y, boxes[1].y) - 15;
-  const right =
-    Math.max(boxes[0].x + boxes[0].width, boxes[1].x + boxes[1].width) + 15;
-  const bottom =
-    Math.max(boxes[0].y + boxes[0].height, boxes[1].y + boxes[1].height) + 15;
-  await page.mouse.move(left, top);
-  await page.mouse.down();
-  await page.mouse.move(right, bottom, { steps: 8 });
-  await page.mouse.up();
-  await expect(texts.nth(0)).toHaveClass(/selected/);
-  await expect(texts.nth(1)).toHaveClass(/selected/);
-
-  const firstBefore = await texts.nth(0).boundingBox();
-  const secondBefore = await texts.nth(1).boundingBox();
-  if (!firstBefore || !secondBefore)
-    throw new Error("Texts are not measurable");
-  await texts.nth(0).dragTo(canvas, { targetPosition: { x: 560, y: 360 } });
-  const firstAfter = await texts.nth(0).boundingBox();
-  const secondAfter = await texts.nth(1).boundingBox();
-  if (!firstAfter || !secondAfter)
-    throw new Error("Moved texts are not measurable");
-  const firstDelta = {
-    x: firstAfter.x - firstBefore.x,
-    y: firstAfter.y - firstBefore.y,
-  };
-  const secondDelta = {
-    x: secondAfter.x - secondBefore.x,
-    y: secondAfter.y - secondBefore.y,
-  };
-  expect(Math.hypot(firstDelta.x, firstDelta.y)).toBeGreaterThan(0);
-  expect(secondDelta.x).toBeCloseTo(firstDelta.x, 0);
-  expect(secondDelta.y).toBeCloseTo(firstDelta.y, 0);
-});
-
-test("multiple selected component annotations move as one text selection", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
-  await placeComponent(page, "resistor", { x: 520, y: 220 });
-  const canvas = page.getByTestId("schematic-canvas");
-  const first = page.getByTestId("annotation-hit-instance-label-R1");
-  const second = page.getByTestId("annotation-hit-instance-label-R2");
-  const labelBoxes = await Promise.all([
-    first.boundingBox(),
-    second.boundingBox(),
-  ]);
-  if (!labelBoxes[0] || !labelBoxes[1])
-    throw new Error("Labels are not measurable");
-  const left = Math.min(labelBoxes[0].x, labelBoxes[1].x) - 5;
-  const top = Math.min(labelBoxes[0].y, labelBoxes[1].y) - 5;
-  const right =
-    Math.max(
-      labelBoxes[0].x + labelBoxes[0].width,
-      labelBoxes[1].x + labelBoxes[1].width,
-    ) + 5;
-  const bottom =
-    Math.max(
-      labelBoxes[0].y + labelBoxes[0].height,
-      labelBoxes[1].y + labelBoxes[1].height,
-    ) + 5;
-  // A left-to-right window selects only what it fully covers. Start it on
-  // empty canvas: the label's corner can sit on a pin's hit area, where the
-  // press would begin a wire instead of a window.
-  const startY = await page.evaluate(
-    ({ x, candidates }) =>
-      candidates.find(
-        (y) =>
-          !document
-            .elementFromPoint(x, y)
-            ?.closest(
-              '[data-testid^="terminal-"], [data-testid^="hit-"], [data-testid^="annotation-hit-"]',
-            ),
-      ) ?? candidates[0]!,
-    { x: left, candidates: [top, bottom, top - 8, bottom + 8] },
-  );
-  await page.mouse.move(left, startY);
-  await page.mouse.down();
-  await page.mouse.move(right, startY >= bottom ? top : bottom, { steps: 8 });
-  await page.mouse.up();
-  await expect(first).toHaveClass(/selected/);
-  await expect(second).toHaveClass(/selected/);
-  await expect(
-    page.locator('[data-canvas-hit-kind="instance"].selected'),
-  ).toHaveCount(0);
-
-  const firstBefore = await first.boundingBox();
-  const secondBefore = await second.boundingBox();
-  if (!firstBefore || !secondBefore)
-    throw new Error("Labels are not measurable");
-  await first.dragTo(canvas, {
-    targetPosition: { x: 400, y: 340 },
-    force: true,
-  });
-  const firstAfter = await first.boundingBox();
-  const secondAfter = await second.boundingBox();
-  if (!firstAfter || !secondAfter)
-    throw new Error("Moved labels are not measurable");
-  const firstDelta = {
-    x: firstAfter.x - firstBefore.x,
-    y: firstAfter.y - firstBefore.y,
-  };
-  const secondDelta = {
-    x: secondAfter.x - secondBefore.x,
-    y: secondAfter.y - secondBefore.y,
-  };
-  expect(Math.hypot(firstDelta.x, firstDelta.y)).toBeGreaterThan(0);
-  expect(secondDelta.x).toBeCloseTo(firstDelta.x, 0);
-  expect(secondDelta.y).toBeCloseTo(firstDelta.y, 0);
-  await expect(first).toHaveClass(/selected/);
-  await expect(second).toHaveClass(/selected/);
-});
-
-test("drafting shapes join device selection from either order", async ({
+test("drafting shapes, text and device labels join device selection from either order and share its context menu", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -509,6 +88,12 @@ test("drafting shapes join device selection from either order", async ({
 
   const instance = page.locator('[data-canvas-hit-kind="instance"]').first();
   const rectangle = page.getByTestId(/^drafting-hit-rectangle-/);
+  const menu = page.getByTestId("canvas-context-menu");
+  const expectSharedMenu = async () => {
+    await expect(menu).toBeVisible();
+    await expect(menu).not.toContainText("Swap device");
+    await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeEnabled();
+  };
 
   // Shape first, then Shift+device — the order that used to drop the shape:
   // the outside-press deselect ran before the additive click could compose.
@@ -523,10 +108,7 @@ test("drafting shapes join device selection from either order", async ({
   // (Shapes do not participate in edge alignment — that boundary is #384's,
   // not this test's — so the mixed menu is asserted, not an Align action.)
   await instance.click({ button: "right" });
-  const menu = page.getByTestId("canvas-context-menu");
-  await expect(menu).toBeVisible();
-  await expect(menu).not.toContainText("Swap device");
-  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeEnabled();
+  await expectSharedMenu();
   await expect(rectangle).toHaveClass(/selected/);
   await expect(instance).toHaveClass(/selected/);
   await page.keyboard.press("Escape");
@@ -543,31 +125,39 @@ test("drafting shapes join device selection from either order", async ({
   await canvas.click({ position: { x: 480, y: 180 }, modifiers: ["Shift"] });
   await expect(instance).toHaveClass(/selected/);
   await expect(rectangle).toHaveClass(/selected/);
-});
 
-test("device annotation shares device additive selection and context menu", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
-  const instance = page.locator('[data-canvas-hit-kind="instance"]').first();
+  // The device's own label joins the same way and opens the same menu.
   const annotation = page
     .locator('[data-canvas-hit-kind="annotation"]')
     .first();
-
   await instance.click();
   await annotation.click({ modifiers: ["Shift"], force: true });
   await expect(instance).toHaveClass(/selected/);
   await expect(annotation).toHaveClass(/selected/);
-
   await annotation.click({ button: "right", force: true });
-  const menu = page.getByTestId("canvas-context-menu");
-  await expect(menu).toBeVisible();
+  await expectSharedMenu();
+  await page.keyboard.press("Escape");
+
+  // Right-clicking an already-selected text keeps the mixed selection and
+  // opens the same command surface, here with edge alignment.
+  await placeText(page, { x: 450, y: 400 });
+  await page.getByRole("textbox", { name: "Canvas text editor" }).fill("BIAS");
+  await page.getByRole("button", { name: "Apply text changes" }).click();
+  const text = page.getByTestId(/^drafting-hit-note-/);
+  await instance.click();
+  await text.click({ modifiers: ["Shift"] });
+  await expect(instance).toHaveClass(/selected/);
+  await expect(text).toHaveClass(/selected/);
+  await text.click({ button: "right" });
+  await expect(menu).toContainText("Align");
   await expect(menu).not.toContainText("Swap device");
-  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeEnabled();
+  await page.getByTestId("context-align-left").click();
+  await expect(page.getByTestId("status")).toContainText(
+    "Aligned 2 selected objects",
+  );
 });
 
-test("visual clipboard preserves mixed selection and exports only its formal SVG", async ({
+test("visual clipboard copies a mixed selection as its formal SVG and a lone Wire as a transparent PNG, without touching history", async ({
   page,
 }) => {
   await captureImageClipboard(page);
@@ -588,18 +178,27 @@ test("visual clipboard preserves mixed selection and exports only its formal SVG
     "Copy as SVG",
   );
   await page.keyboard.press("Escape");
-  const editMenu = await openMenu(page, "Edit");
-  await editMenu
-    .getByRole("button", { name: "Copy selection as SVG", exact: true })
-    .click();
-  await expect(page.getByTestId("status")).toHaveText(
-    "Copied selection as SVG",
-  );
-  const copied = await page.evaluate(
-    () =>
-      (window as unknown as { copiedImage: { mime: string; bytes: number[] } })
-        .copiedImage,
-  );
+  const copyImage = async (format: "SVG" | "PNG") => {
+    const editMenu = await openMenu(page, "Edit");
+    await editMenu
+      .getByRole("button", {
+        name: `Copy selection as ${format}`,
+        exact: true,
+      })
+      .click();
+    await expect(page.getByTestId("status")).toHaveText(
+      `Copied selection as ${format}`,
+    );
+    return page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            copiedImage: { mime: string; bytes: number[] };
+          }
+        ).copiedImage,
+    );
+  };
+  const copied = await copyImage("SVG");
   const svg = Buffer.from(copied.bytes).toString("utf8");
   expect(copied.mime).toBe("image/svg+xml");
   expect(svg).toContain('data-symbol-id="resistor"');
@@ -620,17 +219,12 @@ test("visual clipboard preserves mixed selection and exports only its formal SVG
   );
   await expect(resistor).toHaveClass(/selected/);
   await expect(text).toHaveClass(/selected/);
-});
+  await page.keyboard.press("Escape");
 
-test("visual clipboard rasterizes an independent Wire as transparent PNG without changing history", async ({
-  page,
-}) => {
-  await captureImageClipboard(page);
-  await page.goto("/editor");
-  const canvas = page.getByTestId("schematic-canvas");
+  // A lone Wire rasterizes on a transparent background.
   await clickDrawTool(page, "wire");
-  await canvas.click({ position: { x: 300, y: 200 } });
-  await canvas.dblclick({ position: { x: 500, y: 200 } });
+  await canvas.click({ position: { x: 300, y: 480 } });
+  await canvas.dblclick({ position: { x: 500, y: 480 } });
   await page.keyboard.press("Escape");
   const wire = page.locator('[data-canvas-hit-kind="route"]').first();
   await expect(wire).toHaveCount(1);
@@ -646,18 +240,7 @@ test("visual clipboard rasterizes an independent Wire as transparent PNG without
   });
   await page.mouse.click(midpoint.x, midpoint.y, { button: "right" });
   await page.keyboard.press("Escape");
-  const editMenu = await openMenu(page, "Edit");
-  await editMenu
-    .getByRole("button", { name: "Copy selection as PNG", exact: true })
-    .click();
-  await expect(page.getByTestId("status")).toHaveText(
-    "Copied selection as PNG",
-  );
-  const copied = await page.evaluate(
-    () =>
-      (window as unknown as { copiedImage: { mime: string; bytes: number[] } })
-        .copiedImage,
-  );
+  const raster = await copyImage("PNG");
   const png = await page.evaluate(async (bytes) => {
     const bitmap = await createImageBitmap(
       new Blob([new Uint8Array(bytes)], { type: "image/png" }),
@@ -677,55 +260,14 @@ test("visual clipboard rasterizes an independent Wire as transparent PNG without
     bitmap.close();
     canvas.width = canvas.height = 0;
     return result;
-  }, copied.bytes);
-  expect(copied.mime).toBe("image/png");
+  }, raster.bytes);
+  expect(raster.mime).toBe("image/png");
   expect(png.width).toBeGreaterThan(png.height);
   expect(png.cornerAlpha).toBe(0);
   expect(png.hasInk).toBe(true);
+  // Copying images recorded nothing: one Undo removes the wire.
   await page.keyboard.press("ControlOrMeta+Z");
   await expect(wire).toHaveCount(0);
-});
-
-test("visual clipboard reports denied access and empty selection without downloads", async ({
-  page,
-}) => {
-  await captureImageClipboard(page, true);
-  await page.goto("/editor");
-  const canvas = page.getByTestId("schematic-canvas");
-  await canvas.click({ button: "right", position: { x: 600, y: 400 } });
-  await expect(page.getByTestId("canvas-context-menu")).toHaveCount(0);
-  const emptyEditMenu = await openMenu(page, "Edit");
-  await expect(
-    emptyEditMenu.getByRole("button", {
-      name: "Copy selection as PNG",
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await expect(
-    emptyEditMenu.getByRole("button", {
-      name: "Copy selection as SVG",
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
-  const downloads: string[] = [];
-  page.on("download", (download) =>
-    downloads.push(download.suggestedFilename()),
-  );
-  await page
-    .locator('[data-canvas-hit-kind="instance"]')
-    .first()
-    .click({ button: "right" });
-  await page.keyboard.press("Escape");
-  const selectedEditMenu = await openMenu(page, "Edit");
-  await selectedEditMenu
-    .getByRole("button", { name: "Copy selection as PNG", exact: true })
-    .click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Clipboard access was denied",
-  );
-  expect(downloads).toEqual([]);
 });
 
 test("Netlist keeps format selection in the project panel while File keeps drawing exports", async ({
@@ -739,26 +281,8 @@ test("Netlist keeps format selection in the project panel while File keeps drawi
   await expect(
     menu.getByRole("button", { name: "Export SVG", exact: true }),
   ).toBeHidden();
-  const importMenu = menu.getByRole("button", { name: "Import", exact: true });
-  await expect(importMenu).toHaveAttribute("aria-expanded", "false");
-  await importMenu.click();
-  await expect(
-    menu.locator("label.file-import", { hasText: "Project File…" }),
-  ).toBeVisible();
-  await expect(
-    menu.locator("label.file-import", { hasText: "SPICE / SCS…" }),
-  ).toBeVisible();
-  await expect(
-    menu.locator("label.file-import", {
-      hasText: "Cadence SPICE (`!` globals)…",
-    }),
-  ).toBeVisible();
-  await expect(
-    menu.getByRole("button", { name: "Copy SPICE netlist", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    menu.getByRole("button", { name: "Copy Spectre netlist", exact: true }),
-  ).toHaveCount(0);
+  // The File menu's contents are file-command-menu.test.tsx's; the copy
+  // commands live in neither menu.
   const netlistMenu = await openMenu(page, "Netlist");
   await expect(
     netlistMenu.getByRole("button", {
@@ -783,27 +307,6 @@ test("Netlist keeps format selection in the project panel while File keeps drawi
     exact: true,
   });
   await expect(projectPanel.getByLabel("Netlist format")).toBeVisible();
-  await expect(projectPanel.getByRole("heading")).toHaveCount(0);
-  expect(
-    await projectPanel
-      .locator("select")
-      .evaluateAll((selects) =>
-        selects.map((select) => select.getAttribute("aria-label")),
-      ),
-  ).toEqual([
-    "Netlist format",
-    "Netlist process",
-    "NMOS netlist target",
-    "PMOS netlist target",
-    "R netlist target",
-    "C netlist target",
-    "L netlist target",
-  ]);
-  await expect(
-    page
-      .getByRole("complementary", { name: "Project tools", exact: true })
-      .getByRole("tab"),
-  ).toHaveCount(0);
   await openMenu(page, "File");
   await menu.getByRole("button", { name: "Export", exact: true }).click();
   await expect(

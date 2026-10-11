@@ -1,7 +1,6 @@
-import { parseSavedProject } from "./editor-fixtures";
+import { exportedProject, chooseComponent } from "./editor-fixtures";
 import { expect, test, type Page } from "@playwright/test";
-
-import { chooseComponent, downloadBytes } from "./editor-fixtures";
+import type { SchematicDocument } from "@icm/model";
 
 async function placeComponent(
   page: Page,
@@ -32,18 +31,9 @@ function routePoints(page: Page) {
 async function exportedTerminals(
   page: Page,
 ): Promise<Array<{ instanceId: string; pinName: string }>> {
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ) as {
-    documents: Array<{
-      nets: Array<{
-        terminals: Array<{ instanceId: string; pinName: string }>;
-      }>;
-    }>;
-  };
-  return saved.documents[0]!.nets.flatMap((net) => net.terminals);
+  const document: SchematicDocument = (await exportedProject(page))
+    .documents[0];
+  return document.nets.flatMap((net) => net.terminals);
 }
 
 const META = 4; // CDP Input modifier bitmask (Cmd; macOS turns Ctrl+left into a right press)
@@ -55,11 +45,13 @@ const SHIFT = 8; // CDP Input modifier bitmask for Shift
  * pipeline. Cmd stands in for Ctrl because macOS converts Ctrl+left-press
  * into a right-button press before the page sees it.
  */
+type Point = { x: number; y: number };
+
 async function modifierDrag(
   page: Page,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  modifiers: number = META,
+  from: Point,
+  to: Point,
+  modifiers: number,
 ): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Input.dispatchMouseEvent", {
@@ -95,78 +87,12 @@ async function modifierDrag(
 }
 
 /** Ctrl/Cmd variant, the gesture shipped in #413. */
-async function ctrlDrag(
-  page: Page,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-): Promise<void> {
-  await modifierDrag(page, from, to, META);
-}
+const ctrlDrag = (page: Page, from: Point, to: Point) =>
+  modifierDrag(page, from, to, META);
 
 /** Shift variant, asked for so the drag matches Shift+M. */
-async function shiftDrag(
-  page: Page,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-): Promise<void> {
-  await modifierDrag(page, from, to, SHIFT);
-}
-
-test("Ctrl+drag moves only the part; its wire stays exactly in place", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 180 });
-  await placeComponent(page, "resistor", { x: 300, y: 400 });
-  const ids = await instanceIds(page);
-
-  await page.keyboard.press("w");
-  await page.getByTestId(`terminal-${ids[0]}-2`).click();
-  await page.getByTestId(`terminal-${ids[1]}-1`).click();
-  await page.keyboard.press("Escape");
-  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(1);
-  // Deselect so the drag targets exactly the pointed-at part.
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 620, y: 420 },
-  });
-
-  const wireBefore = await routePoints(page);
-  const top = page.getByTestId(`hit-${ids[0]}`);
-  const before = (await top.boundingBox())!;
-  const center = {
-    x: before.x + before.width / 2,
-    y: before.y + before.height / 2,
-  };
-
-  await ctrlDrag(page, center, { x: center.x + 180, y: center.y });
-
-  // The part moved; the now-open wire kept its exact authored geometry.
-  const after = (await top.boundingBox())!;
-  expect(after.x).toBeGreaterThan(before.x + 100);
-  const wireAfter = await routePoints(page);
-  expect(wireAfter).toEqual(wireBefore);
-  await expect(page.getByTestId("status")).toContainText("without its wires");
-});
-
-test("Ctrl+click without a drag still toggles selection", async ({ page }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 250 });
-  const ids = await instanceIds(page);
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 600, y: 420 },
-  });
-
-  const hit = page.getByTestId(`hit-${ids[0]}`);
-  const box = (await hit.boundingBox())!;
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  // A ctrl press-release without movement is the toggle-selection click.
-  await ctrlDrag(page, center, center);
-  await expect(hit).toHaveClass(/selected/);
-
-  // The part did not move.
-  const settled = (await hit.boundingBox())!;
-  expect(Math.abs(settled.x - box.x)).toBeLessThan(2);
-});
+const shiftDrag = (page: Page, from: Point, to: Point) =>
+  modifierDrag(page, from, to, SHIFT);
 
 /**
  * Build two resistors joined by one wire, with nothing selected. Returns the
@@ -186,108 +112,89 @@ async function wiredPair(page: Page): Promise<{
   await page.getByTestId(`terminal-${ids[1]}-1`).click();
   await page.keyboard.press("Escape");
   await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(1);
+  // Deselect so a drag targets exactly the pointed-at part.
   await page.getByTestId("schematic-canvas").click({
     position: { x: 620, y: 420 },
   });
   return { ids, wireBefore: await routePoints(page) };
 }
 
-// The brake: plain M must still drag the wire along, or Shift+M would have
-// silently replaced the behaviour it is supposed to sit beside.
-test("M still stretches the wire along with the part", async ({ page }) => {
-  const { ids, wireBefore } = await wiredPair(page);
+function centre(box: { x: number; y: number; width: number; height: number }) {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
 
-  const top = page.getByTestId(`hit-${ids[0]}`);
-  await top.click();
-  const before = (await top.boundingBox())!;
-
-  await page.keyboard.press("m");
-  await expect(page.getByTestId("status")).toContainText("Move: move the");
-
-  const target = { x: before.x + 200, y: before.y + before.height / 2 };
-  await page.mouse.move(target.x, target.y);
-  await page.mouse.click(target.x, target.y);
-
-  const after = (await page.getByTestId(`hit-${ids[0]}`).boundingBox())!;
-  expect(after.x).toBeGreaterThan(before.x + 100);
-  expect(await routePoints(page)).not.toEqual(wireBefore);
-  const terminals = await exportedTerminals(page);
-  expect(terminals).toContainEqual(
-    expect.objectContaining({ instanceId: ids[0] }),
-  );
-  expect(terminals).toContainEqual(
-    expect.objectContaining({ instanceId: ids[1] }),
-  );
-});
-
-// Issue #485: Virtuoso's Shift+M. The same detachment Ctrl+drag performs,
-// reached through the verb-first path so it works from the keyboard on a
-// selection rather than only under the pointer.
-// Shift+M is verb-first the same way M is: pressed with nothing selected it
-// arms, and the next click picks up whatever it points at.
-test("Shift+M with nothing selected arms the detached move for the next click", async ({
+test("Ctrl+drag moves only the part, and a still Ctrl+click toggles selection", async ({
   page,
 }) => {
   const { ids, wireBefore } = await wiredPair(page);
+  const top = page.getByTestId(`hit-${ids[0]}`);
+  const bottom = page.getByTestId(`hit-${ids[1]}`);
+
+  // A ctrl press-release without movement is the toggle-selection click.
+  const still = (await bottom.boundingBox())!;
+  await ctrlDrag(page, centre(still), centre(still));
+  await expect(bottom).toHaveClass(/selected/);
+  expect(Math.abs((await bottom.boundingBox())!.x - still.x)).toBeLessThan(2);
+  await page.getByTestId("schematic-canvas").click({
+    position: { x: 620, y: 420 },
+  });
+
+  const before = (await top.boundingBox())!;
+  const from = centre(before);
+  await ctrlDrag(page, from, { x: from.x + 180, y: from.y });
+
+  // The part moved; the now-open wire kept its exact authored geometry.
+  expect((await top.boundingBox())!.x).toBeGreaterThan(before.x + 100);
+  expect(await routePoints(page)).toEqual(wireBefore);
+  await expect(page.getByTestId("status")).toContainText("without its wires");
+});
+
+// Issue #485: Virtuoso's Shift+M. The same detachment Ctrl+drag performs,
+// reached through the verb-first path: with nothing selected it arms for the
+// next click, and on a selection it carries every selected part off its wires.
+test("Shift+M arms for the next click and carries a whole selection off its wires", async ({
+  page,
+}) => {
+  const { ids, wireBefore } = await wiredPair(page);
+  const top = page.getByTestId(`hit-${ids[0]}`);
+  const bottom = page.getByTestId(`hit-${ids[1]}`);
 
   await page.keyboard.press("Shift+M");
   await expect(page.getByTestId("status")).toContainText(
     "Move without wires: click",
   );
-
-  const top = page.getByTestId(`hit-${ids[0]}`);
-  const before = (await top.boundingBox())!;
-  await page.mouse.click(
-    before.x + before.width / 2,
-    before.y + before.height / 2,
-  );
-
-  const target = { x: before.x + 200, y: before.y + before.height / 2 };
-  await page.mouse.move(target.x, target.y);
-  await page.mouse.click(target.x, target.y);
-
-  const after = (await page.getByTestId(`hit-${ids[0]}`).boundingBox())!;
-  expect(after.x).toBeGreaterThan(before.x + 100);
+  const armed = (await top.boundingBox())!;
+  await page.mouse.click(centre(armed).x, centre(armed).y);
+  await page.mouse.move(armed.x + 200, centre(armed).y);
+  await page.mouse.click(armed.x + 200, centre(armed).y);
+  expect((await top.boundingBox())!.x).toBeGreaterThan(armed.x + 100);
   expect(await routePoints(page)).toEqual(wireBefore);
-});
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(async () => Math.round((await top.boundingBox())!.x))
+    .toBe(Math.round(armed.x));
 
-// The reason the keyboard verb earns its place beside Ctrl+drag: the drag
-// detaches only the part under the pointer, while Shift+M carries every
-// selected part and detaches all of them together.
-test("Shift+M carries a whole multi-part selection", async ({ page }) => {
-  const { ids, wireBefore } = await wiredPair(page);
-
-  const top = page.getByTestId(`hit-${ids[0]}`);
-  const bottom = page.getByTestId(`hit-${ids[1]}`);
+  // The keyboard verb earns its place beside Ctrl+drag: the drag detaches only
+  // the part under the pointer, while Shift+M carries the whole selection.
   await top.click();
   await bottom.click({ modifiers: ["Shift"] });
-  await expect(top).toHaveClass(/selected/);
-  await expect(bottom).toHaveClass(/selected/);
-
   const topBefore = (await top.boundingBox())!;
   const bottomBefore = (await bottom.boundingBox())!;
-
   await page.keyboard.press("Shift+M");
   await expect(page.getByTestId("status")).toContainText("without wires");
-
-  const target = {
-    x: topBefore.x + 200,
-    y: topBefore.y + topBefore.height / 2,
-  };
+  const target = { x: topBefore.x + 200, y: centre(topBefore).y };
   await page.mouse.move(target.x, target.y);
   await page.mouse.click(target.x, target.y);
 
   // Both parts moved by the same delta, and the wire between them did not.
-  const topAfter = (await page.getByTestId(`hit-${ids[0]}`).boundingBox())!;
-  const bottomAfter = (await page.getByTestId(`hit-${ids[1]}`).boundingBox())!;
+  const topAfter = (await top.boundingBox())!;
+  const bottomAfter = (await bottom.boundingBox())!;
   expect(topAfter.x).toBeGreaterThan(topBefore.x + 100);
   expect(Math.round(bottomAfter.x - bottomBefore.x)).toBe(
     Math.round(topAfter.x - topBefore.x),
   );
   expect(await routePoints(page)).toEqual(wireBefore);
-
-  // Both selected parts are electrically open, not just visually adrift. The
-  // wire between them was the only thing on that Net, so nothing is left on it.
+  // Both selected parts are electrically open, not just visually adrift.
   const terminals = await exportedTerminals(page);
   expect(terminals).not.toContainEqual(
     expect.objectContaining({ instanceId: ids[0] }),
@@ -298,30 +205,34 @@ test("Shift+M carries a whole multi-part selection", async ({ page }) => {
 });
 
 // Virtuoso's pairing for the two modified drags: Ctrl/Cmd moves a part off its
-// wires, and Shift duplicates. Shift+drag therefore leaves the original alone
-// and drops a copy where the pointer lands. Shift+click with no movement must
-// still mean "add to selection".
-test("Shift+drag leaves the original in place and drops a copy", async ({
+// wires, and Shift duplicates. A stationary Shift+click must keep meaning
+// "add to selection".
+test("Shift+drag drops a copy, and a still Shift+click adds to the selection", async ({
   page,
 }) => {
   const { ids, wireBefore } = await wiredPair(page);
-
   const top = page.getByTestId(`hit-${ids[0]}`);
-  const before = (await top.boundingBox())!;
-  const center = {
-    x: before.x + before.width / 2,
-    y: before.y + before.height / 2,
-  };
+  const bottom = page.getByTestId(`hit-${ids[1]}`);
 
-  await shiftDrag(page, center, { x: center.x + 180, y: center.y });
+  await top.click();
+  const still = (await bottom.boundingBox())!;
+  await shiftDrag(page, centre(still), centre(still));
+  await expect(top).toHaveClass(/selected/);
+  await expect(bottom).toHaveClass(/selected/);
+  expect(Math.abs((await bottom.boundingBox())!.x - still.x)).toBeLessThan(2);
+  await page.getByTestId("schematic-canvas").click({
+    position: { x: 620, y: 420 },
+  });
+
+  const before = (await top.boundingBox())!;
+  const from = centre(before);
+  await shiftDrag(page, from, { x: from.x + 180, y: from.y });
 
   // A third part now exists, and the two originals never moved.
   const after = await instanceIds(page);
   expect(after).toHaveLength(3);
   expect(after).toEqual(expect.arrayContaining(ids));
-  const settled = (await top.boundingBox())!;
-  expect(Math.abs(settled.x - before.x)).toBeLessThan(2);
-
+  expect(Math.abs((await top.boundingBox())!.x - before.x)).toBeLessThan(2);
   // Duplicating never disturbs the wiring the originals already had.
   expect(await routePoints(page)).toEqual(wireBefore);
   const terminals = await exportedTerminals(page);
@@ -331,27 +242,4 @@ test("Shift+drag leaves the original in place and drops a copy", async ({
   expect(terminals).toContainEqual(
     expect.objectContaining({ instanceId: ids[1] }),
   );
-});
-
-// The brake: Shift is this editor's add-to-selection modifier, and a
-// stationary Shift+click must keep meaning exactly that.
-test("Shift+click without a drag still adds to the selection", async ({
-  page,
-}) => {
-  const { ids } = await wiredPair(page);
-
-  const top = page.getByTestId(`hit-${ids[0]}`);
-  const bottom = page.getByTestId(`hit-${ids[1]}`);
-  await top.click();
-  await expect(top).toHaveClass(/selected/);
-
-  const box = (await bottom.boundingBox())!;
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  await shiftDrag(page, center, center);
-
-  // Both are selected, and neither moved.
-  await expect(top).toHaveClass(/selected/);
-  await expect(bottom).toHaveClass(/selected/);
-  const settled = (await bottom.boundingBox())!;
-  expect(Math.abs(settled.x - box.x)).toBeLessThan(2);
 });

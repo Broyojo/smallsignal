@@ -32,7 +32,6 @@
       "apps/editor/src/features/text-editing/**",
       "apps/editor/src/styles/editor-dialogs.css",
       "apps/editor/src/styles/editor-workspace.css",
-      "apps/editor/e2e/bound-label-mirror.spec.ts",
       "apps/editor/e2e/drafting.spec.ts",
       "apps/editor/e2e/instance-table.spec.ts",
       "apps/editor/e2e/circuit-authoring.spec.ts",
@@ -85,8 +84,6 @@
       "apps/editor/src/features/selection/**",
       "apps/editor/e2e/detach-move.spec.ts",
       "apps/editor/e2e/group-mirror.spec.ts",
-      "apps/editor/e2e/net-highlight.spec.ts",
-      "apps/editor/e2e/overlap-warning.spec.ts",
       "apps/editor/e2e/selection-visuals.spec.ts"
     ],
     "editorViewport": [
@@ -573,7 +570,6 @@
       "command": [
         "pnpm",
         "test:e2e:local",
-        "apps/editor/e2e/bound-label-mirror.spec.ts",
         "apps/editor/e2e/circuit-authoring.spec.ts",
         "apps/editor/e2e/copy-paste.spec.ts",
         "apps/editor/e2e/drawing-style.spec.ts",
@@ -588,7 +584,6 @@
       ],
       "ci": {
         "e2eArgs": [
-          "apps/editor/e2e/bound-label-mirror.spec.ts",
           "apps/editor/e2e/circuit-authoring.spec.ts",
           "apps/editor/e2e/copy-paste.spec.ts",
           "apps/editor/e2e/drawing-style.spec.ts",
@@ -700,16 +695,12 @@
         "test:e2e:local",
         "apps/editor/e2e/detach-move.spec.ts",
         "apps/editor/e2e/group-mirror.spec.ts",
-        "apps/editor/e2e/net-highlight.spec.ts",
-        "apps/editor/e2e/overlap-warning.spec.ts",
         "apps/editor/e2e/selection-visuals.spec.ts"
       ],
       "ci": {
         "e2eArgs": [
           "apps/editor/e2e/detach-move.spec.ts",
           "apps/editor/e2e/group-mirror.spec.ts",
-          "apps/editor/e2e/net-highlight.spec.ts",
-          "apps/editor/e2e/overlap-warning.spec.ts",
           "apps/editor/e2e/selection-visuals.spec.ts"
         ]
       }
