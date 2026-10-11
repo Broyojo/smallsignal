@@ -1,5 +1,6 @@
 import {
   ComponentDefinitionSchema,
+  ComponentLibraryOriginSchema,
   isFrozenSnapshot,
   ComponentAuthoringDraftSchema,
   ExternalSubcircuitDefinitionSchema,
@@ -72,6 +73,13 @@ import type {
 } from "./transaction-result.js";
 
 export const ProjectStructureEditSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("associate_component_library"),
+    symbolId: z.string().min(1),
+    definitionId: z.string().min(1).optional(),
+    expectedOrigin: ComponentLibraryOriginSchema.nullable(),
+    origin: ComponentLibraryOriginSchema,
+  }),
   z.strictObject({
     kind: z.literal("discard_model_source_draft"),
     sourceId: z.string().min(1),
@@ -950,6 +958,37 @@ function applyProjectTransaction(
       continue;
     }
 
+    if (edit.kind === "associate_component_library") {
+      const captured = candidate.componentDefinitions?.find(
+        (item) => item.symbol.id === edit.symbolId,
+      );
+      const owner = edit.definitionId
+        ? candidate.externalSubcircuitDefinitions.find(
+            (item) =>
+              item.id === edit.definitionId &&
+              !item.symbolId &&
+              externalSubcircuitSymbolId(item.id) === edit.symbolId,
+          )
+        : undefined;
+      const definition = owner ?? captured;
+      if (
+        !definition ||
+        JSON.stringify(definition.libraryOrigin ?? null) !==
+          JSON.stringify(edit.expectedOrigin)
+      )
+        return rejectProjectTransaction(
+          project,
+          "EDIT_PRECONDITION",
+          "Component publication association changed; reread before associating.",
+        );
+      if (
+        JSON.stringify(definition.libraryOrigin) !== JSON.stringify(edit.origin)
+      ) {
+        definition.libraryOrigin = structuredClone(edit.origin);
+        structuralChange = true;
+      }
+      continue;
+    }
     if (edit.kind === "capture_component_definition") {
       const previous = candidate.componentDefinitions?.find(
         (definition) => definition.symbol.id === edit.definition.symbol.id,
