@@ -30,9 +30,8 @@ const USAGE = `Usage:
   pnpm arena:season upload --out DIR
 
 build    Checks the Owner's list against the Gallery export and, when no id
-         has a problem, writes the Task pack, the human-reference,
-         grid-baseline and check-copy bundles and season-exclusions.json to
-         --out. The report is printed and kept as --out/build-report.json.
+         has a problem, writes the Task pack, the human-reference and
+         check-copy bundles and season-exclusions.json to --out. The report is printed and kept as --out/build-report.json.
 check    The same checks only, printed.
 submissions
          Renders, exports and grades every T###.icproj.json in --contestant
@@ -41,7 +40,7 @@ upload   Not available yet: #1559 has no upload interface to call.
 
 The list holds one Gallery id per line; optional tab-separated columns give
 the circuit name and the function class. --split is #1524's private test
-split, when it exists. --date (default today, UTC) dates the three built
+split, when it exists. --date (default today, UTC) dates the two built
 bundles; --instructions defaults to tools/arena-season/instructions.md.`;
 
 const COMMANDS = new Set(["build", "check", "submissions", "upload"]);

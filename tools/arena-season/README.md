@@ -1,7 +1,7 @@
 # Season tool (AnalogArena, #1560)
 
 An Owner-run, local-only tool. It turns the Owner's list of chosen Gallery
-circuits into a Season's Task pack and the three Project sets every Season
+circuits into a Season's Task pack and the two Project sets every Season
 shows, and turns a model's folder of drawings into its Contestant bundle.
 Arena (#1559) reads what it writes; the layout is fixed by the
 [Season bundle contract](#season-bundle-contract-copied-from-arenas-docscontractsmd-2026-10-09) below.
@@ -51,10 +51,6 @@ uncommitted edits under `apps/` or `packages/` only earn a warning.
 - not exactly one Cell;
 - a netlist the current exporter cannot produce, or refuses as an
   unfinished drawing (the Gallery's gate);
-- a netlist the structural SPICE import cannot read, so there can be no
-  Grid Baseline (on 2026-10-09 it lacks behavioural sources, which the
-  ideal blocks' models use, ideal switches, and generic MOS models with no
-  `.model` card);
 - no devices, counted by the #1524 grader (any positive number is a valid
   size; Arena sets no size range);
 - an AI-account author (the display names in `AI_SEATS`,
@@ -76,23 +72,18 @@ class (`(none)` when the list gives none).
 SEASON_DIR/
   task-pack/        manifest.json, instructions.md, tasks/T###.sp
   human-reference/  the author's Project, unchanged, with its SVG and netlist
-  grid-baseline/    the Task netlist's structural SPICE import, joined by labels
   check-copy/       the Human Reference with its parts scattered
   season-exclusions.json   chosen Gallery ids and graph hashes, for #1524
   build-report.json
 ```
 
 - **Task ids** are `T001`… in the list's order.
-- **Grid Baseline**: the editor's structural SPICE import of the Task
-  netlist, which sets the devices on a grid with the Cell Pins beside them;
-  every drawn device pin then gets a two-step stub carrying a Net Label with
-  its Net's name. Nothing else joins the devices.
 - **Check copy**: the Human Reference's parts moved, one by one, to a
   shuffled partner's place or to random places over an area half again as
   large as the drawing, by a generator seeded from the Gallery id. The
   editor moves each part with its wires; a move is kept only if the netlist
   stays equivalent to the Task's, so a part no place suits stays put.
-- **Verification**: the three sets go through the same pipeline as a
+- **Verification**: the two sets go through the same pipeline as a
   model's files (below). Every item must be `valid`; anything else is
   reported in `build-report.json` and blocks the build.
 - **Writing**: everything is drawn in a staging folder and replaces the
@@ -171,7 +162,7 @@ The Owner's local Season tool (#1560) writes bundles on disk. Arena (#1559) read
 
 ### Contestant bundle: `<contestant-slug>/manifest.json`
 
-One bundle per Contestant, including the three built-in sets.
+One bundle per Contestant, including the two built-in sets.
 
 ```json
 {
@@ -204,7 +195,7 @@ One bundle per Contestant, including the three built-in sets.
 }
 ```
 
-- `role` is one of `"model"`, `"tool"`, `"grid-baseline"`, `"human-reference"` or `"check-copy"`. `"check-copy"` is never ranked and is used only for Check Battles.
+- `role` is one of `"model"`, `"tool"`, `"human-reference"` or `"check-copy"`. `"check-copy"` is never ranked and is used only for Check Battles.
 - `status` is one of `"valid"`, `"not-equivalent"`, `"unreadable"` or `"missing"`. For `missing`, `project`, `svg` and `netlist` are `null`; for `unreadable`, `svg` and `netlist` may be `null`.
 - `items` holds exactly one entry per Task in the pack. Files named after an unknown Task id are reported by the tool and left out of the bundle.
 - Every bundle in a Season must carry the same `rendererVersion` and `taskPackHash`. Arena rejects a bundle whose renderer version differs from the Season's, with a clear message. Changing the renderer means rebuilding every bundle.

@@ -1,25 +1,13 @@
-// The two Project sets the Season tool draws itself (#1560): the Grid
-// Baseline from the Task netlist alone, and the Check Battle copy from the
-// Human Reference. Both are drawn through the editor's own Agent host, as an
-// Agent would draw them, so they are ordinary Projects in every respect.
+// The Project set the Season tool draws itself (#1560): the Check Battle copy
+// of the Human Reference. It is drawn through the editor's own Agent host, as
+// an Agent would draw it, so it is an ordinary Project in every respect.
 import {
   createLocalEditor,
   exportNetlist,
   gradeNetlists,
-  importSpiceSources,
   seededRandom,
-  withImportedInstanceDisplays,
   withSeededIds,
 } from "./editor.mjs";
-
-/** How far a Grid Baseline's stub reaches out of its pin: two grid steps. */
-const STUB_LENGTH = 20;
-/**
- * Actions per call. A transaction holds at most 64 edits, and a wire takes
- * two; a pins snapshot reads at most 64 instances.
- */
-const ACTIONS_PER_CALL = 32;
-const SNAPSHOT_INSTANCES = 64;
 
 function transact(editor, actions, tag) {
   const document = editor.controller.document;
@@ -34,103 +22,6 @@ function transact(editor, actions, tag) {
     actions,
   });
   return answer.ok ? null : (answer.error?.message ?? "refused");
-}
-
-/**
- * The Grid Baseline for a Task: the editor's structural SPICE import of the
- * Task netlist, which sets the devices on a grid with each Cell Pin beside
- * them, and then a short stub on every drawn device pin carrying a Net Label
- * that names the pin's Net. Nothing else joins the devices.
- *
- * @param {string} taskId
- * @param {string} netlist
- */
-export function drawGridBaseline(taskId, netlist) {
-  return withSeededIds(`grid-baseline:${taskId}`, async () => {
-    const path = `${taskId}.sp`;
-    const imported = await importSpiceSources(
-      [{ path, bytes: new TextEncoder().encode(netlist) }],
-      path,
-    );
-    if (!imported.successful || !imported.project)
-      throw new Error(
-        `The structural SPICE import failed: ${
-          imported.diagnostics.find((item) => item.severity === "error")
-            ?.message ?? "no Project"
-        }`,
-      );
-    const project = withImportedInstanceDisplays(imported.project);
-    const document = project.documents.find(
-      (candidate) => candidate.id === project.topDocumentId,
-    );
-    const names = new Map(
-      document.importReference.nets.map((net) => [net.id, net.name]),
-    );
-    const netOfPin = new Map();
-    for (const net of document.nets)
-      for (const terminal of net.terminals)
-        netOfPin.set(`${terminal.instanceId}\u0000${terminal.pinName}`, net.id);
-    const editor = createLocalEditor({ project });
-    const devices = document.instances
-      .filter((instance) => instance.symbolId !== "port")
-      .map((instance) => instance.id);
-    const wires = [];
-    const labels = [];
-    for (let start = 0; start < devices.length; start += SNAPSHOT_INSTANCES) {
-      const snapshot = editor.circuit({
-        apiVersion: "3.0",
-        requestId: `pins-${start}`,
-        operation: "snapshot",
-        documentId: document.id,
-        projection: "pins",
-        instanceIds: devices.slice(start, start + SNAPSHOT_INSTANCES),
-      });
-      if (!snapshot.ok)
-        throw new Error(
-          `The pins could not be read: ${snapshot.error.message}`,
-        );
-      for (const instance of snapshot.instances) {
-        for (const pin of instance.pins) {
-          const netId = netOfPin.get(`${instance.id}\u0000${pin.name}`);
-          // Hidden pins (a body tied by the Cell's default) stay undrawn.
-          if (pin.visibility !== "visible" || !pin.connection || !netId)
-            continue;
-          const { gridLanding, outward } = pin.connection;
-          const ref = {
-            kind: "pin",
-            instance: { kind: "instance", id: instance.id },
-            pin: pin.name,
-          };
-          wires.push({
-            kind: "connect",
-            from: ref,
-            to: {
-              kind: "point",
-              x: gridLanding.x + (outward?.x ?? 0) * STUB_LENGTH,
-              y: gridLanding.y + (outward?.y ?? 0) * STUB_LENGTH,
-            },
-          });
-          labels.push({
-            kind: "add-label",
-            target: ref,
-            text: names.get(netId),
-          });
-        }
-      }
-    }
-    let call = 0;
-    for (const batch of [wires, labels])
-      for (let start = 0; start < batch.length; start += ACTIONS_PER_CALL) {
-        const refused = transact(
-          editor,
-          batch.slice(start, start + ACTIONS_PER_CALL),
-          `grid-${(call += 1)}`,
-        );
-        if (refused)
-          throw new Error(`The editor refused a labelled stub: ${refused}`);
-      }
-    return editor.project;
-  });
 }
 
 /** Places a Check copy tries for one part before leaving it where it is. */

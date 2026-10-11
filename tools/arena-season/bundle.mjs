@@ -22,7 +22,6 @@ export const CONTRACT_VERSION = 1;
 export const CONTESTANT_ROLES = [
   "model",
   "tool",
-  "grid-baseline",
   "human-reference",
   "check-copy",
 ];

@@ -1,6 +1,6 @@
 // The Season tool (#1560): the Owner's list of chosen Gallery circuits
-// becomes a Season's Task pack and the three Project sets every Season
-// shows (Human Reference, Grid Baseline, Check Battle copy), and a model's
+// becomes a Season's Task pack and the two Project sets every Season
+// shows (Human Reference, Check Battle copy), and a model's
 // folder of drawings becomes its Contestant bundle. The tool never chooses
 // circuits: every problem it finds is reported for the Owner to resolve,
 // and a list with a problem builds nothing.
@@ -32,14 +32,13 @@ import {
   AI_AUTHOR_NAMES,
   exportNetlist,
   gradeNetlists,
-  importSpiceSources,
   parseProject,
   serializeProject,
   sha256,
 } from "./editor.mjs";
 import { netlistGraphHash } from "./graph-hash.mjs";
 import { parseOwnerList, parseSplit } from "./list.mjs";
-import { drawCheckCopy, drawGridBaseline } from "./projects.mjs";
+import { drawCheckCopy } from "./projects.mjs";
 
 export { checkContestant };
 
@@ -48,13 +47,12 @@ const GALLERY_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
 const BUILD_OUTPUTS = [
   "task-pack",
   "human-reference",
-  "grid-baseline",
   "check-copy",
   "season-exclusions.json",
 ];
 const NO_CLASS = "(none)";
 
-/** The three Project sets a build draws, as Contestant bundles. */
+/** The two Project sets a build writes, as Contestant bundles. */
 const BUILT_IN = [
   {
     slug: "human-reference",
@@ -66,17 +64,6 @@ const BUILT_IN = [
     harness: "Analog Canvas editor (the author's Gallery drawing)",
     protocolDeclaration:
       "The author's original Gallery Project, unchanged; not drawn under the Drawing Protocol.",
-  },
-  {
-    slug: "grid-baseline",
-    role: "grid-baseline",
-    name: "Grid Baseline",
-    provider: "Analog Canvas",
-    modelId: "grid-baseline",
-    reasoning: "none",
-    harness: "arena-season build: structural SPICE import on a grid",
-    protocolDeclaration:
-      "Drawn by the Season tool from the Task netlist alone: the structural SPICE import set on a grid, joined only by net labels; no human edits.",
   },
   {
     slug: "check-copy",
@@ -200,19 +187,6 @@ async function checkEntry(row, exportDir) {
       }`,
     );
     return { result };
-  }
-  // The Grid Baseline is this import; a netlist it cannot read has none.
-  const imported = await importSpiceSources(
-    [{ path: "task.sp", bytes: new TextEncoder().encode(exported.text) }],
-    "task.sp",
-  );
-  if (!imported.successful) {
-    const errors = imported.diagnostics.filter(
-      (item) => item.severity === "error",
-    );
-    result.problems.push(
-      `The structural SPICE import cannot read its netlist, so it can have no Grid Baseline: ${errors[0]?.message ?? "no Project"}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ""}`,
-    );
   }
   result.devices = self.details.devices.reference;
   if (!(result.devices >= 1))
@@ -423,7 +397,6 @@ export async function buildSeason({
 
     const sets = {
       "human-reference": new Map(),
-      "grid-baseline": new Map(),
       "check-copy": new Map(),
     };
     for (const [index, { entry, netlist }] of tasks.entries()) {
@@ -436,15 +409,6 @@ export async function buildSeason({
           status: "failed",
           reason: error.message,
         });
-      try {
-        const grid = await drawGridBaseline(entry.taskId, netlist);
-        sets["grid-baseline"].set(
-          entry.taskId,
-          new TextEncoder().encode(serializeProject(grid)),
-        );
-      } catch (error) {
-        failed("grid-baseline", error);
-      }
       try {
         const copy = await drawCheckCopy(entry.gallery, project, netlist);
         result.checkCopies.push({

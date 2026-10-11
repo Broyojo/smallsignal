@@ -287,13 +287,9 @@ function expectBundle(dir, pack) {
   );
   for (const value of Object.values(manifest.contestant))
     expect(typeof value).toBe("string");
-  expect([
-    "model",
-    "tool",
-    "grid-baseline",
-    "human-reference",
-    "check-copy",
-  ]).toContain(manifest.contestant.role);
+  expect(["model", "tool", "human-reference", "check-copy"]).toContain(
+    manifest.contestant.role,
+  );
   expect(manifest.items.map((item) => item.taskId)).toEqual(
     pack.manifest.tasks.map((task) => task.id),
   );
@@ -455,11 +451,8 @@ describe("Season tool (#1560)", () => {
       "T010 amp5": [
         expect.stringMatching(/^Listed twice: also on line 1 \(T001\)/u),
       ],
-      "T011 switched": [
-        expect.stringMatching(
-          /^The structural SPICE import cannot read its netlist, so it can have no Grid Baseline/u,
-        ),
-      ],
+      // A netlist the structural SPICE import cannot read is no problem.
+      "T011 switched": [],
       "T012 bare": ["No devices: it has 0"],
     });
     expect(report.ok).toBe(false);
@@ -511,7 +504,7 @@ describe("Season tool (#1560)", () => {
       ).text,
     );
     const renderers = new Set();
-    for (const slug of ["human-reference", "grid-baseline", "check-copy"]) {
+    for (const slug of ["human-reference", "check-copy"]) {
       const bundle = expectBundle(join(out, slug), pack);
       expect(bundle.contestant).toMatchObject({ slug, role: slug, date: DATE });
       expect(bundle.items.map((item) => item.status)).toEqual([
@@ -544,7 +537,7 @@ describe("Season tool (#1560)", () => {
 
   it("draws every Project equivalent to its Task: the grader says so, with source polarity on", async () => {
     const out = join(work, "out");
-    for (const slug of ["human-reference", "grid-baseline", "check-copy"])
+    for (const slug of ["human-reference", "check-copy"])
       for (const id of ["T001", "T002", "T003", "T004"]) {
         const project = parseProject(
           readFileSync(join(out, slug, `${id}.icproj.json`), "utf8"),
@@ -558,7 +551,7 @@ describe("Season tool (#1560)", () => {
       }
   });
 
-  it("joins the Grid Baseline's devices only by net labels, and moves the Check copy's parts", () => {
+  it("moves the Check copy's parts", () => {
     const out = join(work, "out");
     const read = (slug, id) => {
       const project = JSON.parse(
@@ -567,15 +560,6 @@ describe("Season tool (#1560)", () => {
       return project.documents[0];
     };
     for (const id of ["T001", "T002"]) {
-      const grid = read("grid-baseline", id);
-      const terminals = (end) => (end && "terminal" in end ? 1 : 0);
-      expect(grid.routes.length).toBeGreaterThan(0);
-      for (const route of grid.routes)
-        expect(terminals(route.start) + terminals(route.end)).toBe(1);
-      expect(
-        grid.annotations.filter((label) => label.kind === "net-label"),
-      ).toHaveLength(grid.routes.length);
-
       const reference = read("human-reference", id);
       const copy = read("check-copy", id);
       const at = (document) =>
@@ -751,9 +735,9 @@ describe("Season tool (#1560)", () => {
       encoding: "utf8",
     }).stdout.trim();
     const pack = expectTaskPack(join(out, "task-pack"));
-    expect(expectBundle(join(out, "grid-baseline"), pack).rendererVersion).toBe(
-      head,
-    );
+    expect(
+      expectBundle(join(out, "human-reference"), pack).rendererVersion,
+    ).toBe(head);
 
     const info = join(work, "info.json");
     writeFileSync(
