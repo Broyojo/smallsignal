@@ -82,6 +82,25 @@ describe("route resource preload", () => {
     expect(script).toBeLessThan(html.indexOf('type="module"'));
   });
 
+  it("runs before a stylesheet that precedes the entry script", () => {
+    const stylesheet =
+      '<link rel="stylesheet" crossorigin href="/assets/index-12345678.css">';
+    const html = transform(
+      builtHead
+        .replace(`\n    ${stylesheet}`, "")
+        .replace(
+          '<script type="module"',
+          `${stylesheet}\n    <script type="module"`,
+        ),
+    );
+    const script = html.indexOf("<script>const galleryResources");
+    expect(html.indexOf('rel="stylesheet"')).toBeLessThan(
+      html.indexOf('type="module"'),
+    );
+    expect(script).toBeGreaterThan(html.indexOf("<title>"));
+    expect(script).toBeLessThan(html.indexOf('rel="stylesheet"'));
+  });
+
   it.each(["localhost", "127.0.0.1", "[::1]"])(
     "does not preload Gallery on ordinary %s, but keeps explicit replica support",
     (hostname) => {

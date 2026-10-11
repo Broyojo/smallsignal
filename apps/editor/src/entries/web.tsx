@@ -31,16 +31,17 @@ export function mountWebEditor() {
       default: module.WorkspaceAgentProvider,
     })),
   );
-  // Unpaired Gallery visitors must not download the Editor/Agent runtime.
-  const needsAgentWorkspace =
-    !/^\/(?:analytics|moderation|mine|account)?\/?$/.test(
-      window.location.pathname,
-    ) || hasAgentSessionRecovery(window.sessionStorage);
+  const startPath = window.location.pathname;
   // `/editor` and `/g/<id>`: every path no other page claims.
   const editorRoute =
-    !/^\/(?:analytics|moderation|privacy|account|mine)?\/?$/.test(
-      window.location.pathname,
-    );
+    !/^\/(?:analytics|moderation|privacy|account|mine)?\/?$/.test(startPath);
+  // Unpaired Gallery visitors must not download the Editor/Agent runtime.
+  // The editor routes load it with the editor; /privacy and a recovered
+  // Agent session hold it above the page.
+  const agentWorkspaceAbovePage =
+    !editorRoute &&
+    (/^\/privacy\/?$/.test(startPath) ||
+      hasAgentSessionRecovery(window.sessionStorage));
 
   const container = document.getElementById("root");
 
@@ -112,7 +113,7 @@ export function mountWebEditor() {
     guardedRouteChunk(() =>
       Promise.all([import("../app/App"), import("./web-editor")]).then(
         ([app, editor]) => ({
-          default: function EditorWorkspace(
+          default: function EditorRoute(
             props: ComponentProps<typeof WebEditorApp>,
           ) {
             return (
@@ -270,7 +271,7 @@ export function mountWebEditor() {
   createRoot(container).render(
     <StrictMode>
       <EditorErrorBoundary>
-        {needsAgentWorkspace && !editorRoute ? (
+        {agentWorkspaceAbovePage ? (
           <Suspense
             fallback={
               <div className="analytics-loading">Loading workspace…</div>
