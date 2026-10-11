@@ -17,7 +17,7 @@ import {
 } from "./manual-editor-fixtures.js";
 import { clickRoute, routeInk } from "./canvas-fixtures.js";
 
-test("styles a wire's colour, line and arrow through property code, with undo, export, reload and Auto", async ({
+test("styles a wire's colour, line and arrow through property code, with undo, export, reload and Auto, and names it globally in one step", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -135,6 +135,30 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
   await expect.poll(() => routeInk(page, "route-ui-1", "stroke")).toBe("#000");
   await expect(arrow).toHaveCount(0);
   expect(JSON.parse(await readComponentPropertyCode(page)).color).toBe("auto");
+
+  // A new name and global scope in one JSON edit land as one global name
+  // claim in one revision, and one Undo takes both back.
+  const revision = Number(await page.getByTestId("revision").textContent());
+  await editComponentPropertyCode(page, (code) => {
+    code.name = "SIGNAL";
+    code.net.scope = "global";
+  });
+  await expect(page.getByTestId("revision")).toHaveText(String(revision + 1));
+  expect(
+    (await exportedProject(page)).documents[0].connectivityEvidence,
+  ).toContainEqual(
+    expect.objectContaining({
+      kind: "name-claim",
+      name: "SIGNAL",
+      scope: "global",
+      owner: { kind: "net-label", annotationId: "net-label-route-ui-1" },
+    }),
+  );
+  await page.getByTestId("draw-tool-undo").click();
+  expect(JSON.parse(await readComponentPropertyCode(page))).toMatchObject({
+    name: "",
+    net: { scope: "local" },
+  });
 });
 
 test("Shift-click gathers wires, and one color change restyles all of them", async ({

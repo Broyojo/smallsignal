@@ -1,9 +1,12 @@
+import { createEmptyProject } from "@icm/model";
 import {
   chooseComponent,
   clickDrawTool,
   placeText,
   clickCommand,
+  editDocumentStyleCode,
   openMenu,
+  openProject,
 } from "./editor-fixtures";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -12,6 +15,8 @@ async function captureImageClipboard(page: Page): Promise<void> {
     Object.defineProperty(navigator.clipboard, "write", {
       configurable: true,
       value: async (items: ClipboardItem[]) => {
+        if ((window as unknown as { denyClipboard?: boolean }).denyClipboard)
+          throw new DOMException("Denied", "NotAllowedError");
         const item = items[0]!;
         const mime = item.types[0]!;
         const blob = await item.getType(mime);
@@ -155,9 +160,117 @@ test("drafting shapes, text and device labels join device selection from either 
   await expect(page.getByTestId("status")).toContainText(
     "Aligned 2 selected objects",
   );
+
+  // Pressing the text member drags the whole mixed selection as one body,
+  // and one Undo puts both back.
+  const instanceBefore = (await instance.boundingBox())!;
+  const textBefore = (await text.boundingBox())!;
+  const grab = {
+    x: textBefore.x + textBefore.width / 2,
+    y: textBefore.y + textBefore.height / 2,
+  };
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x + 80, grab.y + 60, { steps: 4 });
+  await page.mouse.up();
+  const instanceAfter = (await instance.boundingBox())!;
+  const textAfter = (await text.boundingBox())!;
+  // Smart Snap may hold either axis; the contract is one shared translation.
+  const shift = {
+    x: instanceAfter.x - instanceBefore.x,
+    y: instanceAfter.y - instanceBefore.y,
+  };
+  expect(Math.hypot(shift.x, shift.y)).toBeGreaterThan(0);
+  expect(textAfter.x - textBefore.x).toBeCloseTo(shift.x, 0);
+  expect(textAfter.y - textBefore.y).toBeCloseTo(shift.y, 0);
+  await expect(instance).toHaveClass(/selected/);
+  await expect(text).toHaveClass(/selected/);
+  await page.keyboard.press("ControlOrMeta+Z");
+  expect((await instance.boundingBox())!.x).toBeCloseTo(instanceBefore.x, 0);
+  expect((await text.boundingBox())!.x).toBeCloseTo(textBefore.x, 0);
 });
 
-test("visual clipboard copies a mixed selection as its formal SVG and a lone Wire as a transparent PNG, without touching history", async ({
+// Grid 10 is the strict case: y 325 lies off it, so a stray grid snap shows.
+// Text alignment never reads the annotation grid.
+test("bottom alignment lines up drawn text bottoms off the grid, a repeat is a no-op, and Undo/Redo reverse it", async ({
+  page,
+}) => {
+  const project = createEmptyProject("align-labels", "Align labels");
+  const positions = [
+    { x: 175, y: 322 },
+    { x: 295, y: 325 },
+    { x: 400, y: 323 },
+  ];
+  project.documents[0]!.drafting = {
+    objects: positions.map((position, index) => ({
+      id: `label-${index + 1}`,
+      kind: "text",
+      anchor: { kind: "free", position },
+      content: {
+        runs: [
+          { kind: "text", value: "X" },
+          {
+            kind: "span",
+            style: "subscript",
+            children: [{ kind: "text", value: String(index + 1) }],
+          },
+        ],
+      },
+      alignment: "middle",
+      rotation: 0,
+      typographyToken: "label",
+      zIndex: 0,
+      locked: false,
+    })),
+  };
+  await openProject(page, project);
+  const labels = page.locator('[data-testid^="drafting-hit-label-"]');
+  await expect(labels).toHaveCount(3);
+  await editDocumentStyleCode(page, (code) => {
+    code.canvas.annotationGrid = 10;
+  });
+  const labelRects = () =>
+    labels.evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = (element as SVGGraphicsElement).getBBox();
+        return { x: bounds.x, y: bounds.y, bottom: bounds.y + bounds.height };
+      }),
+    );
+  const before = await labelRects();
+  for (let index = 0; index < 3; index += 1)
+    await labels.nth(index).click({ modifiers: index === 0 ? [] : ["Shift"] });
+  const alignBottom = async () => {
+    await labels.last().click({ button: "right" });
+    await page.getByTestId("context-align-bottom").click();
+  };
+  await alignBottom();
+  await expect(page.getByTestId("status")).toContainText(
+    "Aligned 3 selected objects",
+  );
+  const after = await labelRects();
+  expect(after.map((rect) => rect.x)).toEqual(before.map((rect) => rect.x));
+  const bottoms = await page
+    .locator('[data-layer="drafting"] [data-kind="draft-text"]')
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = (element as SVGGraphicsElement).getBBox();
+        return bounds.y + bounds.height;
+      }),
+    );
+  expect(Math.max(...bottoms) - Math.min(...bottoms)).toBeLessThan(0.01);
+
+  // A second alignment is a true no-op; Undo still reverses the first one.
+  await alignBottom();
+  await expect(page.getByTestId("status")).toContainText(
+    "Selection is already aligned",
+  );
+  await page.keyboard.press("ControlOrMeta+z");
+  expect(await labelRects()).toEqual(before);
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  expect(await labelRects()).toEqual(after);
+});
+
+test("visual clipboard copies a mixed selection as its formal SVG and a lone Wire as a transparent PNG, reports a denied clipboard, and never touches history", async ({
   page,
 }) => {
   await captureImageClipboard(page);
@@ -265,6 +378,24 @@ test("visual clipboard copies a mixed selection as its formal SVG and a lone Wir
   expect(png.width).toBeGreaterThan(png.height);
   expect(png.cornerAlpha).toBe(0);
   expect(png.hasInk).toBe(true);
+
+  // A denied clipboard says so and never falls back to a download.
+  const downloads: string[] = [];
+  page.on("download", (download) =>
+    downloads.push(download.suggestedFilename()),
+  );
+  await page.evaluate(() => {
+    (window as unknown as { denyClipboard: boolean }).denyClipboard = true;
+  });
+  await (
+    await openMenu(page, "Edit")
+  )
+    .getByRole("button", { name: "Copy selection as PNG", exact: true })
+    .click();
+  await expect(page.getByTestId("status")).toContainText(
+    "Clipboard access was denied",
+  );
+  expect(downloads).toEqual([]);
   // Copying images recorded nothing: one Undo removes the wire.
   await page.keyboard.press("ControlOrMeta+Z");
   await expect(wire).toHaveCount(0);

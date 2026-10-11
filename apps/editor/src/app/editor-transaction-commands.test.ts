@@ -93,7 +93,8 @@ describe("editor transaction commands", () => {
 
   it.each([
     ["copy-placement", "active tool cancelled"],
-    // An Undo while a Wire is being drawn drops the Wire and says so.
+    // Any commit while a Wire is being drawn, an Undo say, drops the Wire
+    // and says so.
     ["wire", "Wire cancelled"],
   ] as const)(
     "cancels an unrelated %s after a successful commit",

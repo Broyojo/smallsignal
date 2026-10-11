@@ -1,4 +1,4 @@
-import { createEmptyProject, createRoutePath } from "@icm/model";
+import { createEmptyProject, createRoutePath, type Point } from "@icm/model";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
@@ -359,7 +359,7 @@ test("a middle press cycles the wire corner, even drifting under the hand, and n
   await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(1);
 });
 
-test("Wire options and / choose the corner without a middle button", async ({
+test("Wire options and / choose the corner without a middle button, and Enter finishes at the latest pointer", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -384,6 +384,36 @@ test("Wire options and / choose the corner without a middle button", async ({
   await expect(chip).toHaveText("Any angle · F3");
   await page.keyboard.press("/");
   await expect(chip).toHaveText("Orthogonal · F3");
+
+  // Enter finishes the wire at the latest pointer without waiting for a
+  // preview frame: the move and the key arrive in one task.
+  const canvas = page.getByTestId("schematic-canvas");
+  await canvas.click({ position: { x: 240, y: 200 } });
+  await canvas.evaluate((element) => {
+    const svg = element as SVGSVGElement;
+    const screen = new DOMPoint(500, 400).matrixTransform(svg.getScreenCTM()!);
+    svg.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: screen.x,
+        clientY: screen.y,
+        buttons: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+      }),
+    );
+    svg.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  });
+  const route = page.locator('[data-canvas-hit-kind="route"]');
+  await expect(route).toHaveCount(1);
+  const endpoint = await route.evaluate((element) => {
+    const points = (element as SVGPolylineElement).points;
+    const end = points.getItem(points.numberOfItems - 1);
+    return { x: end.x, y: end.y };
+  });
+  expect(endpoint).toEqual({ x: 500, y: 400 });
 });
 
 test("dragging a wire's end onto another wire joins them into one net", async ({
@@ -441,6 +471,122 @@ test("dragging a wire's end onto another wire joins them into one net", async ({
   // the landed end is joined, and the other three stay open.
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expectOnlyOpenWireEnds(page, 3);
+});
+
+test("a connected wire's segments drag with a live preview, a diagonal along the pointer's axis, a no-op drag records nothing, and a deleted part leaves its wires dangling", async ({
+  page,
+}) => {
+  await page.goto("/editor");
+  await placeComponent(page, "resistor", { x: 260, y: 200 });
+  await placeComponent(page, "resistor", { x: 560, y: 420 });
+  const ids = await instanceIds(page);
+  await page.keyboard.press("w");
+  await page.getByTestId(`terminal-${ids[0]}-2`).click();
+  // Two middle clicks: the opposite right angle, then 45 degrees.
+  const canvas = page.getByTestId("schematic-canvas");
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + 420, box.y + 320);
+  for (let click = 0; click < 2; click += 1) {
+    await page.mouse.down({ button: "middle" });
+    await page.mouse.up({ button: "middle" });
+  }
+  await expect(page.getByTestId("status")).toContainText("45° diagonal");
+  await page.getByTestId(`terminal-${ids[1]}-1`).click();
+  await page.keyboard.press("Escape");
+  await awaitCanvasSettled(canvas);
+
+  const wire = page.locator('[data-testid^="route-hit-"]');
+  const routeId = (await wire.getAttribute("data-testid"))!.replace(
+    "route-hit-",
+    "",
+  );
+  const drawn = page.locator(
+    `[data-layer="routes"] [data-object-id="${routeId}"]`,
+  );
+  const pointsOf = (line: Locator) =>
+    line.evaluate((element) =>
+      Array.from((element as SVGPolylineElement).points).map(({ x, y }) => ({
+        x,
+        y,
+      })),
+    );
+  const revision = () => page.getByTestId("revision").textContent();
+  const drag = async (
+    path: readonly { x: number; y: number }[],
+    during?: () => Promise<void>,
+  ) => {
+    const [first, ...rest] = await onScreen(canvas, path);
+    await page.mouse.move(first!.x, first!.y);
+    await page.mouse.down();
+    for (const point of rest)
+      await page.mouse.move(point.x, point.y, { steps: 8 });
+    await during?.();
+    await page.mouse.up();
+  };
+  // R1's pin, straight into the diagonal, then a leg across to R2's pin.
+  const [pin, corner, end] = (await pointsOf(wire)) as [Point, Point, Point];
+  expect(corner.x - pin.x).toBe(corner.y - pin.y);
+  expect(corner.y).toBe(end.y);
+
+  // Pulled mostly down, the diagonal moves along that axis: R1's lead jogs
+  // down and the diagonal slides along the leg to R2, keeping its angle.
+  const grab = { x: pin.x + 130, y: pin.y + 130 };
+  await drag([grab, { x: grab.x + 3, y: grab.y + 20 }]);
+  await expect(page.getByTestId("status")).toContainText("Moved route segment");
+  const jogged = [
+    pin,
+    { x: pin.x, y: pin.y + 20 },
+    { ...corner, x: corner.x - 20 },
+    end,
+  ];
+  expect(await pointsOf(wire)).toEqual(jogged);
+
+  // The connected leg to R2 drags too: both pins keep their ends, and the
+  // live preview is the wire the release commits, with no slanted leg
+  // closing it back to where it started.
+  const legMiddle = { x: (corner.x - 20 + end.x) / 2, y: end.y };
+  let preview: Point[] = [];
+  await drag([legMiddle, { x: legMiddle.x, y: legMiddle.y + 40 }], async () => {
+    await expect.poll(() => pointsOf(drawn)).not.toEqual(jogged);
+    preview = await pointsOf(drawn);
+  });
+  const moved = await pointsOf(wire);
+  expect(moved).toEqual(preview);
+  expect(moved[0]).toEqual(pin);
+  expect(moved.at(-1)).toEqual(end);
+  expect(
+    moved.every((point, index) => {
+      if (!index) return true;
+      const dx = Math.abs(point.x - moved[index - 1]!.x);
+      const dy = Math.abs(point.y - moved[index - 1]!.y);
+      return dx === 0 || dy === 0 || dx === dy;
+    }),
+  ).toBe(true);
+
+  // Away and back to where it started: nothing changed, so there is no new
+  // revision and no empty undo step.
+  const before = await revision();
+  const diagonal = moved.findIndex((point, index) => {
+    if (!index) return false;
+    const dx = Math.abs(point.x - moved[index - 1]!.x);
+    return dx > 0 && dx === Math.abs(point.y - moved[index - 1]!.y);
+  });
+  const middle = {
+    x: (moved[diagonal]!.x + moved[diagonal - 1]!.x) / 2,
+    y: (moved[diagonal]!.y + moved[diagonal - 1]!.y) / 2,
+  };
+  await drag([middle, { x: middle.x - 30, y: middle.y + 1 }, middle]);
+  await expect(page.getByTestId("status")).toContainText("unchanged");
+  expect(await revision()).toBe(before);
+  expect(await pointsOf(wire)).toEqual(moved);
+
+  // Deleting a connected part keeps its wires, now open where it was.
+  await page.getByTestId(`hit-${ids[0]}`).click();
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("status")).toContainText(
+    "connected wires remain dangling",
+  );
+  await expect(wire).toHaveCount(1);
 });
 
 test("the preview draws the wire the release commits, joining every compatible pin it crosses", async ({

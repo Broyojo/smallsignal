@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createEmptyProject, type SchematicDocument } from "@icm/model";
+import {
+  createEmptyProject,
+  createRoutePath,
+  type SchematicDocument,
+} from "@icm/model";
 import { builtInSymbols } from "@icm/symbols";
 
 import {
@@ -123,16 +127,46 @@ test("Analog Block hit boxes closely enclose browser-rendered artwork", async ({
   }
 });
 
-test("FD Amp blank space does not capture clicks; body and pins remain usable", async ({
+test("FD Amp blank space does not capture clicks, body and pins remain usable, and a wire beside a symbol body beats its box", async ({
   page,
 }) => {
-  await importInstances(page, [
-    {
-      id: "U1",
-      symbolId: "opamp-differential",
-      placement: { position: { x: 200, y: 200 }, rotation: 0, mirror: "none" },
+  await importInstances(
+    page,
+    [
+      {
+        id: "U1",
+        symbolId: "opamp-differential",
+        placement: {
+          position: { x: 200, y: 200 },
+          rotation: 0,
+          mirror: "none",
+        },
+      },
+      {
+        id: "R1",
+        symbolId: "resistor",
+        placement: { position: { x: 60, y: 320 }, rotation: 0, mirror: "none" },
+      },
+    ],
+    // A deliberate crossing, independent of the router's symbol avoidance.
+    (document) => {
+      document.nets.push({ id: "crossing-net", terminals: [] });
+      document.junctions.push(
+        { id: "cross-a", netId: "crossing-net", position: { x: 20, y: 330 } },
+        { id: "cross-b", netId: "crossing-net", position: { x: 100, y: 330 } },
+      );
+      document.routes.push(
+        createRoutePath({
+          id: "crossing-route",
+          netId: "crossing-net",
+          start: { kind: "junction", junctionId: "cross-a" },
+          end: { kind: "junction", junctionId: "cross-b" },
+          bends: [],
+          modes: ["manual"],
+        }),
+      );
     },
-  ]);
+  );
   // A one-symbol import auto-fits tightly. Leave room for the whole drag so
   // this checks object movement rather than edge-triggered canvas scrolling.
   for (let step = 0; step < 3; step += 1)
@@ -151,6 +185,25 @@ test("FD Amp blank space does not capture clicks; body and pins remain usable", 
     await page.mouse.move(to.x, to.y, { steps: 8 });
     await page.mouse.up();
   };
+  // A deliberate click on visible wire selects the wire even where the
+  // symbol's blank hit rectangle overlaps it; the body stays selectable.
+  const overlap = await screenPoint(page, 67, 330);
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document
+          .elementsFromPoint(x, y)
+          .map((element) => element.getAttribute("data-canvas-hit-kind")),
+      overlap,
+    ),
+  ).toEqual(expect.arrayContaining(["route", "instance"]));
+  await page.mouse.click(overlap.x, overlap.y);
+  await expect(page.getByTestId("status")).toContainText("Selected route");
+  await page.keyboard.press("Escape");
+  const body = await screenPoint(page, 60, 318);
+  await page.mouse.click(body.x, body.y);
+  await expect(page.getByTestId("hit-R1")).toHaveClass(/selected/);
+
   // This point is inside the old rectangular hit box but well above the
   // triangle edge and output leads.
   const blank = await screenPoint(page, 215, 175);
@@ -175,7 +228,8 @@ test("FD Amp blank space does not capture clicks; body and pins remain usable", 
   const end = await screenPoint(page, 100, 190);
   await page.mouse.dblclick(end.x, end.y);
   await page.keyboard.press("Escape");
-  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(1);
+  // The crossing wire, and the new wire from IN+.
+  await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(2);
 });
 
 test("enlarged Analog Block triangles leave clear space around internal letters in canvas and SVG", async ({

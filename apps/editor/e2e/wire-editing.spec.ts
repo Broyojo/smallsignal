@@ -10,6 +10,7 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { createRoutingDemoProject } from "../src/demos/routing-demo.js";
 import { clickRoute } from "./canvas-fixtures.js";
+import { openSelectionShelf } from "./manual-editor-fixtures.js";
 
 async function dragHandleToPoint(
   page: Page,
@@ -135,7 +136,7 @@ test("re-points a Wire end that is anchored to a pin", async ({ page }) => {
   expect(new Set(saved.routes.map((route) => route.netId)).size).toBe(1);
 });
 
-test("physically cuts an imported Route without reconnecting detached components through source guidance", async ({
+test("highlighting suppresses only that Net's imported guidance, and cutting an imported Route never reconnects through it", async ({
   page,
 }) => {
   const project = createRoutingDemoProject();
@@ -161,8 +162,24 @@ test("physically cuts an imported Route without reconnecting detached components
   ];
   await openProject(page, project);
 
+  const flightlines = page.getByTestId("flightline");
   await clickRoute(page, "route-imported-partial");
-  await expect(page.getByTestId("flightline")).toHaveCount(1);
+  await expect(flightlines).toHaveCount(1);
+  // All shows every Net's guidance again; highlighting the selected Net
+  // suppresses only that Net's.
+  await openSelectionShelf(page);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  await expect(flightlines).toHaveCount(2);
+  await page.keyboard.press("h");
+  await expect(page.getByTestId("net-highlight-overlay")).toHaveAttribute(
+    "data-net-id",
+    "net-h",
+  );
+  await expect(flightlines).toHaveCount(1);
+  await page.keyboard.press("h");
+  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
+  await expect(flightlines).toHaveCount(2);
+  await clickRoute(page, "route-imported-partial");
   await page.keyboard.press("Delete");
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(0);
   await expect(page.getByTestId("status")).toContainText(
