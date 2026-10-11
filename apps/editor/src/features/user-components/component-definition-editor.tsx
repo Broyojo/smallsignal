@@ -1,5 +1,13 @@
 import { planComponentDefinitionEdit } from "./component-definition-plan";
-import type { ComponentPublication } from "./component-publication";
+import {
+  publicationFromOrigin,
+  type ComponentPublication,
+} from "./component-publication";
+import {
+  saveLibraryComponent,
+  captureLibraryComponent as componentLibraryCapture,
+} from "./component-publication-host";
+import { componentPublicationContent } from "./component-publication-content";
 import { definitionError } from "./component-definition-error";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { InlineConfirm } from "../../components/inline-confirm";
@@ -38,18 +46,10 @@ import {
 } from "./component-library-contract";
 import {
   manageSharedComponent,
-  saveSharedComponent,
   readSharedComponent,
 } from "./component-library-client";
 import { ComponentLibraryError } from "./component-library-error";
-import {
-  saveNativeComponent,
-  readNativeComponent,
-} from "../../hosts/native-component-library";
-
-const saveLibraryComponent = import.meta.env?.ICM_DESKTOP
-  ? saveNativeComponent
-  : saveSharedComponent;
+import { readNativeComponent } from "../../hosts/native-component-library";
 const readLibraryComponent = import.meta.env?.ICM_DESKTOP
   ? readNativeComponent
   : readSharedComponent;
@@ -78,6 +78,9 @@ export interface ComponentDefinitionEditorProps {
   onSaveDefinitionDraft(text: string): string | null;
   onSaveLibraryDraft(text: string, entry?: SharedComponent): string | null;
   onManaged(): void;
+  onAssociateLibrary?(
+    payload: CircuitComponentPackage | { definition: ComponentDefinition },
+  ): string | null;
   onReloadLibrary(entry: SharedComponent): string | null;
   onPlaceCircuit(packaged: CircuitComponentPackage): void;
   onClose(): void;
@@ -116,14 +119,25 @@ export default function ComponentDefinitionEditor(
       (isLibraryAuthoringDraft(props.draft)
         ? readLibraryAuthoringDraft(props.draft!).publication
         : undefined) ?? {
-        kind:
-          props.entry && props.publicationIntent === "update"
-            ? "update"
-            : "new",
-        componentId:
-          props.entry && props.publicationIntent === "update"
-            ? props.entry.id
-            : crypto.randomUUID(),
+        ...(!import.meta.env?.ICM_DESKTOP &&
+        props.definition.libraryOrigin &&
+        props.mode === "instance" &&
+        !props.publicationIntent
+          ? {
+              kind: "update" as const,
+              componentId: props.definition.libraryOrigin.componentId,
+              expectedLibraryRevision: props.definition.libraryOrigin.revision,
+            }
+          : {
+              kind:
+                props.entry && props.publicationIntent === "update"
+                  ? ("update" as const)
+                  : ("new" as const),
+              componentId:
+                props.entry && props.publicationIntent === "update"
+                  ? props.entry.id
+                  : crypto.randomUUID(),
+            }),
       },
   );
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -131,13 +145,79 @@ export default function ComponentDefinitionEditor(
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [publicationConflict, setPublicationConflict] = useState(false);
+  const [duplicate, setDuplicate] = useState<{
+    id: string;
+    revision: number;
+  } | null>(null);
+  const [linkId, setLinkId] = useState("");
+  const originResolved = useRef(false);
+  const [originLoading, setOriginLoading] = useState(
+    () =>
+      !import.meta.env?.ICM_DESKTOP &&
+      !!props.definition.libraryOrigin &&
+      props.mode === "instance" &&
+      !props.publicationIntent &&
+      !isLibraryAuthoringDraft(props.draft),
+  );
+  useEffect(() => {
+    const origin = props.definition.libraryOrigin;
+    if (
+      import.meta.env?.ICM_DESKTOP ||
+      !authReady ||
+      !user ||
+      originResolved.current ||
+      props.publicationIntent ||
+      isLibraryAuthoringDraft(props.draft) ||
+      props.mode !== "instance" ||
+      !origin
+    )
+      return;
+    originResolved.current = true;
+    void readSharedComponent(origin.componentId)
+      .then((entry) => {
+        setRecord(entry);
+        setPublication(publicationFromOrigin(origin, entry, user));
+        if (entry.authorId === user.id || user.isAdmin) {
+          if (entry.revision !== origin.revision) {
+            setPublicationConflict(true);
+            setNotice(
+              "The published version changed. Review it before updating.",
+            );
+          }
+        }
+      })
+      .catch((error) => {
+        setPublicationConflict(true);
+        setNotice(definitionError(error));
+      })
+      .finally(() => setOriginLoading(false));
+  }, [
+    authReady,
+    user,
+    props.definition.libraryOrigin,
+    props.publicationIntent,
+    props.draft,
+    props.mode,
+  ]);
   const [pinNames, setPinNames] = useState(true);
   const [previewWarning, setPreviewWarning] = useState<string | null>(null);
   const libraryAuthoring = useLibraryCircuitAuthoring(
     record,
     (packaged) => {
-      props.onPlaceCircuit(packaged);
-      props.onClose();
+      const placed = record
+        ? componentLibraryCapture(record).then((captured) =>
+            props.onPlaceCircuit({
+              ...packaged,
+              definition: {
+                ...packaged.definition,
+                libraryOrigin: captured.definition.libraryOrigin!,
+              },
+            }),
+          )
+        : Promise.resolve(props.onPlaceCircuit(packaged));
+      void placed
+        .then(props.onClose)
+        .catch((error) => setNotice(definitionError(error)));
     },
     (text) => props.circuit!.onCopyText(text),
     {
@@ -327,7 +407,10 @@ export default function ComponentDefinitionEditor(
       user?.isAdmin ||
       (record.authorId === user?.id && record.status === "shared"));
   const id = publication.componentId;
-  const revision = publication.kind === "update" ? record!.revision : 0;
+  const revision =
+    publication.kind === "update"
+      ? (publication.expectedLibraryRevision ?? record?.revision ?? 0)
+      : 0;
   function requestLeave(action: () => void) {
     if (dirty) setPendingLeave(() => action);
     else action();
@@ -342,6 +425,9 @@ export default function ComponentDefinitionEditor(
       parsed.definition,
       crypto.randomUUID(),
     );
+    const origin =
+      localApplied?.libraryOrigin ?? props.definition.libraryOrigin;
+    if (origin) definition.libraryOrigin = origin;
     const error = latest.current.onApplyDefinition(
       definition,
       planComponentDefinitionEdit,
@@ -402,18 +488,6 @@ export default function ComponentDefinitionEditor(
       entry,
     );
   }
-  async function publicationOptions(payload: unknown) {
-    const fingerprint = JSON.stringify([id, revision, payload]);
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(fingerprint),
-    );
-    return {
-      idempotencyKey: [...new Uint8Array(digest)]
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join(""),
-    };
-  }
   function saveCircuitPublicationDraft(
     entry: SharedComponent | undefined,
     packaged: CircuitComponentPackage,
@@ -428,7 +502,23 @@ export default function ComponentDefinitionEditor(
         publication: destination,
         project: serializeProject(
           libraryAuthoring
-            ? native.project
+            ? {
+                ...native.project,
+                componentDefinitions: native.project.componentDefinitions?.map(
+                  (definition) =>
+                    definition.symbol.id === packaged.definition.symbol.id
+                      ? {
+                          ...definition,
+                          ...(packaged.definition.libraryOrigin
+                            ? {
+                                libraryOrigin:
+                                  packaged.definition.libraryOrigin,
+                              }
+                            : {}),
+                        }
+                      : definition,
+                ),
+              }
             : createCircuitComponentPackageProject(
                 packaged,
                 `publication-${id}`,
@@ -447,7 +537,9 @@ export default function ComponentDefinitionEditor(
         nativeDirty ||
         busy ||
         (!import.meta.env?.ICM_DESKTOP && !user) ||
-        record?.status === "deleted"
+        originLoading ||
+        publicationConflict ||
+        (publication.kind === "update" && !canUpdate)
       )
         return;
       setBusy(true);
@@ -467,30 +559,65 @@ export default function ComponentDefinitionEditor(
         );
         const pendingError = saveCircuitPublicationDraft(record, packaged);
         if (pendingError) throw Error(pendingError);
-        const saved = await saveLibraryComponent(
-          id,
+        const result = await saveLibraryComponent({
+          componentId: id,
           revision,
-          packaged.definition,
-          packaged.circuit,
-          await publicationOptions(packaged),
-        );
+          payload: packaged,
+        });
+        const saved = result.entry;
+        const captured = await componentLibraryCapture(saved);
+        const associationError = import.meta.env?.ICM_DESKTOP
+          ? null
+          : componentPublicationContent(packaged) !==
+              componentPublicationContent(captured)
+            ? "The local definition changed. Recover the published snapshot before associating."
+            : latest.current.onAssociateLibrary?.(captured);
         setRecord(saved);
-        setPublication({ kind: "update", componentId: saved.id });
-        const draftError = saveCircuitPublicationDraft(saved, packaged, {
+        setPublication({
           kind: "update",
           componentId: saved.id,
+          expectedLibraryRevision: saved.revision,
         });
+        const draftError = saveCircuitPublicationDraft(
+          saved,
+          {
+            ...packaged,
+            definition: associationError
+              ? packaged.definition
+              : {
+                  ...packaged.definition,
+                  libraryOrigin: captured.definition.libraryOrigin!,
+                },
+          },
+          {
+            kind: "update",
+            componentId: saved.id,
+            expectedLibraryRevision: saved.revision,
+          },
+        );
         latest.current.onManaged();
         setNotice(
-          draftError
-            ? `Saved to the ${import.meta.env?.ICM_DESKTOP ? "local" : "public"} library. Draft: ${draftError}`
-            : import.meta.env?.ICM_DESKTOP
-              ? "Saved to the local library."
-              : "Saved to the public library.",
+          import.meta.env?.ICM_DESKTOP
+            ? draftError
+              ? `Saved to the local library. Draft: ${draftError}`
+              : "Saved to the local library."
+            : associationError
+              ? `Published. Project association pending: ${associationError}`
+              : draftError
+                ? `Saved to the public library. Draft: ${draftError}`
+                : result.outcome === "unchanged"
+                  ? "Already up to date."
+                  : "Saved to the public library.",
         );
       } catch (error) {
+        if (
+          error instanceof ComponentLibraryError &&
+          error.code === "COMPONENT_ALREADY_PUBLISHED"
+        )
+          setDuplicate(error.existing ?? null);
         setPublicationConflict(
           error instanceof ComponentLibraryError &&
+            error.code !== "COMPONENT_ALREADY_PUBLISHED" &&
             [403, 409].includes(error.status),
         );
         setNotice(definitionError(error));
@@ -504,7 +631,9 @@ export default function ComponentDefinitionEditor(
       source !== localAppliedText ||
       busy ||
       (!import.meta.env?.ICM_DESKTOP && !user) ||
-      record?.status === "deleted"
+      originLoading ||
+      publicationConflict ||
+      (publication.kind === "update" && !canUpdate)
     )
       return;
     const conflict = latest.current.validateApply?.(
@@ -524,36 +653,61 @@ export default function ComponentDefinitionEditor(
         localAppliedText,
       );
       if (pendingError) throw Error(pendingError);
-      const saved = await saveLibraryComponent(
-        id,
+      const result = await saveLibraryComponent({
+        componentId: id,
         revision,
-        localApplied,
-        undefined,
-        await publicationOptions({ definition: localApplied }),
-      );
+        payload: { definition: localApplied },
+      });
+      const saved = result.entry;
+      const captured = await componentLibraryCapture(saved);
+      const associationError = import.meta.env?.ICM_DESKTOP
+        ? null
+        : componentPublicationContent({ definition: localApplied }) !==
+            componentPublicationContent(captured)
+          ? "The local definition changed. Recover the published snapshot before associating."
+          : latest.current.onAssociateLibrary?.(captured);
+      const associated = associationError
+        ? localApplied
+        : {
+            ...localApplied,
+            libraryOrigin: captured.definition.libraryOrigin!,
+          };
+      setLocalApplied(associated);
       setRecord(saved);
-      setPublication({ kind: "update", componentId: saved.id });
+      setPublication({
+        kind: "update",
+        componentId: saved.id,
+        expectedLibraryRevision: saved.revision,
+      });
       setBaseline(source);
       latest.current.onManaged();
-      const draftError = saveArtworkDraft(
-        saved,
-        localApplied,
-        localAppliedText,
-        {
-          kind: "update",
-          componentId: saved.id,
-        },
-      );
+      const draftError = saveArtworkDraft(saved, associated, localAppliedText, {
+        kind: "update",
+        componentId: saved.id,
+        expectedLibraryRevision: saved.revision,
+      });
       setNotice(
-        draftError
-          ? `Saved to the ${import.meta.env?.ICM_DESKTOP ? "local" : "public"} library. Draft: ${draftError}`
-          : import.meta.env?.ICM_DESKTOP
-            ? "Saved to the local library."
-            : "Published to the public library.",
+        import.meta.env?.ICM_DESKTOP
+          ? draftError
+            ? `Saved to the local library. Draft: ${draftError}`
+            : "Saved to the local library."
+          : associationError
+            ? `Published. Project association pending: ${associationError}`
+            : draftError
+              ? `Published to the public library. Draft: ${draftError}`
+              : result.outcome === "unchanged"
+                ? "Already up to date."
+                : "Published to the public library.",
       );
     } catch (error) {
+      if (
+        error instanceof ComponentLibraryError &&
+        error.code === "COMPONENT_ALREADY_PUBLISHED"
+      )
+        setDuplicate(error.existing ?? null);
       setPublicationConflict(
         error instanceof ComponentLibraryError &&
+          error.code !== "COMPONENT_ALREADY_PUBLISHED" &&
           [403, 409].includes(error.status),
       );
       setNotice(definitionError(error));
@@ -582,18 +736,81 @@ export default function ComponentDefinitionEditor(
       setBusy(false);
     }
   }
+  async function associateExisting(
+    componentId: string,
+    expectedRevision?: number,
+  ) {
+    setBusy(true);
+    try {
+      const entry = await readSharedComponent(componentId);
+      if (expectedRevision !== undefined && entry.revision !== expectedRevision)
+        throw Error(
+          "The existing component changed. Review it before associating.",
+        );
+      const captured = await componentLibraryCapture(entry);
+      const candidate =
+        native && nativeDefinitionId
+          ? buildCircuitComponentPackage(
+              native.project,
+              nativeDefinitionId,
+              native.symbolId,
+            )
+          : localApplied
+            ? { definition: localApplied }
+            : null;
+      if (
+        !candidate ||
+        componentPublicationContent(candidate) !==
+          componentPublicationContent(captured)
+      )
+        throw Error(
+          "Apply the matching definition before associating this publication.",
+        );
+      const error = latest.current.onAssociateLibrary?.(captured);
+      if (error) throw Error(error);
+      const destination: ComponentPublication =
+        entry.authorId === user?.id || user?.isAdmin
+          ? {
+              kind: "update",
+              componentId: entry.id,
+              expectedLibraryRevision: entry.revision,
+            }
+          : publication;
+      const applied = localApplied
+        ? { ...localApplied, libraryOrigin: captured.definition.libraryOrigin! }
+        : null;
+      setRecord(entry);
+      setPublication(destination);
+      setDuplicate(null);
+      setLocalApplied(applied);
+      const draftError = native
+        ? saveCircuitPublicationDraft(
+            entry,
+            captured as CircuitComponentPackage,
+            destination,
+          )
+        : saveArtworkDraft(entry, applied, localAppliedText, destination);
+      setNotice(draftError ?? "Using the existing publication.");
+    } catch (error) {
+      setNotice(definitionError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
   const publishAction = (
     <button
       type="button"
       className="primary"
       disabled={
         (!import.meta.env?.ICM_DESKTOP && (!authReady || !user)) ||
+        originLoading ||
+        publicationConflict ||
         (publication.kind === "update" && !canUpdate) ||
         (native
           ? !nativeReady || nativeDirty
           : !localApplied || source !== localAppliedText) ||
         busy ||
-        record?.status === "deleted"
+        (publication.kind === "update" && record?.status === "deleted")
       }
       onClick={() => void save()}
     >
@@ -914,6 +1131,66 @@ export default function ComponentDefinitionEditor(
           </p>
           {notice ? <p role="status">{notice}</p> : null}
         </>
+      ) : null}
+      {!import.meta.env?.ICM_DESKTOP && (
+        <div
+          className="component-publication-destination"
+          role="group"
+          aria-label="Publication destination"
+        >
+          <small>
+            {publication.kind === "new"
+              ? "New component"
+              : "Updating my component"}
+          </small>
+          <details>
+            <summary>Details</summary>
+            <code>{id}</code>
+            {revision ? <span> · Revision {revision}</span> : null}
+            {props.mode === "instance" && !props.definition.libraryOrigin ? (
+              <label>
+                Existing component ID{" "}
+                <input
+                  value={linkId}
+                  onChange={(event) => setLinkId(event.currentTarget.value)}
+                />
+                <button
+                  type="button"
+                  disabled={busy || !linkId}
+                  onClick={() => void associateExisting(linkId)}
+                >
+                  Associate existing
+                </button>
+              </label>
+            ) : null}
+          </details>
+        </div>
+      )}
+      {!import.meta.env?.ICM_DESKTOP && duplicate ? (
+        <div
+          className="component-definition-actions"
+          role="group"
+          aria-label="Existing publication"
+        >
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void associateExisting(duplicate.id, duplicate.revision)
+            }
+          >
+            Use existing
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDuplicate(null);
+              setNotice(null);
+            }}
+          >
+            Continue editing
+          </button>
+        </div>
       ) : null}
       {publicationConflict ||
       (record &&
