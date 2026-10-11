@@ -3,12 +3,10 @@
  * Junctions, annotation room and ink, and drafting objects.
  */
 import {
-  contactRequiresJunctionDot,
   objectStyleProfile,
   resolveDraftingObjectGeometry,
 } from "@icm/derived";
 import type {
-  DocumentContactEvidence,
   ResolvedDocumentRoutingGeometry,
   SchematicStyleProfile,
 } from "@icm/derived";
@@ -106,7 +104,7 @@ export function deriveBounds(
   document: SchematicDocument,
   resolver: SymbolResolver,
   routingGeometry: ResolvedDocumentRoutingGeometry,
-  contactEvidence: DocumentContactEvidence,
+  dottedJunctionIds: ReadonlySet<string>,
   margin: number,
   annotations: readonly ResolvedSvgAnnotation[],
   profile: SchematicStyleProfile,
@@ -157,24 +155,11 @@ export function deriveBounds(
       bounds.push({ x: point.x, y: point.y, width: 0, height: 0 });
     }
   }
-  // A Junction is ink only where it draws a dot or a Route meets it; one
-  // left unconnected draws nothing and must not widen the drawing (#1637).
-  const inkedJunctionIds = new Set(
-    contactEvidence.contacts
-      .filter(
-        (contact) =>
-          contactRequiresJunctionDot(contact) ||
-          contact.incidents.some((incident) => incident.kind === "route"),
-      )
-      .flatMap((contact) =>
-        contact.endpoints.flatMap((endpoint) =>
-          endpoint.kind === "junction" ? [endpoint.junctionId] : [],
-        ),
-      ),
-  );
+  // A Route's own points cover the Junctions it meets; a Junction adds ink
+  // only by its dot, and one that draws nothing never widens a drawing (#1637).
   for (const junction of document.junctions) {
     if (objectIds && !objectIds.has(junction.id)) continue;
-    if (!inkedJunctionIds.has(junction.id)) continue;
+    if (!dottedJunctionIds.has(junction.id)) continue;
     bounds.push({
       x: junction.position.x,
       y: junction.position.y,

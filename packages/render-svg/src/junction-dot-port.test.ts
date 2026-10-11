@@ -3,7 +3,7 @@ import type { SchematicDocument } from "@icm/model";
 import { InMemorySymbolResolver, builtInSymbols } from "@icm/symbols";
 import { describe, expect, it } from "vitest";
 
-import { renderDocumentSvg } from "./render.js";
+import { buildSvgScene, renderDocumentSvg } from "./render.js";
 
 const resolver = new InMemorySymbolResolver(builtInSymbols);
 
@@ -241,5 +241,51 @@ describe("junction dots at Port pins", () => {
     // Exactly the tee's own dot; no second dot at the Port terminus.
     expect((layer.match(/<circle/gu) ?? []).length).toBe(1);
     expect(layer).not.toContain('data-object-id="P1"');
+  });
+});
+
+describe("Junctions in the SVG bounds (#1637)", () => {
+  // The leftover: a Junction no Route meets, far right of the circuit, and a
+  // Net anchored only to it.
+  function withStrayJunction(): SchematicDocument {
+    const document = tee(false);
+    document.nets.push({ id: "net-stray", terminals: [] });
+    document.junctions.push({
+      id: "J-stray",
+      netId: "net-stray",
+      position: { x: 2190, y: 210 },
+      role: "branch",
+    });
+    return document;
+  }
+
+  it("leaves out a Junction that draws nothing and its lone Net", () => {
+    const scene = buildSvgScene(withStrayJunction(), resolver);
+    expect(scene.formalBody).not.toContain('data-object-id="J-stray"');
+    // The tee's ink: R1's turned 48x20 body from x 236 and y 210, the Port's
+    // 18-wide body to x 574, R2's upright body to y 424. Plus 40 each side.
+    expect(scene.viewBox).toEqual({ x: 196, y: 170, width: 418, height: 294 });
+  });
+
+  it("still counts a Junction that draws a branch dot", () => {
+    const scene = buildSvgScene(withStrayJunction(), resolver, {
+      objectIds: new Set(["J1"]),
+    });
+    expect(scene.formalBody).toContain('data-object-id="J1"');
+    // The dot's centre (420, 240) plus the 40-unit margin.
+    expect(scene.viewBox).toEqual({ x: 380, y: 200, width: 80, height: 80 });
+  });
+
+  it("leaves out a dotless through-Junction from a copy selection", () => {
+    // Without the tap J1 joins two collinear wires and draws no dot. Copying
+    // it with R2 but not the wires paints only R2.
+    const document = tee(false);
+    document.routes = document.routes.filter((route) => route.id !== "r-tap");
+    const scene = buildSvgScene(document, resolver, {
+      objectIds: new Set(["J1", "R2"]),
+    });
+    expect(scene.formalBody).not.toContain('data-object-id="J1"');
+    // R2's upright 20x48 body at (420, 400) plus the 40-unit margin.
+    expect(scene.viewBox).toEqual({ x: 370, y: 336, width: 100, height: 128 });
   });
 });
