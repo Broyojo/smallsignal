@@ -144,6 +144,7 @@ test("compacts the editor header at half width and keeps the account role in its
     page.getByRole("heading", { name: "Analog Canvas" }),
   ).toBeHidden();
   await expect(page.getByTestId("header-gallery-link")).toBeVisible();
+  await expect(page.getByTestId("header-arena-link")).toBeVisible();
   await expect(page.getByTestId("account-name")).toBeVisible();
   await expect(page.getByTestId("account-owner")).toBeHidden();
 
