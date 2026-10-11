@@ -23,6 +23,9 @@ on:
       - "packages/devices/**"
       - "packages/netlist/**"
       - "worker/simulation-ngspice.ts"
+      - "worker/simulation.ts"
+      - "packages/edit-engine/**"
+      - "packages/model/**"
       - "fixtures/simulation-acceptance/**"
       - "scripts/lib/preview-simulation-*.mjs"
   workflow_dispatch:
