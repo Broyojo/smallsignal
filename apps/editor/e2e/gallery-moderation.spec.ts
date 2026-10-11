@@ -1,52 +1,88 @@
 // Moderation: rejecting and withdrawing entries, the recycle bin, moderation
-// collections and pending visual reviews.
+// collections and pending visual reviews. A member's own withdrawal is in
+// gallery-account.spec.ts; the page holding no maintenance forms is the
+// ModerationContent module test.
 
 import { expect, test } from "./gallery-test.js";
-import { ENTRY, mockGallery } from "./gallery-fixtures.js";
+import {
+  ENTRY,
+  fulfillPreview,
+  mockGallery,
+  mockPreviews,
+  sessionUser,
+  signIn,
+} from "./gallery-fixtures.js";
 
-test("the Owner rejects a Gallery entry with an author-visible reason", async ({
+const OWNER = sessionUser({
+  id: "owner-1",
+  displayName: "Owner",
+  email: "owner@example.com",
+  isAdmin: true,
+});
+
+test("the Owner withdraws an entry from its tile menu and rejects another with an author-visible reason", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 360, height: 500 });
   let sessionRequests = 0;
   await page.route("**/api/auth/providers", (route) =>
     route.fulfill({ json: { github: true, google: false, email: false } }),
   );
   await page.route("**/api/auth/me", (route) => {
     sessionRequests += 1;
-    return route.fulfill({
-      json: {
-        user: {
-          id: "owner-1",
-          displayName: "Owner",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    });
+    return route.fulfill({ json: { user: OWNER } });
   });
-  await mockGallery(page, [ENTRY]);
+  const other = { ...ENTRY, id: "g-other", name: "Other circuit" };
+  await mockGallery(page, [ENTRY, other]);
+  await mockPreviews(page);
+  const calls: string[] = [];
   let rejectReason = "";
-  await page.route(`**/api/gallery/${ENTRY.id}/reject`, async (route) => {
-    rejectReason = (route.request().postDataJSON() as { reason: string })
-      .reason;
-    await route.fulfill({ json: { id: ENTRY.id, status: "rejected" } });
+  await page.route("**/api/gallery/*/{recycle,reject}", async (route) => {
+    const [, , , id, action] = new URL(route.request().url()).pathname.split(
+      "/",
+    );
+    calls.push(`${action} ${id}`);
+    if (action === "reject")
+      rejectReason = (route.request().postDataJSON() as { reason: string })
+        .reason;
+    await route.fulfill({ json: { id } });
   });
 
   await page.goto("/");
   const menu = page.getByTestId(`gallery-owner-menu-${ENTRY.id}`);
   await expect(menu).toBeVisible();
   expect(sessionRequests).toBe(1);
+  // On a phone the menu stays inside the window.
   await menu.locator("summary").click();
+  await expect
+    .poll(async () =>
+      menu.locator(".gallery-owner-popover").evaluate((popover) => {
+        const rect = popover.getBoundingClientRect();
+        return (
+          rect.left >= 0 &&
+          rect.right <= innerWidth &&
+          rect.top >= 0 &&
+          rect.bottom <= innerHeight
+        );
+      }),
+    )
+    .toBe(true);
   await expect(
     page.getByTestId(`gallery-owner-edit-${ENTRY.id}`),
   ).toHaveAttribute("href", `/g/${ENTRY.id}`);
-  await menu.locator("summary").click();
+  // Withdrawing is undone from the recycle bin, so it asks nothing more.
+  await page.getByTestId(`gallery-owner-withdraw-${ENTRY.id}`).click();
+  await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toHaveCount(0);
+  await expect(page.getByTestId("gallery-owner-notice")).toContainText(
+    "recycle bin",
+  );
 
   // Rejection is a direct card action, beside the management menu.
-  await page.getByTestId(`gallery-owner-reject-${ENTRY.id}`).click();
-  await expect(page.getByTestId("gallery-owner-reject-confirm")).toBeDisabled();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByTestId(`gallery-owner-reject-${other.id}`).click();
+  const confirm = page.getByTestId("gallery-owner-reject-confirm");
+  const note = page.getByTestId("gallery-owner-reject-note");
+  await expect(confirm).toBeDisabled();
   for (const reason of [
     "too ugly",
     "circuit incorrect",
@@ -60,199 +96,33 @@ test("the Owner rejects a Gallery entry with an author-visible reason", async ({
     ).toBeVisible();
   }
   // A free-form other reason is independently sufficient.
-  await page.getByTestId("gallery-owner-reject-note").fill("Other reason");
-  await expect(page.getByTestId("gallery-owner-reject-confirm")).toBeEnabled();
-  await page.getByTestId("gallery-owner-reject-note").fill("");
-  await expect(page.getByTestId("gallery-owner-reject-confirm")).toBeDisabled();
+  await note.fill("Other reason");
+  await expect(confirm).toBeEnabled();
+  await note.fill("");
+  await expect(confirm).toBeDisabled();
 
   await page.getByTestId("gallery-owner-reject-option-too-ugly").check();
   await page
     .getByTestId("gallery-owner-reject-option-circuit-incorrect")
     .check();
-  await expect(page.getByTestId("gallery-owner-reject-confirm")).toBeEnabled();
-  await page
-    .getByTestId("gallery-owner-reject-note")
-    .fill("Label the ports and remove the loose wire.");
-  await page.getByTestId("gallery-owner-reject-confirm").click();
+  await expect(confirm).toBeEnabled();
+  await note.fill("Label the ports and remove the loose wire.");
+  await confirm.click();
 
-  await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toHaveCount(0);
+  await expect(page.getByTestId(`gallery-tile-${other.id}`)).toHaveCount(0);
   await expect(page.getByTestId("gallery-owner-notice")).toContainText(
     "rejected",
   );
   expect(rejectReason).toBe(
     "too ugly; circuit incorrect — Note: Label the ports and remove the loose wire.",
   );
+  expect(calls).toEqual([`recycle ${ENTRY.id}`, `reject ${other.id}`]);
 });
 
-test("the Owner withdraws a Gallery entry into the recycle bin", async ({
+test("the Owner restores, recycles or deletes rejected and binned work in one click each", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 360, height: 500 });
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "owner-1",
-          displayName: "Owner",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
-  await mockGallery(page, [ENTRY]);
-  let withdrawn = 0;
-  await page.route(`**/api/gallery/${ENTRY.id}/recycle`, (route) => {
-    withdrawn += 1;
-    return route.fulfill({ json: { id: ENTRY.id, status: "recycled" } });
-  });
-
-  await page.goto("/");
-  await page
-    .getByTestId(`gallery-owner-menu-${ENTRY.id}`)
-    .locator("summary")
-    .click();
-  await expect
-    .poll(async () =>
-      page.locator(".gallery-owner-popover").evaluate((menu) => {
-        const rect = menu.getBoundingClientRect();
-        return (
-          rect.left >= 0 &&
-          rect.right <= innerWidth &&
-          rect.top >= 0 &&
-          rect.bottom <= innerHeight
-        );
-      }),
-    )
-    .toBe(true);
-  // Withdrawing is undone from the recycle bin, so it asks nothing more.
-  await page.getByTestId(`gallery-owner-withdraw-${ENTRY.id}`).click();
-
-  await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toHaveCount(0);
-  await expect(page.getByTestId("gallery-owner-notice")).toContainText(
-    "recycle bin",
-  );
-  expect(withdrawn).toBe(1);
-});
-
-test("a member withdraws their own entry from its tile, and only their own", async ({
-  page,
-}) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "member-1",
-          displayName: "Member",
-          email: "member@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-  const mine = { ...ENTRY, ownerUserId: "member-1" };
-  const theirs = {
-    ...ENTRY,
-    id: "g-other",
-    name: "Someone else's",
-    ownerUserId: "member-2",
-  };
-  await mockGallery(page, [mine, theirs]);
-  let withdrawn = 0;
-  await page.route(`**/api/gallery/${mine.id}/recycle`, (route) => {
-    withdrawn += 1;
-    return route.fulfill({ json: { id: mine.id, status: "recycled" } });
-  });
-
-  await page.goto("/");
-  await expect(page.getByTestId(`gallery-tile-${theirs.id}`)).toBeVisible();
-  await expect(
-    page.getByTestId(`gallery-author-menu-${theirs.id}`),
-  ).toHaveCount(0);
-  await expect(page.getByTestId(`gallery-owner-reject-${mine.id}`)).toHaveCount(
-    0,
-  );
-  await page
-    .getByTestId(`gallery-author-menu-${mine.id}`)
-    .getByLabel(`Manage ${mine.name}`)
-    .click();
-  await page.getByTestId(`gallery-author-withdraw-${mine.id}`).click();
-
-  await expect(page.getByTestId(`gallery-tile-${mine.id}`)).toHaveCount(0);
-  await expect(page.getByTestId(`gallery-tile-${theirs.id}`)).toBeVisible();
-  await expect(page.getByTestId("gallery-owner-notice")).toContainText(
-    "Restore it from My submissions",
-  );
-  expect(withdrawn).toBe(1);
-});
-
-test("the admin recycle bin restores a recycled entry", async ({ page }) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Token Zhang",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
-  let restored = 0;
-  await page.route("**/api/gallery/rejected", (route) =>
-    route.fulfill({ json: { entries: [] } }),
-  );
-  await page.route("**/api/gallery/recycled", (route) =>
-    route.fulfill({
-      json: {
-        entries: restored
-          ? []
-          : [
-              {
-                id: "bin-1",
-                name: "Old Sketch",
-                recycledAt: "2026-08-22T08:00:00.000Z",
-              },
-            ],
-      },
-    }),
-  );
-  await page.route("**/api/gallery/bin-1/restore", (route) => {
-    restored += 1;
-    return route.fulfill({ json: { id: "bin-1", status: "public" } });
-  });
-
-  await page.goto("/moderation");
-  await expect(page.getByTestId("bin-card-bin-1")).toBeVisible();
-  await page.getByTestId("bin-restore-bin-1").click();
-  await expect(page.getByTestId("bin-empty")).toBeVisible();
-  expect(restored).toBe(1);
-});
-
-test("the Owner restores, recycles or deletes rejected work in one click each", async ({
-  page,
-}) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Token Zhang",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
+  await signIn(page, OWNER);
   let rejected = [
     {
       id: "rejected-restore",
@@ -273,52 +143,40 @@ test("the Owner restores, recycles or deletes rejected work in one click each", 
       reviewedAt: "2026-08-22T07:00:00.000Z",
     },
   ];
-  let recycled: Array<{ id: string; name: string; recycledAt: string }> = [];
-  let deleted = 0;
+  let recycled = [
+    { id: "bin-1", name: "Old Sketch", recycledAt: "2026-08-22T08:00:00.000Z" },
+  ];
+  const calls: string[] = [];
   await page.route("**/api/gallery/rejected", (route) =>
     route.fulfill({ json: { entries: rejected } }),
   );
   await page.route("**/api/gallery/recycled", (route) =>
     route.fulfill({ json: { entries: recycled } }),
   );
-  await page.route("**/api/gallery/rejected-restore/restore", (route) => {
-    rejected = rejected.filter((entry) => entry.id !== "rejected-restore");
-    return route.fulfill({
-      json: { id: "rejected-restore", status: "public" },
-    });
-  });
-  await page.route("**/api/gallery/rejected-delete/recycle", (route) => {
-    rejected = rejected.filter((entry) => entry.id !== "rejected-delete");
-    recycled = [
-      {
-        id: "rejected-delete",
-        name: "Spam",
-        recycledAt: "2026-08-22T10:00:00.000Z",
-      },
-    ];
-    return route.fulfill({
-      json: { id: "rejected-delete", status: "recycled" },
-    });
-  });
-  await page.route("**/api/gallery/rejected-delete", (route) => {
-    deleted += 1;
-    recycled = [];
-    return route.fulfill({ json: { id: "rejected-delete", deleted: true } });
-  });
-  // The server deletes only from the bin, so Delete on a rejected circuit
-  // moves it there and deletes it, in the one click.
-  const gone: string[] = [];
-  await page.route("**/api/gallery/rejected-gone/recycle", (route) => {
-    gone.push("recycle");
-    rejected = rejected.filter((entry) => entry.id !== "rejected-gone");
-    return route.fulfill({ json: { id: "rejected-gone", status: "recycled" } });
-  });
-  await page.route("**/api/gallery/rejected-gone", (route) => {
-    gone.push(route.request().method());
-    return route.fulfill({ json: { id: "rejected-gone", deleted: true } });
-  });
+  await page.route(
+    /\/api\/gallery\/[\w-]+(\/(restore|recycle))?$/u,
+    (route) => {
+      if (route.request().method() === "GET") return route.fallback();
+      const [, , , id, action] = new URL(route.request().url()).pathname.split(
+        "/",
+      );
+      calls.push(`${action ?? route.request().method()} ${id}`);
+      rejected = rejected.filter((entry) => entry.id !== id);
+      if (action === "recycle")
+        recycled = [
+          { id: id!, name: "Spam", recycledAt: "2026-08-22T10:00:00.000Z" },
+        ];
+      else recycled = recycled.filter((entry) => entry.id !== id);
+      return route.fulfill({ json: { id, status: action ?? "deleted" } });
+    },
+  );
 
   await page.goto("/moderation");
+  // The bin restores what was recycled.
+  await expect(page.getByTestId("bin-card-bin-1")).toBeVisible();
+  await page.getByTestId("bin-restore-bin-1").click();
+  await expect(page.getByTestId("bin-empty")).toBeVisible();
+
   await expect(
     page.getByTestId("rejected-card-rejected-restore"),
   ).toContainText("Remove the loose wire");
@@ -330,10 +188,11 @@ test("the Owner restores, recycles or deletes rejected work in one click each", 
     0,
   );
 
+  // The server deletes only from the bin, so Delete on a rejected circuit
+  // moves it there and deletes it, in the one click.
   await page.getByTestId("rejected-delete-rejected-gone").click();
   await expect(page.getByTestId("rejected-card-rejected-gone")).toHaveCount(0);
   await expect(page.getByTestId("bin-card-rejected-gone")).toHaveCount(0);
-  expect(gone).toEqual(["recycle", "DELETE"]);
 
   await page.getByTestId("rejected-recycle-rejected-delete").click();
   await expect(page.getByTestId("rejected-empty")).toBeVisible();
@@ -342,65 +201,21 @@ test("the Owner restores, recycles or deletes rejected work in one click each", 
   // Deleting from the bin asks nothing more: the click is the decision.
   await page.getByTestId("bin-delete-rejected-delete").click();
   await expect(page.getByTestId("bin-empty")).toBeVisible();
-  expect(deleted).toBe(1);
-});
-
-test("post-publication moderation contains collections without operational maintenance forms", async ({
-  page,
-}) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Owner",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
-  await page.route("**/api/gallery/recycled", (route) =>
-    route.fulfill({ json: { entries: [] } }),
-  );
-  await page.route("**/api/gallery/rejected", (route) =>
-    route.fulfill({ json: { entries: [] } }),
-  );
-  const maintenance: string[] = [];
-  page.on("request", (request) => {
-    if (/\/maintenance\/|\/auth\/users\/role/.test(request.url()))
-      maintenance.push(request.url());
-  });
-  await page.goto("/moderation");
-  await expect(page.getByTestId("moderation")).toBeVisible();
-  await expect(page.getByTestId("rejected-empty")).toBeVisible();
-  await expect(page.getByTestId("bin-empty")).toBeVisible();
-  await expect(page.getByTestId("owner-settings")).toHaveCount(0);
-  await expect(page.getByRole("textbox")).toHaveCount(0);
-  await expect(page.getByText("Project schema maintenance")).toHaveCount(0);
-  await expect(page.getByText("Netlist marks", { exact: true })).toHaveCount(0);
-  await expect(page.getByTestId("review-empty")).toHaveCount(0);
-  expect(maintenance).toEqual([]);
+  expect(calls).toEqual([
+    "restore bin-1",
+    "restore rejected-restore",
+    "recycle rejected-gone",
+    "DELETE rejected-gone",
+    "recycle rejected-delete",
+    "DELETE rejected-delete",
+  ]);
 });
 
 test("moderation uses full-width responsive masonry and keyboard-accessible card actions", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Owner",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
+  await signIn(page, OWNER);
   const entries = Array.from({ length: 12 }, (_, index) => ({
     ...ENTRY,
     id: `review-${index}`,
@@ -474,19 +289,7 @@ test("moderation uses full-width responsive masonry and keyboard-accessible card
 test("moderation keeps failed actions visible and retries collection loading", async ({
   page,
 }) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Owner",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
+  await signIn(page, OWNER);
   let loadFailed = true;
   let restoreFailed = true;
   let restored = false;
@@ -524,20 +327,7 @@ test("moderation keeps failed actions visible and retries collection loading", a
 test("authors can filter pending visual reviews and resolve their own drawing", async ({
   page,
 }) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "maker-1",
-          displayName: "Maker",
-          email: "maker@example.com",
-          provider: "github",
-          isAdmin: false,
-          role: "user",
-        },
-      },
-    }),
-  );
+  await signIn(page, sessionUser({ id: "maker-1", displayName: "Maker" }));
   let entry = {
     ...ENTRY,
     id: "review-me",
@@ -551,6 +341,7 @@ test("authors can filter pending visual reviews and resolve their own drawing", 
           kind: "suspected-disconnection",
           detail: "Output wire has a visible gap near OUT.",
         },
+        { kind: "global-vdd", detail: ".global VDD in the netlist" },
       ],
     },
     assessedPreviewRevision: ENTRY.previewRevision,
@@ -582,11 +373,7 @@ test("authors can filter pending visual reviews and resolve their own drawing", 
         },
       });
     }
-    if (url.pathname.endsWith("/preview.svg"))
-      return route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"/>',
-      });
+    if (url.pathname.endsWith("/preview.svg")) return fulfillPreview(route);
     return route.fallback();
   });
   await page.goto("/");
@@ -606,9 +393,13 @@ test("authors can filter pending visual reviews and resolve their own drawing", 
     await page.getByTestId("gallery-author-review-review-me").click();
   };
   await openReview();
+  // Each finding is listed under its reason.
   const review = page.getByTestId("gallery-attention-review-me");
   await expect(review).toContainText("Needs attention");
-  await expect(review).toContainText("Output wire has a visible gap");
+  await expect(review).toContainText(
+    "Wiring break · Output wire has a visible gap",
+  );
+  await expect(review).toContainText("Global VDD · .global VDD");
   await review.getByRole("button", { name: "Mark resolved" }).click();
   await expect(page.getByTestId("gallery-tile-review-me")).toHaveCount(0);
   await expect(review).toContainText("Reviewed · resolved");

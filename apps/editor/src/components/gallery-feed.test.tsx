@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +12,7 @@ import {
   contributorBoardRows,
   GalleryCountPanel,
 } from "./gallery-feed-count-panel";
+import { GalleryQuickFilters } from "./gallery-feed-quick-filters";
 import { GalleryWallTile } from "./gallery-feed-tile";
 import { GalleryTileMenu } from "./gallery-owner-controls";
 
@@ -539,5 +540,81 @@ describe("The Sim mark", () => {
       );
     expect(menu(() => {})).toContain("Verify simulation");
     expect(menu()).not.toContain("Verify simulation");
+  });
+});
+
+describe("GalleryQuickFilters", () => {
+  const props = (
+    overrides: Partial<Parameters<typeof GalleryQuickFilters>[0]> = {},
+  ): Parameters<typeof GalleryQuickFilters>[0] => ({
+    signedIn: true,
+    isOwner: true,
+    attentionOnly: false,
+    attentionKind: null,
+    attentionKindCounts: {},
+    aiFilter: null,
+    netlistableOnly: false,
+    withoutNetlistOnly: false,
+    likedOnly: false,
+    updateFilters: () => {},
+    quickCount: () => null,
+    ...overrides,
+  });
+  /** The element a test id names, to press it as a reader would. */
+  const press = (node: ReactNode, testId: string): boolean => {
+    if (Array.isArray(node))
+      return node.some((child: ReactNode) => press(child, testId));
+    if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node))
+      return false;
+    if ((node.props as Record<string, unknown>)["data-testid"] === testId) {
+      node.props.onClick!();
+      return true;
+    }
+    return press(node.props.children, testId);
+  };
+
+  it("offers a reason only under Needs attention, each with how many it holds", () => {
+    const render = (overrides: Parameters<typeof props>[0]) =>
+      renderToStaticMarkup(
+        createElement(GalleryQuickFilters, props(overrides)),
+      );
+    expect(render({})).not.toContain("gallery-filter-attention-reason");
+    const reasons = render({
+      attentionOnly: true,
+      attentionKindCounts: { "global-vdd": 2, "suspected-disconnection": 1 },
+    });
+    expect(
+      [...reasons.matchAll(/<option[^>]*>([^<]*)<\/option>/gu)].map(
+        ([, label]) => label,
+      ),
+    ).toEqual(["Every reason", "Global VDD (2)", "Wiring break (1)"]);
+  });
+
+  it("moves a pair's choice to the side pressed and forgets the reason with Needs attention", () => {
+    const pressed = (testId: string) => {
+      const patches: unknown[] = [];
+      const shown = GalleryQuickFilters(
+        props({
+          attentionOnly: true,
+          attentionKind: "global-vdd",
+          aiFilter: "ai",
+          netlistableOnly: true,
+          updateFilters: (patch) => patches.push(patch),
+        }),
+      );
+      expect(press(shown, testId)).toBe(true);
+      return patches;
+    };
+    expect(pressed("gallery-filter-without-netlist")).toEqual([
+      { withoutNetlist: true, netlistable: false },
+    ]);
+    expect(pressed("gallery-filter-netlistable")).toEqual([
+      { netlistable: false, withoutNetlist: false },
+    ]);
+    expect(pressed("gallery-filter-human")).toEqual([{ ai: "human" }]);
+    expect(pressed("gallery-filter-ai")).toEqual([{ ai: null }]);
+    expect(pressed("gallery-filter-attention")).toEqual([
+      { attention: false, attentionKind: null },
+    ]);
   });
 });

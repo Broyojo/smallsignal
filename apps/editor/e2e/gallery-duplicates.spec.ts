@@ -1,15 +1,17 @@
-// Duplicate checks: the admin cleanup, the check before publishing and its
-// topology comparison, and the durable check across reloads.
+// Duplicate checks: the admin cleanup and the check before publishing with
+// its topology comparison. Reconnecting to the durable server check after a
+// reload is the gallery-topology-task "durable topology observation" test.
 
 import { expect, test } from "./gallery-test.js";
 import { readFileSync } from "node:fs";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject, parseProject } from "@icm/project-protocol";
-import { awaitEditorReady, chooseComponent } from "./editor-fixtures.js";
 import {
   ENTRY,
+  fulfillPreview,
   galleryResistorProject,
-  mockGallery,
+  sessionUser,
+  signIn,
 } from "./gallery-fixtures.js";
 
 test("admin checks duplicates and cleans selected copies with partial failure recovery", async ({
@@ -58,19 +60,9 @@ test("admin checks duplicates and cleans selected copies with partial failure re
     different,
     different,
   ];
-  await context.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "owner-1",
-          displayName: "Owner",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
+  await signIn(
+    context,
+    sessionUser({ id: "owner-1", displayName: "Owner", isAdmin: true }),
   );
   const recycled = new Set<string>();
   const cleanupRequests: Array<{
@@ -93,11 +85,7 @@ test("admin checks duplicates and cleans selected copies with partial failure re
       removed.forEach((id: string) => recycled.add(id));
       return route.fulfill({ json: { kept: body.keep.id, recycled: removed } });
     }
-    if (url.pathname.endsWith("preview.svg"))
-      return route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60"><path d="M10 30h20l5 -10 10 20 10 -20 10 20 5 -10h20" fill="none" stroke="black"/></svg>',
-      });
+    if (url.pathname.endsWith("preview.svg")) return fulfillPreview(route);
     if (url.pathname === "/api/gallery") {
       const visible = (
         url.searchParams.has("author") ? [entries[0]!] : entries
@@ -160,10 +148,6 @@ test("admin checks duplicates and cleans selected copies with partial failure re
       exact: true,
     })
     .check();
-  await page.screenshot({
-    path: "plan/gallery-duplicate-cleanup.png",
-    fullPage: true,
-  });
   await panel
     .getByRole("button", { name: "Remove all extra copies (2)", exact: true })
     .click();
@@ -206,43 +190,25 @@ test("admin checks duplicates and cleans selected copies with partial failure re
   ).not.toBeVisible();
 });
 
-for (const role of ["user", "moderator"]) {
-  test(`duplicate check is hidden for ${role}`, async ({ page }) => {
-    await page.route("**/api/auth/me", (route) =>
-      route.fulfill({
-        json: {
-          user:
-            role === "visitor"
-              ? null
-              : {
-                  id: "member",
-                  displayName: "Member",
-                  email: "member@example.com",
-                  provider: "github",
-                  role,
-                  isAdmin: false,
-                },
-        },
-      }),
-    );
-    await page.route("**/api/gallery**", (route) =>
-      route.fulfill({
-        json: { entries: [ENTRY], total: 1, tags: [], nextCursor: null },
-      }),
-    );
-    await page.goto("/");
-    await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toBeVisible();
-    await expect(page.getByTestId("gallery-check-duplicates")).toHaveCount(0);
-    await expect(
-      page.getByRole("button", {
-        name: "Fill missing SKY130 models",
-        exact: true,
-      }),
-    ).toHaveCount(0);
-  });
-}
+test("duplicate check is hidden for a moderator", async ({ page }) => {
+  await signIn(page, sessionUser({ id: "member", role: "moderator" }));
+  await page.route("**/api/gallery**", (route) =>
+    route.fulfill({
+      json: { entries: [ENTRY], total: 1, tags: [], nextCursor: null },
+    }),
+  );
+  await page.goto("/");
+  await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toBeVisible();
+  await expect(page.getByTestId("gallery-check-duplicates")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", {
+      name: "Fill missing SKY130 models",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+});
 
-test("Publish checks exact and nearest duplicates without adding a Gallery control", async ({
+test("Publish checks exact, nearest and hierarchical duplicates without adding a Gallery control", async ({
   page,
   context,
 }) => {
@@ -261,19 +227,9 @@ test("Publish checks exact and nearest duplicates without adding a Gallery contr
     releaseScan = resolve;
   });
   let detailRequests = 0;
-  await context.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "publisher-1",
-          displayName: "Publisher",
-          email: "publisher@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
+  await signIn(
+    context,
+    sessionUser({ id: "publisher-1", displayName: "Publisher" }),
   );
   await context.route("**/api/gallery**", async (route) => {
     const url = new URL(route.request().url());
@@ -283,11 +239,7 @@ test("Publish checks exact and nearest duplicates without adding a Gallery contr
       });
     if (url.pathname === "/api/gallery/tags")
       return route.fulfill({ json: { tags: [] } });
-    if (url.pathname.endsWith("preview.svg"))
-      return route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>',
-      });
+    if (url.pathname.endsWith("preview.svg")) return fulfillPreview(route);
     const id = url.pathname.split("/").pop()!;
     const project = projects.get(id);
     if (project) {
@@ -414,51 +366,13 @@ test("Publish checks exact and nearest duplicates without adding a Gallery contr
   await comparison
     .getByRole("button", { name: "All matches", exact: true })
     .click();
-  await page.screenshot({ path: "plan/topology-comparison.png" });
   await page.keyboard.press("Delete");
   await page.keyboard.press("Escape");
   await expect(comparison).toHaveCount(0);
   await expect(dialog).toBeVisible();
   await expect(page.getByTestId("instance-count")).toHaveText("2");
-  // Editing the live Project and revising a candidate cannot rewrite completed comparisons.
-  await dialog
-    .getByRole("button", { name: "Cancel", exact: true })
-    .first()
-    .click();
-  projects.set("nearest", galleryResistorProject("99k"));
-  await page.getByTestId("project-file").setInputFiles({
-    name: "edited.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(galleryResistorProject("9k"))),
-  });
-  await expect(page.getByTestId("status")).toContainText("edited.icproj.json");
-  // Publishing the other Project shows none of the last check's results
-  // (#1417); its notice still shows them when asked.
-  await page.getByTestId("publish-gallery-button").click();
-  await expect(dialog.getByTestId("gallery-topology-snapshot")).toContainText(
-    "The last check was for another Project or Cell",
-  );
-  await expect(page.getByTestId("topology-compare-nearest")).toHaveCount(0);
-  await dialog
-    .getByRole("button", { name: "Cancel", exact: true })
-    .first()
-    .click();
-  await page
-    .getByTestId("gallery-topology-task-notice")
-    .getByRole("button", { name: "View results", exact: true })
-    .click();
-  await expect(dialog.getByTestId("gallery-topology-snapshot")).toContainText(
-    "Historical check for another Project or Cell",
-  );
-  await page.getByTestId("topology-compare-nearest").click();
-  await comparison
-    .getByRole("button", { name: "R1 ↔ R1", exact: true })
-    .click();
-  await expect(valueRow).toBeVisible();
-  expect(detailRequests).toBe(3);
-  await comparison
-    .getByRole("button", { name: "Close circuit comparison" })
-    .click();
+  // A frozen comparison of another Project or Cell, and a revised
+  // candidate, are the gallery-topology-check and -match module tests.
   await page.getByTestId("topology-compare-partial").click();
   await expect(comparison.getByTestId("topology-highlight-source")).toHaveCount(
     1,
@@ -467,13 +381,11 @@ test("Publish checks exact and nearest duplicates without adding a Gallery contr
     1,
   );
   await expect(comparison).toContainText("1 matched devices");
-});
+  expect(detailRequests).toBe(3);
 
-test("topology comparison enters the matched child Cell and shows SKY130 parameter differences", async ({
-  page,
-  context,
-}) => {
-  const project = parseProject(
+  // A hierarchical match enters the matched child Cell and shows its SKY130
+  // parameter differences.
+  const ota = parseProject(
     readFileSync(
       new URL(
         "../src/examples/five-transistor-ota-sky130.icproj.json",
@@ -482,200 +394,47 @@ test("topology comparison enters the matched child Cell and shows SKY130 paramet
       "utf8",
     ),
   );
-  const candidate = structuredClone(project);
-  const transistor = candidate.documents
+  const sized = structuredClone(ota);
+  sized.documents
     .find((doc) => doc.id === "document-ota-5t")!
-    .instances.find((item) => item.id === "M1")!;
-  transistor.netlist!.parameters.w = "99u";
-  await context.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "publisher",
-          displayName: "Publisher",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-  await context.route("**/api/gallery**", (route) => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname === "/api/gallery")
-      return route.fulfill({
-        json: { entries: [ENTRY], nextCursor: null, total: 1 },
-      });
-    if (pathname === "/api/gallery/tags")
-      return route.fulfill({ json: { tags: [] } });
-    if (pathname.endsWith("preview.svg"))
-      return route.fulfill({
-        contentType: "image/svg+xml",
-        body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
-      });
-    return route.fulfill({
-      json: {
-        status: "public",
-        entry: ENTRY,
-        projectText: serializeProject(candidate),
-      },
-    });
-  });
-  await page.goto("/editor");
+    .instances.find((item) => item.id === "M1")!.netlist!.parameters.w = "99u";
+  entries.push({ ...ENTRY, id: "sized-ota", name: "Sized OTA" });
+  projects.set("sized-ota", sized);
+  await comparison
+    .getByRole("button", { name: "Close circuit comparison" })
+    .click();
+  await dialog
+    .getByRole("button", { name: "Cancel", exact: true })
+    .first()
+    .click();
   await page.getByTestId("project-file").setInputFiles({
     name: "ota.icproj.json",
     mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
+    buffer: Buffer.from(serializeProject(ota)),
   });
   await expect(page.getByTestId("status")).toContainText("ota.icproj.json");
   await page.getByTestId("publish-gallery-button").click();
-  await page.getByTestId("gallery-find-similar").click();
-  await page.getByTestId(`topology-compare-${ENTRY.id}`).click();
-  const comparison = page.getByRole("dialog", {
-    name: "Circuit match comparison",
-  });
-  await expect(
-    comparison.locator(
-      '[data-testid="topology-highlight-source"][data-instance-id="XDUT"]',
-    ),
-  ).toBeVisible();
+  await check.click();
+  await page.getByTestId("topology-compare-sized-ota").click();
+  const source = comparison.getByTestId("topology-highlight-source");
+  const childInstance = comparison.locator(
+    '[data-testid="topology-highlight-source"][data-instance-id="XDUT"]',
+  );
+  await expect(childInstance).toBeVisible();
   await comparison
     .getByRole("button", { name: "XDUT / XM1 ↔ XDUT / XM1", exact: true })
     .click();
-  await expect(
-    comparison.getByTestId("topology-highlight-source"),
-  ).toHaveAttribute("data-instance-id", "M1");
+  await expect(source).toHaveAttribute("data-instance-id", "M1");
   await expect(
     comparison.getByTestId("topology-highlight-target"),
   ).toHaveAttribute("data-instance-id", "M1");
   await expect(
     comparison.getByRole("row", { name: "w 96u 99u", exact: true }),
   ).toBeVisible();
-  await page.screenshot({ path: "plan/topology-ota-comparison.png" });
   await comparison
     .getByRole("button", { name: "All matches", exact: true })
     .click();
-  await expect(
-    comparison.locator(
-      '[data-testid="topology-highlight-source"][data-instance-id="XDUT"]',
-    ),
-  ).toBeVisible();
+  await expect(childInstance).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(comparison).toHaveCount(0);
-});
-
-test("durable duplicate check reconnects after reload and a closed browser page", async ({
-  page,
-  context,
-}) => {
-  let job: {
-    id: string;
-    revision: number;
-    projectText: string;
-    running: boolean;
-    dismissed: boolean;
-    report: {
-      scanned: number;
-      total: number;
-      comparable: number;
-      matches: [];
-      uncheckable: number;
-      complete: boolean;
-    };
-  } | null = null;
-  await context.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "publisher",
-          displayName: "Publisher",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-  let starts = 0;
-  await context.route("**/api/topology-task**", (route) => {
-    if (route.request().method() === "POST") {
-      starts++;
-      const body = route.request().postDataJSON();
-      job = {
-        id: body.id,
-        revision: 1,
-        projectText: body.projectText,
-        running: true,
-        dismissed: false,
-        report: {
-          scanned: 1,
-          total: 7,
-          comparable: 1,
-          matches: [],
-          uncheckable: 0,
-          complete: false,
-        },
-      };
-    }
-    return route.fulfill({ json: { job } });
-  });
-  await mockGallery(page, []);
-  await page.goto("/editor?new=1");
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 300, y: 230 } });
-  await page.keyboard.press("Escape");
-  await page.getByTestId("publish-gallery-button").click();
-  await page.getByTestId("gallery-find-similar").click();
-  await expect(page.getByTestId("gallery-topology-check")).toContainText(
-    "1 / 7",
-  );
-  const originalText = job!.projectText;
-  page.on("dialog", (dialog) => dialog.accept());
-  const resumed = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/topology-task" &&
-      response.request().method() === "GET",
-  );
-  await page.reload();
-  await awaitEditorReady(page);
-  expect(await (await resumed).json()).toMatchObject({
-    job: { id: job!.id, report: { scanned: 1 } },
-  });
-  await expect(page.getByTestId("gallery-topology-task-notice")).toContainText(
-    "1 compared",
-  );
-  expect(starts).toBe(1);
-  await page.close();
-  // The server finishes while no page exists; reopening merely reads it.
-  job = {
-    ...job!,
-    revision: 2,
-    running: false,
-    report: { ...job!.report, scanned: 7, comparable: 7, complete: true },
-  };
-  const reopened = await context.newPage();
-  const restored = reopened.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/topology-task" &&
-      response.request().method() === "GET",
-  );
-  await reopened.goto("/editor?new=1");
-  await awaitEditorReady(reopened);
-  expect(await (await restored).json()).toMatchObject({
-    job: { id: job!.id, running: false, report: { scanned: 7 } },
-  });
-  await expect(
-    reopened.getByTestId("gallery-topology-task-notice"),
-  ).toContainText("Duplicate check finished");
-  await reopened
-    .getByRole("button", { name: "View results", exact: true })
-    .click();
-  await expect(reopened.getByTestId("gallery-topology-check")).toContainText(
-    "7 comparable circuits checked",
-  );
-  expect(job.projectText).toBe(originalText);
-  expect(starts).toBe(1);
-  await reopened.close();
 });

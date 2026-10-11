@@ -25,18 +25,13 @@ const editingSpecs = [
   "wire-drawing",
   "wire-editing",
 ].map((name) => `apps/editor/e2e/${name}.spec.ts`);
-// The Gallery workflows, one spec per feature (#1537).
+// The Gallery workflows, one spec per feature (#1537, #1646).
 const gallerySpecs = [
   "account",
   "duplicates",
-  "editor-panel",
-  "filters",
   "history",
   "moderation",
   "publish",
-  "search",
-  "shelf",
-  "tags",
   "wall",
 ].map((name) => `apps/editor/e2e/gallery-${name}.spec.ts`);
 gallerySpecs.push("apps/editor/e2e/local-examples.spec.ts");

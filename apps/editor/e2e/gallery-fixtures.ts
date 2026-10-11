@@ -1,6 +1,6 @@
 // The Gallery entry, projects and route mocks the Gallery specs share.
 
-import type { Page } from "@playwright/test";
+import type { BrowserContext, Page, Route } from "@playwright/test";
 import { createRoutePath, createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
@@ -19,6 +19,46 @@ export const ENTRY = {
 /** Match the list path with or without filters and a paging cursor. */
 export const galleryListUrl = (url: URL): boolean =>
   url.pathname === "/api/gallery";
+
+/** A signed-in account as `/api/auth/me` describes it. */
+export function sessionUser<Overrides extends object>(
+  overrides: Overrides = {} as Overrides,
+) {
+  return {
+    id: "u1",
+    displayName: "Member",
+    email: "member@example.com",
+    provider: "github",
+    role: "user",
+    isAdmin: false,
+    ...overrides,
+  };
+}
+
+/** Answer the session with this account, or signed out for null. */
+export async function signIn(
+  target: Page | BrowserContext,
+  user: object | null,
+): Promise<void> {
+  await target.route("**/api/auth/me", (route) =>
+    route.fulfill({ json: { user } }),
+  );
+}
+
+/** One blank drawing for any preview a route answers. */
+export function fulfillPreview(route: Route): Promise<void> {
+  return route.fulfill({
+    contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><rect width="10" height="6" fill="#fff"/></svg>',
+  });
+}
+
+/** Answer every Gallery, version and Shelf preview with a blank drawing. */
+export async function mockPreviews(
+  target: Page | BrowserContext,
+): Promise<void> {
+  await target.route("**/preview.svg*", fulfillPreview);
+}
 
 export function galleryResistorProject(value = "1k", count = 2) {
   const project = createEmptyProject(`gallery-${value}-${count}`, "Resistors");
@@ -65,12 +105,7 @@ export async function mockGallery(
   await page.route(galleryListUrl, (route) =>
     route.fulfill({ json: { entries, nextCursor: null } }),
   );
-  await page.route(`**/api/gallery/${ENTRY.id}/preview.svg*`, (route) =>
-    route.fulfill({
-      contentType: "image/svg+xml",
-      body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/></svg>',
-    }),
-  );
+  await page.route(`**/api/gallery/${ENTRY.id}/preview.svg*`, fulfillPreview);
   await page.route(`**/api/gallery/${ENTRY.id}`, (route) =>
     route.fulfill({
       json: {

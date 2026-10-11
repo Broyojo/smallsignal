@@ -1,95 +1,72 @@
-// Publishing to the Gallery: the publish dialog, its quality gates and tag
-// suggestions, and updating an opened entry in place.
+// Publishing to the Gallery: the publish dialog, its tag suggestions, a
+// published tab's saved state and updating an entry in place; the Shelf's
+// publication journeys and its cards. Quality gates, the sign-in prompt and a
+// reopened draft are the publish-gallery-dialog module tests.
 
 import { expect, test } from "./gallery-test.js";
 import { test as localTest } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { createEmptyDocument, createEmptyProject } from "@icm/model";
 import {
   serializeProject,
+  parseProject,
   CURRENT_PROJECT_FILE_VERSION,
 } from "@icm/project-protocol";
 import { hierarchicalSymbolId } from "@icm/symbols";
-import { awaitEditorReady, chooseComponent } from "./editor-fixtures.js";
-import { ENTRY, mockGallery } from "./gallery-fixtures.js";
+import {
+  awaitEditorReady,
+  chooseComponent,
+  openMenu,
+} from "./editor-fixtures.js";
+import {
+  ENTRY,
+  fulfillPreview,
+  mockGallery,
+  sessionUser,
+  signIn,
+} from "./gallery-fixtures.js";
 
 function hierarchicalPublishProject() {
   const project = createEmptyProject("hierarchical-publish", "Hierarchical");
   const top = project.documents[0]!;
   const child = createEmptyDocument("document-child", "scdac_unit");
+  const placed = (id: string, x: number, y: number) => ({
+    id,
+    symbolId: "resistor",
+    placement: {
+      position: { x, y },
+      rotation: 0 as const,
+      mirror: "none" as const,
+    },
+    reference: id,
+    netlist: { parameters: {} },
+  });
   top.instances = [
+    placed("R1", 0, 0),
+    placed("R2", 200, 0),
     {
-      id: "R1",
-      symbolId: "resistor",
-      placement: {
-        position: { x: 0, y: 0 },
-        rotation: 0,
-        mirror: "none",
-      },
-      reference: "R1",
-      netlist: { parameters: {} },
-    },
-    {
-      id: "R2",
-      symbolId: "resistor",
-      placement: {
-        position: { x: 200, y: 0 },
-        rotation: 0,
-        mirror: "none",
-      },
-      reference: "R2",
-      netlist: { parameters: {} },
-    },
-    {
-      id: "XU0",
+      ...placed("XU0", 100, 120),
       symbolId: hierarchicalSymbolId(child.netlist!.name),
-      placement: {
-        position: { x: 100, y: 120 },
-        rotation: 0,
-        mirror: "none",
-      },
-      reference: "XU0",
       netlist: {
         parameters: {},
         binding: { kind: "subcircuit", childDocumentId: child.id },
       },
     },
   ];
-  top.nets = [
-    {
-      id: "n1",
-      terminals: [
-        { instanceId: "R1", pinName: "1" },
-        { instanceId: "R2", pinName: "1" },
-      ],
-    },
-    {
-      id: "n2",
-      terminals: [
-        { instanceId: "R1", pinName: "2" },
-        { instanceId: "R2", pinName: "2" },
-      ],
-    },
-  ];
+  top.nets = ["1", "2"].map((pinName) => ({
+    id: `n${pinName}`,
+    terminals: ["R1", "R2"].map((instanceId) => ({ instanceId, pinName })),
+  }));
   project.documents.push(child);
   return project;
 }
 
-test("a signed-in member publishes directly, bylined by the account", async ({
+test("a member publishes from a tab, which then counts as saved and updates its entry in place", async ({
   page,
 }) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Token Zhang",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
+  await signIn(
+    page,
+    sessionUser({ displayName: "Token Zhang", email: "owner@example.com" }),
   );
   const posted: {
     authorization: string | null;
@@ -143,112 +120,6 @@ test("a signed-in member publishes directly, bylined by the account", async ({
     });
     return route.fulfill({ status: 200, json: { id: "entry-77" } });
   });
-
-  await page.goto("/editor");
-  await page.getByTestId("publish-gallery-button").click();
-  const dialog = page.getByTestId("publish-gallery-dialog");
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Publishing as Token Zhang")).toBeVisible();
-  await expect(dialog.getByLabel("Owner passphrase")).toHaveCount(0);
-  // The byline comes from the account, so there is no field to fill in.
-  await expect(dialog.getByLabel("Author")).toHaveCount(0);
-
-  await dialog.getByLabel("Circuit name").fill("Session Publish");
-  await dialog.getByTestId("publish-preset-amplifier").click();
-  // Five suggestions show; "+ …" opens the rest (#1385).
-  const presets = dialog.locator('[data-testid^="publish-preset-"]');
-  await expect(presets).toHaveCount(5);
-  await dialog.getByTestId("publish-presets-more").click();
-  await expect(dialog.getByTestId("publish-presets-more")).toHaveCount(0);
-  await expect.poll(() => presets.count()).toBeGreaterThan(5);
-  await dialog.getByLabel("Add tag").fill("Latch");
-  await dialog.getByLabel("Add tag").press("Enter");
-  await expect(dialog.getByTestId("publish-tag-latch")).toBeVisible();
-  // Drawn by hand, so the AI mark starts off; the publisher may still set it.
-  await expect(dialog.getByLabel("AI-generated")).not.toBeChecked();
-  await dialog.getByLabel("AI-generated").check();
-  await dialog.getByRole("button", { name: "Publish" }).click();
-  await expect(page.getByTestId("status")).toHaveText(
-    'Published "Session Publish" to the gallery',
-  );
-  // A publish says it landed where it cannot be missed, with the way there.
-  const notice = page.getByTestId("gallery-published-notice");
-  await expect(notice).toContainText(
-    "Published “Session Publish” to the Gallery",
-  );
-  await expect(
-    notice.getByRole("link", { name: "View in Gallery" }),
-  ).toHaveAttribute("href", /^\/\?entry=[A-Za-z0-9-]+$/u);
-  expect(posted).toEqual([
-    {
-      authorization: null,
-      hasAuthor: false,
-      name: "Session Publish",
-      tags: ["amplifier", "latch"],
-      aiGenerated: true,
-      schemaVersion: CURRENT_PROJECT_FILE_VERSION,
-    },
-  ]);
-
-  // The live Project remains the source of this publication. After another
-  // edit, Publish must update the item it just created rather than creating a
-  // duplicate Gallery entry.
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 340, y: 230 } });
-  await page.keyboard.press("Escape");
-  await page.getByTestId("publish-gallery-button").click();
-  await expect(page.getByTestId("publish-mode")).toContainText(
-    "Session Publish",
-  );
-  // The update starts from the entry's own mark.
-  await expect(
-    page.getByTestId("publish-gallery-dialog").getByLabel("AI-generated"),
-  ).toBeChecked();
-  await page
-    .getByTestId("publish-gallery-dialog")
-    .getByRole("button", { name: "Update entry" })
-    .click();
-  await expect(page.getByTestId("status")).toHaveText(
-    'Updated "Session Publish" in the gallery',
-  );
-  await expect(page.getByTestId("gallery-published-notice")).toContainText(
-    "Updated “Session Publish” in the Gallery",
-  );
-  expect(posted).toHaveLength(1);
-  expect(updated).toEqual([
-    { name: "Session Publish", aiGenerated: true, instanceCount: 1 },
-  ]);
-});
-
-test("a published tab counts as saved until its next edit", async ({
-  page,
-}) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Token Zhang",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-  await page.route("**/api/gallery/submissions", (route) =>
-    route.request().method() === "POST"
-      ? route.fulfill({ status: 201, json: { id: "entry-88" } })
-      : route.fallback(),
-  );
-  await page.route("**/api/gallery/entry-88", (route) =>
-    route.request().method() === "PUT"
-      ? route.fulfill({ status: 200, json: { id: "entry-88" } })
-      : route.fallback(),
-  );
   const place = async (x: number) => {
     await chooseComponent(page, "resistor");
     await page
@@ -269,27 +140,94 @@ test("a published tab counts as saved until its next edit", async ({
 
   await page.getByTestId("publish-gallery-button").click();
   const dialog = page.getByTestId("publish-gallery-dialog");
-  await dialog.getByLabel("Circuit name").fill("Published tab");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Publishing as Token Zhang")).toBeVisible();
+  await expect(dialog.getByLabel("Owner passphrase")).toHaveCount(0);
+  // The byline comes from the account, so there is no field to fill in.
+  await expect(dialog.getByLabel("Author")).toHaveCount(0);
+
+  await dialog.getByLabel("Circuit name").fill("Session Publish");
+  // Five suggestions show; "+ …" opens the rest (#1385).
+  const presets = dialog.locator('[data-testid^="publish-preset-"]');
+  await expect(presets).toHaveCount(5);
+  await dialog.getByTestId("publish-presets-more").click();
+  await expect(dialog.getByTestId("publish-presets-more")).toHaveCount(0);
+  await expect.poll(() => presets.count()).toBeGreaterThan(5);
+  // A suggestion stays clickable while typing filters them, and takes the
+  // typed text's place.
+  const addTag = dialog.getByLabel("Add tag");
+  await addTag.fill("amp");
   await dialog.getByTestId("publish-preset-amplifier").click();
-  await dialog.getByRole("button", { name: "Publish" }).click();
+  await expect(dialog.getByTestId("publish-tag-amplifier")).toBeVisible();
+  await expect(dialog.getByTestId("publish-tag-amp")).toHaveCount(0);
+  // A tag still being typed is published with the rest.
+  await addTag.fill("custom label");
+  // Drawn by hand, so the AI mark starts off; the publisher may still set it.
+  await expect(dialog.getByLabel("AI-generated")).not.toBeChecked();
+  await dialog.getByLabel("AI-generated").check();
+  await dialog.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page.getByTestId("status")).toHaveText(
-    'Published "Published tab" to the gallery',
+    'Published "Session Publish" to the gallery',
   );
+  // A publish says it landed where it cannot be missed, with the way there.
+  const notice = page.getByTestId("gallery-published-notice");
+  await expect(notice).toContainText(
+    "Published “Session Publish” to the Gallery",
+  );
+  await expect(
+    notice.getByRole("link", { name: "View in Gallery" }),
+  ).toHaveAttribute("href", /^\/\?entry=[A-Za-z0-9-]+$/u);
+  expect(posted).toEqual([
+    {
+      authorization: null,
+      hasAuthor: false,
+      name: "Session Publish",
+      tags: ["amplifier", "custom label"],
+      aiGenerated: true,
+      schemaVersion: CURRENT_PROJECT_FILE_VERSION,
+    },
+  ]);
   // The Gallery holds exactly these bytes: nothing is unsaved.
   await expect(active.getByLabel("Unsaved")).toHaveCount(0);
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
 
-  // The next edit is unsaved again, until it is published too.
+  // The live Project remains the source of this publication. After another
+  // edit, Publish must update the item it just created rather than creating a
+  // duplicate Gallery entry.
   await place(460);
   await expect(active.getByLabel("Unsaved")).toBeVisible();
   await page.getByTestId("publish-gallery-button").click();
-  await page
-    .getByTestId("publish-gallery-dialog")
-    .getByRole("button", { name: "Update entry" })
-    .click();
+  const mode = page.getByTestId("publish-mode");
+  // The update option names exactly what it will replace, above the choice
+  // of a new entry and the version history.
+  await expect(mode).toContainText("Session Publish");
+  await expect(dialog.getByText("updates the entry in place")).toBeVisible();
+  const [updateBox, newBox, historyBox] = await Promise.all([
+    mode
+      .getByRole("radio", { name: /^Update /u })
+      .locator("..")
+      .boundingBox(),
+    mode
+      .getByRole("radio", { name: "Publish as a new entry", exact: true })
+      .locator("..")
+      .boundingBox(),
+    page.getByTestId("publish-history").boundingBox(),
+  ]);
+  expect(newBox!.y).toBeGreaterThanOrEqual(updateBox!.y + updateBox!.height);
+  expect(historyBox!.y).toBeGreaterThanOrEqual(newBox!.y + newBox!.height);
+  // The update starts from the entry's own mark.
+  await expect(dialog.getByLabel("AI-generated")).toBeChecked();
+  await dialog.getByRole("button", { name: "Update entry" }).click();
   await expect(page.getByTestId("status")).toHaveText(
-    'Updated "Published tab" in the gallery',
+    'Updated "Session Publish" in the gallery',
   );
+  await expect(page.getByTestId("gallery-published-notice")).toContainText(
+    "Updated “Session Publish” in the Gallery",
+  );
+  expect(posted).toHaveLength(1);
+  expect(updated).toEqual([
+    { name: "Session Publish", aiGenerated: true, instanceCount: 2 },
+  ]);
   await expect(active.getByLabel("Unsaved")).toHaveCount(0);
 
   // Closing it loses nothing, so it closes without asking.
@@ -304,32 +242,15 @@ test("a published tab counts as saved until its next edit", async ({
 test("a mistaken click beside the publish form keeps what was written", async ({
   page,
 }) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Token Zhang",
-          email: "owner@example.com",
-          provider: "github",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
-
+  await signIn(page, sessionUser({ displayName: "Token Zhang" }));
   await page.goto("/editor");
   await page.getByTestId("publish-gallery-button").click();
   const dialog = page.getByTestId("publish-gallery-dialog");
   await expect(dialog).toBeVisible();
-
   await dialog.getByLabel("Circuit name").fill("Folded Cascode");
   await dialog
     .getByLabel("Description")
     .fill("Gain boosted, 1.2 V supply, trimmed offset.");
-  await dialog.getByLabel("Add tag").fill("Cascode");
-  await dialog.getByLabel("Add tag").press("Enter");
-  await expect(dialog.getByTestId("publish-tag-cascode")).toBeVisible();
 
   // A stray press on the backdrop beside a form being written in is a miss,
   // not a decision to throw the writing away.
@@ -337,198 +258,18 @@ test("a mistaken click beside the publish form keeps what was written", async ({
   await page.mouse.click(8, viewport.height - 8);
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("Circuit name")).toHaveValue("Folded Cascode");
-
-  // Cancelling is a decision, and it still closes — but reopening comes back
-  // to the draft rather than to an empty form.
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(dialog).toHaveCount(0);
-  await page.getByTestId("publish-gallery-button").click();
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel("Circuit name")).toHaveValue("Folded Cascode");
   await expect(dialog.getByLabel("Description")).toHaveValue(
     "Gain boosted, 1.2 V supply, trimmed offset.",
   );
-  await expect(dialog.getByTestId("publish-tag-cascode")).toBeVisible();
-});
-
-test("an ordinary user sees blocking quality gates on an empty project", async ({
-  page,
-}) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u9",
-          displayName: "Visitor",
-          email: "visitor@example.com",
-          provider: "email",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-
-  await page.goto("/editor");
-  const toolbar = page.locator(".toolbar-row").first();
-  const toolbarStyleBeforeDialog = await toolbar.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      backgroundColor: style.backgroundColor,
-      borderTopColor: style.borderTopColor,
-      display: style.display,
-    };
-  });
-  await page.getByTestId("publish-gallery-button").click();
-  const dialog = page.getByTestId("publish-gallery-dialog");
-  await expect(dialog).toBeVisible();
-  await expect
-    .poll(() =>
-      toolbar.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return {
-          backgroundColor: style.backgroundColor,
-          borderTopColor: style.borderTopColor,
-          display: style.display,
-        };
-      }),
-    )
-    .toEqual(toolbarStyleBeforeDialog);
-
-  // The empty canvas trips the content check — listed as advice, never as a
-  // hard gate: the checker has false positives and sketches are shareable.
-  const gates = page.getByTestId("publish-gallery-gates");
-  await expect(gates).toBeVisible();
-  await expect(gates).toContainText("publishing stays open");
-  await expect(gates).toContainText("Too little content");
-  const tags = dialog.getByTestId("publish-tags");
-  await expect(tags).toHaveCSS("display", "flex");
-  await expect(tags).toHaveCSS("flex-direction", "column");
-  await expect(dialog.getByLabel("Owner passphrase")).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: "Publish" })).toBeEnabled();
-});
-
-test("the publish dialog resolves internal Cell instances from the open Project", async ({
-  page,
-}) => {
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u9",
-          displayName: "Visitor",
-          email: "visitor@example.com",
-          provider: "email",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
-
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "hierarchical-publish.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(hierarchicalPublishProject())),
-  });
-  await page.getByTestId("publish-gallery-button").click();
-  const dialog = page.getByTestId("publish-gallery-dialog");
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByTestId("publish-gallery-gates")).toHaveCount(0);
-  await expect(dialog).not.toContainText("ERC_UNRESOLVED_SYMBOL");
-  await expect(dialog.getByRole("button", { name: "Publish" })).toBeEnabled();
-});
-
-test("an opened gallery entry offers updating in place", async ({ page }) => {
-  await page.setViewportSize({ width: 420, height: 900 });
-  await mockGallery(page, [ENTRY]);
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Token Zhang",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
-    }),
-  );
-  const updates: { method: string; body: { name: string } }[] = [];
-  await page.route(`**/api/gallery/${ENTRY.id}`, (route) => {
-    if (route.request().method() !== "PUT") return route.fallback();
-    updates.push({
-      method: route.request().method(),
-      body: route.request().postDataJSON() as { name: string },
-    });
-    return route.fulfill({ json: { id: ENTRY.id, status: "public" } });
-  });
-
-  await page.goto(`/g/${ENTRY.id}`);
-  await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText(
-    `Opened gallery circuit: ${ENTRY.name}`,
-  );
-  await page.getByTestId("publish-gallery-button").click();
-  const dialog = page.getByTestId("publish-gallery-dialog");
-  await expect(dialog).toBeVisible();
-  const publishMode = page.getByTestId("publish-mode");
-  await expect(publishMode).toBeVisible();
-  await expect(publishMode).toHaveCSS("display", "flex");
-  await expect(publishMode).toHaveCSS("flex-direction", "column");
-  const updateChoice = publishMode
-    .getByRole("radio", { name: /^Update /u })
-    .locator("..");
-  const newChoice = publishMode
-    .getByRole("radio", { name: "Publish as a new entry", exact: true })
-    .locator("..");
-  const [updateBox, newBox, historyBox] = await Promise.all([
-    updateChoice.boundingBox(),
-    newChoice.boundingBox(),
-    page.getByTestId("publish-history").boundingBox(),
-  ]);
-  expect(updateBox).not.toBeNull();
-  expect(newBox).not.toBeNull();
-  expect(historyBox).not.toBeNull();
-  expect(newBox!.y).toBeGreaterThanOrEqual(updateBox!.y + updateBox!.height);
-  expect(historyBox!.y).toBeGreaterThanOrEqual(newBox!.y + newBox!.height);
-  // The update option names exactly what it will replace.
-  await expect(publishMode).toContainText(ENTRY.name);
-  await expect(dialog.getByText("updates the entry in place")).toBeVisible();
-
-  await dialog.getByRole("button", { name: "Update entry" }).click();
-  await expect(page.getByTestId("status")).toContainText(
-    `Updated "${ENTRY.name}" in the gallery`,
-  );
-  expect(updates).toHaveLength(1);
-  expect(updates[0]!.body.name).toBe(ENTRY.name);
 });
 
 localTest(
-  "replacing the project retires the stale update offer",
+  "replacing the project retires the stale update offer and resolves the new one's Cells",
   async ({ page }) => {
     await mockGallery(page, [ENTRY]);
-    await page.route("**/api/gallery?limit=60", (route) =>
-      // The panel sees an empty gallery, so it offers the bundled examples
-      // — opening one replaces the Project with a non-gallery one.
-      route.fulfill({ json: { entries: [], nextCursor: null } }),
-    );
-    await page.route("**/api/auth/me", (route) =>
-      route.fulfill({
-        json: {
-          user: {
-            id: "u1",
-            displayName: "Token Zhang",
-            email: "owner@example.com",
-            provider: "github",
-            role: "user",
-            isAdmin: true,
-          },
-        },
-      }),
+    await signIn(
+      page,
+      sessionUser({ displayName: "Token Zhang", isAdmin: true }),
     );
 
     await page.goto(`/g/${ENTRY.id}`);
@@ -548,55 +289,470 @@ localTest(
     // Import a different Project over it: the gallery entry is no longer
     // active, so publishing must NOT offer updating it any more.
     await page.getByTestId("project-file").setInputFiles({
-      name: "fresh.icproj.json",
+      name: "hierarchical-publish.icproj.json",
       mimeType: "application/json",
-      buffer: Buffer.from(
-        serializeProject(createEmptyProject("fresh-project", "Fresh Start")),
-      ),
+      buffer: Buffer.from(serializeProject(hierarchicalPublishProject())),
     });
     // The fixture may pass through the rolling schema upgrade; either status
     // still proves that this different Project replaced the gallery entry.
-    await expect(page.getByTestId("status")).toContainText("fresh.icproj.json");
+    await expect(page.getByTestId("status")).toContainText(
+      "hierarchical-publish.icproj.json",
+    );
 
     await page.getByTestId("publish-gallery-button").click();
     const dialog = page.getByTestId("publish-gallery-dialog");
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId("publish-mode")).toHaveCount(0);
-    await expect(dialog.getByRole("button", { name: "Publish" })).toBeVisible();
+    // Its internal Cell resolves from the open Project: no gate trips.
+    await expect(dialog.getByTestId("publish-gallery-gates")).toHaveCount(0);
+    await expect(dialog).not.toContainText("ERC_UNRESOLVED_SYMBOL");
+    await expect(dialog.getByRole("button", { name: "Publish" })).toBeEnabled();
   },
 );
 
-test("publish tag suggestions remain clickable after filtering and save pending tags", async ({
+for (const scenario of [
+  "reopen and metadata",
+  "source replacement",
+  "unrelated Shelf rename",
+] as const) {
+  test(`Shelf publication: ${scenario}`, async ({ page }) => {
+    // Independent user journeys avoid accumulating reload time into one timeout.
+    // They share the mock service contract, not browser or saved-draft state.
+    test.setTimeout(60_000);
+    const user = sessionUser({ id: "shelf-owner", displayName: "Author" });
+    await signIn(page, user);
+    await mockGallery(page, []);
+    type Saved = {
+      id: string;
+      name: string;
+      updatedAt: string;
+      revision: number;
+      schemaVersion: number;
+      projectText: string;
+      galleryEntryId: string | null;
+    };
+    const drafts = new Map<string, Saved>();
+    const publications = new Map<
+      string,
+      { name: string; projectText: string; description: string; tags: string[] }
+    >();
+    const requests: { method: string; id: string; body: any }[] = [];
+    let failDetail = false;
+    await page.route(/\/api\/projects(?:\/[^/?]+)?$/, async (route) => {
+      const request = route.request();
+      const id = new URL(request.url()).pathname.split("/")[3];
+      if (request.method() === "GET")
+        return route.fulfill({
+          json: id
+            ? { project: drafts.get(id) }
+            : { projects: [...drafts.values()] },
+        });
+      const body = request.postDataJSON();
+      const previous = id ? drafts.get(id) : null;
+      const saved: Saved = {
+        ...body,
+        id: id ?? `draft-${drafts.size + 1}`,
+        updatedAt: new Date().toISOString(),
+        revision: (previous?.revision ?? 0) + 1,
+        schemaVersion: CURRENT_PROJECT_FILE_VERSION,
+        galleryEntryId: previous?.galleryEntryId ?? body.galleryEntryId ?? null,
+      };
+      drafts.set(saved.id, saved);
+      return route.fulfill({
+        status: previous ? 200 : 201,
+        json: { project: saved },
+      });
+    });
+    await page.route(
+      /\/api\/gallery\/(?:submissions|published-\d+)(?:\?summary=1)?$/,
+      async (route) => {
+        const req = route.request();
+        let id = new URL(req.url()).pathname.split("/")[3]!;
+        if (req.method() === "GET") {
+          if (failDetail)
+            return route.fulfill({
+              status: 503,
+              json: { error: "unreachable" },
+            });
+          const stored = publications.get(id)!;
+          return route.fulfill({
+            json: {
+              entry: { id, ...stored, author: "Author" },
+              ownerUserId: user.id,
+              projectText: stored.projectText,
+            },
+          });
+        }
+        const body = req.postDataJSON();
+        if (id === "submissions") id = `published-${publications.size + 1}`;
+        requests.push({ method: req.method(), id, body });
+        publications.set(id, body);
+        if (body.cloudProjectId) {
+          const draft = drafts.get(body.cloudProjectId)!;
+          expect(body.expectedGalleryEntryId).toBe(draft.galleryEntryId);
+          for (const other of drafts.values())
+            if (other.id !== draft.id && other.galleryEntryId === id)
+              other.galleryEntryId = null;
+          draft.galleryEntryId = id;
+        }
+        return route.fulfill({
+          status: req.method() === "POST" ? 201 : 200,
+          json: { id },
+        });
+      },
+    );
+    const save = async () => {
+      await (
+        await openMenu(page, "File")
+      )
+        .getByRole("button", { name: "Save", exact: true })
+        .click();
+      await expect(page.getByTestId("status")).toContainText("Saved");
+    };
+    const publishDialog = async () => {
+      await page.getByTestId("publish-gallery-button").click();
+      const dialog = page.getByTestId("publish-gallery-dialog");
+      await expect(dialog).toBeVisible();
+      return dialog;
+    };
+    if (scenario === "reopen and metadata") {
+      await page.goto("/editor?new=1");
+      await awaitEditorReady(page);
+      await chooseComponent(page, "resistor");
+      await page
+        .getByTestId("schematic-canvas")
+        .click({ position: { x: 340, y: 230 } });
+      await page.keyboard.press("Escape");
+      await save();
+      const originalPrivateText = drafts.get("draft-1")!.projectText;
+      let dialog = await publishDialog();
+      await dialog.getByLabel("Circuit name").fill("Public title");
+      await dialog
+        .getByLabel("Description", { exact: true })
+        .fill("Original description");
+      await dialog.getByLabel("Add tag").fill("resistor");
+      await dialog.getByLabel("Add tag").press("Enter");
+      await dialog
+        .getByRole("button", { name: "Publish", exact: true })
+        .click();
+      await expect(dialog).toHaveCount(0);
+      expect(drafts.get("draft-1")!.galleryEntryId).toBe("published-1");
+      expect(drafts.get("draft-1")!.projectText).toBe(originalPrivateText);
+      await page.goto("/editor?project=draft-1");
+      await awaitEditorReady(page);
+      // A restored Cloud tab is selected without downloading it again. Assert
+      // its actual circuit before editing, rather than the download's status.
+      await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+      await chooseComponent(page, "capacitor");
+      await page
+        .getByTestId("schematic-canvas")
+        .click({ position: { x: 410, y: 260 } });
+      await page.keyboard.press("Escape");
+      dialog = await publishDialog();
+      await expect(
+        dialog.getByRole("button", { name: "Update entry" }),
+      ).toBeEnabled();
+      await dialog.getByRole("button", { name: "Update entry" }).click();
+      await expect(dialog).toHaveCount(0);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]!.method).toBe("PUT");
+      expect(
+        parseProject(requests[1]!.body.projectText).documents[0]!.instances,
+      ).toHaveLength(2);
+      expect(drafts.get("draft-1")!.projectText).toBe(originalPrivateText);
+      await save();
+      // A transient metadata failure must not turn Update into an accidental new publication.
+      failDetail = true;
+      await page.goto("/editor?project=draft-1");
+      await awaitEditorReady(page);
+      dialog = await publishDialog();
+      await expect(dialog.getByRole("alert")).toContainText("Retry");
+      await expect(
+        dialog.getByRole("button", { name: "Publish", exact: true }),
+      ).toBeDisabled();
+      failDetail = false;
+      await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(
+        dialog.getByRole("button", { name: "Update entry" }),
+      ).toBeEnabled();
+      // Target changes follow that publication's metadata, even after reopening
+      // the dialog, while deliberate edits (including empty fields) remain intact.
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      dialog = await publishDialog();
+      publications.set("published-999", {
+        name: "Another publication",
+        projectText: originalPrivateText,
+        description: "Another description",
+        tags: ["capacitor"],
+      });
+      await dialog
+        .getByText("Use an existing Gallery publication…", { exact: true })
+        .click();
+      const choosePublication = async (id: string) => {
+        await dialog.getByLabel("Existing Gallery link").fill(id);
+        await dialog
+          .getByRole("button", { name: "Use this publication", exact: true })
+          .click();
+        await expect(
+          dialog.getByRole("radio", { name: /^Update /u }),
+        ).toBeChecked();
+      };
+      await choosePublication("published-999");
+      await expect(dialog.getByLabel("Circuit name")).toHaveValue(
+        "Another publication",
+      );
+      await expect(
+        dialog.getByLabel("Description", { exact: true }),
+      ).toHaveValue("Another description");
+      await expect(dialog.getByTestId("publish-tag-capacitor")).toBeVisible();
+      await expect(dialog.getByTestId("publish-tag-resistor")).toHaveCount(0);
+      await dialog.getByLabel("Description", { exact: true }).fill("");
+      await dialog.getByTestId("publish-tag-capacitor").click();
+      await choosePublication("published-1");
+      await expect(dialog.getByLabel("Circuit name")).toHaveValue(
+        "Public title",
+      );
+      await expect(
+        dialog.getByLabel("Description", { exact: true }),
+      ).toHaveValue("");
+      await expect(dialog.locator(".publish-gallery-tag-chips")).toHaveCount(0);
+      expect(drafts.get("draft-1")!.galleryEntryId).toBe("published-1");
+      publications.delete("published-999");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      return;
+    }
+    const original = createEmptyProject("original", "Original draft");
+    original.documents[0]!.instances.push({
+      id: "R1",
+      reference: "R1",
+      symbolId: "resistor",
+      placement: { position: { x: 200, y: 200 }, rotation: 0, mirror: "none" },
+      netlist: { parameters: { value: "1k" } },
+    });
+    const originalPrivateText = serializeProject(original);
+    drafts.set("draft-1", {
+      id: "draft-1",
+      name: original.name,
+      updatedAt: new Date().toISOString(),
+      revision: 1,
+      schemaVersion: CURRENT_PROJECT_FILE_VERSION,
+      projectText: originalPrivateText,
+      galleryEntryId: "published-1",
+    });
+    publications.set("published-1", {
+      name: "Public title",
+      projectText: originalPrivateText,
+      description: "Original description",
+      tags: ["resistor"],
+    });
+    let dialog;
+    // A different saved draft deliberately takes over the existing public address.
+    const replacement = createEmptyProject("replacement", "Replacement draft");
+    drafts.set("draft-2", {
+      id: "draft-2",
+      name: replacement.name,
+      updatedAt: new Date().toISOString(),
+      revision: 1,
+      schemaVersion: CURRENT_PROJECT_FILE_VERSION,
+      projectText: serializeProject(replacement),
+      galleryEntryId: null,
+    });
+    if (scenario === "unrelated Shelf rename") {
+      await page.goto("/g/published-1");
+      await awaitEditorReady(page);
+      dialog = await publishDialog();
+      await expect(
+        dialog.getByRole("button", { name: "Update entry" }),
+      ).toBeEnabled();
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await page
+        .getByLabel("Open Shelf project in tab", { exact: true })
+        .click();
+      const shelf = page.locator(".project-tabs-shelf");
+      await shelf
+        .getByRole("button", { name: "Replacement draft", exact: true })
+        .hover();
+      await shelf
+        .getByRole("button", { name: "Rename Replacement draft", exact: true })
+        .click();
+      await shelf
+        .getByRole("textbox", { name: "Shelf project name", exact: true })
+        .fill("Unrelated renamed");
+      await shelf
+        .getByRole("textbox", { name: "Shelf project name", exact: true })
+        .press("Enter");
+      await expect(
+        shelf.getByRole("button", { name: "Unrelated renamed", exact: true }),
+      ).toBeVisible();
+      await page
+        .getByLabel("Open Shelf project in tab", { exact: true })
+        .click();
+      dialog = await publishDialog();
+      await expect(
+        dialog.getByRole("button", { name: "Update entry" }),
+      ).toBeEnabled();
+      await dialog.getByRole("button", { name: "Update entry" }).click();
+      await expect(dialog).toHaveCount(0);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.method).toBe("PUT");
+      expect(requests[0]!.id).toBe("published-1");
+      return;
+    }
+    const oldDraft = drafts.get("draft-1")!.projectText;
+    await page.goto("/editor?project=draft-2");
+    await awaitEditorReady(page);
+    dialog = await publishDialog();
+    await dialog
+      .getByText("Use an existing Gallery publication…", { exact: true })
+      .click();
+    await dialog
+      .getByLabel("Existing Gallery link")
+      .fill("https://analog-canvas.tokenzhang.com/g/published-1");
+    await dialog
+      .getByRole("button", { name: "Use this publication", exact: true })
+      .click();
+    await expect(
+      dialog.getByRole("radio", { name: /^Update /u }),
+    ).toBeChecked();
+    await dialog.getByRole("button", { name: "Update entry" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(drafts.get("draft-1")!.projectText).toBe(oldDraft);
+    expect(drafts.get("draft-1")!.galleryEntryId).toBeNull();
+    expect(drafts.get("draft-2")!.galleryEntryId).toBe("published-1");
+    expect(publications.size).toBe(1);
+    await page.goto("/editor?project=draft-2");
+    await awaitEditorReady(page);
+    dialog = await publishDialog();
+    await expect(
+      dialog.getByRole("button", { name: "Update entry" }),
+    ).toBeEnabled();
+    await dialog
+      .getByRole("radio", { name: "Publish as a new entry", exact: true })
+      .check();
+    await dialog.getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(publications.size).toBe(2);
+    expect(drafts.get("draft-2")!.galleryEntryId).toBe("published-2");
+  });
+}
+
+test("Shelf cards leave native gestures alone, open their menu from the keyboard and export the saved text", async ({
   page,
 }) => {
-  await page.route("**/api/auth/me", (route) =>
+  // Duplicating, renaming and favouriting are the cloud-projects
+  // "Shelf card operations" tests.
+  const source = parseProject(
+    readFileSync(
+      new URL(
+        "../src/examples/five-transistor-ota-sky130.icproj.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const saved = {
+    id: "original",
+    name: "Folded OTA",
+    revision: 2,
+    updatedAt: "2026-09-21T08:00:00Z",
+    schemaVersion: CURRENT_PROJECT_FILE_VERSION,
+    projectText: serializeProject(source),
+    galleryEntryId: null,
+    favorite: false,
+  };
+  let deleted = false;
+  await signIn(page, sessionUser({ id: "owner", displayName: "Author" }));
+  await page.route("**/api/gallery**", (route) =>
     route.fulfill({
-      json: {
-        user: {
-          id: "tag-author",
-          displayName: "Author",
-          isAdmin: false,
-          role: "user",
-        },
-      },
+      json: { entries: [], tags: [], nextCursor: null, total: 0 },
     }),
   );
-  await mockGallery(page, []);
-  let submitted: { tags: string[] } | undefined;
-  await page.route("**/api/gallery/submissions", (route) => {
-    submitted = route.request().postDataJSON();
-    return route.fulfill({ status: 201, json: { id: "tag-test" } });
+  await page.route("**/api/projects**", (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/preview.svg")) return fulfillPreview(route);
+    if (request.method() === "DELETE") {
+      deleted = true;
+      return route.fulfill({ json: { deleted: true } });
+    }
+    return route.fulfill({
+      json: url.pathname.split("/")[3]
+        ? { project: saved }
+        : { projects: deleted ? [] : [saved] },
+    });
   });
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
-  await page.getByTestId("publish-gallery-button").click();
-  const dialog = page.getByTestId("publish-gallery-dialog");
-  await dialog.getByLabel("Add tag").fill("amp");
-  await dialog.getByTestId("publish-preset-amplifier").click();
-  await expect(dialog.getByTestId("publish-tag-amplifier")).toBeVisible();
-  await expect(dialog.getByTestId("publish-tag-amp")).toHaveCount(0);
-  await dialog.getByLabel("Add tag").fill("custom label");
-  await dialog.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  expect(submitted?.tags).toEqual(["amplifier", "custom label"]);
+  await page.goto("/?view=shelf");
+  const tile = page.getByTestId("shelf-tile-original");
+  const actions = page.getByTestId("shelf-actions-original");
+  await expect(tile).toBeVisible();
+  // The card no longer cancels the browser's context menu, and holding it on
+  // touch leaves native gestures alone too.
+  await tile.click({ button: "right" });
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  expect(
+    await tile.evaluate((element) =>
+      element.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    ),
+  ).toBe(true);
+  await tile.dispatchEvent("pointerdown", {
+    pointerType: "touch",
+    clientX: 120,
+    clientY: 220,
+  });
+  await page.waitForTimeout(600);
+  await tile.dispatchEvent("pointerup", { pointerType: "touch" });
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(page).toHaveURL(/view=shelf/);
+  // The actions button toggles its menu, opens it from the keyboard and
+  // takes focus back when it closes.
+  await actions.click();
+  await expect(actions).toHaveAttribute("aria-expanded", "true");
+  await actions.click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(actions).toHaveAttribute("aria-expanded", "false");
+  await actions.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
+  await actions.click();
+  await expect(
+    page.getByRole("menuitem", { name: "Open in new tab" }),
+  ).toHaveAttribute("target", "_blank");
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("menuitem", { name: "Export", exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("Folded OTA.icproj.json");
+  expect(readFileSync((await download.path())!, "utf8")).toBe(
+    saved.projectText,
+  );
+  // At phone width the inline rename fits, and Escape gives focus back.
+  await page.setViewportSize({ width: 360, height: 600 });
+  await actions.click();
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Project name", exact: true })
+    .fill("VeryLongCircuitName".repeat(6));
+  expect(
+    await page
+      .locator(".shelf-rename-form")
+      .evaluate((form) => form.scrollWidth <= form.clientWidth),
+  ).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
+  // Deleting asks first; keeping it gives focus back to the button.
+  const remove = page.getByTestId("shelf-delete-original");
+  await remove.click();
+  await page.getByRole("button", { name: "Keep it", exact: true }).click();
+  await expect(remove).toBeFocused();
+  expect(deleted).toBe(false);
+  await remove.click();
+  await page
+    .getByRole("button", { name: "Really delete", exact: true })
+    .click();
+  await expect(tile).toHaveCount(0);
+  expect(deleted).toBe(true);
 });
