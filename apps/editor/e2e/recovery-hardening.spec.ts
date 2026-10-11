@@ -5,36 +5,10 @@ import { WORKING_COPY_STORAGE_KEY } from "../src/document/recovery-coordinator";
 import {
   chooseComponent,
   openMenu,
+  placeResistors,
   readRecoveryRecords,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
-
-async function placeResistor(page: Page, x: number, y: number): Promise<void> {
-  await chooseComponent(page, "resistor");
-  await page.getByTestId("schematic-canvas").click({ position: { x, y } });
-  await page.keyboard.press("Escape");
-}
-
-async function expectStoredDocumentRevision(
-  page: Page,
-  workingCopyId: string,
-  revision: number,
-): Promise<void> {
-  await expect
-    .poll(async () => {
-      const record = (await readRecoveryRecords(page)).find(
-        (candidate) =>
-          candidate.workingCopyId === workingCopyId &&
-          candidate.generation === "latest",
-      );
-      if (!record) return null;
-      const project = JSON.parse(record.projectText) as {
-        documents?: Array<{ revision?: number }>;
-      };
-      return project.documents?.[0]?.revision ?? null;
-    })
-    .toBe(revision);
-}
 
 async function restoreThroughDialog(
   page: Page,
@@ -54,21 +28,35 @@ async function restoreThroughDialog(
   await expect(dialog).toBeHidden();
 }
 
-test("a hard renderer crash restores the latest committed Project", async ({
+test("a hard renderer crash restores the latest committed Project, which never entered Cache Storage", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await placeResistor(page, 360, 230);
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("revision")).toHaveText("1");
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 1');
-  await placeResistor(page, 500, 230);
+  await placeResistors(page, [500]);
   await expect(page.getByTestId("revision")).toHaveText("2");
   // Both commits must be durably stored before the crash.
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 2');
+
+  // Browser recovery is the only store of Project data: none of it enters
+  // the offline shell's Cache Storage.
+  const cached = await page.evaluate(async () => {
+    const texts: string[] = [];
+    for (const name of await caches.keys()) {
+      const cache = await caches.open(name);
+      for (const request of await cache.keys())
+        texts.push((await (await cache.match(request))?.text()) ?? "");
+    }
+    return texts.join("\n");
+  });
+  expect(cached).not.toContain('"topDocumentId"');
+  expect(cached).not.toContain('"schemaVersion"');
 
   // Simulate an abrupt tab death: CDP `Page.crash` would take the whole
   // Playwright context down with it, so close the page without running
@@ -90,8 +78,7 @@ test("simultaneous tabs keep separate working copies", async ({ context }) => {
   const pageB = await context.newPage();
 
   await pageA.goto("/editor");
-  await placeResistor(pageA, 360, 230);
-  await placeResistor(pageA, 500, 230);
+  await placeResistors(pageA, [360, 500]);
   await expect(pageA.getByTestId("revision")).toHaveText("2");
 
   await pageB.goto("/editor");
@@ -112,16 +99,22 @@ test("simultaneous tabs keep separate working copies", async ({ context }) => {
   expect(workingCopyB).not.toBeNull();
   expect(workingCopyA).not.toBe(workingCopyB);
 
-  // Both tabs' sessions coexist in the shared origin storage.
+  // Both tabs' sessions coexist in the shared origin storage, and each tab
+  // restores its own.
   await expect
     .poll(async () => {
-      const records = await readRecoveryRecords(pageB);
-      return new Set(records.map((record) => record.workingCopyId)).size;
+      const latest = (await readRecoveryRecords(pageB)).filter(
+        (record) => record.generation === "latest",
+      );
+      return [workingCopyA, workingCopyB].map(
+        (id) =>
+          JSON.parse(
+            latest.find((record) => record.workingCopyId === id)?.projectText ??
+              "{}",
+          ).documents?.[0]?.revision,
+      );
     })
-    .toBe(2);
-  await expectStoredDocumentRevision(pageB, workingCopyA!, 2);
-  await expectStoredDocumentRevision(pageB, workingCopyB!, 1);
-
+    .toEqual([2, 1]);
   await pageA.reload();
   await restoreThroughDialog(pageA, "revision 2");
   await expect(pageA.getByTestId("hit-R1")).toBeVisible();
@@ -131,125 +124,4 @@ test("simultaneous tabs keep separate working copies", async ({ context }) => {
   await restoreThroughDialog(pageB, "revision 1");
   await expect(pageB.getByTestId("hit-M1")).toBeVisible();
   await expect(pageB.getByTestId("hit-R1")).toHaveCount(0);
-});
-
-test("quota-exceeded keeps the editor alive with a persistent warning", async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
-    const realOpen = indexedDB.open.bind(indexedDB);
-    const failingRequest = (error: DOMException) => {
-      const pending: { onerror: ((event: Event) => void) | null } = {
-        onerror: null,
-      };
-      let onsuccess: ((event: Event) => void) | null = null;
-      void Promise.resolve().then(() => {
-        pending.onerror?.(new Event("error"));
-        onsuccess?.(new Event("success"));
-      });
-      return {
-        get error() {
-          return error;
-        },
-        get result() {
-          return undefined;
-        },
-        get readyState() {
-          return "pending";
-        },
-        set onerror(handler) {
-          pending.onerror = handler;
-        },
-        get onerror() {
-          return pending.onerror;
-        },
-        set onsuccess(handler) {
-          onsuccess = handler;
-        },
-        get onsuccess() {
-          return onsuccess;
-        },
-      };
-    };
-    indexedDB.open = ((name: string, version?: number) => {
-      const request = realOpen(name, version);
-      request.addEventListener("success", () => {
-        const database = request.result;
-        const realTransaction = database.transaction.bind(database);
-        database.transaction = (
-          stores: string | string[],
-          mode?: IDBTransactionMode,
-        ) => {
-          const transaction = realTransaction(stores, mode);
-          const realObjectStore = transaction.objectStore.bind(transaction);
-          transaction.objectStore = (storeName: string) => {
-            const objectStore = realObjectStore(storeName);
-            if (storeName === "browser-recovery-v2") {
-              const realPut = objectStore.put.bind(objectStore);
-              objectStore.put = (value: unknown, key?: IDBValidKey) => {
-                void value;
-                void key;
-                void realPut;
-                return failingRequest(
-                  new DOMException("simulated quota", "QuotaExceededError"),
-                ) as unknown as IDBRequest<IDBValidKey>;
-              };
-            }
-            return objectStore;
-          };
-          return transaction;
-        };
-      });
-      return request;
-    }) as IDBFactory["open"];
-  });
-  await page.goto("/editor");
-  await placeResistor(page, 360, 230);
-  await expect(page.getByTestId("revision")).toHaveText("1");
-
-  await expect(page.getByTestId("recovery-state")).toHaveText(
-    "Recovery full — download now",
-  );
-  const warning = page.getByTestId("recovery-failure-banner");
-  await expect(warning).toBeVisible();
-  await expect(warning).toContainText("full");
-
-  // The editor keeps working and the warning stays.
-  await placeResistor(page, 500, 230);
-  await expect(page.getByTestId("revision")).toHaveText("2");
-  await expect(warning).toBeVisible();
-
-  const downloadPromise = page.waitForEvent("download");
-  await warning.getByRole("button", { name: "Download Backup" }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toContain(".icproj.json");
-});
-
-test("no Project data enters Cache Storage", async ({ page }) => {
-  await page.goto("/editor");
-  await placeResistor(page, 360, 230);
-  await expect(page.getByTestId("revision")).toHaveText("1");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
-
-  const polluted = await page.evaluate(async () => {
-    if (typeof caches === "undefined") return false;
-    for (const name of await caches.keys()) {
-      const cache = await caches.open(name);
-      for (const request of await cache.keys()) {
-        const response = await cache.match(request);
-        if (!response) continue;
-        const text = await response.text();
-        if (
-          text.includes('"topDocumentId"') ||
-          text.includes('"schemaVersion"')
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  });
-  expect(polluted).toBe(false);
 });

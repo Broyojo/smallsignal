@@ -4,6 +4,7 @@ import {
   awaitEditorReady,
   chooseComponent,
   openCellManager,
+  placeResistors,
 } from "./editor-fixtures.js";
 
 /** The App module as the dev server serves it, or its chunk in the built editor. */
@@ -49,30 +50,9 @@ test("a render crash shows the recovery screen instead of a blank page", async (
   await awaitEditorReady(page);
 });
 
-test("a repeated route chunk failure is not misreported as an old build", async ({
-  page,
-}) => {
-  // #529 named the App chunk from the current deployment. Aborting its route
-  // reproduces a transient dynamic-import failure rather than a retired 404.
-  await page.route(APP_CHUNK, (route) => route.abort());
-  await page.goto("/editor");
-
-  // The loader retries one navigation. The second failure reaches a neutral,
-  // correctly diagnosed loading screen instead of the stale-build warning.
-  const crashScreen = page.getByTestId("editor-crash-screen");
-  await expect(crashScreen).toBeVisible();
-  await expect(crashScreen).toContainText(
-    "The editor could not finish loading",
-  );
-  await expect(crashScreen).toContainText("temporarily unavailable");
-  await expect(crashScreen).not.toContainText(
-    "This page is running an old version",
-  );
-  await expect(
-    crashScreen.getByRole("button", { name: "Try again" }),
-  ).toBeVisible();
-  await expect(crashScreen.getByTestId("crash-reload-clean")).toBeVisible();
-});
+// A transient route chunk failure's diagnosis and single retry are
+// route-chunk-loader's and EditorCrashScreen's; the case below reaches the
+// same screen through the loader with a retired chunk.
 
 /**
  * The recovery screen's own promise, tested end to end.
@@ -88,7 +68,7 @@ test("the recovery button gets a stuck page back into the editor", async ({
   page,
 }) => {
   // A retired chunk: the shape that genuinely means "this document can no
-  // longer boot", as distinct from the transient failure above.
+  // longer boot", as distinct from a transient failure (route-chunk-loader).
   let chunkRetired = true;
   await page.route(APP_CHUNK, (route) => {
     if (chunkRetired) return route.fulfill({ status: 404, body: "" });
@@ -126,11 +106,7 @@ test("a failed dialog chunk degrades to a scoped notice, not the crash screen", 
   page,
 }) => {
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("hit-R1")).toBeVisible();
 
   // A tab that survives a redeploy asks for chunk names the server no longer
@@ -173,11 +149,7 @@ test("a scene build failure degrades to the last good view and recovers", async 
   page,
 }) => {
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistors(page, [360]);
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   await expect(page.getByTestId("revision")).toHaveText("1");
 
@@ -208,11 +180,7 @@ test("a scene build failure degrades to the last good view and recovers", async 
   await page.evaluate(() => {
     window.__ICM_TEST_SCENE_CRASH__ = false;
   });
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 640, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistors(page, [640]);
   await expect(page.getByTestId("revision")).toHaveText("3");
   await expect(page.getByTestId("hit-R3")).toBeVisible();
   await expect(

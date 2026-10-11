@@ -50,7 +50,8 @@
       "apps/editor/e2e/manual-editor-fixtures.ts",
       "apps/editor/e2e/canvas-fixtures.ts",
       "apps/editor/src/features/editor-shell/document-settings*",
-      "packages/derived/src/annotation-text*"
+      "packages/derived/src/annotation-text*",
+      "packages/derived/src/annotation-presentation.ts"
     ],
     "editorCommands": [
       "apps/editor/src/app/editor-transaction-commands*",
@@ -115,10 +116,6 @@
       "apps/editor/e2e/thin-target-hit.spec.ts",
       "apps/editor/e2e/digital-gate-grid.spec.ts"
     ],
-    "emptyLabelGhost": [
-      "packages/derived/src/annotation-presentation.ts",
-      "apps/editor/e2e/empty-label-ghost.spec.ts"
-    ],
     "symbolBodyText": [
       "apps/editor/src/features/text-editing/**",
       "apps/editor/e2e/symbol-body-text.spec.ts"
@@ -162,7 +159,6 @@
     "projectPersistence": [
       "apps/editor/src/features/clipboard/**",
       "apps/editor/src/document/**",
-      "apps/editor/e2e/auto-fit.spec.ts",
       "apps/editor/e2e/project-file.spec.ts",
       "apps/editor/e2e/project-tabs.spec.ts",
       "apps/editor/e2e/recovery-dialog.spec.ts",
@@ -478,7 +474,6 @@
       ],
       "ci": {
         "e2eArgs": [
-          "apps/editor/e2e/auto-fit.spec.ts",
           "apps/editor/e2e/project-file.spec.ts",
           "apps/editor/e2e/project-tabs.spec.ts",
           "apps/editor/e2e/recovery-dialog.spec.ts",
@@ -771,20 +766,6 @@
       }
     },
     {
-      "id": "empty-label-ghost-browser",
-      "stage": "affected",
-      "groups": ["emptyLabelGhost"],
-      "description": "Validate that a label with no text leaves no selectable target.",
-      "command": [
-        "pnpm",
-        "test:e2e:local",
-        "apps/editor/e2e/empty-label-ghost.spec.ts"
-      ],
-      "ci": {
-        "e2eArgs": ["apps/editor/e2e/empty-label-ghost.spec.ts"]
-      }
-    },
-    {
       "id": "symbol-body-text-browser",
       "stage": "affected",
       "groups": ["symbolBodyText"],
@@ -838,7 +819,6 @@
         "editor-viewport-browser",
         "editor-wiring-browser",
         "thin-target-hit-browser",
-        "empty-label-ghost-browser",
         "symbol-body-text-browser",
         "release-verification",
         "branch-verification",

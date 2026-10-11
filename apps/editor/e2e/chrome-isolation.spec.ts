@@ -25,40 +25,8 @@ test("keeps editor chrome typography from suppressing SVG italics", async ({
   ).not.toBe("none");
 });
 
-test("links GitHub from the upper chrome and Change Log from the statusbar", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await expect(page.getByRole("button", { name: "Help" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "About" })).toHaveCount(0);
-  await expect(page.getByRole("dialog", { name: "Help" })).toHaveCount(0);
-
-  const repositoryLink = page.getByTestId("editor-repository-link");
-  await expect(repositoryLink).toBeVisible();
-  await expect(repositoryLink).toHaveAttribute(
-    "href",
-    "https://github.com/cascode-ai/analog-canvas",
-  );
-  await expect(repositoryLink).toHaveAttribute("target", "_blank");
-  await expect(
-    page.locator(".app-chrome-actions").getByTestId("editor-repository-link"),
-  ).toBeVisible();
-
-  const changeLog = page.getByTestId("statusbar-change-log");
-  await expect(changeLog).toBeVisible();
-  await expect(changeLog).toHaveAttribute(
-    "href",
-    "https://github.com/cascode-ai/analog-canvas/commits/main",
-  );
-  await expect(
-    page.locator(".app-statusbar").getByTestId("statusbar-change-log"),
-  ).toBeVisible();
-  await expect(page.getByRole("link", { name: "TokenZhang" })).toHaveAttribute(
-    "href",
-    "https://tokenzhang.com",
-  );
-});
-
+// The GitHub, change log and credit links are App.test's ("links GitHub and
+// the change log directly without a Help surface").
 test("keeps Gallery Library Netlist and Project Code together on the left at full and half width", async ({
   page,
 }) => {
@@ -148,7 +116,8 @@ test("compacts the editor header at half width and keeps the account role in its
   await expect(page.getByTestId("account-name")).toBeVisible();
   await expect(page.getByTestId("account-owner")).toBeHidden();
 
-  for (const width of [320, 360, 390, 480, 720, 1440]) {
+  // One width per editor-chrome.css band the original six covered.
+  for (const width of [320, 390, 480, 720, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     const leftControls = page.locator(
       ".app-brand > :is(.gallery-home-link, .header-gallery-link, .project-menu, .command-menu)",
@@ -215,17 +184,14 @@ test("compacts the editor header at half width and keeps the account role in its
     }
   }
 
-  // Beside the drawing, account navigation keeps this window for workspace return.
+  // Beside the drawing, account navigation keeps this window for workspace
+  // return; the account page's Owner role is account.test's.
   const name = page.getByTestId("account-name");
   await expect(name).toHaveAttribute("href", "/account");
   await expect(name).not.toHaveAttribute("target", "_blank");
-  await page.goto("/account");
-  await expect(page.getByTestId("account-menu-name")).toHaveText(
-    "A Very Long Display Name",
-  );
-  await expect(page.getByTestId("account-owner")).toHaveText("Owner");
 });
 
+// A failed providers or session request falls back to the account menu.
 test("keeps the account affordance when auth providers are unavailable", async ({
   page,
 }) => {

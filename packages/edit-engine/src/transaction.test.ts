@@ -2435,6 +2435,26 @@ describe("Edit Transaction envelope", () => {
     });
   });
 
+  it("refuses a netlist reference that does not match the device's prefix", () => {
+    const document = documentWithInstance();
+    const result = executeTransaction(document, {
+      ...transaction(),
+      edits: [
+        { kind: "set_instance_reference", instanceId: "M1", reference: "gm" },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      applied: false,
+      error: { code: "EDIT_PRECONDITION" },
+    });
+    expect(JSON.stringify(result)).toContain(
+      "Reference gm does not match this component prefix M",
+    );
+    expect(document.instances[0]!.reference).toBe("M1");
+  });
+
   it("keeps the schematic reference independent from the netlist reference", () => {
     const document = documentWithInstance();
     document.instances.push({

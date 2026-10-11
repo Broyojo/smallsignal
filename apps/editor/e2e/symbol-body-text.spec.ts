@@ -1,13 +1,13 @@
-import { parseSavedProject } from "./editor-fixtures";
-import { revealPropertiesShelf } from "./editor-fixtures.js";
 import { expect, test, type Page } from "@playwright/test";
 
 import {
   chooseComponent,
   downloadBytes,
   expectComponentCodeField,
+  parseSavedProject,
+  revealPropertiesShelf,
   setComponentCodeField,
-} from "./editor-fixtures";
+} from "./editor-fixtures.js";
 
 async function placeSymbol(page: Page, symbolId: string): Promise<void> {
   await page.goto("/editor");
@@ -28,21 +28,6 @@ async function placeMarkedSymbol(page: Page, symbolId: string): Promise<void> {
   await setComponentCodeField(page, "appearance.internalMark", "A");
 }
 
-async function placeBodyTextSymbol(
-  page: Page,
-  symbolId: string,
-): Promise<void> {
-  if (symbolId === "opamp-lettered") {
-    await placeMarkedSymbol(page, "opamp");
-    return;
-  }
-  if (symbolId === "voltage-amplifier-lettered") {
-    await placeMarkedSymbol(page, "voltage-amplifier");
-    return;
-  }
-  await placeSymbol(page, symbolId);
-}
-
 function bodyText(page: Page) {
   // Scoped to the drawing: the Library chips draw the same body text.
   return page.locator(
@@ -56,7 +41,7 @@ function bodyText(page: Page) {
  * else — net labels, notes, designators — edits on the canvas, so the same
  * gesture meant two different things depending on where the text lived.
  */
-test("double-clicking a Symbol's body text edits it on the canvas", async ({
+test("double-clicking a Symbol's body text edits it on the canvas and in Properties", async ({
   page,
 }) => {
   await placeSymbol(page, "dac");
@@ -78,33 +63,15 @@ test("double-clicking a Symbol's body text edits it on the canvas", async ({
 
   await editor.fill("8-bit DAC");
   await page.getByRole("button", { name: "Apply text changes" }).click();
-
   await expect(bodyText(page)).toContainText("8-bit DAC");
-});
 
-// Both surfaces write one field, so they cannot drift apart.
-test("the Properties field shows what the canvas edit committed", async ({
-  page,
-}) => {
-  await placeSymbol(page, "dac");
-
-  await page.getByTestId("hit-X1").dblclick();
-  await page
-    .getByRole("textbox", { name: "Canvas text editor" })
-    .fill("current steering");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-
+  // Both surfaces write one field, so they cannot drift apart.
   await page.getByTestId("hit-X1").click();
   await revealPropertiesShelf(page);
   const shelf = page.getByTestId("selection-shelf");
   if ((await shelf.getAttribute("aria-expanded")) !== "true")
     await shelf.click();
-  await expectComponentCodeField(
-    page,
-    "signalFlow.formula",
-    "current steering",
-  );
-
+  await expectComponentCodeField(page, "signalFlow.formula", "8-bit DAC");
   const saved = parseSavedProject(
     (await downloadBytes(page, "File", "Export Project File…")).toString(
       "utf8",
@@ -115,90 +82,17 @@ test("the Properties field shows what the canvas edit committed", async ({
     }>;
   };
   expect(saved.documents[0]!.instances[0]!.signalFlowParameters?.formula).toBe(
-    "current steering",
+    "8-bit DAC",
   );
-});
-
-// The owner's request: the text inside a block takes every format a label
-// takes — upright or italic, scripts, Greek letters — and keeps it.
-test("formats a Symbol's body text like any label", async ({ page }) => {
-  await placeSymbol(page, "adc");
-
-  await page.getByTestId("hit-X1").dblclick();
-  const editor = page.getByRole("textbox", { name: "Canvas text editor" });
-  await expect(editor).toHaveText("ADC");
-  for (const name of ["Bold", "Italic", "Subscript", "Insert formula"])
-    await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
-  await expect(page.getByLabel("Insert circuit symbol")).toBeVisible();
-
-  // A slanted ADC — a look its text alone cannot ask for — then a subscript.
-  await editor.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.getByRole("button", { name: "Italic", exact: true }).click();
-  await page.keyboard.press("End");
-  await page.keyboard.type("1");
-  await page.keyboard.press("Shift+ArrowLeft");
-  await page.getByRole("button", { name: "Subscript", exact: true }).click();
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-
-  const drawn = bodyText(page);
-  await expect(drawn).toHaveAttribute("data-formatted", "true");
-  await expect(drawn).toContainText("ADC1");
-  expect(
-    await drawn.evaluate((element) =>
-      [...element.querySelectorAll("text, tspan")].some(
-        (node) => getComputedStyle(node).fontStyle === "italic",
-      ),
-    ),
-  ).toBe(true);
-
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ) as {
-    documents: Array<{
-      instances: Array<{
-        signalFlowParameters?: { formula?: string; formulaFormat?: unknown };
-      }>;
-    }>;
-  };
-  const parameters = saved.documents[0]!.instances[0]!.signalFlowParameters;
-  expect(parameters?.formula).toBe("ADC1");
-  expect(parameters?.formulaFormat).toBeDefined();
-
-  // Reopening edits the stored look, subscript and all.
-  await page.getByTestId("hit-X1").dblclick();
-  await expect(editor.locator("sub")).toHaveText("1");
-});
-
-// Textbook notation, as the owner asked: a converter's word stands upright,
-// an amplifier's single-letter gain slants.
-async function slanted(page: Page): Promise<boolean> {
-  return bodyText(page).evaluate((element) =>
-    [element, ...element.querySelectorAll("text, tspan")].some(
-      (node) => getComputedStyle(node).fontStyle === "italic",
-    ),
-  );
-}
-
-test("stands a converter's word upright", async ({ page }) => {
-  await placeSymbol(page, "adc");
-  await expect(bodyText(page)).toHaveText("ADC");
-  expect(await slanted(page)).toBe(false);
-});
-
-test("slants an amplifier's single-letter gain", async ({ page }) => {
-  await placeBodyTextSymbol(page, "opamp-lettered");
-  await expect(bodyText(page)).toHaveText("A");
-  expect(await slanted(page)).toBe(true);
 });
 
 // The owner reported this on a DAC and said several other circuits have it
-// too. The DAC and the lettered op-amps edit their body text in the cases
+// too. The DAC and the lettered op-amp edit their body text in the cases
 // above and below; a signal-flow block is hit through its rectangle instead.
+// How the text is stored, formatted, slanted and kept upright under a mirror
+// is text-editing's, signal-flow-layout's and signal-flow-formula's.
 test("integrator edits its body text on the canvas", async ({ page }) => {
-  await placeBodyTextSymbol(page, "integrator");
+  await placeSymbol(page, "integrator");
 
   await page.getByTestId("hit-X1").dblclick();
   const editor = page.getByRole("textbox", { name: "Canvas text editor" });
@@ -208,26 +102,6 @@ test("integrator edits its body text on the canvas", async ({ page }) => {
   await editor.fill("Zz");
   await page.getByRole("button", { name: "Apply text changes" }).click();
   await expect(bodyText(page)).toContainText("Zz");
-});
-
-test("dac body text stays screen-upright after a left/right mirror", async ({
-  page,
-}) => {
-  await placeBodyTextSymbol(page, "dac");
-  await page.getByTestId("hit-X1").click();
-  await page.keyboard.press("Shift+R");
-
-  const matrix = await bodyText(page).evaluate((element) => {
-    const value = (element as SVGGraphicsElement).getScreenCTM();
-    if (!value) throw new Error("Body text has no screen transform");
-    return { a: value.a, b: value.b, c: value.c, d: value.d };
-  });
-  // The camera contributes a positive uniform scale. A formula left inside
-  // the mirrored Symbol group instead has a negative horizontal basis.
-  expect(matrix.a).toBeGreaterThan(0);
-  expect(matrix.d).toBeGreaterThan(0);
-  expect(Math.abs(matrix.b)).toBeLessThan(0.001);
-  expect(Math.abs(matrix.c)).toBeLessThan(0.001);
 });
 
 // The swapped-input sibling has no Library tile of its own: it is reached by

@@ -40,28 +40,6 @@ export async function revealPropertiesShelf(page: Page): Promise<void> {
   await expect(page.getByTestId("selection-shelf")).toBeVisible();
 }
 
-/** Wait for the recovery coordinator to finish creating its owned IDB store. */
-export async function awaitRecoveryStoreReady(page: Page): Promise<void> {
-  await page.waitForFunction(async () => {
-    const databases = await indexedDB.databases();
-    if (
-      !databases.some((database) => database.name === "analog-canvas-recovery")
-    ) {
-      return false;
-    }
-    return new Promise<boolean>((resolve) => {
-      const request = indexedDB.open("analog-canvas-recovery");
-      request.onerror = () => resolve(false);
-      request.onsuccess = () => {
-        const database = request.result;
-        const ready = database.objectStoreNames.contains("browser-recovery-v2");
-        database.close();
-        resolve(ready);
-      };
-    });
-  });
-}
-
 /**
  * Open one group of editor commands. The header has three menus: File (the
  * project and its file commands), Edit, and Circuit (Hierarchy and Netlist).
@@ -216,6 +194,19 @@ export async function chooseComponent(
 }
 
 /** Edit the selected component's strict JSON; valid changes update live. */
+/** Place one resistor at each x on row y, leaving no tool armed. */
+export async function placeResistors(
+  page: Page,
+  xs: number[],
+  y = 230,
+): Promise<void> {
+  for (const x of xs) {
+    await chooseComponent(page, "resistor");
+    await page.getByTestId("schematic-canvas").click({ position: { x, y } });
+    await page.keyboard.press("Escape");
+  }
+}
+
 export async function editComponentPropertyCode(
   page: Page,
   update: (value: Record<string, any>) => void,

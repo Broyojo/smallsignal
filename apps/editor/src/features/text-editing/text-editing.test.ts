@@ -246,6 +246,22 @@ describe("unified text editing", () => {
     );
     // A device reference has no complement: its overbar stays styling.
     expect(edit(device, overbar("M1"), "M1")).toBe("M1");
+    // A Net Label drawn under an overbar names the complement Net, too.
+    document.nets.push({ id: "net-f", terminals: [] });
+    document.connectivityEvidence.push({
+      id: "claim-f",
+      kind: "name-claim",
+      netId: "net-f",
+      name: "F",
+      scope: "local",
+      owner: { kind: "net-label", annotationId: "f-label" },
+    });
+    const netLabel: Annotation = {
+      ...bound("f-label", { kind: "net-name", netId: "net-f" }),
+      kind: "net-label",
+      netId: "net-f",
+    };
+    expect(edit(netLabel, overbar("F"), "F")).toBe("F_bar");
   });
   it("edits a scalar Value at its source and leaves compound MOS values to Properties", () => {
     const document = createEmptyDocument("value", "Value");

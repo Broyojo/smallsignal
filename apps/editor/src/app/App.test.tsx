@@ -144,6 +144,30 @@ describe("editor shell", () => {
     expect(netlistMenu).not.toContain('data-testid="check-and-save"');
     expect(markup).toContain('data-testid="check-and-save"');
     expect(markup).not.toContain("<summary>Run</summary>");
+    // Drawing tools live in the always-visible toolbar, not behind a header
+    // menu, and the retired tools stay retired.
+    const text = (html: string) => html.replace(/<[^>]+>/gu, "").trim();
+    const summaries = [
+      ...actionRow.matchAll(/<summary[^>]*>([\s\S]*?)<\/summary>/gu),
+    ].map((match) => text(match[1]!));
+    for (const group of ["Draw", "More", "View", "Style", "Export"])
+      expect(summaries).not.toContain(group);
+    const buttonNames = [
+      ...actionRow.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/gu),
+    ].flatMap((match) => [
+      text(match[2]!),
+      /aria-label="([^"]*)"/u.exec(match[1]!)?.[1] ?? "",
+    ]);
+    expect(buttonNames).toContain("Agent");
+    for (const retired of [
+      "Select",
+      "Junction",
+      "Crossing",
+      "Stretch",
+      "Detach",
+      "Guide",
+    ])
+      expect(buttonNames).not.toContain(retired);
     const agentEnd =
       markup.indexOf("</button>", markup.indexOf('data-testid="open-agent"')) +
       "</button>".length;
@@ -218,6 +242,10 @@ describe("editor shell", () => {
     expect(markup).toContain(
       'href="https://github.com/cascode-ai/analog-canvas"',
     );
+    // The repository opens beside the drawing, never in its place.
+    expect(
+      /<a[^>]*data-testid="editor-repository-link"[^>]*>/u.exec(markup)?.[0],
+    ).toContain('target="_blank"');
     expect(markup).toContain('data-testid="statusbar-change-log"');
     expect(markup).toContain(
       'href="https://github.com/cascode-ai/analog-canvas/commits/main"',

@@ -214,8 +214,9 @@ describe("validation gate planning", () => {
 // gate, and a named browser spec that no longer exists fails only in CI.
 describe("validation gate catalog paths", () => {
   it("points every path group pattern at a tracked path", () => {
-    // `packages/devices/src/descriptors/*switch*` was added to emptyLabelGhost
-    // two days after the directory it names was deleted, and never matched.
+    // `packages/devices/src/descriptors/*switch*` was once added to a path
+    // group two days after the directory it names was deleted, and never
+    // matched.
     const dead = [];
     for (const [group, patterns] of Object.entries(catalog.pathGroups)) {
       for (const pattern of patterns) {

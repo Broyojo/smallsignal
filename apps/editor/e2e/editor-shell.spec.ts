@@ -1,21 +1,15 @@
-// The editor around the drawing: formal export, the palette, recovery, the
-// command surface and menus, panels, the Properties dock, Project Code and
-// camera fitting.
+// The editor around the drawing: formal export, the command surface and
+// menus, panels, analytics, the Properties dock, Project Code and camera
+// fitting. Recovery is recovery-dialog's and recovery-hardening's.
 
 import { expect, test } from "@playwright/test";
-import { resolve } from "node:path";
 import { createEmptyProject } from "@icm/model";
 import {
   revealPropertiesShelf,
   awaitEditorReady,
-  clickCommand,
   clickDrawTool,
-  clickNetlistWorkflowCommand,
   downloadBytes,
-  readDocumentStyleCode,
   openMenu,
-  readRecoveryRecords,
-  recoveryProjectTexts,
   renameProject,
 } from "./editor-fixtures.js";
 import {
@@ -23,7 +17,7 @@ import {
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
 
-test("formal SVG and PNG contain wide rotated edge labels without clipping", async ({
+test("formal SVG keeps wide rotated edge labels inside its figure, and the PNG is that figure", async ({
   page,
 }) => {
   const project = createEmptyProject("export-ink", "Export ink");
@@ -86,119 +80,59 @@ test("formal SVG and PNG contain wide rotated edge labels without clipping", asy
   const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
     "utf8",
   );
-  const png = await downloadBytes(page, "File", "Export PNG");
-  const result = await page.evaluate(
-    async ({ svg, png }) => {
-      const frame = document.createElement("iframe");
-      document.body.append(frame);
-      try {
-        const doc = frame.contentDocument!;
-        // The faces the PNG is drawn in and the canvas shows, so a system
-        // without the schematic fonts installed checks the same text (#1436).
-        const faces = doc.createElement("style");
-        faces.textContent = [...document.querySelectorAll("style")]
-          .map((style) => style.textContent ?? "")
-          .filter((css) => css.includes('font-family:"Metropolis"'))
-          .join("");
-        doc.head.append(faces);
-        doc.body.innerHTML = svg;
-        doc.querySelector("svg")!.getBBox();
-        await doc.fonts.ready;
-        const root = doc.querySelector("svg")!;
-        const view = root.viewBox.baseVal;
-        const inverse = root.getCTM()!.inverse();
-        const overflows: string[] = [];
-        for (const text of root.querySelectorAll("text")) {
-          const box = text.getBBox();
-          const transform = inverse.multiply(text.getCTM()!);
-          for (const x of [box.x, box.x + box.width])
-            for (const y of [box.y, box.y + box.height]) {
-              const p = new DOMPoint(x, y).matrixTransform(transform);
-              if (
-                p.x < view.x ||
-                p.y < view.y ||
-                p.x > view.x + view.width ||
-                p.y > view.y + view.height
-              )
-                overflows.push(text.textContent ?? "");
-            }
-        }
-        const image = new Image();
-        image.src = png;
-        await image.decode();
-        const canvas = document.createElement("canvas");
-        canvas.width = image.width;
-        canvas.height = image.height;
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(image, 0, 0);
-        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let borderInk = 0,
-          ink = 0;
-        for (let y = 0; y < canvas.height; y++)
-          for (let x = 0; x < canvas.width; x++) {
-            const offset = (y * canvas.width + x) * 4;
-            if (pixels[offset]! < 128 && pixels[offset + 3]! > 128) {
-              ink++;
-              if (
-                x < 2 ||
-                y < 2 ||
-                x >= canvas.width - 2 ||
-                y >= canvas.height - 2
-              )
-                borderInk++;
-            }
+  const result = await page.evaluate(async (svg) => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    try {
+      const doc = frame.contentDocument!;
+      // The faces the PNG is drawn in and the canvas shows, so a system
+      // without the schematic fonts installed checks the same text (#1436).
+      const faces = doc.createElement("style");
+      faces.textContent = [...document.querySelectorAll("style")]
+        .map((style) => style.textContent ?? "")
+        .filter((css) => css.includes('font-family:"Metropolis"'))
+        .join("");
+      doc.head.append(faces);
+      doc.body.innerHTML = svg;
+      doc.querySelector("svg")!.getBBox();
+      await doc.fonts.ready;
+      const root = doc.querySelector("svg")!;
+      const view = root.viewBox.baseVal;
+      const inverse = root.getCTM()!.inverse();
+      const overflows: string[] = [];
+      for (const text of root.querySelectorAll("text")) {
+        const box = text.getBBox();
+        const transform = inverse.multiply(text.getCTM()!);
+        for (const x of [box.x, box.x + box.width])
+          for (const y of [box.y, box.y + box.height]) {
+            const p = new DOMPoint(x, y).matrixTransform(transform);
+            if (
+              p.x < view.x ||
+              p.y < view.y ||
+              p.x > view.x + view.width ||
+              p.y > view.y + view.height
+            )
+              overflows.push(text.textContent ?? "");
           }
-        return {
-          faceCss: faces.textContent.length,
-          overflows,
-          borderInk,
-          ink,
-          width: image.width,
-          expectedWidth: Math.round(view.width * 3),
-          textCount: root.querySelectorAll("text").length,
-        };
-      } finally {
-        frame.remove();
       }
-    },
-    { svg, png: `data:image/png;base64,${png.toString("base64")}` },
-  );
+      return {
+        faceCss: faces.textContent.length,
+        overflows,
+        viewWidth: view.width,
+        textCount: root.querySelectorAll("text").length,
+      };
+    } finally {
+      frame.remove();
+    }
+  }, svg);
   expect(result.textCount).toBe(4);
   expect(result.faceCss).toBeGreaterThan(0);
   expect(result.overflows).toEqual([]);
-  expect(result.ink).toBeGreaterThan(1000);
-  expect(result.borderInk).toBe(0);
-  expect(result.width).toBe(result.expectedWidth);
+  // The PNG is that same figure at three times its size (exporters' "derives
+  // SVG, PNG, and PDF from one formal scene"; its faces are browser-raster's).
+  const png = await downloadBytes(page, "File", "Export PNG");
+  expect(png.readUInt32BE(16)).toBe(Math.round(result.viewWidth * 3));
   await expect(page.locator('iframe[aria-hidden="true"]')).toHaveCount(0);
-});
-
-test("shows faithful symbol previews for the reviewed Razavi palette", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.keyboard.press("i");
-  const dialog = page.getByRole("dialog", { name: "Insert Component" });
-  const search = dialog.getByLabel("Component search");
-  // Browser coverage owns tile-to-artwork wiring. Catalogue completeness and
-  // every symbol's geometry are covered by the symbol contract and goldens.
-  for (const symbolId of ["pmos", "resistor", "comparator"]) {
-    await search.fill(symbolId);
-    await expect(
-      dialog
-        .getByTestId(`insert-component-${symbolId}`)
-        .locator("svg.insert-symbol-artwork"),
-    ).toBeVisible();
-  }
-  await search.fill("pmos");
-  const tileArtwork = dialog
-    .getByTestId("insert-component-pmos")
-    .locator("svg.insert-symbol-artwork");
-  await expect(tileArtwork.locator("circle")).toHaveCount(0);
-  await expect(tileArtwork.locator("polygon")).toHaveCount(3);
-  await expect(dialog.getByTestId("insert-component-nmos3")).toHaveCount(0);
-  await expect(dialog.getByTestId("insert-component-pmos3")).toHaveCount(0);
-  await page.keyboard.press("Escape");
 });
 
 test("right-drag frames a region and fits the camera to it transiently", async ({
@@ -255,7 +189,9 @@ test("right-drag frames a region and fits the camera to it transiently", async (
   await expect(page.getByTestId("revision")).toHaveText("1");
 });
 
-test("edits the complete Project Code with one undo boundary and protects a stale draft", async ({
+// Applying edited code in one undoable step is project-source-format's and
+// project-code's ("commits authored code once…").
+test("shows the complete Project Code and protects an invalid or stale draft", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -291,25 +227,6 @@ test("edits the complete Project Code with one undo boundary and protects a stal
     }),
   ).toBeGreaterThan(1);
 
-  const edited = structuredClone(original);
-  edited.name = "Edited Project";
-  edited.documents[0]!.name = "Edited Main";
-  await projectCode.fill(JSON.stringify(edited, null, 2));
-  await projectCode.press("ControlOrMeta+Enter");
-  await expect(page.getByTestId("project-name")).toHaveText("Edited Project");
-  await expect(page.getByTestId("active-document-name")).toHaveText(
-    "Edited Main",
-  );
-  await expect(page.getByTestId("status")).toContainText(
-    "Applied complete Project Code",
-  );
-
-  await page.getByTestId("draw-tool-undo").click();
-  await expect(page.getByTestId("project-name")).toHaveText(original.name);
-  await expect(page.getByTestId("active-document-name")).toHaveText(
-    original.documents[0]!.name,
-  );
-
   await projectCode.fill("{");
   await expect(apply).toBeDisabled();
   await expect(page.getByRole("alert")).toBeVisible();
@@ -344,64 +261,42 @@ test("keeps panel tooltips visible and exposes panel keyboard shortcuts", async 
     await page.evaluate(() => window.innerWidth - 8),
   );
 
-  const shortcuts = [
-    ["g", "examples-toggle"],
-    ["b", "library-toggle"],
-    ["n", "netlist-panel-toggle"],
-  ] as const;
-  for (const [key, testId] of shortcuts) {
-    const toggle = page.getByTestId(testId);
-    const initialPressed = await toggle.getAttribute("aria-pressed");
-    await page.keyboard.press(key);
-    await expect(toggle).toHaveAttribute(
-      "aria-pressed",
-      initialPressed === "true" ? "false" : "true",
-    );
-    await page.keyboard.press(key);
-    await expect(toggle).toHaveAttribute("aria-pressed", initialPressed!);
-  }
+  // B and N toggle their panels the same way (editor-shortcuts maps all three).
+  const initialPressed = await gallery.getAttribute("aria-pressed");
+  await page.keyboard.press("g");
+  await expect(gallery).toHaveAttribute(
+    "aria-pressed",
+    initialPressed === "true" ? "false" : "true",
+  );
+  await page.keyboard.press("g");
+  await expect(gallery).toHaveAttribute("aria-pressed", initialPressed!);
 });
 
-test("uses automatic recovery and guards shortcuts while typing", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 360, y: 220 });
-  await expect(page.getByTestId("revision")).toHaveText("1");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
-
-  await page.reload();
-  // Refresh restores this window's workspace without a second manual restore.
-  await awaitEditorReady(page);
-  await expect(page.getByTestId("revision")).toHaveText("1");
-
-  await page.keyboard.press("i");
-  const search = page.getByLabel("Component search");
-  await search.fill("r");
-  await page.keyboard.press("r");
-  await expect(page.getByTestId("revision")).toHaveText("1");
-});
-
-test("keeps component insertion and inspection from resizing the canvas", async ({
+test("keeps insertion, selection and inspection from resizing the canvas, and typing from triggering shortcuts", async ({
   page,
 }) => {
   await page.goto("/editor");
   await revealPropertiesShelf(page);
   const canvas = page.getByTestId("schematic-canvas");
-  const beforePlaceCanvas = await canvas.boundingBox();
-  if (!beforePlaceCanvas) throw new Error("Canvas is not measurable");
+  const width = (await canvas.boundingBox())!.width;
+
+  // Selecting a placed component leaves the explicitly collapsed inspector
+  // collapsed; it must not change the canvas width.
+  await placeComponent(page, "resistor", { x: 280, y: 180 });
+  await expect(page.getByTestId("hit-R1")).toBeVisible();
+  expect((await canvas.boundingBox())!.width).toBe(width);
 
   await page.keyboard.press("i");
-  await expect(
-    page.getByRole("dialog", { name: "Insert Component" }),
-  ).toBeVisible();
-  expect((await canvas.boundingBox())?.width).toBe(beforePlaceCanvas.width);
   const dialog = page.getByRole("dialog", { name: "Insert Component" });
-  await dialog.getByLabel("Component search").fill("pmos");
+  await expect(dialog).toBeVisible();
+  expect((await canvas.boundingBox())!.width).toBe(width);
+  // Typing in the search field never reaches the canvas: R does not rotate.
+  const search = dialog.getByLabel("Component search");
+  await search.fill("r");
+  await page.keyboard.press("r");
+  await expect(page.getByTestId("revision")).toHaveText("1");
+  await search.fill("pmos");
   await dialog.getByTestId("insert-component-pmos").click();
-
   await canvas.click({ position: { x: 420, y: 260 } });
 
   await expect(
@@ -414,97 +309,21 @@ test("keeps component insertion and inspection from resizing the canvas", async 
   // has started.
   await expect
     .poll(async () => (await canvas.boundingBox())?.width ?? 0)
-    .toBeLessThan(beforePlaceCanvas.width);
-
+    .toBeLessThan(width);
   await expect(page.getByTestId("selection-shelf")).toContainText("M1");
 });
 
-test("retains recovery across export but honors explicit discard on replacement", async ({
+// The header's menu groups and its retired tools are App.test's; this is
+// the hover colour, one-open-menu focus and the served PWA manifest.
+test("keeps the command surface compact, its menus dismissable, and publishes PWA metadata", async ({
   page,
 }) => {
   await page.goto("/editor");
-  for (const x of [280, 360, 440]) {
-    await placeComponent(page, "resistor", { x, y: 220 });
-  }
-  await expect(page.getByTestId("revision")).toHaveText("3");
-
-  // Saving downloads the formal Project but never clears the browser
-  // recovery copies; waiting past the debounce proves they survive.
-  await downloadBytes(page, "File", "Export Project File…");
-  await page.waitForTimeout(500);
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 3');
-
-  // A fresh edit invalidates the export's safe stamp, so the replacement
-  // below prompts again.
-  await placeComponent(page, "resistor", { x: 520, y: 220 });
-  await expect(page.getByTestId("revision")).toHaveText("4");
-  // Let the debounced recovery write for revision 4 settle before replacing;
-  // a replacement inside the window intentionally drops only the pending
-  // write (stale-write protection), never the stored one.
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 4');
-  await page
-    .getByTestId("project-file")
-    .setInputFiles(
-      resolve(
-        process.cwd(),
-        "fixtures/projects/manual-basics/project.icproj.json",
-      ),
-    );
-  await page
-    .getByRole("dialog", { name: "Unsaved changes" })
-    .getByRole("button", { name: "Continue without saving" })
-    .click();
-  await expect(page.getByTestId("active-document-name")).toHaveText(
-    "Manual Editor Demo",
-  );
-  // Discard is not a hidden undo stack: it removes the outgoing working copy,
-  // while the incoming Project seeds its own bounded recovery session.
-  await expect
-    .poll(async () => {
-      const texts = await recoveryProjectTexts(page);
-      return (
-        !texts.includes('"revision": 2') &&
-        texts.includes('"name": "Phase 1 Manual Editor"')
-      );
-    })
-    .toBe(true);
-});
-
-test("discard recovery clears the recovery slot", async ({ page }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 360, y: 220 });
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
-
-  await page.reload();
-  await clickCommand(page, "File", "Recover Unsaved Work…");
-  await page
-    .getByRole("dialog", { name: "Recover recent work" })
-    .getByRole("button", { name: "Delete" })
-    .click();
-  await expect
-    .poll(async () => (await readRecoveryRecords(page)).length)
-    .toBe(0);
-});
-
-test("keeps the production command surface compact and publishes PWA metadata", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  // The right action group holds simulation, Agent, and Publish; File, Edit,
-  // and Circuit remain in the left brand group.
-  const toolbar = page.locator(".app-chrome-actions");
-  await expect(toolbar.getByTestId("open-analog-simulation")).toBeVisible();
-  await expect(toolbar.getByTestId("open-agent")).toBeVisible();
-  await expect(toolbar.getByTestId("publish-gallery-button")).toBeVisible();
   // Publish rests in soft blue and turns solid blue under the pointer
   // (#1612); the app-wide button hover once turned it grey instead.
-  const publish = toolbar.getByTestId("publish-gallery-button");
+  const publish = page
+    .locator(".app-chrome-actions")
+    .getByTestId("publish-gallery-button");
   // Read the settled colour: a running transition still reports its start.
   const fill = () =>
     publish.evaluate((element) => {
@@ -514,78 +333,37 @@ test("keeps the production command surface compact and publishes PWA metadata", 
   expect(await fill()).toBe("rgba(35, 131, 226, 0.1)");
   await publish.hover();
   await expect.poll(fill).toBe("rgb(35, 131, 226)");
+
+  // Header menus, one open at a time; a blank canvas click or Escape
+  // dismisses them without navigating away.
   await expect(page.getByTestId("copy-netlist")).toBeHidden();
-  await expect(page.getByTestId("check-and-save")).toBeHidden();
-  // Three header menus, one open at a time: File, Edit, and Circuit
-  // (Hierarchy and Netlist).
   const netlist = await openMenu(page, "Netlist");
   await expect(netlist.getByTestId("copy-netlist")).toBeVisible();
   const file = await openMenu(page, "File");
   await expect(file.getByTestId("check-and-save")).toBeVisible();
   await expect(page.getByTestId("copy-netlist")).toBeHidden();
-  for (const group of ["Edit", "Hierarchy"])
-    await expect(await openMenu(page, group)).toBeVisible();
-  await expect(page.getByTestId("check-and-save")).toBeHidden();
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("circuit-menu")).not.toHaveAttribute("open");
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  await expect(
-    page.getByRole("region", { name: "Analog simulation" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Exit Simulation" }).click();
+  const menu = page.getByTestId("project-menu");
   await page
-    .getByRole("dialog", { name: "Exit Simulation?" })
-    .getByRole("button", { name: "Exit Simulation", exact: true })
-    .click();
-  await expect(
-    page.getByRole("dialog", { name: "Exit Simulation?" }),
-  ).toHaveCount(0);
-  // Drawing tools live in the always-visible toolbar, not behind a menu.
-  await expect(toolbar.locator("summary", { hasText: "Draw" })).toHaveCount(0);
+    .getByTestId("schematic-canvas")
+    .click({ position: { x: 400, y: 300 } });
+  await expect(menu).not.toHaveAttribute("open", "");
+  await openMenu(page, "File");
+  await page.keyboard.press("Escape");
+  await expect(menu).not.toHaveAttribute("open", "");
   await expect(page.getByTestId("draw-toolbar")).toBeVisible();
-  await expect(toolbar.locator("summary", { hasText: "More" })).toHaveCount(0);
-  await expect(toolbar.locator("summary", { hasText: "View" })).toHaveCount(0);
-  await expect(toolbar.locator("summary", { hasText: "Style" })).toHaveCount(0);
-  await expect(toolbar.locator("summary", { hasText: "Export" })).toHaveCount(
-    0,
-  );
-  await clickDrawTool(page, "wire");
-  await expect(page.getByTestId("active-tool")).toHaveText("wire");
-  for (const obsolete of [
-    "Select",
-    "Junction",
-    "Crossing",
-    "Stretch",
-    "Detach",
-    "Guide",
-  ]) {
-    await expect(
-      toolbar.getByRole("button", { name: obsolete, exact: true }),
-    ).toHaveCount(0);
-  }
 
-  const manifest = await page
-    .locator('link[rel="manifest"]')
-    .getAttribute("href");
-  expect(manifest).toBe("/manifest.webmanifest");
-  const manifestPayload = await (
-    await page.request.get("/manifest.webmanifest")
-  ).json();
-  expect(manifestPayload).toMatchObject({
+  expect(await page.locator('link[rel="manifest"]').getAttribute("href")).toBe(
+    "/manifest.webmanifest",
+  );
+  expect(
+    await (await page.request.get("/manifest.webmanifest")).json(),
+  ).toMatchObject({
     name: "Analog Canvas",
     display: "standalone",
     theme_color: "#2383e2",
     icons: [
-      {
-        src: "./icon-192.png?v=nmos-4",
-        sizes: "192x192",
-        purpose: "any",
-      },
-      {
-        src: "./icon-512.png?v=nmos-4",
-        sizes: "512x512",
-        purpose: "any",
-      },
+      { src: "./icon-192.png?v=nmos-4", sizes: "192x192", purpose: "any" },
+      { src: "./icon-512.png?v=nmos-4", sizes: "512x512", purpose: "any" },
     ],
   });
 });
@@ -679,41 +457,8 @@ test("shows first-party visitor analytics without tracking the dashboard itself"
   expect(dashboardTracked).toBe(false);
 });
 
-test("dismisses a command menu on outside click or Escape", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  // The File commands are a group in the header's one menu.
-  const menu = page.getByTestId("project-menu");
-  await openMenu(page, "File");
-  await expect(menu).toHaveAttribute("open", "");
-
-  // A blank canvas click dismisses the menu without navigating away.
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 400, y: 300 } });
-  await expect(menu).not.toHaveAttribute("open", "");
-
-  await openMenu(page, "File");
-  await page.keyboard.press("Escape");
-  await expect(menu).not.toHaveAttribute("open", "");
-});
-
-test("selecting an object does not change canvas width", async ({ page }) => {
-  await page.goto("/editor");
-  await revealPropertiesShelf(page);
-  const canvas = page.getByTestId("schematic-canvas");
-  const widthBefore = (await canvas.boundingBox())!.width;
-
-  // Selecting a placed component leaves the explicitly collapsed inspector
-  // collapsed; it must not change the canvas width.
-  await placeComponent(page, "resistor", { x: 280, y: 180 });
-  await expect(page.getByTestId("hit-R1")).toBeVisible();
-
-  const widthAfter = (await canvas.boundingBox())!.width;
-  expect(widthAfter).toBe(widthBefore);
-});
-
+// The settings code, its sixteen bounded choices, the serialized shape and
+// Defaults are document-settings-code's; this is the docked surface.
 test("docked Properties JSON is the only global configuration surface", async ({
   page,
 }) => {
@@ -726,54 +471,21 @@ test("docked Properties JSON is the only global configuration surface", async ({
   // the single copyable Properties JSON surface.
   const propertiesButton = page.getByTestId("draw-tool-document-style");
   await expect(propertiesButton).toHaveText("Properties");
-  await expect(propertiesButton).toHaveAttribute(
-    "title",
-    "Properties: Ports, canvas, and selected objects",
-  );
   await clickDrawTool(page, "document-style");
   const settings = page.getByLabel("Document settings");
   await expect(settings).toBeVisible();
-  await expect(
-    settings.getByRole("button", {
-      name: "Format all Port labels in this Cell",
-    }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("region", { name: "Port label formatting" }),
-  ).toHaveCount(0);
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   await expect(settings.getByLabel("Editable Properties code")).toBeVisible();
-  await expect(settings.locator("select.cm-netlist-target-select")).toHaveCount(
-    0,
-  );
-  await expect(
-    settings.getByRole("button", { name: "Show Font size previews" }),
-  ).toBeVisible();
-  await expect(
-    settings.getByRole("button", {
-      name: "Show NMOS body / substrate previews",
-    }),
-  ).toBeVisible();
-  await expect(
-    settings.getByRole("button", {
-      name: "Show PMOS previews",
-    }),
-  ).toBeVisible();
-  await expect(
-    settings.getByRole("button", { name: /^Show .+ previews$/u }),
-  ).toHaveCount(16);
+
+  // The subscript preview draws a real lowered suffix, not Unicode scripts.
   await settings
     .getByRole("button", {
       name: "Show Subscript after first letter previews",
     })
     .click();
-  const subscriptPreview = page.getByRole("listbox", {
-    name: "Subscript after first letter previews",
-  });
-  await expect(subscriptPreview).toBeVisible();
-  const subscriptOption = subscriptPreview.getByRole("option", {
-    name: /Subscript after the first letter/u,
-  });
+  const subscriptOption = page
+    .getByRole("listbox", { name: "Subscript after first letter previews" })
+    .getByRole("option", { name: /Subscript after the first letter/u });
   const subscriptFirst = subscriptOption.locator(
     ".cm-property-label-preview-first",
   );
@@ -781,26 +493,14 @@ test("docked Properties JSON is the only global configuration surface", async ({
     ".cm-property-label-preview-suffix[data-subscript]",
   );
   await expect(subscriptSuffix).toHaveText("in");
-  const firstBox = await subscriptFirst.boundingBox();
-  const suffixBox = await subscriptSuffix.boundingBox();
-  expect(firstBox).not.toBeNull();
-  expect(suffixBox).not.toBeNull();
-  expect(suffixBox!.height).toBeGreaterThan(0);
-  expect(suffixBox!.y).toBeGreaterThan(firstBox!.y + 6);
+  const firstBox = (await subscriptFirst.boundingBox())!;
+  const suffixBox = (await subscriptSuffix.boundingBox())!;
+  expect(suffixBox.height).toBeGreaterThan(0);
+  expect(suffixBox.y).toBeGreaterThan(firstBox.y + 6);
   await expect(subscriptOption).not.toContainText("ᵢₙ");
   await page.keyboard.press("Escape");
-  await settings
-    .getByRole("button", { name: "Show NMOS body / substrate previews" })
-    .click();
-  const bulkPreview = page.getByRole("listbox", {
-    name: "NMOS body / substrate previews",
-  });
-  await expect(bulkPreview).toContainText("VSSNMOS→VSS");
-  await page.keyboard.press("Escape");
-  // The one note: the NMOS body default is also the PDK substrate (#1530).
-  await expect(settings.locator(".cm-property-unit")).toHaveText([
-    "// and substrate",
-  ]);
+
+  // A preview choice is applied to the live drawing, and Defaults undoes it.
   await settings
     .getByRole("button", { name: "Show Font size previews" })
     .click();
@@ -812,33 +512,8 @@ test("docked Properties JSON is the only global configuration surface", async ({
   await expect(page.getByTestId("status")).toContainText(
     "Updated Properties code",
   );
-
-  const styleSource = await readDocumentStyleCode(page);
-  const style = JSON.parse(styleSource);
-  expect(style.bulkDefaults).toEqual({ nmos: "VSS", pmos: "VDD" });
-  expect(style.labels).toEqual({
-    first_letter_italic: true,
-    subscript_after_first: false,
-    subscript_case: "preserve",
-    subscript_italic: false,
-    underscore_subscript: true,
-  });
-  expect(style.canvas).toEqual({
-    showGrid: true,
-    annotationGrid: 5,
-    drawAngle: "free",
-    scrollBehavior: "auto",
-  });
-  await settings
-    .getByLabel("Editable Properties code", { exact: true })
-    .press("Enter");
-  expect(await readDocumentStyleCode(page)).toBe(styleSource);
-
   await settings.getByRole("button", { name: "Defaults", exact: true }).click();
   await expect(label).toHaveAttribute("font-size", "15.116");
-  expect(
-    JSON.parse(await readDocumentStyleCode(page)).appearance.fontScale,
-  ).toBe(1);
 
   // Object Properties replace global document settings instead of stacking
   // a second code editor below them.

@@ -16,9 +16,7 @@ test("bulk edits instance JSON in the sidebar with atomic undo and live netlist 
     exact: true,
   });
   const code = panel.getByRole("textbox", { name: "Instance JSON" });
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(panel.getByRole("combobox")).toHaveCount(0);
-  await expect(panel.getByRole("button")).toHaveCount(0);
+  // No modal or form controls: instance-code-panel.test.
   const original = await code.inputValue();
   const values = JSON.parse(original);
   const rows = Object.values(values)[0] as Record<string, any>;
@@ -52,6 +50,7 @@ test("bulk edits instance JSON in the sidebar with atomic undo and live netlist 
   await expect(live).toContainText(/R1 a b 10k/iu);
   await expect(live).toContainText(/R2 b a 10k/iu);
 
+  // A duplicate reference is refused whole, and the panel says so.
   await clickCommand(page, "Netlist", "Edit Device Data…");
   const rejected = JSON.parse(await code.inputValue());
   const invalidRows = Object.values(rejected)[0] as Record<string, any>;
@@ -60,8 +59,8 @@ test("bulk edits instance JSON in the sidebar with atomic undo and live netlist 
   await code.fill(JSON.stringify(rejected));
   await expect(panel.getByRole("alert")).toContainText("Edit rejected");
   expect(await copyNetlistText(page)).toMatch(/R1 a b 10k\nR2 b a 10k/iu);
+  // The sidebar stays usable at a narrow window.
   await clickCommand(page, "Netlist", "Edit Device Data…");
   await page.setViewportSize({ width: 760, height: 800 });
   await expect(code).toBeVisible();
-  await code.selectText();
 });
