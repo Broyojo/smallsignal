@@ -27,6 +27,20 @@ export const extendedQualification = JSON.parse(
     "utf8",
   ),
 );
+/**
+ * The high-Vt 1.8 V PFET the HD standard cells are built from (#1596), at
+ * every corner. Observed on the candidate image, whose measured environment
+ * is the pinned Profile's: its evidence names that executor.
+ */
+export const hvtPfetQualification = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../fixtures/simulation-acceptance/hosted-sky130-hvt-pfet-v1.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
 if (qualification.profileId !== profile.id) {
   throw new Error(
     `Qualification ${qualification.fixtureId} targets ${String(qualification.profileId)}, not Profile ${profile.id}.`,
@@ -40,6 +54,7 @@ if (extendedQualification.profileId !== profile.id) {
 const evidencedDevices = new Set([
   ...(qualification.devices ?? []),
   ...(extendedQualification.devices ?? []),
+  ...(hvtPfetQualification.devices ?? []),
 ]);
 if (
   evidencedDevices.size !== profile.qualifiedScope.devices.length ||
@@ -102,6 +117,25 @@ if (
   throw new Error(
     `Qualification ${extendedQualification.fixtureId} does not cover the Profile model selection.`,
   );
+}
+
+for (const fixture of [hvtPfetQualification]) {
+  const corners = Object.keys(fixture.expectedCorners ?? {});
+  if (
+    fixture.profileId !== profile.id ||
+    fixture.modelLibrary?.directive !== profile.models.library.directive ||
+    fixture.analyses.some(
+      (analysis) => !profile.qualifiedScope.analyses.includes(analysis),
+    ) ||
+    corners.length === 0 ||
+    profile.qualifiedScope.sections.some(
+      (corner) => !corners.includes(corner),
+    ) ||
+    corners.some((corner) => !profile.qualifiedScope.sections.includes(corner))
+  )
+    throw new Error(
+      `Qualification ${fixture.fixtureId} does not cover Profile ${profile.id}'s model selection.`,
+    );
 }
 
 export const EXECUTORS = ["operator-host"];
@@ -253,6 +287,33 @@ export function hostedSky130ExtendedDeviceRequest(corner) {
     ].join("\n"),
     timeoutMs: 110_000,
     inputRevision: `preview-sky130-extended-${corner}`,
+    environment: { profileId: profile.id, corner },
+  };
+}
+
+export function hostedSky130HvtPfetRequest(corner) {
+  return {
+    netlist: [
+      ".subckt hvt_pfet g s d",
+      // The geometry of the HD cells' pull-up devices.
+      "XMPH d g s s sky130_fd_pr__pfet_01v8_hvt L=0.15 W=1",
+      ".ends hvt_pfet",
+    ].join("\n"),
+    testbench: [
+      "* High-Vt PFET qualification",
+      "VGPH gph 0 0",
+      "VSPH sph 0 1.8",
+      "VDPH dph 0 0",
+      "XDUT gph sph dph hvt_pfet",
+      ".control",
+      "set filetype=ascii",
+      "op",
+      "write out.raw i(vsph)",
+      ".endc",
+      ".end",
+    ].join("\n"),
+    timeoutMs: 110_000,
+    inputRevision: `preview-sky130-hvt-pfet-${corner}`,
     environment: { profileId: profile.id, corner },
   };
 }

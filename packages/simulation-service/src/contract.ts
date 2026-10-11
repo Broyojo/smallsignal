@@ -744,6 +744,13 @@ export const NativeModelLibrarySymbolsSchema: z.ZodType<NativeModelLibrarySymbol
       )
       .max(256),
   });
+/**
+ * What a capabilities request lists in `accepts` to be told the running
+ * simulator's standard-cell libraries (#1596). Clients that predate them
+ * omit it and get the shape they parse.
+ */
+export const CAPABILITIES_ACCEPT_CELL_LIBRARIES = "cell-libraries";
+
 export const CapabilitiesSchema = z.strictObject({
   discovery: z
     .strictObject({
@@ -778,6 +785,23 @@ export const CapabilitiesSchema = z.strictObject({
         /** Environment-owned files addressable by raw Project dependencies. */
         dependencies: z
           .array(z.strictObject({ id: Id, sha256: Digest }))
+          .optional(),
+        /**
+         * Standard-cell libraries the running simulator mounts (#1596), each
+         * a dependency by its own identity: `cells` names the library whose
+         * cells it defines, `directive` how a deck loads it. Advertised only
+         * to a caller that asks for them (`accepts`), so earlier clients
+         * keep the shape they parse.
+         */
+        cellLibraries: z
+          .array(
+            z.strictObject({
+              id: Id,
+              sha256: Digest,
+              cells: Id,
+              directive: z.literal("include"),
+            }),
+          )
           .optional(),
         /** Read-only names derived from exact dependency bytes, not model definitions. */
         modelSymbols: z

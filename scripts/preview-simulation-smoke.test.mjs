@@ -8,9 +8,11 @@ import {
   compileHostedSky130TransientProject,
   hostedSky130CornerRequest,
   hostedSky130ExtendedDeviceRequest,
+  hostedSky130HvtPfetRequest,
   runHostedSky130Acceptance,
   runHostedSky130CornerAcceptance,
   runHostedSky130ExtendedDeviceAcceptance,
+  runHostedSky130HvtPfetAcceptance,
   runHostedSky130NoiseAcceptance,
   runHostedSky130TransientAcceptance,
   runPreviewSimulationSmoke,
@@ -21,6 +23,7 @@ import {
   validateHostedSky130Result,
   validateHostedSky130CornerResult,
   validateHostedSky130ExtendedDeviceResult,
+  validateHostedSky130HvtPfetResult,
   validatePreviewSimulationResult,
 } from "./preview-simulation-smoke.mjs";
 
@@ -202,6 +205,25 @@ function cornerResult(target, corner = "ff") {
           ],
         },
       ],
+    },
+  };
+}
+
+function hvtPfetResult(target, corner = "ff", value = -0.0001390822188942903) {
+  const base = result(target);
+  return {
+    ...base,
+    metadata: {
+      ...base.metadata,
+      input: { inputRevision: `preview-sky130-hvt-pfet-${corner}` },
+      configuration: { modelLibrary: { directive: "lib", section: corner } },
+      environment: {
+        ...base.metadata.environment,
+        fingerprint: CORNER_ENVIRONMENT_SHA,
+      },
+    },
+    data: {
+      analyses: [{ analysis: "op", probes: [{ name: "i(vsph)", value }] }],
     },
   };
 }
@@ -553,6 +575,41 @@ describe("the hosted SKY130 qualification", () => {
       profileId: PROFILE_ID,
       corner: "ff",
     });
+  });
+
+  it("qualifies the HD cells' high-Vt PFET at the cells' geometry (#1596)", async () => {
+    const request = hostedSky130HvtPfetRequest("ff");
+    expect(request.netlist).toContain(
+      "XMPH d g s s sky130_fd_pr__pfet_01v8_hvt L=0.15 W=1",
+    );
+    expect(
+      validateHostedSky130HvtPfetResult(
+        hvtPfetResult("operator-host"),
+        "operator-host",
+        "ff",
+      ),
+    ).toEqual({ corner: "ff", hvtPfetSourceCurrentA: -0.0001390822188942903 });
+    let submitted;
+    await runHostedSky130HvtPfetAcceptance({
+      baseUrl: "https://preview.example",
+      target: "operator-host",
+      corner: "ff",
+      fetchImpl: async (_url, init) => {
+        submitted = JSON.parse(init.body);
+        return Response.json(hvtPfetResult("operator-host"));
+      },
+    });
+    expect(submitted.environment).toEqual({
+      profileId: PROFILE_ID,
+      corner: "ff",
+    });
+    expect(() =>
+      validateHostedSky130HvtPfetResult(
+        hvtPfetResult("operator-host", "ff", -0.00014),
+        "operator-host",
+        "ff",
+      ),
+    ).toThrow(/hvtPfetSourceCurrentA at ff/u);
   });
 
   it("refuses extended-device numerical drift", () => {

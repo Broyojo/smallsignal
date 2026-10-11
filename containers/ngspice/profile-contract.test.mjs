@@ -33,6 +33,38 @@ describe("the hosted SKY130 Profile", () => {
     });
   });
 
+  it("pins the vendored standard-cell library, outside the model tree (#1596)", async () => {
+    expect(profile.cellLibraries).toEqual([
+      {
+        id: "sky130_fd_sc_hd",
+        cells: "sky130_fd_sc_hd",
+        contentSha256:
+          "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
+        library: {
+          directive: "include",
+          runtimePath: "/opt/sky130-cells/sky130_fd_sc_hd.spice",
+        },
+      },
+    ]);
+    const [cells] = profile.cellLibraries;
+    // The vendored bytes, the bytes the build checks and the bytes the
+    // harness expects are one digest.
+    expect(
+      createHash("sha256")
+        .update(await readFile(join(directory, "cells/sky130_fd_sc_hd.spice")))
+        .digest("hex"),
+    ).toBe(cells.contentSha256);
+    expect(dockerfile).toContain(
+      `ARG SKY130_HD_SPICE_SHA256=${cells.contentSha256}`,
+    );
+    expect(dockerfile).toContain(
+      `COPY \${HARNESS_DIR}/cells/sky130_fd_sc_hd.spice ${cells.library.runtimePath}`,
+    );
+    // The model tree's digest covers SKY130_MODEL_ROOT; the cells are not in it.
+    expect(dockerfile).toContain("SKY130_MODEL_ROOT=/opt/sky130 ");
+    expect(cells.library.runtimePath.startsWith("/opt/sky130/")).toBe(false);
+  });
+
   it("qualifies only the scope backed by tracked hosted acceptance", () => {
     expect(profile.qualifiedScope).toEqual({
       devices: [
@@ -40,6 +72,7 @@ describe("the hosted SKY130 Profile", () => {
         "sky130_fd_pr__pfet_01v8",
         "sky130_fd_pr__nfet_01v8_lvt",
         "sky130_fd_pr__pfet_01v8_lvt",
+        "sky130_fd_pr__pfet_01v8_hvt",
         "sky130_fd_pr__res_high_po",
         "sky130_fd_pr__cap_mim_m3_1",
         "sky130_fd_pr__pnp_05v5_W0p68L0p68",

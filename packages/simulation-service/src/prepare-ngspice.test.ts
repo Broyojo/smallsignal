@@ -14,6 +14,7 @@ import { createSimulationInputMetadata } from "@icm/spice-run";
 import { CapabilitiesSchema } from "./contract.js";
 import { ProjectInputIdentity } from "./input-identity.js";
 import { prepareNgspiceExecutionInput } from "./prepare-ngspice.js";
+import { standardCellGates } from "../test-support/standard-cell-gates.js";
 
 function nativeSweepFixture() {
   const project = CircuitProjectSchema.parse(
@@ -735,4 +736,235 @@ describe("ngspice authored input identity", () => {
       ).not.toBe(prepared.input.inputRevision);
     },
   );
+});
+
+/**
+ * The gates, under a Profile that declares an HD cell library beside its
+ * models. Its id names neither the library nor a file kind: what it supplies
+ * and how it loads are the Profile's declarations.
+ */
+function standardCellFixture() {
+  const { project, folder } = standardCellGates("ngspice");
+  const caps = nativeSweepFixture().caps;
+  caps.profiles[0]!.cellLibraries = [
+    {
+      id: "hd-cells",
+      sha256: "c".repeat(64),
+      cells: "sky130_fd_sc_hd",
+      directive: "include",
+    },
+  ];
+  return { project, folder, caps };
+}
+
+describe("a Library gate bound to a PDK standard cell (#1596)", () => {
+  it("mounts the Profile's cell library beside its models and calls the cell in its pin order", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps, {
+      environment: { corner: "ff" },
+    });
+    if (!prepared.ok) throw Error(JSON.stringify(prepared));
+    expect(prepared.input.dependencies).toEqual([
+      { id: "models", sha256: "a".repeat(64), mountPath: "icm-models.lib" },
+      {
+        id: "hd-cells",
+        sha256: "c".repeat(64),
+        mountPath: "sky130_fd_sc_hd.spice",
+      },
+    ]);
+    const entry = prepared.input.files.find(
+      (file) => file.path === folder.input.entry,
+    )!.text;
+    // The corner selects the primitives; the cells take no section.
+    expect(entry).toMatch(
+      /\.lib "icm-models\.lib" ff\n(?:\*[^\n]*\n)?\.include "sky130_fd_sc_hd\.spice"\n/u,
+    );
+    const circuit = prepared.input.files.find(
+      (file) => file.path === "circuit.spice",
+    )!.text;
+    // A, B, then VGND VNB on ground and VPB VPWR on VDD, then Y.
+    expect(circuit).toContain(
+      "X1 net0 net1 0 0 VDD VDD net2 sky130_fd_sc_hd__nor2_1\n",
+    );
+    expect(circuit).toContain(
+      "X2 net0 0 0 VDD VDD net3 sky130_fd_sc_hd__inv_1\n",
+    );
+    expect(circuit).toContain(
+      "X3 net0 net1 0 0 VDD VDD net4 sky130_fd_sc_hd__nand2_1\n",
+    );
+    expect(circuit).not.toMatch(/\.subckt/u);
+  });
+
+  it("keeps an author's own load of the cell library and adds no second one", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    folder.input.dependencies = [
+      { id: "models", sha256: "a".repeat(64), mountPath: "pdk/models.lib" },
+      {
+        id: "hd-cells",
+        sha256: "c".repeat(64),
+        mountPath: "pdk/cells.spice",
+      },
+    ];
+    const entry = folder.input.files.find(
+      (file) => file.path === folder.input.entry,
+    )!;
+    entry.text = entry.text.replace(
+      '.include "circuit.spice"',
+      '.lib "pdk/models.lib" tt\n.include "pdk/cells.spice"\n.include "circuit.spice"',
+    );
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
+    if (!prepared.ok) throw Error(JSON.stringify(prepared));
+    expect(prepared.input.dependencies).toEqual(folder.input.dependencies);
+    const text = prepared.input.files.find(
+      (file) => file.path === entry.path,
+    )!.text;
+    expect(text.match(/\.include "pdk\/cells\.spice"/gu)).toHaveLength(1);
+    expect(text.match(/\.lib /gu)).toHaveLength(1);
+  });
+
+  it("refuses a cell whose library the selected Profile does not provide", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    delete caps.profiles[0]!.cellLibraries;
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: {
+        code: "SIMULATION_COMPILE_REFUSED",
+        diagnostics: ["nor2_1", "inv_1", "nand2_1"].map((cell) =>
+          expect.objectContaining({
+            code: "STANDARD_CELL_LIBRARY_UNAVAILABLE",
+            message: expect.stringMatching(
+              new RegExp(
+                `sky130_fd_sc_hd__${cell} .*sky130_fd_sc_hd.*not offered.*Library gate`,
+                "u",
+              ),
+            ),
+            path: "circuit.spice",
+          }),
+        ),
+      },
+    });
+  });
+
+  it("refuses a cell declared out of its library's pin order", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    const nor = project.externalSubcircuitDefinitions.find(
+      (definition) => definition.name === "sky130_fd_sc_hd__nor2_1",
+    )!;
+    // Y before the rails: the library's subcircuit would be miswired.
+    nor.terminals.push(...nor.terminals.splice(2, 4));
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({
+            code: "STANDARD_CELL_UNSUPPORTED",
+            message:
+              "sky130_fd_sc_hd__nor2_1 is declared with pins A B Y VGND VNB VPB VPWR, not in the library's order A B VGND VNB VPB VPWR Y, so the library's cell cannot stand in for it. Bind a Library gate to the cell with set-model or Properties; the gate calls it in the library's order.",
+          }),
+        ]),
+      },
+    });
+  });
+
+  it("says which standard cells run when a definition names an unsupported one", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    const definition = {
+      id: "flop",
+      name: "sky130_fd_sc_hd__dfxtp_1",
+      interfaceStatus: "declared" as const,
+      formalParameters: [],
+      terminals: ["CLK", "D", "VGND", "VNB", "VPB", "VPWR", "Q"].map(
+        (name) => ({ id: name, name, direction: "passive" as const }),
+      ),
+    };
+    project.externalSubcircuitDefinitions.push(definition);
+    project.documents[0]!.instances.push(
+      createExternalSubcircuitInstance("X4", definition, {
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        mirror: "none",
+      }),
+    );
+    project.documents[0]!.noConnects.push(
+      ...definition.terminals.map((terminal) => ({
+        id: `nc-${terminal.name}`,
+        endpoint: {
+          kind: "terminal" as const,
+          instanceId: "X4",
+          pinName: terminal.name,
+        },
+      })),
+    );
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({
+            code: "STANDARD_CELL_UNSUPPORTED",
+            message:
+              "sky130_fd_sc_hd__dfxtp_1 is a sky130_fd_sc_hd cell that simulation does not run. Hosted ngspice runs sky130_fd_sc_hd combinational gate cells (inverters, buffers, NAND, NOR, AND, OR, XOR and XNOR) bound to a Library gate; give this cell a Project model source to run it.",
+          }),
+        ]),
+      },
+    });
+  });
+
+  it("no longer takes any loaded dependency as the body of an unreviewed definition", async () => {
+    const { project, folder, caps } = standardCellFixture();
+    const definition = {
+      id: "missing",
+      name: "missing_amp",
+      interfaceStatus: "declared" as const,
+      formalParameters: [],
+      terminals: [{ id: "a", name: "A", direction: "passive" as const }],
+    };
+    project.externalSubcircuitDefinitions.push(definition);
+    project.documents[0]!.instances.push(
+      createExternalSubcircuitInstance("X4", definition, {
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        mirror: "none",
+      }),
+    );
+    project.documents[0]!.noConnects.push({
+      id: "nc",
+      endpoint: { kind: "terminal", instanceId: "X4", pinName: "A" },
+    });
+    folder.input.dependencies = [
+      {
+        id: "hd-cells",
+        sha256: "c".repeat(64),
+        mountPath: "cells.spice",
+      },
+    ];
+    const entry = folder.input.files.find(
+      (file) => file.path === folder.input.entry,
+    )!;
+    // Loaded, and still not a body for missing_amp: it defines the cells.
+    entry.text = entry.text.replace(
+      '.include "circuit.spice"',
+      '.include "cells.spice"\n.include "circuit.spice"',
+    );
+    const prepared = await prepareNgspiceExecutionInput(project, folder, caps);
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({
+            code: "MODEL_IMPLEMENTATION_MISSING",
+            message: expect.stringContaining("missing_amp"),
+          }),
+        ]),
+      },
+    });
+    if (!prepared.ok)
+      expect(
+        prepared.error.diagnostics?.filter(
+          (diagnostic) => diagnostic.code === "MODEL_IMPLEMENTATION_MISSING",
+        ),
+      ).toHaveLength(1);
+  });
 });

@@ -6,6 +6,7 @@ import {
   DIVIDER_REQUEST,
   hostedSky130CornerRequest,
   hostedSky130ExtendedDeviceRequest,
+  hostedSky130HvtPfetRequest,
   RC_TRAN_REQUEST,
   REQUEST_ERRORS,
   RESISTOR_NOISE_REQUEST,
@@ -21,6 +22,7 @@ import { simulationSmokeHeaders } from "./simulation-smoke-headers.mjs";
 import {
   validateHostedSky130CornerResult,
   validateHostedSky130ExtendedDeviceResult,
+  validateHostedSky130HvtPfetResult,
   validateHostedSky130NoiseResult,
   validateHostedSky130Result,
   validateHostedSky130TransientResult,
@@ -85,6 +87,29 @@ export async function runHostedSky130CornerAcceptance({
       `[infrastructure:http-${response.status}] ${target} ${corner} corner qualification failed.`,
     );
   return validateHostedSky130CornerResult(payload, target, corner);
+}
+
+export async function runHostedSky130HvtPfetAcceptance({
+  baseUrl,
+  target,
+  corner,
+  fetchImpl = fetch,
+}) {
+  const response = await fetchImpl(new URL("/api/simulate", baseUrl), {
+    method: "POST",
+    headers: simulationSmokeHeaders(),
+    body: JSON.stringify({
+      ...hostedSky130HvtPfetRequest(corner),
+      executorTarget: target,
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const payload = await response.json();
+  if (!response.ok)
+    throw new Error(
+      `[infrastructure:http-${response.status}] ${target} ${corner} high-Vt PFET qualification failed.`,
+    );
+  return validateHostedSky130HvtPfetResult(payload, target, corner);
 }
 
 export async function runHostedSky130ExtendedDeviceAcceptance({

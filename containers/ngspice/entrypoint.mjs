@@ -249,7 +249,8 @@ async function loadEnvironmentProfile() {
     !isSha256(profile.models.contentSha256) ||
     typeof profile.models.library?.runtimePath !== "string" ||
     !profile.models.library.runtimePath.startsWith("/") ||
-    !isSha256(profile.startup?.contentSha256)
+    !isSha256(profile.startup?.contentSha256) ||
+    !validCellLibraries(profile)
   ) {
     throw new Error(`Simulation Profile ${PROFILE_PATH} is malformed.`);
   }
@@ -259,6 +260,30 @@ async function loadEnvironmentProfile() {
     );
   }
   return profile;
+}
+
+/**
+ * A Profile's standard-cell libraries (#1596): each one file, outside the
+ * model tree, that the image measures as it measures the models. Optional,
+ * so a Profile without cells keeps its meaning.
+ */
+function validCellLibraries(profile) {
+  const libraries = profile.cellLibraries ?? [];
+  if (!Array.isArray(libraries)) return false;
+  const ids = [profile.models.id, ...libraries.map((library) => library?.id)];
+  return (
+    libraries.every(
+      (library) =>
+        typeof library?.id === "string" &&
+        library.id.length > 0 &&
+        typeof library.cells === "string" &&
+        library.cells.length > 0 &&
+        isSha256(library.contentSha256) &&
+        library.library?.directive === "include" &&
+        typeof library.library.runtimePath === "string" &&
+        library.library.runtimePath.startsWith("/"),
+    ) && new Set(ids).size === ids.length
+  );
 }
 
 async function sha256Tree(root) {
@@ -294,13 +319,26 @@ async function observeEnvironment(ngspiceBin) {
     STARTUP_PATH === null
       ? DEFAULT_STARTUP
       : await readFile(STARTUP_PATH, "utf8");
-  const [versionOutput, binarySha256, modelTreeSha256, startupSha256] =
-    await Promise.all([
-      commandOutput(ngspiceBin, ["--version"]),
-      sha256File(ngspiceBin),
-      sha256Tree(MODEL_ROOT),
-      Promise.resolve(createHash("sha256").update(startupText).digest("hex")),
-    ]);
+  const cellLibraries = profile?.cellLibraries ?? [];
+  const [
+    versionOutput,
+    binarySha256,
+    modelTreeSha256,
+    startupSha256,
+    cellLibrarySha256,
+  ] = await Promise.all([
+    commandOutput(ngspiceBin, ["--version"]),
+    sha256File(ngspiceBin),
+    sha256Tree(MODEL_ROOT),
+    Promise.resolve(createHash("sha256").update(startupText).digest("hex")),
+    Promise.all(
+      cellLibraries.map((library) =>
+        sha256File(library.library.runtimePath).catch(
+          (error) => `no readable file (${error.code ?? String(error)})`,
+        ),
+      ),
+    ),
+  ]);
   const platform = `${process.platform}/${process.arch}`;
   const version = ngspiceVersion(versionOutput);
   if (profile !== null) {
@@ -314,6 +352,11 @@ async function observeEnvironment(ngspiceBin) {
       ],
       ["model tree SHA-256", profile.models.contentSha256, modelTreeSha256],
       ["startup SHA-256", profile.startup.contentSha256, startupSha256],
+      ...cellLibraries.map((library, index) => [
+        `cell library ${library.id} SHA-256`,
+        library.contentSha256,
+        cellLibrarySha256[index],
+      ]),
     ].filter(([, expected, actual]) => expected !== actual);
     if (mismatches.length > 0) {
       throw new Error(
@@ -350,14 +393,25 @@ async function observeEnvironment(ngspiceBin) {
         .digest("hex"),
     },
     startupText,
-    dependency:
+    // What a run may mount, by identity: the models, then each cell
+    // library, every one measured above against its Profile digest.
+    dependencies:
       profile === null
-        ? null
-        : {
-            id: profile.models.id,
-            sha256: profile.models.contentSha256,
-            runtimePath: profile.models.library.runtimePath,
-          },
+        ? []
+        : [
+            {
+              kind: "models",
+              id: profile.models.id,
+              sha256: profile.models.contentSha256,
+              runtimePath: profile.models.library.runtimePath,
+            },
+            ...cellLibraries.map((library) => ({
+              kind: "cells",
+              id: library.id,
+              sha256: library.contentSha256,
+              runtimePath: library.library.runtimePath,
+            })),
+          ],
   };
 }
 
@@ -751,14 +805,17 @@ async function handleRun(body, streaming = false) {
   }
 
   const [binary, observed, runRoot] = runtime;
-  if (
-    dependencies.some(
-      (dependency) =>
-        observed.dependency === null ||
-        dependency.id !== observed.dependency.id ||
-        dependency.sha256 !== observed.dependency.sha256,
-    )
-  )
+  const mounted = dependencies.map((dependency) =>
+    observed.dependencies.find(
+      (available) =>
+        available.id === dependency.id &&
+        available.sha256 === dependency.sha256,
+    ),
+  );
+  const mountedCells = mounted
+    .filter((available) => available?.kind === "cells")
+    .map(({ id, sha256 }) => ({ id, sha256 }));
+  if (mounted.some((available) => available === undefined))
     return {
       status: 400,
       payload: { error: "simulation-dependency-unavailable" },
@@ -785,12 +842,12 @@ async function handleRun(body, streaming = false) {
           await mkdir(dirname(join(directory, file.path)), { recursive: true });
           await writeFile(join(directory, file.path), file.text, "utf8");
         }
-        for (const dependency of dependencies) {
+        for (const [index, dependency] of dependencies.entries()) {
           await mkdir(dirname(join(directory, dependency.mountPath)), {
             recursive: true,
           });
           await symlink(
-            observed.dependency.runtimePath,
+            mounted[index].runtimePath,
             join(directory, dependency.mountPath),
           );
         }
@@ -855,6 +912,8 @@ async function handleRun(body, streaming = false) {
           rawfileFormat: raw.rawfileFormat,
           limits: { ...LIMITS, timeoutMs: run.timeoutMs },
           environment: observed.environment,
+          // The cell libraries this run mounted, by measured identity (#1596).
+          ...(mountedCells.length > 0 ? { cellLibraries: mountedCells } : {}),
         };
         const response = await ngspiceResultResponse(body, payload, streaming);
         return {
@@ -914,6 +973,11 @@ const server = createServer((request, response) => {
           runRoot,
           ...(runRootFailures.length > 0 ? { runRootFailures } : {}),
           environment: observed.environment,
+          // The measured libraries a run may mount, cells included (#1596).
+          dependencies: observed.dependencies.map(({ id, sha256 }) => ({
+            id,
+            sha256,
+          })),
         });
       },
       (error) =>

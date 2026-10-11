@@ -17,6 +17,7 @@
 # The digest is the environment lock. Changing it is a deliberate edit here;
 # the image reports the resulting binary and model-tree hashes at runtime.
 ARG BASE_IMAGE=ghcr.io/arcadia-1/circuit-bench-sky130-ngspice@sha256:2da03dc7f1ead7ddc33f2f930a0487ae8618e51518009344584a98fca41a621d
+
 FROM ${BASE_IMAGE}
 
 # The harness is a Node program; the base image has none. Debian bookworm's
@@ -73,6 +74,15 @@ COPY ${HARNESS_DIR}/runtime/entrypoint.mjs ${HARNESS_DIR}/gateway.mjs /opt/harne
 COPY containers/simulation/run-local-files.mjs /opt/simulation/run-local-files.mjs
 COPY ${HARNESS_DIR}/hosted-sky130-profile.json /opt/harness/hosted-sky130-profile.json
 COPY ${HARNESS_DIR}/hosted.spiceinit /opt/harness/hosted.spiceinit
+# The SKY130 HD standard cells (#1596), which the base does not carry:
+# sky130_fd_sc_hd.spice, vendored unmodified with its provenance and
+# Apache-2.0 notice (containers/ngspice/cells/NOTICE), from the volare build
+# of the same PDK version as the base's models. Beside the model tree, not in
+# it: the tree's digest stays the models' own, and the Profile pins this
+# file's digest separately (cellLibraries). The build refuses other bytes.
+ARG SKY130_HD_SPICE_SHA256=6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3
+COPY ${HARNESS_DIR}/cells/sky130_fd_sc_hd.spice /opt/sky130-cells/sky130_fd_sc_hd.spice
+RUN echo "${SKY130_HD_SPICE_SHA256}  /opt/sky130-cells/sky130_fd_sc_hd.spice" | sha256sum -c -
 
 # Nothing a deck can reach is writable except its own run directory.
 #
@@ -85,7 +95,7 @@ COPY ${HARNESS_DIR}/hosted.spiceinit /opt/harness/hosted.spiceinit
 # the property really holds is not assumed — the container workflow asserts
 # it by trying to write, as the run account, and requiring failure.
 RUN set -eu; \
-    chmod -R a-w /opt/harness /opt/simulation; \
+    chmod -R a-w /opt/harness /opt/simulation /opt/sky130-cells; \
     find /opt/sky130 /opt/ngspice -perm /022 -exec chmod go-w {} + || true; \
     mkdir -p "${RUN_ROOT}"; \
     chown "${RUN_UID}:${RUN_GID}" "${RUN_ROOT}"; \

@@ -26,7 +26,11 @@ import {
 import { simulationNetlistDiagnostic } from "./simulation-diagnostic.js";
 import { reachableCircuitBindings } from "./source-file-graph.js";
 import { sha256Hex } from "@icm/derived";
-import { resolveReviewedExternalBinding } from "@icm/devices";
+import {
+  resolveReviewedLibraryInterface,
+  standardCellBindingForMaster,
+  standardCellLibraryOfName,
+} from "@icm/devices";
 import {
   mapSimulationFile,
   insertSimulationText,
@@ -101,6 +105,35 @@ export type NgspiceSourceSimulationCompilation =
       modelDependencies?: SimulationRawDependency[];
     };
 
+/**
+ * Why a definition without a body cannot run, and what would. A standard
+ * cell is named as one (#1596): what is wrong with it, and which cells run.
+ */
+function missingImplementation(definition: {
+  readonly name: string;
+  readonly terminals: readonly { readonly name: string }[];
+}): SimulationSourceDiagnostic {
+  const cell = standardCellBindingForMaster(definition.name);
+  if (cell)
+    return {
+      code: "STANDARD_CELL_UNSUPPORTED",
+      severity: "error",
+      message: `${definition.name} is declared with pins ${definition.terminals.map((terminal) => terminal.name).join(" ")}, not in the library's order ${cell.terminals.map((terminal) => terminal.targetName).join(" ")}, so the library's cell cannot stand in for it. Bind a Library gate to the cell with set-model or Properties; the gate calls it in the library's order.`,
+    };
+  const library = standardCellLibraryOfName(definition.name);
+  if (library)
+    return {
+      code: "STANDARD_CELL_UNSUPPORTED",
+      severity: "error",
+      message: `${definition.name} is a ${library} cell that simulation does not run. Hosted ngspice runs sky130_fd_sc_hd combinational gate cells (inverters, buffers, NAND, NOR, AND, OR, XOR and XNOR) bound to a Library gate; give this cell a Project model source to run it.`,
+    };
+  return {
+    code: "MODEL_IMPLEMENTATION_MISSING",
+    severity: "error",
+    message: `Legacy model ${definition.name} has no resolvable implementation in this experiment. Define its source in Cell Manager`,
+  };
+}
+
 /** Author text stays native. Canvas extraction, instrumentation and output math remain shared. */
 export function compileNgspiceSourceSimulation(
   project: CircuitProject,
@@ -163,9 +196,14 @@ export function compileNgspiceSourceSimulation(
     },
   );
   diagnostics.push(...projectModels.diagnostics);
-  const loadedDependency = folder.input.dependencies.some((d) =>
-    authoredGraph.paths.includes(d.mountPath),
-  );
+  // A definition without a body runs only when something defines it: a
+  // reviewed library interface, a PDK device or a standard cell in its exact
+  // pin order (#1596), whose library the Profile mounts and Preparation
+  // checks; or a .subckt of the experiment's own files. A loaded dependency
+  // no longer stands in for one (#1596): whether it defines this name, and in
+  // this pin order, is not known here, and an undefined or misordered call
+  // would reach ngspice. An unreviewed library name takes a Project model
+  // source or an authored .subckt.
   for (const id of modelReachability.definitionIds) {
     const definition = project.externalSubcircuitDefinitions.find(
       (d) => d.id === id,
@@ -173,7 +211,7 @@ export function compileNgspiceSourceSimulation(
     if (
       !definition ||
       definition.implementation ||
-      resolveReviewedExternalBinding(
+      resolveReviewedLibraryInterface(
         definition.name,
         definition.terminals.map((t) => t.name),
       )
@@ -184,12 +222,7 @@ export function compileNgspiceSourceSimulation(
         statement.kind === "subckt_start" &&
         statement.name.toLowerCase() === definition.name.toLowerCase(),
     );
-    if (!declaration && !loadedDependency)
-      diagnostics.push({
-        code: "MODEL_IMPLEMENTATION_MISSING",
-        severity: "error",
-        message: `Legacy model ${definition.name} has no resolvable implementation in this experiment. Define its source in Cell Manager`,
-      });
+    if (!declaration) diagnostics.push(missingImplementation(definition));
   }
   const modelNames = new Set(
     projectModels.sources.flatMap((s) =>

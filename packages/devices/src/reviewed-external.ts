@@ -1163,6 +1163,8 @@ interface StandardCellRule {
   readonly example: (fn: GateFunction, inputs: number) => string;
   /** The most inputs the library builds a function with; four where unlisted. */
   readonly maxInputs: Partial<Record<GateFunction, number>>;
+  /** Every cell name of the library, gate cells or not. */
+  readonly namespace: RegExp;
 }
 
 const builds = (rule: StandardCellRule, fn: GateFunction, inputs: number) =>
@@ -1241,6 +1243,7 @@ const STANDARD_CELL_RULES: readonly StandardCellRule[] = [
     ],
     example: lowerCaseExample("sky130_fd_sc_hd__"),
     maxInputs: { xor: 3, xnor: 3 },
+    namespace: /^sky130_fd_sc_hd__/iu,
   },
   {
     // sg13g2_nand2_1: the output first (Y inverting, X not), inputs A–D,
@@ -1259,6 +1262,7 @@ const STANDARD_CELL_RULES: readonly StandardCellRule[] = [
     ],
     example: lowerCaseExample("sg13g2_"),
     maxInputs: { xor: 2, xnor: 2 },
+    namespace: /^sg13g2_/iu,
   },
   {
     // ND2D1BWP12T30P140[LVT]: [CK]<function><inputs>[X|OPT…]D<drive>; the
@@ -1285,8 +1289,20 @@ const STANDARD_CELL_RULES: readonly StandardCellRule[] = [
     example: (fn, inputs) =>
       `${TSMC28_STEMS[fn]}${inputs > 1 ? inputs : ""}D1BWP12T30P140`,
     maxInputs: {},
+    namespace: /BWP12T30P140(?:LVT)?$/iu,
   },
 ];
+
+/**
+ * The standard-cell library a cell name belongs to, any cell of it, gate or
+ * not (#1596): for telling a cell no Library gate takes from an unknown name.
+ */
+export function standardCellLibraryOfName(
+  name: string,
+): StandardCellLibraryId | undefined {
+  return STANDARD_CELL_RULES.find((rule) => rule.namespace.test(name))
+    ?.libraryId;
+}
 
 /** A standard cell's binding id: this prefix and the cell's name. */
 const STANDARD_CELL_ID_PREFIX = "std-cell-";

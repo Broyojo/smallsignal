@@ -5,6 +5,7 @@ import {
   type SimulationEnv,
 } from "./simulation";
 import ngspiceProfile from "../containers/ngspice/hosted-sky130-profile.json";
+import { CAPABILITIES_ACCEPT_CELL_LIBRARIES } from "@icm/simulation-service";
 import {
   nativeEnvironment,
   nativeHealth,
@@ -154,6 +155,112 @@ describe("dual-engine Profile routing", () => {
       (await routeSimulationRequest(post(nativeInput()), env))!.status,
     ).toBe(503);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the hosted SKY130 standard cells (#1596)", () => {
+  const raw = (dependencies: unknown) => ({
+    mode: "raw",
+    netlist: "",
+    testbench: '* cells\n.include "cells.spice"\n.end\n',
+    inputRevision: "cells",
+    environment: { profileId: ngspiceProfile.id },
+    entryPath: "run.cir",
+    files: [],
+    dependencies,
+  });
+
+  const hd = {
+    id: "sky130_fd_sc_hd",
+    sha256: "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
+  };
+  const models = {
+    id: "sky130A-continuous",
+    sha256: ngspiceProfile.models.contentSha256,
+  };
+  /** A simulator host whose /health lists these measured libraries. */
+  const host = (dependencies?: unknown[]) => {
+    const fetcher = vi.fn(async (url: URL, _init: RequestInit) =>
+      url.pathname === "/health"
+        ? Response.json({
+            status: "ready",
+            limits: { outputBytes: 1024 },
+            ...(dependencies ? { dependencies } : {}),
+          })
+        : Response.json({ error: "simulator-busy" }, { status: 503 }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  };
+  const ngspiceCaps = async (accepts?: string[]) =>
+    (
+      (await (await routeSimulationRequest(
+        post({
+          operation: "capabilities",
+          ...(accepts ? { accepts } : {}),
+          environment: { profileId: ngspiceProfile.id },
+        }),
+        env,
+      ))!.json()) as any
+    ).profiles[0];
+
+  it("keeps the shape an earlier client parses: one model library and no cells", async () => {
+    host([models, hd]);
+    const profile = await ngspiceCaps();
+    // An editor tab loaded before #1596 parses capabilities strictly, and
+    // its Prepare needs exactly one Profile library for every SKY130 run.
+    expect(profile).not.toHaveProperty("cellLibraries");
+    expect(profile.dependencies).toEqual([models]);
+    expect(profile.devices).toContain("sky130_fd_pr__pfet_01v8_hvt");
+  });
+
+  it("offers the cell library only once the running simulator measured it", async () => {
+    host([models, hd]);
+    expect(
+      (await ngspiceCaps([CAPABILITIES_ACCEPT_CELL_LIBRARIES])).cellLibraries,
+    ).toEqual([{ ...hd, cells: "sky130_fd_sc_hd", directive: "include" }]);
+    // A host that predates the cells, or one that does not answer.
+    host([models]);
+    expect(
+      (await ngspiceCaps([CAPABILITIES_ACCEPT_CELL_LIBRARIES])).cellLibraries,
+    ).toEqual([]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+    expect(
+      (await ngspiceCaps([CAPABILITIES_ACCEPT_CELL_LIBRARIES])).cellLibraries,
+    ).toEqual([]);
+  });
+
+  it("mounts a cell library by identity", async () => {
+    const fetcher = host([models, hd]);
+    const cells = { ...hd, mountPath: "cells.spice" };
+    await routeSimulationRequest(post(raw([cells])), env);
+    const run = fetcher.mock.calls.find(([url]) => url.pathname === "/run");
+    expect(JSON.parse(String(run?.[1].body)).dependencies).toEqual([cells]);
+  });
+
+  it("refuses a cell library of other bytes before Run", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const response = await routeSimulationRequest(
+      post(
+        raw([
+          {
+            id: "sky130_fd_sc_hd",
+            sha256: "e".repeat(64),
+            mountPath: "cells.spice",
+          },
+        ]),
+      ),
+      env,
+    );
+    expect(response!.status).toBe(400);
+    expect(await response!.json()).toEqual({ error: "invalid-input-files" });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
 

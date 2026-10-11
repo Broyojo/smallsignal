@@ -24,6 +24,16 @@ export const ExecutionReceiptSchema = z.strictObject({
   execution: SimulationResultSchema.shape.execution,
   cancelled: z.boolean(),
   collectionStatus: z.enum(["complete", "partial"]),
+  /**
+   * The standard-cell libraries the run mounted, as the executor measured
+   * them (#1596). Present only on a run that mounted one, which a Worker
+   * predating them never forwards.
+   */
+  cellLibraries: z
+    .array(z.strictObject({ id: z.string().min(1).max(256), sha256: digest }))
+    .min(1)
+    .max(24)
+    .optional(),
 });
 export type ExecutionReceipt = z.infer<typeof ExecutionReceiptSchema>;
 

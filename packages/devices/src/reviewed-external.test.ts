@@ -16,6 +16,7 @@ import {
   reviewedSizeOutOfRange,
   sky130MicrometresToProjectLength,
   standardCellBindingForMaster,
+  standardCellLibraryOfName,
 } from "./reviewed-external.js";
 
 describe("reviewed external device bindings", () => {
@@ -593,4 +594,47 @@ describe("standard cells behind Library gates (#1450)", () => {
       }
     },
   );
+
+  // The SKY130 HD netlist the hosted simulator mounts is vendored (#1596):
+  // checked on every run, not only when a library is supplied.
+  it("agrees with the vendored SKY130 HD netlist the hosted simulator runs", () => {
+    const text = readFileSync(
+      new URL(
+        "../../../containers/ngspice/cells/sky130_fd_sc_hd.spice",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const cells = [
+      ...text.matchAll(/^\.subckt\s+(\S+)\s+([^\n]*)\n([\s\S]*?)^\.ends/gmu),
+    ].map(([, name, pins, body]) => ({
+      name: name!,
+      pins: pins!.trim().split(/\s+/u),
+      primitives: new Set(body!.match(/sky130_fd_pr__\w+/gu)),
+    }));
+    expect(cells.length).toBeGreaterThan(400);
+    let gates = 0;
+    for (const cell of cells) {
+      expect(standardCellLibraryOfName(cell.name), cell.name).toBe(
+        "sky130_fd_sc_hd",
+      );
+      const binding = standardCellBindingForMaster(cell.name);
+      if (!binding) continue;
+      gates += 1;
+      expect(
+        binding.terminals.map((terminal) => terminal.targetName),
+        cell.name,
+      ).toEqual(cell.pins);
+      // Only the primitives the hosted Profile qualifies.
+      expect(
+        [...cell.primitives].every((primitive) =>
+          ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__pfet_01v8_hvt"].includes(
+            primitive,
+          ),
+        ),
+        cell.name,
+      ).toBe(true);
+    }
+    expect(gates).toBe(98);
+  });
 });
