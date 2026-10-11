@@ -40,17 +40,4 @@ test("imports SCS and local includes, copies SPICE, and retains the circuit afte
   expect(await copyNetlistText(page)).toBe(text);
 });
 
-test("serves the backend conversion protocol from the local development server", async ({
-  request,
-}) => {
-  const result = await request.post("/api/netlist/convert", {
-    data: { text: "R1 a 0 1Meg", source: "spice", target: "spectre" },
-  });
-  expect(result.status()).toBe(200);
-  const body = await result.json();
-  expect(body.text).toContain("resistor r=1000000");
-  const back = await request.post("/api/netlist/convert", {
-    data: { text: body.text, source: "spectre", target: "ngspice" },
-  });
-  expect((await back.json()).text).toContain("R1 a 0 1000000");
-});
+// The local server's conversion endpoint is dev/netlist-conversion.test.ts.

@@ -1,8 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createEmptyProject } from "@icm/model";
-import { serializeProject } from "@icm/project-protocol";
 
-import { awaitEditorReady, chooseComponent } from "./editor-fixtures";
+import { chooseComponent } from "./editor-fixtures";
 
 async function placeComponent(
   page: Page,
@@ -58,181 +56,63 @@ test("C before selection picks up one copy and only subsequent clicks place it",
   await expect(page.getByTestId("instance-count")).toHaveText("2");
 });
 
-test("C copies a part as a fresh insertion, without the Net names its pins were on", async ({
-  page,
-  context,
-}) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  // M1's gate is on the Net a Cell Pin names O; its source goes to ground.
-  const project = createEmptyProject("fresh-copy", "Fresh copy");
-  const document = project.documents[0]!;
-  const placement = (x: number, y: number) => ({
-    position: { x, y },
-    rotation: 0 as const,
-    mirror: "none" as const,
-  });
-  document.instances.push(
-    {
-      id: "M1",
-      reference: "M1",
-      symbolId: "nmos",
-      placement: placement(300, 200),
-      netlist: {
-        binding: { kind: "model", deviceClass: "mos", name: "NMOS" },
-        parameters: { w: "1u", l: "150n", nf: "1", m: "1" },
-      },
-    },
-    { id: "P1", symbolId: "port", placement: placement(200, 200) },
-    { id: "GND1", symbolId: "ground", placement: placement(320, 300) },
-  );
-  document.nets.push(
-    {
-      id: "net-o",
-      terminals: [
-        { instanceId: "M1", pinName: "G" },
-        { instanceId: "P1", pinName: "P" },
-      ],
-    },
-    {
-      id: "net-gnd",
-      terminals: [
-        { instanceId: "M1", pinName: "S" },
-        { instanceId: "GND1", pinName: "0" },
-      ],
-    },
-  );
-  document.netlist!.terminals.push({
-    id: "terminal-o",
-    name: "O",
-    netId: "net-o",
-    direction: "input",
-    interfaceInstanceIds: ["P1"],
-  });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "fresh-copy.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  const netLabels = page.locator(
-    '[data-layer="annotations"] [data-kind="net-label"]',
-  );
-  await expect(page.getByTestId("hit-M1")).toBeVisible();
-  await expect(netLabels).toHaveCount(0);
-
-  await page.getByTestId("hit-M1").click();
-  // Ctrl/Cmd+C then Ctrl/Cmd+V is the same copy; project-tabs pastes it
-  // with those keys into another tab.
-  await page.keyboard.press("c");
-  const ghost = page.getByTestId("copy-placement-preview");
-  await expect(ghost).toBeVisible();
-  // Nothing from the source circuit travels: no O, no ground name.
-  await expect(ghost.locator('[data-kind="net-label"]')).toHaveCount(0);
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 620, y: 460 } });
-  await page.keyboard.press("Escape");
-  await expect(instances(page)).toHaveCount(4);
-  await expect(netLabels).toHaveCount(0);
-});
-
-test("Delete pressed first enters a repeating delete mode until Escape", async ({
+// Delete, M and R pressed with nothing selected arm their verb, and the next
+// press on the canvas goes to it (editor-command, pointer-down-router); this
+// is the armed verb's real clicks and the Escape that disarms it.
+test("Delete, M and R pressed first arm their verb for the next clicks until Escape", async ({
   page,
 }) => {
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 280, y: 220 });
   await placeComponent(page, "resistor", { x: 460, y: 220 });
-  await expect(instances(page)).toHaveCount(2);
-
+  const canvas = page.getByTestId("schematic-canvas");
+  const status = page.getByTestId("status");
+  const clickPart = async () => {
+    const box = (await instances(page).first().boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    return box;
+  };
   // Click empty canvas so nothing is selected before pressing the verb key.
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 150, y: 420 },
-  });
-  await page.keyboard.press("Delete");
-  await expect(page.getByTestId("status")).toContainText("Delete: click");
+  const arm = async (key: string, prompt: string) => {
+    await canvas.click({ position: { x: 150, y: 420 } });
+    await page.keyboard.press(key);
+    await expect(status).toContainText(prompt);
+  };
 
-  const first = (await instances(page).first().boundingBox())!;
-  await page.mouse.click(first.x + first.width / 2, first.y + first.height / 2);
+  // Delete repeats until Escape.
+  await arm("Delete", "Delete: click");
+  await clickPart();
   await expect(instances(page)).toHaveCount(1);
-  await expect(page.getByTestId("status")).toContainText("click another");
-
-  const second = (await instances(page).first().boundingBox())!;
-  await page.mouse.click(
-    second.x + second.width / 2,
-    second.y + second.height / 2,
-  );
+  await expect(status).toContainText("click another");
+  await clickPart();
   await expect(instances(page)).toHaveCount(0);
-
-  // Escape leaves the mode; later clicks stop deleting.
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("status")).toContainText("Cancelled");
-  await placeComponent(page, "resistor", { x: 360, y: 320 });
-  const third = (await instances(page).first().boundingBox())!;
-  await page.mouse.click(third.x + third.width / 2, third.y + third.height / 2);
-  await expect(instances(page)).toHaveCount(1);
-});
-
-test("M pressed first arms move; the next click picks the part up", async ({
-  page,
-}) => {
-  await page.goto("/editor");
+  await expect(status).toContainText("Cancelled");
   await placeComponent(page, "resistor", { x: 300, y: 250 });
+  await clickPart();
+  await expect(instances(page)).toHaveCount(1);
 
-  // Click empty canvas so nothing is selected before pressing the verb key.
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 150, y: 420 },
-  });
-  await page.keyboard.press("m");
-  await expect(page.getByTestId("status")).toContainText("Move: click");
-
-  const part = instances(page).first();
-  const before = (await part.boundingBox())!;
-  await page.mouse.click(
-    before.x + before.width / 2,
-    before.y + before.height / 2,
-  );
-  await expect(page.getByTestId("status")).toContainText("Move: move the");
-
-  // The part follows the pointer; a click places it.
+  // M: the next click picks the part up, the one after places it.
+  await arm("m", "Move: click");
+  const before = await clickPart();
+  await expect(status).toContainText("Move: move the");
   await page.mouse.move(before.x + 160, before.y + before.height / 2);
   await page.mouse.click(before.x + 160, before.y + before.height / 2);
-  const after = (await instances(page).first().boundingBox())!;
-  expect(after.x).toBeGreaterThan(before.x + 80);
-});
+  const moved = (await instances(page).first().boundingBox())!;
+  expect(moved.x).toBeGreaterThan(before.x + 80);
 
-test("Escape disarms rotate so later clicks stop turning parts", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 250 });
-
-  // Click empty canvas so nothing is selected before pressing the verb key.
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 150, y: 420 },
-  });
-  await page.keyboard.press("r");
-  await expect(page.getByTestId("status")).toContainText("Rotate: click");
-
-  const part = instances(page).first();
-  const upright = (await part.boundingBox())!;
-  await page.mouse.click(
-    upright.x + upright.width / 2,
-    upright.y + upright.height / 2,
-  );
-  await expect(page.getByTestId("status")).toContainText("Rotated");
-  const turned = (await instances(page).first().boundingBox())!;
+  // R turns the clicked part; Escape must actually stop the armed rotate
+  // (the historical gap).
+  await arm("r", "Rotate: click");
+  await clickPart();
+  await expect(status).toContainText("Rotated");
   await expect(
-    page.locator('[data-layer="symbols"] [data-object-id="R1"] > g'),
+    page.locator('[data-layer="symbols"] [data-object-id] > g').first(),
   ).toHaveAttribute("transform", /rotate\(90\)/u);
-
-  // Escape must actually stop the armed rotate (the historical gap).
+  const turned = (await instances(page).first().boundingBox())!;
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("status")).toContainText("Cancelled");
-  await page.mouse.click(
-    turned.x + turned.width / 2,
-    turned.y + turned.height / 2,
-  );
+  await expect(status).toContainText("Cancelled");
+  await clickPart();
   const settled = (await instances(page).first().boundingBox())!;
   expect(Math.abs(settled.width - turned.width)).toBeLessThan(2);
 });

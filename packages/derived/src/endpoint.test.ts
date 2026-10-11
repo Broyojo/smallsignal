@@ -1,4 +1,4 @@
-import { createEmptyProject } from "@icm/model";
+import { createEmptyProject, transformPoint } from "@icm/model";
 import type { Net, RouteEndpoint } from "@icm/model";
 import {
   InMemorySymbolResolver,
@@ -195,6 +195,40 @@ describe("endpoint primitives", () => {
         }
       },
     );
+    it("keeps the left-anchored NAND's named pins on its body when it turns and mirrors", () => {
+      const document = createEmptyProject("ep", "EP").documents[0]!;
+      const nand = requireRazaviCatalogSymbol("nand-gate");
+      const gateResolver = new InMemorySymbolResolver([nand]);
+      const placement = {
+        position: { x: 240, y: 500 },
+        rotation: 90 as const,
+        mirror: "horizontal" as const,
+      };
+      document.instances = [{ id: "U8", symbolId: "nand-gate", placement }];
+      const points = ["A", "B", "Y"].map((pinName) =>
+        resolveEndpointPoint(document, gateResolver, terminal("U8", pinName)),
+      );
+      expect(points).toEqual(
+        ["A", "B", "Y"].map((pinName) =>
+          transformPoint(
+            nand.pins.find((pin) => pin.name === pinName)!.at,
+            placement.position,
+            placement,
+          ),
+        ),
+      );
+      document.instances = [
+        {
+          id: "U8",
+          symbolId: "nand-gate",
+          placement: { ...placement, mirror: "none" },
+        },
+      ];
+      expect(
+        resolveEndpointPoint(document, gateResolver, terminal("U8", "A")),
+      ).not.toEqual(points[0]);
+    });
+
     it("separates an exact auxiliary contact from its persistable grid landing", () => {
       const project = createEmptyProject("ep", "EP");
       const document = project.documents[0]!;

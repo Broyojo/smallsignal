@@ -6,7 +6,10 @@ import {
 } from "@icm/project-protocol";
 import { withProjectComponentDefinitions } from "@icm/symbols";
 
-test("edits a complete instance in portable Project Code, pastes it into another canvas, and undoes once", async ({
+// Pasting code from another Project is project-code's ("pastes all content
+// from another Project while retaining recipient identity"); native text copy
+// in the code editor across windows is project-file's clipboard case.
+test("edits a complete instance in portable Project Code and undoes once", async ({
   page,
   context,
 }) => {
@@ -74,30 +77,10 @@ test("edits a complete instance in portable Project Code, pastes it into another
   await expect(
     page.locator('[data-layer="symbols"] [data-object-id="R1"] > g').first(),
   ).toHaveAttribute("transform", /translate\(300(?:,| )250\)/);
-  await editor.focus();
-  await editor.press("ControlOrMeta+a");
-  await editor.press("ControlOrMeta+c");
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  const other = await context.newPage();
-  await other.goto("/editor?new=1");
-  await other.getByTestId("project-code-toggle").click();
-  const destination = other.getByRole("textbox", {
-    name: "Project code",
-    exact: true,
-  });
-  await destination.fill(copied);
-  await destination.press("ControlOrMeta+Enter");
-  await expect(
-    other.locator('[data-layer="annotations"] [data-object-id="name-R1"]'),
-  ).toContainText("R7");
-  await expect(
-    other.locator('[data-layer="symbols"] [data-object-id="R1"] > g').first(),
-  ).toHaveAttribute("transform", /translate\(300(?:,| )250\)/);
   await page.getByTestId("draw-tool-undo").click();
   await expect(
     page.locator('[data-layer="annotations"] [data-object-id="name-R1"]'),
   ).toContainText("R1");
-  await other.close();
 });
 
 test("lights the whole Project Code of a part selected on the canvas", async ({

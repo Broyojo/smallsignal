@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { executeProjectTransaction } from "@icm/edit-engine";
+import {
+  executeProjectTransaction,
+  executeTransaction,
+} from "@icm/edit-engine";
 import { createEmptyProject, type Instance } from "@icm/model";
 import { builtInSymbols, InMemorySymbolResolver } from "@icm/symbols";
 
@@ -39,6 +42,59 @@ describe("planPropertyApply", () => {
     const shown = showValue({ value: "33k" });
     expect(shown.kind).toBe("edits");
     expect(JSON.stringify(shown)).toContain("instance-value-R1");
+  });
+
+  it("hides and shows a component's name label from display.visualAnnotation", () => {
+    const project = createEmptyProject("name-display", "Name display");
+    const document = project.documents[0]!;
+    const instance: Instance = {
+      id: "R1",
+      reference: "R1",
+      symbolId: "resistor",
+      placement: { position: { x: 100, y: 100 }, rotation: 0, mirror: "none" },
+    };
+    document.instances.push(instance);
+    document.annotations.push({
+      id: "instance-label-R1",
+      kind: "instance-label",
+      binding: { kind: "instance-reference", instanceId: "R1" },
+      anchor: {
+        kind: "object",
+        objectId: "R1",
+        localOffset: { x: 25, y: 0 },
+        fallbackPosition: { x: 125, y: 100 },
+      },
+      alignment: "middle",
+      rotation: 0,
+      locked: false,
+    });
+    const plan = (visualAnnotation: boolean) =>
+      planPropertyApply(
+        { project, document, resolver, instance },
+        {
+          placement: null,
+          appearance: { color: "auto" },
+          display: { visualAnnotation },
+        },
+      );
+
+    // Already shown: nothing to do.
+    expect(plan(true)).toEqual({ kind: "unchanged" });
+    const hidden = plan(false);
+    if (hidden.kind !== "edits") throw new Error(JSON.stringify(hidden));
+    const result = executeTransaction(document, {
+      transactionId: "hide-name",
+      documentId: document.id,
+      expectedRevision: document.revision,
+      actor: { kind: "human", id: "test" },
+      edits: hidden.edits,
+    });
+    if (!result.ok) throw new Error(JSON.stringify(result));
+    expect(
+      result.document.annotations.find(
+        (annotation) => annotation.id === "instance-label-R1",
+      )?.visible,
+    ).toBe(false);
   });
 
   it("renames a copied Cell Pin's formal name though it has no canvas label", () => {

@@ -7,77 +7,51 @@ import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
 import {
-  awaitEditorReady,
-  awaitRecoveryStoreReady,
   chooseComponent,
   clickCommand,
+  downloadBytes,
   openMenu,
   readRecoveryRecords,
   recoveryProjectTexts,
 } from "./editor-fixtures.js";
+
+async function placeResistor(page: Page, x: number, y: number) {
+  await chooseComponent(page, "resistor");
+  await page.getByTestId("schematic-canvas").click({ position: { x, y } });
+  await page.keyboard.press("Escape");
+}
 
 const fixtureText = readFileSync(
   resolve(process.cwd(), "fixtures/projects/manual-basics/project.icproj.json"),
   "utf8",
 );
 
-interface SeedRecord {
-  workingCopyId: string;
-  generation: "latest" | "previous";
-  projectText: string;
-  projectName: string;
-  schemaVersion: number;
-  updatedAt: string;
-}
-
-async function seedRecoveryRecords(
+/** Merge `patch` into the stored recovery record at `key`, or store it whole. */
+async function patchRecoveryRecord(
   page: Page,
-  records: SeedRecord[],
+  key: string,
+  patch: Record<string, unknown>,
 ): Promise<void> {
-  await awaitEditorReady(page);
-  await awaitRecoveryStoreReady(page);
-  await page.evaluate(async (entries) => {
-    const seeds = entries as SeedRecord[];
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      const request = indexedDB.open("analog-canvas-recovery");
-      request.onerror = () => rejectPromise(request.error);
-      request.onsuccess = () => {
-        const database = request.result;
-        if (!database.objectStoreNames.contains("browser-recovery-v2")) {
-          rejectPromise(new Error("recovery store missing"));
-          database.close();
-          return;
-        }
-        const tx = database.transaction("browser-recovery-v2", "readwrite");
-        const store = tx.objectStore("browser-recovery-v2");
-        for (const entry of seeds) {
-          store.put(
-            {
-              format: "analog-canvas-browser-recovery-v2",
-              recordId: `${entry.workingCopyId}-${entry.generation}`,
-              workingCopyId: entry.workingCopyId,
-              generation: entry.generation,
-              projectId: "seed-project",
-              projectName: entry.projectName,
-              projectSchemaVersion: entry.schemaVersion,
-              topDocumentId: "document-main",
-              documentRevisions: { "document-main": 0 },
-              source: "new",
-              updatedAt: entry.updatedAt,
-              byteLength: entry.projectText.length,
-              projectText: entry.projectText,
-            },
-            `${entry.workingCopyId}#${entry.generation}`,
-          );
-        }
-        tx.oncomplete = () => {
-          database.close();
-          resolvePromise();
+  await page.evaluate(
+    ([key, patch]) =>
+      new Promise<void>((resolvePromise, rejectPromise) => {
+        const request = indexedDB.open("analog-canvas-recovery");
+        request.onerror = () => rejectPromise(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const tx = database.transaction("browser-recovery-v2", "readwrite");
+          const store = tx.objectStore("browser-recovery-v2");
+          const get = store.get(key);
+          get.onsuccess = () => store.put({ ...get.result, ...patch }, key);
+          tx.oncomplete = () => {
+            database.close();
+            resolvePromise();
+          };
+          tx.onerror = () => rejectPromise(tx.error);
         };
-        tx.onerror = () => rejectPromise(tx.error);
-      };
-    });
-  }, records);
+      }),
+    [key, patch] as const,
+  );
 }
 
 test("startup recovery without a saved workspace restores into a new working copy", async ({
@@ -86,11 +60,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   await page.goto("/editor");
   // A fresh navigation has no saved window workspace and can offer recovery.
   // One lone component remains below the banner's meaningful-content threshold.
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistor(page, 360, 230);
   await expect(page.getByTestId("revision")).toHaveText("1");
   await expect
     .poll(() => recoveryProjectTexts(page))
@@ -101,13 +71,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   await expect(banner).toHaveCount(0);
 
   // Three objects clear the threshold and the banner offers the restore.
-  for (const x of [360, 470, 580]) {
-    await chooseComponent(page, "resistor");
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x, y: 330 } });
-    await page.keyboard.press("Escape");
-  }
+  for (const x of [360, 470, 580]) await placeResistor(page, x, 330);
   await expect(page.getByTestId("revision")).toHaveText("3");
   await expect
     .poll(() => recoveryProjectTexts(page))
@@ -124,55 +88,48 @@ test("startup recovery without a saved workspace restores into a new working cop
   );
 });
 
-test("a damaged latest copy restores the previous generation", async ({
+test("a damaged copy restores its previous generation; a newer-schema copy downloads but never restores", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistor(page, 360, 230);
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 1');
 
   // Place one more edit so a valid previous generation exists, then corrupt
   // the latest record's Project text in place.
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 500, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistor(page, 500, 230);
   await expect(page.getByTestId("revision")).toHaveText("2");
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 2');
-  const records = await readRecoveryRecords(page);
-  const target = records.find((record) => record.generation === "latest");
-  expect(target).toBeDefined();
-  await page.evaluate((workingCopyId: string) => {
-    void new Promise<void>((resolvePromise, rejectPromise) => {
-      const request = indexedDB.open("analog-canvas-recovery");
-      request.onerror = () => rejectPromise(request.error);
-      request.onsuccess = () => {
-        const database = request.result;
-        const tx = database.transaction("browser-recovery-v2", "readwrite");
-        const store = tx.objectStore("browser-recovery-v2");
-        const get = store.get(`${workingCopyId}#latest`);
-        get.onsuccess = () => {
-          const record = get.result as Record<string, unknown>;
-          record.projectText = "corrupted by test";
-          store.put(record, `${workingCopyId}#latest`);
-        };
-        tx.oncomplete = () => {
-          database.close();
-          resolvePromise();
-        };
-        tx.onerror = () => rejectPromise(tx.error);
-      };
-    });
-  }, target!.workingCopyId);
+  const latest = (await readRecoveryRecords(page)).find(
+    (record) => record.generation === "latest",
+  )!;
+  await patchRecoveryRecord(page, `${latest.workingCopyId}#latest`, {
+    projectText: "corrupted by test",
+  });
+  // A copy another, newer build left behind.
+  const futureText = JSON.stringify({
+    ...JSON.parse(fixtureText),
+    schemaVersion: 99,
+  });
+  await patchRecoveryRecord(page, "future-copy#latest", {
+    format: "analog-canvas-browser-recovery-v2",
+    recordId: "future-copy-latest",
+    workingCopyId: "future-copy",
+    generation: "latest",
+    projectId: "seed-project",
+    projectName: "Future Project",
+    projectSchemaVersion: 99,
+    topDocumentId: "document-main",
+    documentRevisions: { "document-main": 0 },
+    source: "new",
+    updatedAt: new Date().toISOString(),
+    byteLength: futureText.length,
+    projectText: futureText,
+  });
 
   await page.goto("/editor?recovery=damaged");
   await clickCommand(page, "File", "Recover Unsaved Work…");
@@ -180,7 +137,25 @@ test("a damaged latest copy restores the previous generation", async ({
   await expect(dialog).toBeVisible();
   // The tab this address left behind has a copy of its own beside it (#1599).
   const cards = dialog.getByTestId("recovery-session-card");
-  await expect(cards).toHaveCount(2);
+  await expect(cards).toHaveCount(3);
+
+  const future = cards.filter({ hasText: "Future Project" });
+  await expect(future).toContainText("Newer Project schema");
+  await expect(future.getByRole("button", { name: "Restore" })).toBeDisabled();
+  const downloadPromise = page.waitForEvent("download");
+  await future
+    .getByRole("button", { name: "Download backup of Future Project" })
+    .click();
+  expect((await downloadPromise).suggestedFilename()).toContain(
+    "-backup.icproj.json",
+  );
+  // The incompatible record is still present, never deleted as corrupt.
+  expect(
+    (await readRecoveryRecords(page)).some((record) =>
+      record.projectText.includes('"schemaVersion":99'),
+    ),
+  ).toBe(true);
+
   const damaged = cards.filter({ hasText: "Damaged" });
   await expect(damaged).toHaveCount(1);
   await damaged
@@ -190,66 +165,27 @@ test("a damaged latest copy restores the previous generation", async ({
   await expect(page.getByTestId("revision")).toHaveText("1");
 });
 
-test("a newer-schema copy is downloadable but not restorable", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  const futureText = JSON.stringify({
-    ...JSON.parse(fixtureText),
-    schemaVersion: 99,
-  });
-  await seedRecoveryRecords(page, [
-    {
-      workingCopyId: "future-copy",
-      generation: "latest",
-      projectText: futureText,
-      projectName: "Future Project",
-      schemaVersion: 99,
-      updatedAt: new Date().toISOString(),
-    },
-  ]);
-  await page.reload();
-  await clickCommand(page, "File", "Recover Unsaved Work…");
-  const dialog = page.getByRole("dialog", { name: "Recover recent work" });
-  await expect(dialog).toBeVisible();
-  const card = dialog.getByTestId("recovery-session-card").filter({
-    hasText: "Future Project",
-  });
-  await expect(card).toContainText("Newer Project schema");
-  await expect(card.getByRole("button", { name: "Restore" })).toBeDisabled();
-
-  const downloadPromise = page.waitForEvent("download");
-  await card
-    .getByRole("button", { name: "Download backup of Future Project" })
-    .click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toContain("-backup.icproj.json");
-  // The incompatible record is still present, never deleted as corrupt.
-  await expect
-    .poll(async () => {
-      const records = await readRecoveryRecords(page);
-      return records.some((record) =>
-        record.projectText.includes('"schemaVersion":99'),
-      );
-    })
-    .toBe(true);
-});
-
-test("explicit discard removes outgoing recovery and hides a clean replacement", async ({
+test("export keeps recovery; explicit discard removes it and hides a clean replacement", async ({
   page,
 }) => {
   await page.goto("/editor");
   // Three authored objects: enough for the replacement guard to engage.
-  for (const x of [300, 380, 460]) {
-    await chooseComponent(page, "resistor");
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x, y: 230 } });
-    await page.keyboard.press("Escape");
-  }
+  for (const x of [300, 380, 460]) await placeResistor(page, x, 230);
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 3');
+  // Exporting downloads the formal Project but never clears the browser
+  // recovery copies: the next write rotates revision 3 into the previous
+  // generation of the same session. That edit also invalidates the export's
+  // safe stamp, so the replacement below prompts again.
+  await downloadBytes(page, "File", "Export Project File…");
+  await placeResistor(page, 540, 230);
+  await expect
+    .poll(async () => {
+      const texts = await recoveryProjectTexts(page);
+      return texts.includes('"revision": 4') && texts.includes('"revision": 3');
+    })
+    .toBe(true);
   const replacement = createEmptyProject(
     "clean-replacement",
     "Clean Replacement",
@@ -284,13 +220,11 @@ test("explicit discard removes outgoing recovery and hides a clean replacement",
   ).toHaveCount(0);
 });
 
-test("dialog closes with Escape and keeps focus labels", async ({ page }) => {
+test("dialog closes with Escape, keeps focus labels and deletes a copy", async ({
+  page,
+}) => {
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistor(page, 360, 230);
   await expect
     .poll(() => recoveryProjectTexts(page))
     .toContain('"revision": 1');
@@ -312,6 +246,13 @@ test("dialog closes with Escape and keeps focus labels", async ({ page }) => {
   await dialog.getByText("These copies live only in this browser").click();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+
+  // Delete clears the recovery slot.
+  await clickCommand(page, "File", "Recover Unsaved Work…");
+  await dialog.getByRole("button", { name: "Delete" }).click();
+  await expect
+    .poll(async () => (await readRecoveryRecords(page)).length)
+    .toBe(0);
 });
 
 test("storage failure offers a backup without acknowledging Cloud Save", async ({
@@ -326,11 +267,7 @@ test("storage failure offers a backup without acknowledging Cloud Save", async (
     });
   });
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
+  await placeResistor(page, 360, 230);
   await expect(page.getByTestId("revision")).toHaveText("1");
   const warning = page.getByTestId("recovery-failure-banner");
   await expect(warning).toBeVisible();

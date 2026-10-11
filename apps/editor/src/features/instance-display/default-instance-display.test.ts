@@ -581,6 +581,42 @@ describe("blocks that carry no designator", () => {
     }
   });
 
+  // A Symbol with no reference prefix once projected an empty designator: no
+  // glyph, but a hit box and a lone line break (#895).
+  it("gives a placed logic gate one visible X Reference label and no empty one", () => {
+    const document = createEmptyDocument("main", "Main");
+    const gate = createNewInstance(document, {
+      symbolId: "nand-gate",
+      placement: {
+        position: { x: 100, y: 100 },
+        rotation: 0 as const,
+        mirror: "none" as const,
+      },
+      netlist: initialInstanceNetlist("nand-gate", {}),
+    });
+    expect(gate.reference).toBe("X1");
+    const profile = styleProfile(document);
+    const annotations = defaultInstanceDisplayAnnotations(
+      document,
+      gate,
+      resolver,
+      profile,
+      {},
+    );
+    expect(annotations).toEqual([
+      expect.objectContaining({
+        kind: "instance-label",
+        binding: { kind: "instance-reference", instanceId: gate.id },
+      }),
+    ]);
+    expect(
+      resolveAnnotationName(
+        { ...document, instances: [gate] },
+        annotations[0]!,
+      ),
+    ).toBe("X1");
+  });
+
   it("labels each compound magnetic device with its allocated X reference", () => {
     for (const [symbolId, reference] of [
       ["tcoil", "X1"],

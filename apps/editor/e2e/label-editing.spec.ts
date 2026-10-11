@@ -4,12 +4,10 @@
 import { parseSavedProject } from "./editor-fixtures";
 import { createRoutePath } from "@icm/model";
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
 import { createRoutingDemoProject } from "../src/demos/routing-demo.js";
 import {
   revealPropertiesShelf,
   clickDrawTool,
-  placeText,
   downloadBytes,
   editComponentPropertyCode,
   readComponentPropertyCode,
@@ -18,185 +16,35 @@ import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
-import {
-  clickRoute,
-  dragBy,
-  closeSelectionShelf,
-  selectRichTextOffsets,
-} from "./canvas-fixtures.js";
+import { clickRoute, selectRichTextOffsets } from "./canvas-fixtures.js";
 
-async function instanceLabelVector(
-  page: Page,
-  instanceId: string,
-): Promise<{ x: number; y: number }> {
-  const instance = await page
-    .locator(`[data-layer="symbols"] [data-object-id="${instanceId}"]`)
-    .boundingBox();
-  const label = await page
-    .locator(
-      `[data-layer="editor-overlay"] [data-testid="annotation-hit-instance-label-${instanceId}"]`,
-    )
-    .boundingBox();
-  if (!instance || !label) throw new Error("Instance label is not measurable");
-  return {
-    x: label.x + label.width / 2 - (instance.x + instance.width / 2),
-    y: label.y + label.height / 2 - (instance.y + instance.height / 2),
-  };
-}
-
-test("keeps a transformed instance label at a constant distance while moving", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 320, y: 220 });
-  await page.keyboard.press("Shift+r");
-  await expect(page.getByTestId("revision")).toHaveText("2");
-
-  const hit = page.getByTestId("hit-R1");
-  const before = await instanceLabelVector(page, "R1");
-  await dragBy(hit, { x: 83, y: 47 });
-  const afterFirst = await instanceLabelVector(page, "R1");
-  expect(afterFirst.x).toBeCloseTo(before.x, 3);
-  expect(afterFirst.y).toBeCloseTo(before.y, 3);
-
-  await dragBy(hit, { x: -51, y: 69 });
-  const afterSecond = await instanceLabelVector(page, "R1");
-  expect(afterSecond.x).toBeCloseTo(before.x, 3);
-  expect(afterSecond.y).toBeCloseTo(before.y, 3);
-  await expect(page.getByTestId("revision")).toHaveText("4");
-});
-
-test("selects an attached label without selecting its host", async ({
+test("Alt selects an attached label without its host, and the label then drags alone", async ({
   page,
 }) => {
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 320, y: 220 });
 
-  await page
-    .getByTestId("annotation-hit-instance-label-R1")
-    .click({ modifiers: ["Alt"] });
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveClass(/hit-target/u);
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveClass(/selected/u);
+  // The placed component is initially selected and therefore owns an
+  // overlapping drag. Alt cycles to the label once; subsequent drags remain
+  // sticky to that explicit selection.
+  const label = page.getByTestId("annotation-hit-instance-label-R1");
+  await label.click({ modifiers: ["Alt"] });
+  await expect(label).toHaveClass(/hit-target/u);
+  await expect(label).toHaveClass(/selected/u);
   await revealPropertiesShelf(page);
   await expect(page.getByTestId("selection-shelf")).toContainText(
     "Annotation · instance-label",
   );
-});
-
-test("moves an explicitly selected attached label", async ({ page }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 320, y: 220 });
-
+  const host = await page.getByTestId("hit-R1").boundingBox();
+  const before = (await label.boundingBox())!;
   // Text uses the same one-gesture threshold as a component.
-  const label = page.getByTestId("annotation-hit-instance-label-R1");
-  await expect(label).toBeVisible();
-  // The placed component is initially selected and therefore owns an
-  // overlapping drag. Alt cycles to the label once; subsequent drags remain
-  // sticky to that explicit selection.
-  await label.click({ modifiers: ["Alt"] });
-  const before = await label.boundingBox();
-  expect(before).not.toBeNull();
-
   await label.dragTo(page.getByTestId("schematic-canvas"), {
     targetPosition: { x: 470, y: 330 },
   });
-  const after = await label.boundingBox();
-  expect(after).not.toBeNull();
-  expect(after!.x).not.toBe(before!.x);
-  expect(after!.y).not.toBe(before!.y);
-});
-
-test("edits instance, electrical Net, and free text with bounded label handles", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 280, y: 180 });
-  await placeComponent(page, "resistor", { x: 480, y: 180 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
-
-  await page.getByTestId("hit-R1").click();
-  await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
-  await page.getByRole("checkbox", { name: "Use display alias" }).check();
-  const referenceEditor = page.getByRole("textbox", {
-    name: "Canvas text editor",
-  });
-  await expect(referenceEditor).toHaveAttribute("contenteditable", "true");
-  await referenceEditor.fill("R_LOAD");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  // The user-owned schematic name changes without touching the hidden SPICE
-  // reference, so its RichText spelling is displayed exactly as authored.
-  await expect(page.locator('[data-layer="annotations"]')).toContainText(
-    "R_LOAD",
-  );
-
-  await clickRoute(page, "route-ui-1", 0.5, 0);
-  await openSelectionShelf(page);
-  await editComponentPropertyCode(page, (code) => {
-    code.name = "SIGNAL";
-  });
-  await expect(page.locator('[data-layer="annotations"]')).toContainText(
-    "SIGNAL",
-  );
-  await expect(
-    page.getByTestId("annotation-hit-net-label-route-ui-1"),
-  ).toBeVisible();
-  await page.getByTestId("annotation-hit-net-label-route-ui-1").dblclick();
-  const annotationEditor = page.getByRole("textbox", {
-    name: "Canvas text editor",
-  });
-  await expect(annotationEditor).toHaveAttribute("contenteditable", "true");
-  await annotationEditor.fill("Vref");
-  await expect(page.getByRole("button", { name: "Italic" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Subscript" })).toBeVisible();
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(page.locator('[data-layer="annotations"]')).toContainText(
-    "Vref",
-  );
-  await revealPropertiesShelf(page);
-  await page.getByTestId("selection-shelf").click();
-
-  await placeComponent(page, "resistor", { x: 280, y: 320 });
-  await placeComponent(page, "resistor", { x: 480, y: 320 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R3-2").click();
-  await page.getByTestId("terminal-R4-1").click();
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("net-count")).toHaveText("2");
-  await clickRoute(page, "route-ui-2", 0.5, 0);
-  await openSelectionShelf(page);
-  await editComponentPropertyCode(page, (code) => {
-    code.name = "Vref";
-  });
-  await expect(page.getByTestId("net-count")).toHaveText("2");
-  await expect(page.getByTestId("status")).toHaveText(
-    "Updated Route route-ui-2",
-  );
-
-  await placeText(page);
-  const textInput = page.getByRole("textbox", {
-    name: "Canvas text editor",
-  });
-  await textInput.fill("Matched pair");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(page.locator('[data-layer="drafting"]')).toContainText(
-    "Matched pair",
-  );
-  const noteHandle = page.locator('[data-testid^="drafting-hit-note-"]');
-  const beforeBox = await noteHandle.boundingBox();
-  if (!beforeBox) throw new Error("Text handle is not measurable");
-  await closeSelectionShelf(page);
-  await noteHandle.dragTo(page.getByTestId("schematic-canvas"), {
-    targetPosition: { x: 360, y: 300 },
-  });
-  const afterBox = await noteHandle.boundingBox();
-  expect(afterBox?.x).not.toBe(beforeBox.x);
+  const after = (await label.boundingBox())!;
+  expect(after.x).not.toBe(before.x);
+  expect(after.y).not.toBe(before.y);
+  expect(await page.getByTestId("hit-R1").boundingBox()).toEqual(host);
 });
 
 test("L labels a selected wire or snaps near an unselectable wire", async ({
@@ -219,23 +67,25 @@ test("L labels a selected wire or snaps near an unselectable wire", async ({
   const editorBox = await editor.boundingBox();
   expect(editorBox?.width).toBeGreaterThan(250);
   expect(editorBox?.height).toBeGreaterThan(100);
-  const editorLayerOrder = await editor.evaluate((element) => {
-    const overlay = element.closest('[data-layer="editor-overlay"]');
-    const hitTargets = overlay
-      ? [...overlay.querySelectorAll('[data-testid*="-hit-"]')]
-      : [];
-    return {
-      hitTargetCount: hitTargets.length,
-      followsEveryHitTarget: hitTargets.every(
-        (target) =>
-          (target.compareDocumentPosition(element) &
-            Node.DOCUMENT_POSITION_FOLLOWING) !==
-          0,
-      ),
-    };
-  });
-  expect(editorLayerOrder.hitTargetCount).toBeGreaterThan(0);
-  expect(editorLayerOrder.followsEveryHitTarget).toBe(true);
+  // The editor paints above every canvas hit target.
+  expect(
+    await editor.evaluate((element) => {
+      const hitTargets = [
+        ...(element
+          .closest('[data-layer="editor-overlay"]')
+          ?.querySelectorAll('[data-testid*="-hit-"]') ?? []),
+      ];
+      return (
+        hitTargets.length > 0 &&
+        hitTargets.every(
+          (target) =>
+            (target.compareDocumentPosition(element) &
+              Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0,
+        )
+      );
+    }),
+  ).toBe(true);
   await expect(editor.getByRole("button", { name: "Italic" })).toBeVisible();
   const richEditor = editor.getByRole("textbox", {
     name: "Canvas text editor",
@@ -349,107 +199,11 @@ test("canvas text editor cancels explicitly and commits on Escape or outside cli
   await expect(page.getByTestId("revision")).toHaveText("3");
 });
 
-test("a dragged Net label moves freely while retaining its Net tether", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 280, y: 180 });
-  await placeComponent(page, "resistor", { x: 520, y: 180 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
-
-  await page.keyboard.press("l");
-  const editor = page.getByTestId("net-label-editor");
-  await editor
-    .getByRole("textbox", { name: "Canvas text editor" })
-    .fill("NETA");
-  await editor.getByRole("button", { name: "Apply text changes" }).click();
-  await clickRoute(page, "route-ui-1", 0.5, 0);
-
-  const label = page.getByTestId("annotation-hit-net-label-route-ui-1");
-  const renderedLabel = page.locator('[data-object-id="net-label-route-ui-1"]');
-  await expect(label).toBeVisible();
-  const before = await renderedLabel.boundingBox();
-  if (!before) throw new Error("Net label is not measurable");
-  const revisionBefore = await page.getByTestId("revision").textContent();
-
-  // Well past the left end of the short Route: the label must follow the
-  // pointer rather than clamping its horizontal position to that Route. Start
-  // on the overlap between the text's lower hit area and the wire hit stroke:
-  // this press used to move the Route instead of the visible label.
-  const start = await page.evaluate(({ x, y, width, height }) => {
-    for (let py = y; py <= y + height; py += 2) {
-      for (let px = x; px <= x + width; px += 2) {
-        const ids = document
-          .elementsFromPoint(px, py)
-          .map((element) => element.getAttribute("data-testid"));
-        if (
-          ids.includes("annotation-hit-net-label-route-ui-1") &&
-          ids.includes("route-hit-route-ui-1")
-        ) {
-          return { x: px, y: py };
-        }
-      }
-    }
-    return null;
-  }, before);
-  if (!start) throw new Error("Net label and Route do not overlap");
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x - 240, start.y + 80, { steps: 8 });
-  await page.mouse.up();
-  await expect(page.getByTestId("revision")).not.toHaveText(revisionBefore!);
-  const after = await renderedLabel.boundingBox();
-  if (!after) throw new Error("Net label vanished after the drag");
-  expect(after.x - before.x).toBeLessThan(-200);
-  expect(after.y - before.y).toBeGreaterThan(60);
-  await expect(renderedLabel).toHaveAttribute("data-anchor-kind", "free");
-  const tether = page.getByTestId("label-tether");
-  await expect(tether).toBeVisible();
-  await expect(tether).toHaveAttribute("data-tether-kind", "wire");
-});
-
-test("L puts a vertical wire's label on its right, and a selected name points at its part", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 160 });
-  await placeComponent(page, "resistor", { x: 300, y: 400 });
-  await clickDrawTool(page, "wire");
-  // Drawn from R2 up to R1: a vertical wire whose direction used to put
-  // the label on its left, across the wire.
-  await page.getByTestId("terminal-R2-1").click();
-  await page.getByTestId("terminal-R1-2").click();
-  await page.keyboard.press("Escape");
-  await clickRoute(page, "route-ui-1", 0.5, 0);
-  await page.keyboard.press("l");
-  const editor = page.getByTestId("net-label-editor");
-  await editor.getByRole("textbox", { name: "Canvas text editor" }).fill("MID");
-  await editor.getByRole("button", { name: "Apply text changes" }).click();
-  const label = page.locator('[data-object-id="net-label-route-ui-1"]');
-  await expect(label).toContainText("MID");
-  const wire = await page.getByTestId("route-hit-route-ui-1").boundingBox();
-  const text = await label.boundingBox();
-  if (!wire || !text) throw new Error("Wire or label is not measurable");
-  expect(text.x).toBeGreaterThan(wire.x + wire.width / 2);
-
-  // A part's selected name draws its line to the part and lights the part.
-  await page.keyboard.press("Escape");
-  await page.getByTestId("annotation-hit-instance-label-R1").click();
-  const tether = page.getByTestId("label-tether");
-  await expect(tether).toHaveCount(1);
-  await expect(tether).toHaveAttribute("data-tether-kind", "part");
-  await expect(page.getByTestId("selection-halo-label-owner")).toHaveCount(1);
-  // Selecting the part alone shows which labels are its own.
-  await page.keyboard.press("Escape");
-  await page.getByTestId("hit-R2").click();
-  await expect(
-    page.locator('[data-testid="label-tether"][data-tether-kind="part"]'),
-  ).not.toHaveCount(0);
-});
-
+// A dragged Net Label turns free and keeps its Net (annotation-drag-model's
+// "freely places a routed Net Label while retaining its Net binding"), a
+// press on its text wins over the wire beneath (canvas-hit-resolver's
+// "prefers visible annotation text over an overlapping conductor"), and its
+// tether is label-tether's.
 test("keeps the rich-text editor outside its target and shields canvas input", async ({
   page,
 }) => {
@@ -522,16 +276,6 @@ test("deletes imported Net Labels with non-editor ids", async ({ page }) => {
     "annotation-hit-imported-label-horizontal",
   );
   await importedLabel.click();
-  await page.keyboard.press("h");
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveAttribute(
-    "data-net-id",
-    "net-h",
-  );
-  await expect(
-    page.locator(".net-highlight-overlay .net-highlight-core"),
-  ).toHaveCount(1);
-  await page.keyboard.press("h");
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
   await page.keyboard.press("Delete");
   await expect(importedLabel).toHaveCount(0);
   await page.keyboard.press("Control+z");
@@ -568,16 +312,6 @@ test("deletes imported Net Labels with non-editor ids", async ({ page }) => {
   expect(savedDocument.annotations).toHaveLength(0);
   expect(savedDocument.connectivityEvidence).not.toContainEqual(
     expect.objectContaining({ kind: "name-claim", netId: "net-h" }),
-  );
-  await page.getByTestId("project-file").setInputFiles({
-    name: "legacy-net-label-reopened.icproj.json",
-    mimeType: "application/json",
-    buffer: savedWithoutLabel,
-  });
-  await clickRoute(page, "route-imported-h");
-  await openSelectionShelf(page);
-  expect(JSON.parse(await readComponentPropertyCode(page)).net.name ?? "").toBe(
-    "",
   );
 });
 

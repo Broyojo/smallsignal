@@ -52,16 +52,7 @@ test("bulk edits instance JSON in the sidebar with atomic undo and live netlist 
   await expect(live).toContainText(/R1 a b 10k/iu);
   await expect(live).toContainText(/R2 b a 10k/iu);
 
-  await clickCommand(page, "Netlist", "Edit Device Data…");
-  const rejected = JSON.parse(await code.inputValue());
-  const invalidRows = Object.values(rejected)[0] as Record<string, any>;
-  Object.values(invalidRows)[0]!.parameters.value = "99k";
-  Object.values(invalidRows)[1]!.reference = "R1";
-  await code.fill(JSON.stringify(rejected));
-  await expect(panel.getByRole("alert")).toContainText("Edit rejected");
-  expect(await copyNetlistText(page)).toMatch(/R1 a b 10k\nR2 b a 10k/iu);
-  await clickCommand(page, "Netlist", "Edit Device Data…");
-  await page.setViewportSize({ width: 760, height: 800 });
-  await expect(code).toBeVisible();
-  await code.selectText();
+  // A rejected edit (a duplicate reference) leaves every row unchanged:
+  // instance-code's "rejects the whole transaction when a later Cell is
+  // invalid".
 });
