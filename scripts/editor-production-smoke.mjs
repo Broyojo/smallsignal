@@ -71,6 +71,44 @@ async function loadedStylesheetContains(page, needle) {
   return contents.some((content) => content.includes(needle));
 }
 
+// Every loading screen a first /editor visit reveals, in order, on a fresh
+// profile over a slow link where the route's chunks arrive over time. React
+// keeps a revealed fallback for at least 300 ms, so each further stage costs
+// that much (#1645).
+async function editorLoadingScreensOf(browser, url) {
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  try {
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const seen = (window.__icmLoadingScreens = []);
+      new MutationObserver((records) => {
+        for (const record of records)
+          for (const node of record.addedNodes) {
+            if (!(node instanceof Element)) continue;
+            const screens = node.matches(".analytics-loading")
+              ? [node]
+              : node.querySelectorAll(".analytics-loading");
+            for (const screen of screens) seen.push(screen.textContent ?? "");
+          }
+      }).observe(document, { childList: true, subtree: true });
+    });
+    const network = await context.newCDPSession(page);
+    await network.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 40,
+      downloadThroughput: 10_000_000 / 8,
+      uploadThroughput: 5_000_000 / 8,
+    });
+    await page.goto(new URL("editor", url).href);
+    await page.waitForSelector('[data-testid="schematic-canvas"]', {
+      timeout: 30_000,
+    });
+    return await page.evaluate(() => window.__icmLoadingScreens);
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   const expected = check
     ? JSON.parse(await readFile(reportPath, "utf8"))
@@ -87,6 +125,7 @@ async function main() {
   let editorStylesLoaded = false;
   let galleryPdfRuntimeLoaded = true;
   let editorPdfRuntimeLoaded = true;
+  let editorLoadingScreens = [];
   let editorSimulationServiceLoaded = true;
   try {
     server = await preview({
@@ -100,6 +139,7 @@ async function main() {
         ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
         : { channel: process.env.CI ? undefined : "chrome" },
     );
+    editorLoadingScreens = await editorLoadingScreensOf(browser, url);
     const page = await browser.newPage();
     // This acceptance checks the hosted Gallery contract on a loopback server.
     // Ordinary loopback Examples have their own browser workflow.
@@ -254,6 +294,7 @@ async function main() {
     editorStylesLoaded,
     galleryPdfRuntimeLoaded,
     editorPdfRuntimeLoaded,
+    editorLoadingScreens,
     editorSimulationServiceLoaded,
     routePreloadBeforeStylesheets,
   };
@@ -285,6 +326,11 @@ async function main() {
   }
   if (report.galleryPdfRuntimeLoaded || report.editorPdfRuntimeLoaded) {
     throw new Error("PDF runtime loaded before a PDF export was requested");
+  }
+  if (report.editorLoadingScreens.length > 1) {
+    throw new Error(
+      `Editor revealed more than one loading screen: ${report.editorLoadingScreens.join(", ")}`,
+    );
   }
   if (report.editorSimulationServiceLoaded) {
     throw new Error("Editor loaded the simulation service on startup");

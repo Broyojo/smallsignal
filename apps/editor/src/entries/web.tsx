@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense } from "react";
+import { lazy, StrictMode, Suspense, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 
 import { useVisitStats } from "../../analytics/client";
@@ -21,6 +21,7 @@ import "../../analytics/analytics.css";
 import "../styles.css";
 import { hasAgentSessionRecovery } from "../agent/session-recovery-presence";
 
+import type { WebEditorApp } from "./web-editor";
 import { configureWebServiceWorker } from "./web-service-worker";
 import { localhostExamplesEnabled } from "../gallery-source";
 
@@ -35,6 +36,11 @@ export function mountWebEditor() {
     !/^\/(?:analytics|moderation|mine|account)?\/?$/.test(
       window.location.pathname,
     ) || hasAgentSessionRecovery(window.sessionStorage);
+  // `/editor` and `/g/<id>`: every path no other page claims.
+  const editorRoute =
+    !/^\/(?:analytics|moderation|privacy|account|mine)?\/?$/.test(
+      window.location.pathname,
+    );
 
   const container = document.getElementById("root");
 
@@ -98,11 +104,25 @@ export function mountWebEditor() {
     ?.then(warmGalleryPreviews)
     .catch(() => undefined);
 
-  const EditorApp = lazy(
+  // The editor routes load the Agent workspace and the editor as one chunk
+  // set behind one loading screen. Two nested lazy stages revealed a second
+  // fallback, which React keeps for at least 300 ms though its code was
+  // already preloaded (#1645).
+  const EditorWorkspace = lazy(
     guardedRouteChunk(() =>
-      import("./web-editor").then((module) => ({
-        default: module.WebEditorApp,
-      })),
+      Promise.all([import("../app/App"), import("./web-editor")]).then(
+        ([app, editor]) => ({
+          default: function EditorWorkspace(
+            props: ComponentProps<typeof WebEditorApp>,
+          ) {
+            return (
+              <app.WorkspaceAgentProvider>
+                <editor.WebEditorApp {...props} />
+              </app.WorkspaceAgentProvider>
+            );
+          },
+        }),
+      ),
     ),
   );
 
@@ -239,7 +259,7 @@ export function mountWebEditor() {
       <Suspense
         fallback={<div className="analytics-loading">Loading editor…</div>}
       >
-        <EditorApp
+        <EditorWorkspace
           visitStats={stats}
           initialGalleryEntryId={galleryEntryIdOf(path)}
         />
@@ -250,7 +270,7 @@ export function mountWebEditor() {
   createRoot(container).render(
     <StrictMode>
       <EditorErrorBoundary>
-        {needsAgentWorkspace ? (
+        {needsAgentWorkspace && !editorRoute ? (
           <Suspense
             fallback={
               <div className="analytics-loading">Loading workspace…</div>
