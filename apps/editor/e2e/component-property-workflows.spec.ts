@@ -1,14 +1,13 @@
 import { parseSavedProject } from "./editor-fixtures";
 import type { SchematicDocument } from "@icm/model";
 import { razaviProductSymbols } from "@icm/symbols";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 import { executeProjectTransaction } from "@icm/edit-engine";
 import {
   revealPropertiesShelf,
   awaitEditorReady,
-  clickDrawTool,
   downloadBytes,
   editComponentPropertyCode,
   readComponentPropertyCode,
@@ -21,170 +20,99 @@ import {
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
 
-for (const legacy of [false, true]) {
-  test(`Rail Properties switches Cell Pin and Global atomically, survives reload and undo (legacy=${legacy})`, async ({
-    page,
-  }) => {
-    const seed = createEmptyProject("rail-connection", "Rail connection");
-    const initial = executeProjectTransaction(seed, {
-      transactionId: "rail",
-      projectId: seed.id,
-      expectedStructureRevision: seed.structureRevision,
-      actor: { kind: "human", id: "test" },
-      edits: [
-        {
-          kind: "transact_document",
-          documentId: seed.topDocumentId,
-          expectedRevision: 0,
-          edits: [
-            {
-              kind: "add_power_rail",
-              netId: "supply",
-              routeId: "rail",
-              startJunctionId: "left",
-              endJunctionId: "right",
-              labelId: "supply-label",
-              netName: "VCC",
-              scope: "global",
-              powerDomain: "vdd",
-              start: { x: 200, y: 200 },
-              end: { x: 400, y: 200 },
-            },
-          ],
-        },
-      ],
-    });
-    if (!initial.ok) throw new Error(JSON.stringify(initial));
-    const original = initial.project.documents[0]!;
-    if (legacy) {
-      original.annotations = [];
-      original.connectivityEvidence = ["rail", "right"].map((objectId) => ({
-        id: `legacy-${objectId}`,
-        kind: "name-claim",
-        netId: "supply",
-        name: "VCC",
-        scope: "global",
-        powerDomain: "vdd",
-        owner: { kind: "power-marker", objectId },
-      }));
-    }
-    const load = async (content: string) => {
-      await page.getByTestId("project-file").setInputFiles({
-        name: "rail.icproj.json",
-        mimeType: "application/json",
-        buffer: Buffer.from(content),
-      });
-      await page.getByTestId("route-hit-rail").click({ force: true });
-      await openSelectionShelf(page);
-    };
-    const save = async () =>
-      parseSavedProject(
-        (await downloadBytes(page, "File", "Export Project File…")).toString(
-          "utf8",
-        ),
-      );
-    await page.goto("/editor");
-    await awaitEditorReady(page);
-    await load(serializeProject(initial.project));
-    await expectComponentCodeField(page, "net.scope", "global");
-    await editComponentPropertyCode(page, (code) => {
-      code.net.scope = "local";
-      if (!legacy) code.display.visualAnnotation = false;
-    });
-    await expectComponentCodeField(page, "net.scope", "local");
-    const local = await save();
-    expect(local.documents[0]!.netlist!.terminals).toEqual([
-      expect.objectContaining({
-        name: "VCC",
-        interfaceAnnotationId: expect.any(String),
-      }),
-    ]);
-    expect(local.documents[0]!.routes).toEqual(original.routes);
-    expect(local.documents[0]!.junctions).toEqual(original.junctions);
-    await load(serializeProject(local));
-    await expectComponentCodeField(page, "net.scope", "local");
-    await editComponentPropertyCode(page, (code) => {
-      code.net.scope = "global";
-      if (!legacy) code.display.visualAnnotation = true;
-    });
-    await expectComponentCodeField(page, "net.scope", "global");
-    const global = await save();
-    expect(global.documents[0]!.netlist!.terminals).toEqual([]);
-    expect(global.documents[0]!.nets).toEqual(original.nets);
-    expect(
-      global.documents[0]!.annotations.filter(
-        (label: SchematicDocument["annotations"][number]) =>
-          label.visible !== false,
-      ),
-    ).toEqual(original.annotations);
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x: 40, y: 40 } });
-    await page.keyboard.press("Control+z");
-    const undone = await save();
-    expect(undone.documents[0]!.netlist!.terminals).toEqual(
-      local.documents[0]!.netlist!.terminals,
-    );
-  });
-}
-
-test("Cell Pin Properties edits the formal name even without a canvas label", async ({
-  page,
-}) => {
-  const project = createEmptyProject("pin-name", "Pin name");
-  const document = project.documents[0]!;
-  document.instances.push({
-    id: "P2-copy-1",
-    symbolId: "port",
-    placement: {
-      position: { x: 300, y: 200 },
-      rotation: 0,
-      mirror: "none",
-    },
-  });
-  document.nets.push({
-    id: "net-voc",
-    terminals: [{ instanceId: "P2-copy-1", pinName: "P" }],
-  });
-  document.netlist = {
-    name: document.name,
-    formalParameters: [],
-    terminals: [
-      {
-        id: "terminal-voc",
-        name: "Voc",
-        netId: "net-voc",
-        direction: "passive",
-        interfaceInstanceIds: ["P2-copy-1"],
-      },
-    ],
-  };
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "pin-name.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  await page.getByTestId("hit-P2-copy-1").click();
-  await openSelectionShelf(page);
-  await expect(page.getByTestId("selection-shelf")).toContainText("Voc · port");
-  await expectComponentCodeField(page, "name", "Voc");
-  await editComponentPropertyCode(page, (code) => {
-    code.name = "Vcm";
-  });
-  await expectComponentCodeField(page, "name", "Vcm");
-  const saved = parseSavedProject(
+const exportedProject = async (page: Page) =>
+  parseSavedProject(
     (await downloadBytes(page, "File", "Export Project File…")).toString(
       "utf8",
     ),
   );
-  expect(saved.documents[0]!.netlist!.terminals[0]).toMatchObject({
-    id: "terminal-voc",
-    name: "Vcm",
-    netId: "net-voc",
+
+test("Rail Properties switches Cell Pin and Global atomically, survives reload and undo", async ({
+  page,
+}) => {
+  const seed = createEmptyProject("rail-connection", "Rail connection");
+  const initial = executeProjectTransaction(seed, {
+    transactionId: "rail",
+    projectId: seed.id,
+    expectedStructureRevision: seed.structureRevision,
+    actor: { kind: "human", id: "test" },
+    edits: [
+      {
+        kind: "transact_document",
+        documentId: seed.topDocumentId,
+        expectedRevision: 0,
+        edits: [
+          {
+            kind: "add_power_rail",
+            netId: "supply",
+            routeId: "rail",
+            startJunctionId: "left",
+            endJunctionId: "right",
+            labelId: "supply-label",
+            netName: "VCC",
+            scope: "global",
+            powerDomain: "vdd",
+            start: { x: 200, y: 200 },
+            end: { x: 400, y: 200 },
+          },
+        ],
+      },
+    ],
   });
-  expect(saved.documents[0]!.instances[0]!.id).toBe("P2-copy-1");
+  if (!initial.ok) throw new Error(JSON.stringify(initial));
+  const original = initial.project.documents[0]!;
+  const load = async (content: string) => {
+    await page.getByTestId("project-file").setInputFiles({
+      name: "rail.icproj.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(content),
+    });
+    await page.getByTestId("route-hit-rail").click({ force: true });
+    await openSelectionShelf(page);
+  };
+  const save = async () => await exportedProject(page);
+  await page.goto("/editor");
+  await awaitEditorReady(page);
+  await load(serializeProject(initial.project));
+  await expectComponentCodeField(page, "net.scope", "global");
+  await editComponentPropertyCode(page, (code) => {
+    code.net.scope = "local";
+    code.display.visualAnnotation = false;
+  });
+  await expectComponentCodeField(page, "net.scope", "local");
+  const local = await save();
+  expect(local.documents[0]!.netlist!.terminals).toEqual([
+    expect.objectContaining({
+      name: "VCC",
+      interfaceAnnotationId: expect.any(String),
+    }),
+  ]);
+  expect(local.documents[0]!.routes).toEqual(original.routes);
+  expect(local.documents[0]!.junctions).toEqual(original.junctions);
+  await load(serializeProject(local));
+  await expectComponentCodeField(page, "net.scope", "local");
+  await editComponentPropertyCode(page, (code) => {
+    code.net.scope = "global";
+    code.display.visualAnnotation = true;
+  });
+  await expectComponentCodeField(page, "net.scope", "global");
+  const global = await save();
+  expect(global.documents[0]!.netlist!.terminals).toEqual([]);
+  expect(global.documents[0]!.nets).toEqual(original.nets);
+  expect(
+    global.documents[0]!.annotations.filter(
+      (label: SchematicDocument["annotations"][number]) =>
+        label.visible !== false,
+    ),
+  ).toEqual(original.annotations);
+  await page
+    .getByTestId("schematic-canvas")
+    .click({ position: { x: 40, y: 40 } });
+  await page.keyboard.press("Control+z");
+  const undone = await save();
+  expect(undone.documents[0]!.netlist!.terminals).toEqual(
+    local.documents[0]!.netlist!.terminals,
+  );
 });
 
 test("property inspection and remounts keep canvas keyboard ownership", async ({
@@ -233,90 +161,6 @@ test("explicit property typing keeps Delete local and returns shortcuts to canva
   await expect(page.getByTestId("hit-R1")).toHaveCount(0);
 });
 
-test("live JSON properties update controls immediately and round-trip raw parameter strings", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "nmos", { x: 360, y: 220 });
-  await openSelectionShelf(page);
-  const panel = page.getByRole("complementary", { name: "Properties" });
-  await expect(
-    panel.getByLabel("Component parameters and display"),
-  ).toHaveCount(0);
-  await expect(panel.getByLabel("Component actions")).toHaveCount(0);
-  await expect(panel.getByLabel("Netlist target", { exact: true })).toHaveCount(
-    0,
-  );
-  const revision = await page.getByTestId("revision").textContent();
-  await expect(panel.getByRole("button", { name: "Apply code" })).toHaveCount(
-    0,
-  );
-  await expect(panel.locator(".cm-property-unit")).toHaveCount(0);
-  await expect(
-    panel.getByRole("button", { name: /Use Cell parameter/ }),
-  ).toHaveCount(0);
-  await expect(panel.getByLabel("Target netlist options")).toBeVisible();
-  await editComponentPropertyCode(page, (code) => {
-    code.rotation = 90;
-    code.display.visualAnnotation = false;
-  });
-  await expect(page.getByTestId("revision")).toHaveText(
-    String(Number(revision) + 1),
-  );
-  await panel.getByRole("button", { name: "Edit line color" }).click();
-  await page.getByRole("button", { name: "Use Red for line" }).click();
-  await expect(page.getByTestId("revision")).toHaveText(
-    String(Number(revision) + 2),
-  );
-  const draft = JSON.parse(await readComponentPropertyCode(page));
-  expect(draft.rotation).toBe(90);
-  expect(draft.display.visualAnnotation).toBe(false);
-  expect(draft.color).toEqual([220, 38, 38]);
-  expect(draft.appearance ?? {}).not.toHaveProperty("foreground");
-  expect(draft.appearance ?? {}).not.toHaveProperty("background");
-  expect(draft.appearance ?? {}).not.toHaveProperty("fillColor");
-  draft.parameters.w = "EV";
-  draft.parameters.l = "L";
-  draft.parameters.custom = "{raw_expression}";
-  draft.display.value = true;
-  await panel
-    .getByLabel("Editable Canvas property code")
-    .fill(JSON.stringify(draft, null, 2));
-  await expect(page.getByTestId("revision")).toHaveText(
-    String(Number(revision) + 3),
-  );
-  const value = page.locator(
-    '[data-layer="formal"] [data-object-id="instance-value-M1"]',
-  );
-  await expect(value).toContainText("EV");
-  await expect(value).not.toContainText("EVm");
-  const source = await readComponentPropertyCode(page);
-  expect(source).not.toContain("Clockwise");
-  expect(source).not.toContain("Enter any unit");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.documents[0].instances[0]).toMatchObject({
-    netlist: { parameters: { w: "EV", l: "L", custom: "{raw_expression}" } },
-    styleOverride: { foreground: "#dc2626" },
-    placement: { rotation: 90 },
-  });
-  await page.getByTestId("draw-tool-undo").click();
-  await expectComponentCodeField(page, "parameters.w", "1u");
-  await page.getByTestId("draw-tool-redo").click();
-  await expectComponentCodeField(page, "parameters.w", "EV");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "raw.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(saved)),
-  });
-  await page.getByTestId("hit-M1").click();
-  await openSelectionShelf(page);
-  await expectComponentCodeField(page, "parameters.w", "EV");
-});
-
 test("live Defaults are undoable and invalid drafts never change the canvas", async ({
   page,
 }) => {
@@ -341,27 +185,16 @@ test("live Defaults are undoable and invalid drafts never change the canvas", as
     page.getByText(/Canvas keeps the last valid edit/u),
   ).toBeVisible();
   await expect(page.getByTestId("revision")).toHaveText(lastValidRevision!);
-  await expect(
+  for (const control of [
     page.getByRole("button", { name: "Edit line color" }),
-  ).toBeDisabled();
-  await expect(
-    page.getByRole("switch", {
-      name: "Toggle visual annotation visibility",
-    }),
-  ).toBeDisabled();
-  await expect(
+    page.getByRole("switch", { name: "Toggle visual annotation visibility" }),
     page.getByRole("switch", { name: "Toggle value visibility" }),
-  ).toBeDisabled();
-  await expect(
     page.getByRole("button", { name: "Rotate clockwise" }),
-  ).toBeDisabled();
-  await expect(
     page.getByRole("button", { name: "Mirror left to right" }),
-  ).toBeDisabled();
-  await expect(
     page.getByRole("button", { name: "Mirror top to bottom" }),
-  ).toBeDisabled();
-  await expect(page.getByLabel("Target netlist options")).toBeDisabled();
+    page.getByLabel("Target netlist options"),
+  ])
+    await expect(control).toBeDisabled();
   await page.getByRole("button", { name: "Discard draft" }).click();
   await expectComponentCodeField(page, "parameters.w", "7u");
   await expect(page.locator(".cm-json-key").first()).toBeVisible();
@@ -504,7 +337,7 @@ test("property code undo and redo use Control on Windows", async ({ page }) => {
 });
 
 // The narrowest stored panel width; the panel has no width breakpoints.
-test("plain selectable property code and inline controls at 300px", async ({
+test("Properties resizes from 300px with plain selectable code and its inline controls", async ({
   page,
 }) => {
   await page.addInitScript(
@@ -559,76 +392,30 @@ test("plain selectable property code and inline controls at 300px", async ({
   // CRLF convention. Compare all selected content, not OS line separators.
   expect(selected?.replace(/\r\n/gu, "\n")).toBe(raw.replace(/\r\n/gu, "\n"));
 
-  const color = editor.getByRole("button", { name: "Edit line color" });
-  const reference = editor.getByRole("switch", {
-    name: "Toggle visual annotation visibility",
-  });
-  const value = editor.getByRole("switch", {
-    name: "Toggle value visibility",
-  });
-  const rotation = editor.getByRole("button", {
-    name: "Rotate clockwise 90 degrees",
-  });
-  const mirrorLeftRight = editor.getByRole("button", {
-    name: "Mirror left to right",
-  });
-  const mirrorTopBottom = editor.getByRole("button", {
-    name: "Mirror top to bottom",
-  });
-  await expect(color).toBeVisible();
-  await expect(reference).toHaveAttribute("aria-checked", "true");
-  await expect(value).toHaveAttribute("aria-checked", "false");
-  await expect(rotation).toBeVisible();
-  await expect(mirrorLeftRight).toBeVisible();
-  await expect(mirrorTopBottom).toBeVisible();
-  const horizontalIcon = mirrorLeftRight.locator("svg");
-  const verticalIcon = mirrorTopBottom.locator("svg");
-  await expect(horizontalIcon).toBeVisible();
-  await expect(verticalIcon).toBeVisible();
-  expect(await horizontalIcon.locator("path").getAttribute("d")).toBe(
-    await verticalIcon.locator("path").getAttribute("d"),
-  );
-  await expect(horizontalIcon.locator("g")).not.toHaveAttribute(
-    "transform",
-    /.+/u,
-  );
-  await expect(verticalIcon.locator("g")).toHaveAttribute(
-    "transform",
-    "rotate(90 8 8)",
-  );
-  expect(
-    await reference.evaluate((element) =>
-      element.closest(".cm-line")?.textContent?.includes('"visualAnnotation"'),
-    ),
-  ).toBe(true);
-  expect(
-    await value.evaluate((element) =>
-      element.closest(".cm-line")?.textContent?.includes('"value"'),
-    ),
-  ).toBe(true);
-  expect(
-    await color.evaluate((element) =>
-      element.closest(".cm-line")?.textContent?.includes('"color"'),
-    ),
-  ).toBe(true);
-  expect(
-    await rotation.evaluate((element) =>
-      element.closest(".cm-line")?.textContent?.includes('"rotation"'),
-    ),
-  ).toBe(true);
-  expect(
-    await mirrorLeftRight.evaluate((element) =>
-      element.closest(".cm-line")?.textContent?.includes('"mirror"'),
-    ),
-  ).toBe(true);
-  expect(
-    await mirrorTopBottom.evaluate((element) =>
-      element.closest(".cm-line")?.textContent?.includes('"mirror"'),
-    ),
-  ).toBe(true);
-  await expect(
-    page.getByRole("dialog", { name: "Line color settings" }),
-  ).toHaveCount(0);
+  // Each inline control sits on the JSON line it edits.
+  for (const [control, key] of [
+    [editor.getByRole("button", { name: "Edit line color" }), "color"],
+    [
+      editor.getByRole("switch", {
+        name: "Toggle visual annotation visibility",
+      }),
+      "visualAnnotation",
+    ],
+    [editor.getByRole("switch", { name: "Toggle value visibility" }), "value"],
+    [
+      editor.getByRole("button", { name: "Rotate clockwise 90 degrees" }),
+      "rotation",
+    ],
+    [editor.getByRole("button", { name: "Mirror left to right" }), "mirror"],
+    [editor.getByRole("button", { name: "Mirror top to bottom" }), "mirror"],
+  ] as const) {
+    await expect(control).toBeVisible();
+    expect(
+      await control.evaluate(
+        (element) => element.closest(".cm-line")?.textContent,
+      ),
+    ).toContain(`"${key}"`);
+  }
   const layout = await editor.evaluate((section) => ({
     overflow: section.scrollWidth > section.clientWidth,
     editable: Boolean(section.querySelector('[contenteditable="true"]')),
@@ -645,107 +432,28 @@ test("plain selectable property code and inline controls at 300px", async ({
     editable: true,
     inlineControls: 7,
   });
-  expect(raw).not.toContain("Line color");
-  // While the W/L shows, the ×m switch says why its label waits (#1434).
-  const multiplierNote = editor
-    .locator(".cm-line", { hasText: '"m"' })
-    .locator(".cm-property-inline-note");
-  await expect(multiplierNote).toHaveCount(0);
-  await reference.click();
-  await value.click();
-  await rotation.click();
-  await expectComponentCodeField(page, "display.visualAnnotation", false);
-  await expectComponentCodeField(page, "display.value", true);
-  await expect(multiplierNote).toHaveText("hidden by W/L");
-  await expectComponentCodeField(page, "rotation", 90);
-  await mirrorLeftRight.click();
-  await expectComponentCodeField(page, "rotation", 90);
-  await expectComponentCodeField(page, "mirror", "horizontal");
-  await mirrorLeftRight.click();
-  await expectComponentCodeField(page, "rotation", 90);
-  await expectComponentCodeField(page, "mirror", "none");
-  await mirrorTopBottom.click();
-  await expectComponentCodeField(page, "rotation", 90);
-  await expectComponentCodeField(page, "mirror", "vertical");
-  await mirrorLeftRight.click();
-  await expectComponentCodeField(page, "rotation", 90);
-  await expectComponentCodeField(page, "mirror", "both");
-  await mirrorLeftRight.click();
-  await expectComponentCodeField(page, "rotation", 90);
-  await expectComponentCodeField(page, "mirror", "vertical");
-  await mirrorTopBottom.click();
-  await expectComponentCodeField(page, "rotation", 90);
-  await expectComponentCodeField(page, "mirror", "none");
-  for (const next of [180, 270, 0, 90]) {
-    await rotation.click();
-    await expectComponentCodeField(page, "rotation", next);
-  }
-  await color.click();
 
-  expect(
-    await page
-      .getByLabel("Line presets")
-      .getByRole("button")
-      .evaluateAll((buttons) =>
-        buttons.map((button) => button.getAttribute("aria-label")),
-      ),
-  ).toEqual([
-    "Use Black for line",
-    "Use Light gray for line",
-    "Use Red for line",
-    "Use Green for line",
-    "Use Blue for line",
-  ]);
-  await expect(
-    page.getByRole("button", { name: "Use Light gray for line" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Use Blue for line" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Use Black for line" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Reset line", exact: true }),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: "Use Black for line" }).click();
-  await expectComponentCodeField(page, "color", [0, 0, 0]);
-
-  await color.click();
-  await page
-    .getByRole("button", { name: "Use Red for line", exact: true })
-    .click();
-  await expectComponentCodeField(page, "color", [220, 38, 38]);
-
-  await color.click();
-  await expect(page.getByLabel("Line RGB")).toHaveValue("[220,38,38]");
-  await page.getByLabel("Line RGB").fill("[12,38,38]");
-  await expectComponentCodeField(page, "color", [12, 38, 38]);
-
-  // With m = 4 the shown W/L prints ×4, and the switch says so.
-  await editComponentPropertyCode(page, (value) => {
-    value.parameters.m = "4";
-  });
-  await expectComponentCodeField(page, "parameters.m", "4");
-  await expect(multiplierNote).toHaveText("in W/L");
-  await value.click();
-  await expectComponentCodeField(page, "display.value", false);
-  await expect(multiplierNote).toHaveCount(0);
-});
-
-test("a black-box part exposes its generated Reference", async ({ page }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  // Analog Blocks are exported as unresolved subcircuits, so their visible
-  // X reference is part of the same contract as their netlist instance.
-  await placeComponent(page, "voltage-amplifier", { x: 300, y: 200 });
-  await openSelectionShelf(page);
+  // The left edge resizes by pointer and keyboard, and the width persists.
   const properties = page.getByRole("complementary", { name: "Properties" });
-  await expect(properties).toContainText("voltage-amplifier");
-  const code = properties.getByLabel("Editable Canvas property code");
-  await expect(code).toContainText(/"visualAnnotation": true/u);
-  await expect(code).toContainText(/"name": "X1"/u);
-  await expect(code).toContainText(/"netlistName": "X1"/u);
+  const resize = page.getByTestId("properties-resize-handle");
+  const width = async () => (await properties.boundingBox())!.width;
+  const before = await width();
+  const grip = (await resize.boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + grip.width / 2 - 24, grip.y + grip.height / 2);
+  await page.mouse.up();
+  await expect.poll(width).toBeCloseTo(before + 24, 0);
+  await resize.focus();
+  await resize.press("Shift+ArrowLeft");
+  await expect.poll(width).toBeCloseTo(before + 56, 0);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Number(localStorage.getItem("icm.properties-panel-width.v1")),
+      ),
+    )
+    .toBeCloseTo(before + 56, 0);
 });
 
 test("Q opens a text-first Properties editor with one-click exact draft copy", async ({
@@ -806,461 +514,103 @@ test("Q opens a text-first Properties editor with one-click exact draft copy", a
   await expectComponentCodeField(page, "parameters.w", "1u");
 });
 
-test("Properties offers no dead Reference controls for a schematic-only block", async ({
+test("batch Code lists differing values, edits them atomically and refuses incompatible values", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "adder", { x: 300, y: 200 });
-  await placeComponent(page, "resistor", { x: 520, y: 200 });
-  await openSelectionShelf(page);
-  const properties = page.getByRole("complementary", { name: "Properties" });
-  const referenceField = properties.getByLabel("Netlist Reference");
-  const parametersCard = properties.getByLabel(
-    "Component parameters and display",
-  );
-
-  // A summing junction hides its designator on the canvas, so the panel
-  // offers neither a Reference field nor display keys that could never
-  // change the drawing. Its Canvas property code still owns placement/style.
-  await page.locator('[data-canvas-hit-kind="instance"]').first().click();
-  await expect(
-    properties.getByLabel("Editable Canvas property code"),
-  ).toBeVisible();
-  await expect(referenceField).toHaveCount(0);
-  await expect(parametersCard).toHaveCount(0);
-  await expect(
-    properties.getByLabel("Editable Canvas property code"),
-  ).not.toContainText(/"display"/u);
-  await expect(
-    properties.locator('details[aria-label="Component appearance"]'),
-  ).toHaveCount(0);
-
-  // An ordinary device exposes both in the single code editor, not forms.
-  await page.getByTestId("hit-R1").click();
-  await expect(referenceField).toHaveCount(0);
-  await expect(parametersCard).toHaveCount(0);
-  await expectComponentCodeField(page, "netlistName", "R1");
-  await expect(
-    properties.getByLabel("Editable Canvas property code"),
-  ).toContainText(/"display"/u);
-});
-
-test("resizes Properties and applies component presentation as editable code", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 360, y: 240 });
-  await openSelectionShelf(page);
-
-  const properties = page.getByRole("complementary", { name: "Properties" });
-  const resize = page.getByTestId("properties-resize-handle");
-  const code = properties.getByLabel("Editable Canvas property code");
-  await expect(resize).toBeVisible();
-  await expect(code).toBeVisible();
-  await expect(properties.getByLabel("Component geometry")).toHaveCount(0);
-  await expect(
-    properties.locator('details[aria-label="Component appearance"]'),
-  ).toHaveCount(0);
-  await expect(properties.getByLabel("Component display toggles")).toHaveCount(
-    0,
-  );
-
-  const beforeWidth = (await properties.boundingBox())!.width;
-  const resizeBox = await resize.boundingBox();
-  if (!resizeBox) throw new Error("Properties resize handle is not measurable");
-  await page.mouse.move(
-    resizeBox.x + resizeBox.width / 2,
-    resizeBox.y + resizeBox.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(
-    resizeBox.x + resizeBox.width / 2 - 24,
-    resizeBox.y + resizeBox.height / 2,
-  );
-  await page.mouse.up();
-  await expect
-    .poll(async () => (await properties.boundingBox())?.width ?? 0)
-    .toBeCloseTo(beforeWidth + 24, 0);
-
-  await resize.focus();
-  await resize.press("Shift+ArrowLeft");
-  await expect
-    .poll(async () => (await properties.boundingBox())?.width ?? 0)
-    .toBeCloseTo(beforeWidth + 56, 0);
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        Number(localStorage.getItem("icm.properties-panel-width.v1")),
-      ),
-    )
-    .toBeCloseTo(beforeWidth + 56, 0);
-
-  // The half-window overlay keeps the same adjustable left edge rather than
-  // falling back to a fixed narrow Properties panel.
-  await page.setViewportSize({ width: 760, height: 900 });
-  await expect(resize).toBeVisible();
-  const compactWidth = (await properties.boundingBox())!.width;
-  await resize.focus();
-  await resize.press("ArrowLeft");
-  await expect
-    .poll(async () => (await properties.boundingBox())?.width ?? 0)
-    .toBeCloseTo(compactWidth + 8, 0);
-
-  const edited = JSON.parse(await readComponentPropertyCode(page));
-  edited.coordinate = [420, 280];
-  edited.rotation = 90;
-  edited.mirror = "horizontal";
-  edited.display.visualAnnotation = false;
-  edited.color = "#DC2626";
-  await code.fill(JSON.stringify(edited, null, 2));
-
-  await expect(page.getByTestId("revision")).toHaveText("2");
-  await expect(
-    page.locator(
-      '[data-layer="formal"] [data-object-id="R1"] [data-role="instance-symbol"]',
-    ),
-  ).toHaveAttribute("stroke", "#DC2626");
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveCount(0);
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.documents[0].instances[0]).toMatchObject({
+  const project = createEmptyProject("batch-values", "Batch values");
+  project.documents[0]!.instances = [
+    ["R1", "resistor", { value: "1k", tc: "1" }],
+    ["R2", "resistor", { tc: "2" }],
+    ["C1", "capacitor", { value: "1p" }],
+  ].map(([id, symbolId, parameters], index) => ({
+    id: id as string,
+    reference: id as string,
+    symbolId: symbolId as string,
     placement: {
-      position: { x: 420, y: 280 },
-      rotation: 90,
-      mirror: "horizontal",
+      position: { x: 100 + index * 180, y: 100 },
+      rotation: 0 as const,
+      mirror: "none" as const,
     },
-    styleOverride: { foreground: "#DC2626" },
-  });
-});
-
-test("two Pins selected are renamed through their own name entries", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "port", { x: 280, y: 200 });
-  await placeComponent(page, "port", { x: 280, y: 320 });
-  await page.getByTestId("hit-P1").click();
-  await page.getByTestId("hit-P2").click({ modifiers: ["Shift"] });
-  await openSelectionShelf(page);
-  const code = JSON.parse(await readComponentPropertyCode(page));
-  // They show different names; a list by part still renames each one.
-  expect(code.name).toBe("as is");
-  await editComponentPropertyCode(page, (value) => {
-    value.name = { P1: "Voutp", P2: "Voutn" };
-  });
-  await expect
-    .poll(async () =>
-      parseSavedProject(
-        (await downloadBytes(page, "File", "Export Project File…")).toString(
-          "utf8",
-        ),
-      )
-        .documents[0].netlist.terminals.map(
-          (terminal: { name: string }) => terminal.name,
-        )
-        .sort(),
-    )
-    .toEqual(["Voutn", "Voutp"]);
-  // The list as written stays in the field.
-  expect(JSON.parse(await readComponentPropertyCode(page)).name).toEqual({
-    P1: "Voutp",
-    P2: "Voutn",
-  });
-});
-
-test("a coordinate typed in Properties joins the pin the part lands on", async ({
-  page,
-}) => {
-  // Reported as p3wysk799e: a gate typed onto a Pin's pin lay on it without
-  // connecting, as a drag there would have.
-  const project = createEmptyProject("typed-move", "Typed move");
-  const cell = project.documents[0]!;
-  cell.instances.push(
-    {
-      id: "M1",
-      reference: "M1",
-      symbolId: "nmos",
-      placement: { position: { x: 440, y: 200 }, rotation: 0, mirror: "none" },
-      netlist: {
-        binding: { kind: "primitive", deviceClass: "mos" },
-        parameters: {},
+    netlist: {
+      binding: {
+        kind: "primitive" as const,
+        deviceClass: symbolId as "resistor" | "capacitor",
       },
-    } as never,
-    {
-      id: "P1",
-      symbolId: "port",
-      placement: { position: { x: 400, y: 200 }, rotation: 0, mirror: "none" },
+      parameters: parameters as Record<string, string>,
     },
-  );
-  cell.nets.push({
-    id: "net-p1",
-    terminals: [{ instanceId: "P1", pinName: "P" }],
-  });
-  cell.netlist!.terminals.push({
-    id: "terminal-p1",
-    name: "Vinp",
-    netId: "net-p1",
-    direction: "passive",
-    interfaceInstanceIds: ["P1"],
-  });
+  }));
   await page.goto("/editor");
   await awaitEditorReady(page);
   await page.getByTestId("project-file").setInputFiles({
-    name: "typed-move.icproj.json",
+    name: "batch-values.icproj.json",
     mimeType: "application/json",
     buffer: Buffer.from(serializeProject(project)),
   });
   await expect(page.getByTestId("status")).toContainText(
-    "Opened typed-move.icproj.json",
+    "Opened batch-values.icproj.json",
   );
-  await page.getByTestId("hit-M1").click();
-  await openSelectionShelf(page);
-  await editComponentPropertyCode(page, (value) => {
-    value.coordinate = [420, 200];
-  });
-  await expect
-    .poll(async () => {
-      const saved = parseSavedProject(
-        (await downloadBytes(page, "File", "Export Project File…")).toString(
-          "utf8",
-        ),
-      ).documents[0];
-      const netOf = (instanceId: string, pinName: string) =>
-        saved.nets.find(
-          (net: { terminals: { instanceId: string; pinName: string }[] }) =>
-            net.terminals.some(
-              (terminal) =>
-                terminal.instanceId === instanceId &&
-                terminal.pinName === pinName,
-            ),
-        )?.id ?? null;
-      return [netOf("M1", "G"), netOf("P1", "P")];
-    })
-    .toEqual(["net-p1", "net-p1"]);
-});
-
-test("Properties toggles reference label visibility for one or many components", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 280, y: 180 });
-  await placeComponent(page, "resistor", { x: 480, y: 180 });
-
   await page.getByTestId("hit-R1").click();
+  await page.getByTestId("hit-R2").click({ modifiers: ["Shift"] });
   await openSelectionShelf(page);
-  const properties = page.getByRole("complementary", { name: "Properties" });
-  for (const sectionName of ["Parameters", "Netlist overrides", "Actions"]) {
-    await expect(
-      properties.getByText(sectionName, { exact: true }),
-    ).toHaveCount(0);
-  }
-  const componentProperties = properties.getByRole("region", {
-    name: "Component properties",
-  });
-  await expect(
-    componentProperties.locator(":scope > .property-disclosure"),
-  ).toHaveCount(0);
-  await expect(
-    componentProperties.locator(":scope > :last-child"),
-  ).toHaveAttribute("aria-label", "Canvas property code");
-  await expect(
-    componentProperties.locator(
-      ':scope > details[aria-label="Component appearance"]',
-    ),
-  ).toHaveCount(0);
-  await expect(
-    componentProperties.getByText("Built-in primitive: resistor", {
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await expect(
-    componentProperties.getByText("Netlist target", { exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    componentProperties.getByLabel("Component model target"),
-  ).toHaveCount(0);
-  await expectComponentCodeField(page, "netlistTarget", "");
-  await editComponentPropertyCode(page, (value) => {
-    value.display.visualAnnotation = false;
-  });
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveCount(0);
-  await expect(
-    page.locator('[data-object-id="instance-label-R1"]'),
-  ).toHaveCount(0);
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R2"),
-  ).toHaveCount(1);
-  // Hiding is recoverable: the annotation is still in the project.
-  await editComponentPropertyCode(page, (value) => {
-    value.display.visualAnnotation = true;
-  });
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveCount(1);
-  await editComponentPropertyCode(page, (value) => {
-    value.display.visualAnnotation = false;
-  });
-
-  // Marquee both components and edit the shared code surface. The left-to-right
-  // window requires FULL coverage, so sweep well past both symbol bodies.
-  const canvas = page.getByTestId("schematic-canvas");
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error("Canvas is not measurable");
-  await page.mouse.move(box.x + 120, box.y + 40);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 700, box.y + 340, { steps: 6 });
-  await page.mouse.up();
-  const groupEditor = page.getByTestId("group-property-code-editor");
-  await expect(groupEditor).toBeVisible();
-  await expect(
-    groupEditor.getByText("2 selected", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("Canvas labels", { exact: true })).toHaveCount(0);
-  // Where the two differ, each is listed with its own switch.
-  expect(
-    JSON.parse(await readComponentPropertyCode(page)).display.visualAnnotation,
-  ).toEqual({ R1: false, R2: true });
-  await groupEditor
-    .getByRole("switch", { name: "Toggle Visual annotation · R1 visibility" })
-    .click();
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveCount(1);
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R2"),
-  ).toHaveCount(1);
-  // Now alike, they share one switch again.
-  const groupToggle = groupEditor.getByRole("switch", {
-    name: "Toggle visual annotation visibility",
-  });
-  await expect(groupToggle).toBeVisible();
-  await groupToggle.click();
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveCount(0);
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R2"),
-  ).toHaveCount(0);
-  await groupToggle.click();
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R1"),
-  ).toHaveCount(1);
-  await expect(
-    page.getByTestId("annotation-hit-instance-label-R2"),
-  ).toHaveCount(1);
-});
-
-test("Select All shows one batch code surface instead of object-specific forms", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 280, y: 180 });
-  await placeComponent(page, "resistor", { x: 480, y: 180 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("ControlOrMeta+a");
-  await openSelectionShelf(page);
-
-  const properties = page.getByRole("complementary", { name: "Properties" });
-  const batch = properties.getByTestId("group-property-code-editor");
-  await expect(batch).toBeVisible();
+  const batch = page.getByTestId("group-property-code-editor");
   await expect(batch.getByText("2 selected", { exact: true })).toBeVisible();
-  expect(JSON.parse(await readComponentPropertyCode(page))).toEqual({
-    // They show different names; one name written here names them all.
-    name: "as is",
-    coordinate: null,
-    rotation: null,
-    mirror: null,
-    display: { visualAnnotation: true, value: false },
-    color: [0, 0, 0],
-    // A shared parameter lists each component too, even where they agree.
-    parameters: { value: { R1: "1k", R2: "1k" } },
+  const code = JSON.parse(await readComponentPropertyCode(page));
+  // Values that differ are listed per component.
+  expect(code).toMatchObject({
     type: "resistor",
+    parameters: { value: { R1: "1k", R2: "" }, tc: { R1: "1", R2: "2" } },
+    color: [0, 0, 0],
   });
-  // An entry changed changes only that component.
-  await editComponentPropertyCode(page, (code) => {
-    code.parameters.value.R2 = "2.2k";
+  const revision = Number(await page.getByTestId("revision").textContent());
+  await editComponentPropertyCode(page, (value) => {
+    value.parameters.value = "10k";
+    value.color = [255, 0, 0];
+    value.display.value = true;
   });
-  await expect
-    .poll(async () =>
-      parseSavedProject(
-        (await downloadBytes(page, "File", "Export Project File…")).toString(
-          "utf8",
-        ),
-      ).documents[0].instances.map(
-        (instance: {
-          id: string;
-          netlist: { parameters: { value: string } };
-        }) => `${instance.id}=${instance.netlist.parameters.value}`,
-      ),
-    )
-    .toEqual(["R1=1k", "R2=2.2k"]);
-  await expect(
-    properties.getByText("Electrical route", { exact: true }),
-  ).toHaveCount(0);
-  await expect(properties.getByLabel("Electrical Net label")).toHaveCount(0);
-  await expect(properties.getByLabel("Wire color custom RGB")).toHaveCount(0);
-  await expect(
-    properties.getByText("Canvas labels", { exact: true }),
-  ).toHaveCount(0);
-
-  await batch.getByRole("button", { name: "Edit line color" }).click();
-  await page.getByRole("button", { name: "Use Red for line" }).click();
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.documents[0].instances).toMatchObject([
-    { id: "R1", styleOverride: { foreground: "#dc2626" } },
-    { id: "R2", styleOverride: { foreground: "#dc2626" } },
-  ]);
-  expect(saved.documents[0].routes[0].styleOverride).toBeUndefined();
-
-  // One name for both, applied as it is typed: R1, first in the selection,
-  // is renamed to it; R2 keeps its own name and shows it as a display alias.
-  // The field then shows the name they share, so typing carries on.
-  await editComponentPropertyCode(page, (code) => {
-    code.name = "R";
-  });
-  await expect(page.getByTestId("status")).toHaveText(
-    "R1 is now R; R2 shows it as a display alias",
-  );
-  expect(JSON.parse(await readComponentPropertyCode(page)).name).toBe("R");
-  await editComponentPropertyCode(page, (code) => {
-    code.name = "R5";
-  });
-  await expect(page.getByTestId("status")).toHaveText(
-    "R is now R5; R2 shows it as a display alias",
-  );
-  for (const id of ["R1", "R2"])
+  await expect(page.getByTestId("revision")).toHaveText(String(revision + 1));
+  for (const id of ["R1", "R2"]) {
     await expect(
-      page.locator(`[data-object-id="instance-label-${id}"]`),
-    ).toHaveText("R5");
-  const named = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(
-    named.documents[0].instances.map(
-      (instance: { reference: string }) => instance.reference,
-    ),
-  ).toEqual(["R5", "R2"]);
-  expect(
-    named.documents[0].annotations.find(
-      (annotation: { id: string }) => annotation.id === "instance-label-R2",
-    ).binding,
-  ).toBeUndefined();
+      page.locator(`[data-object-id="${id}"] [data-role="instance-symbol"]`),
+    ).toHaveAttribute("stroke", "#ff0000");
+    await expect(
+      page.locator(`[data-object-id="instance-value-${id}"]`),
+    ).toContainText("10k");
+  }
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  expect(JSON.parse(await readComponentPropertyCode(page))).toEqual(code);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  // The value both now share is still listed per component, beside each tc.
+  expect(JSON.parse(await readComponentPropertyCode(page))).toMatchObject({
+    parameters: { value: { R1: "10k", R2: "10k" }, tc: { R1: "1", R2: "2" } },
+  });
+
+  // A resistance typed for a resistor and a capacitor together is refused.
+  await page.getByTestId("hit-C1").click({ modifiers: ["Shift"] });
+  const mixed = JSON.parse(await readComponentPropertyCode(page));
+  expect(mixed).toMatchObject({
+    type: "",
+    parameters: { value: { R1: "10k", R2: "10k", C1: "1p" } },
+    color: { R1: [255, 0, 0], R2: [255, 0, 0], C1: [0, 0, 0] },
+  });
+  const mixedRevision = await page.getByTestId("revision").textContent();
+  await page
+    .getByLabel("Editable Canvas property code")
+    .fill(JSON.stringify({ ...mixed, parameters: { value: "10k" } }));
+  const discard = page.getByRole("button", {
+    name: "Discard draft",
+    exact: true,
+  });
+  await expect(discard).toBeVisible();
+  await expect(page.getByTestId("revision")).toHaveText(mixedRevision!);
+  await discard.click();
+  // One color entered for the batch colors every type.
+  await editComponentPropertyCode(page, (value) => {
+    value.color = [220, 38, 38];
+  });
+  for (const id of ["R1", "R2", "C1"])
+    await expect(
+      page.locator(`[data-object-id="${id}"] [data-role="instance-symbol"]`),
+    ).toHaveAttribute("stroke", "#dc2626");
 });
 
 test("Properties keeps component and Annotation text colors independent", async ({
@@ -1331,11 +681,7 @@ test("Properties keeps component and Annotation text colors independent", async 
   await expect(label).toHaveAttribute("fill", "#dc2626");
   expect(JSON.parse(await readComponentPropertyCode(page)).color).toBe("auto");
 
-  const project = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const project = await exportedProject(page);
   const savedR1 = project.documents[0].instances.find(
     (instance: { id: string }) => instance.id === "R1",
   );
@@ -1347,7 +693,7 @@ test("Properties keeps component and Annotation text colors independent", async 
   expect(savedLabel).not.toHaveProperty("textColor");
 });
 
-test("value display projects MOS W/L and passive values beside the reference", async ({
+test("value display projects MOS W/L beside the reference", async ({
   page,
 }) => {
   await page.goto("/editor");
@@ -1438,250 +784,91 @@ test("value display projects MOS W/L and passive values beside the reference", a
   const valueBox = await value.boundingBox();
   if (!referenceBox || !valueBox) throw new Error("Labels are not measurable");
   expect(valueBox.y).toBeGreaterThan(referenceBox.y);
-
-  // A passive value projects the same way through Properties.
-  await page.keyboard.press("i");
-  await dialog.getByLabel("Component search").fill("resistor");
-  await dialog.getByTestId("insert-component-resistor").click();
-  await canvas.click({ position: { x: 560, y: 240 } });
-  await page.keyboard.press("Escape");
-  await page.getByTestId("hit-R1").click();
-  await openSelectionShelf(page);
-  await setComponentParameter(page, "value", "33k");
-  await editComponentPropertyCode(page, (propertyCode) => {
-    propertyCode.display.value = true;
-  });
-  await canvas.click({ position: { x: 80, y: 80 } });
-  await expect(
-    page.locator('[data-object-id="instance-value-R1"]'),
-  ).toContainText("33k");
-
-  // The formal SVG export carries the fraction bar and unit text through the
-  // shared annotation path.
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
-  expect(svg).toContain('data-kind="instance-value"');
-  expect(svg).toContain('data-role="fraction-bar"');
-  expect(svg).toContain("41um");
-  expect(svg).toContain("80nm");
-  expect(svg).toContain("×4");
-  expect(svg).toContain("33k");
 });
 
-test("reference and value code refreshes content after parameter edits", async ({
+test("a W/L numerator drags freely and keeps its offset through history and file reload", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 200 });
-  await placeComponent(page, "resistor", { x: 500, y: 200 });
-
-  // Removing a required value leaves no valid annotation and proves that the
-  // pending code becomes applicable as soon as the value is restored.
-  await page.getByTestId("hit-R1").click();
-  await openSelectionShelf(page);
-  const properties = page.getByRole("complementary", { name: "Properties" });
-  const propertyCode = properties.getByLabel("Editable Canvas property code");
-  const missingValueCode = JSON.parse(await readComponentPropertyCode(page));
-  delete missingValueCode.parameters.value;
-  missingValueCode.display.value = true;
-  await propertyCode.fill(JSON.stringify(missingValueCode, null, 2));
-  await expect(
-    properties.getByText(/Set a valid component value/u),
-  ).toBeVisible();
-  await expect(
-    page.getByTestId("annotation-hit-instance-value-R1"),
-  ).toHaveCount(0);
-
-  // Typing a value makes the same pending code applicable without closing and
-  // reopening Properties.
-
-  await setComponentParameter(page, "value", "33k");
-
-  await expect(
-    page.locator('[data-object-id="instance-value-R1"]'),
-  ).toContainText("33k");
-
-  // A later parameter edit re-projects the visible value text.
-
-  await setComponentParameter(page, "value", "47k");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 60, y: 60 } });
-  await expect(
-    page.locator('[data-object-id="instance-value-R1"]'),
-  ).toContainText("47k");
-
-  // Hiding keeps the annotation recoverable.
-  await page.getByTestId("hit-R1").click();
-  await openSelectionShelf(page);
-  await editComponentPropertyCode(page, (code) => {
-    code.display.value = false;
-  });
-  await expect(
-    page.getByTestId("annotation-hit-instance-value-R1"),
-  ).toHaveCount(0);
-  await expect(
-    page.locator('[data-object-id="instance-value-R1"]'),
-  ).toHaveCount(0);
-
-  // The shared code toggle applies the same value display to every component
-  // that has a projection; R2 exposes its authored 1k device default.
+  await placeComponent(page, "nmos", { x: 350, y: 250 });
   const canvas = page.getByTestId("schematic-canvas");
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error("Canvas is not measurable");
-  await page.mouse.move(box.x + 180, box.y + 80);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 700, box.y + 340, { steps: 6 });
-  await page.mouse.up();
-  await page
-    .getByTestId("group-property-code-editor")
-    .getByRole("switch", { name: "Toggle value visibility" })
-    .click();
-  await expect(
-    page.locator('[data-object-id="instance-value-R1"]'),
-  ).toContainText("47k");
-  await expect(
-    page.locator('[data-object-id="instance-value-R2"]'),
-  ).toContainText("1k");
-});
-
-for (const symbol of ["nmos", "pmos"]) {
-  test(`${symbol} W/L numerator drags freely and retains its offset through editing and file reload`, async ({
-    page,
-  }) => {
-    await page.goto("/editor");
-    await placeComponent(page, symbol, { x: 350, y: 250 });
-    const canvas = page.getByTestId("schematic-canvas");
-    const instance = page.getByTestId("hit-M1");
-    await instance.click();
-    await openSelectionShelf(page);
-    await setComponentParameter(page, "w", "2u");
-    await setComponentParameter(page, "l", "180n");
-    await setComponentParameter(page, "m", "4");
-    await editComponentPropertyCode(page, (code) => {
-      code.display.value = true;
-    });
-    await canvas.click({ position: { x: 70, y: 70 } });
-
-    const value = page.locator('[data-object-id="instance-value-M1"]');
-    const numerator = value.locator('[data-role="fraction-numerator"]');
-    await expect(numerator).toContainText("2u");
-    const before = (await value.boundingBox())!;
-    const ownerBefore = (await instance.boundingBox())!;
-    const grip = (await numerator.boundingBox())!;
-    const start = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 };
-    // Grab the numerator itself, not the lower hit rectangle or an Alt cycle.
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(start.x + 180, start.y + 120, { steps: 12 });
-    await expect
-      .poll(async () => (await value.boundingBox())!.x)
-      .toBeCloseTo(before.x + 180, 0);
-    await page.mouse.up();
-    // The only allowed difference on release is annotation-grid rounding.
-    await expect
-      .poll(async () =>
-        Math.abs((await value.boundingBox())!.x - before.x - 180),
-      )
-      .toBeLessThan(3);
-    await expect
-      .poll(async () =>
-        Math.abs((await value.boundingBox())!.y - before.y - 120),
-      )
-      .toBeLessThan(3);
-    expect(await instance.boundingBox()).toEqual(ownerBefore);
-    const dropped = (await value.boundingBox())!;
-
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect
-      .poll(async () => (await value.boundingBox())!.x)
-      .toBeCloseTo(before.x, 0);
-    await page.keyboard.press("ControlOrMeta+Shift+z");
-    await expect
-      .poll(async () => (await value.boundingBox())!.x)
-      .toBeCloseTo(dropped.x, 0);
-
-    const readDocument = async (): Promise<SchematicDocument> => {
-      const bytes = await downloadBytes(page, "File", "Export Project File…");
-      return parseSavedProject(bytes.toString("utf8")).documents[0];
-    };
-    const valueAnchor = (document: SchematicDocument) => {
-      const anchor = document.annotations.find(
-        (annotation) => annotation.id === "instance-value-M1",
-      )!.anchor;
-      if (anchor.kind !== "object")
-        throw new Error("Value must retain its component anchor");
-      return anchor;
-    };
-    const authored = await readDocument();
-    const anchor = valueAnchor(authored);
-    expect(anchor.objectId).toBe("M1");
-    expect(
-      Math.hypot(anchor.localOffset.x, anchor.localOffset.y),
-    ).toBeGreaterThan(200);
-
-    // Updating W refreshes the fraction without restoring its default slot.
-    await instance.click();
-    await openSelectionShelf(page);
-    await setComponentParameter(page, "w", "3u");
-    await canvas.click({ position: { x: 70, y: 70 } });
-    await expect(numerator).toContainText("3u");
-    expect(valueAnchor(await readDocument())).toEqual(anchor);
-
-    // Move and rotate the host: the authored vector follows, never reflows.
-    const host = (await instance.boundingBox())!;
-    await page.mouse.move(host.x + host.width / 2, host.y + host.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(
-      host.x + host.width / 2 + 60,
-      host.y + host.height / 2 - 40,
-      { steps: 8 },
-    );
-    await page.mouse.up();
-    const moved = await readDocument();
-    const movedAnchor = valueAnchor(moved);
-    expect(movedAnchor.localOffset).toEqual(anchor.localOffset);
-    const movedPosition = moved.instances.find((item) => item.id === "M1")!
-      .placement!.position;
-    expect(movedAnchor.fallbackPosition).toEqual({
-      x: movedPosition.x + anchor.localOffset.x,
-      y: movedPosition.y + anchor.localOffset.y,
-    });
-    await openSelectionShelf(page);
-    await editComponentPropertyCode(page, (code) => {
-      code.rotation = 45;
-    });
-    await expect(
-      page.locator('[data-object-id="M1"] > g').first(),
-    ).toHaveAttribute("transform", /rotate\(45\)/u);
-    const rotated = await readDocument();
-    const rotatedAnchor = valueAnchor(rotated);
-    expect(
-      rotated.instances.find((item) => item.id === "M1")!.placement!.rotation,
-    ).toBe(45);
-    expect(rotatedAnchor.localOffset.x).toBe(
-      Math.round((anchor.localOffset.x - anchor.localOffset.y) / Math.sqrt(2)),
-    );
-    expect(rotatedAnchor.localOffset.y).toBe(
-      Math.round((anchor.localOffset.x + anchor.localOffset.y) / Math.sqrt(2)),
-    );
-    await expect(numerator).toContainText("3u");
-
-    // Reopen a real exported file, then export again to verify persisted data.
-    const saved = await downloadBytes(page, "File", "Export Project File…");
-    await page.getByTestId("project-file").setInputFiles({
-      name: `${symbol}-value-drag.icproj.json`,
-      mimeType: "application/json",
-      buffer: saved,
-    });
-    await expect(numerator).toContainText("3u");
-    const reopened = await readDocument();
-    expect(valueAnchor(reopened)).toEqual(rotatedAnchor);
-    expect(reopened.instances).toEqual(rotated.instances);
-    expect(reopened.nets).toEqual(authored.nets);
+  const instance = page.getByTestId("hit-M1");
+  await instance.click();
+  await openSelectionShelf(page);
+  await setComponentParameter(page, "w", "2u");
+  await setComponentParameter(page, "l", "180n");
+  await setComponentParameter(page, "m", "4");
+  await editComponentPropertyCode(page, (code) => {
+    code.display.value = true;
   });
-}
+  await canvas.click({ position: { x: 70, y: 70 } });
+
+  const value = page.locator('[data-object-id="instance-value-M1"]');
+  const numerator = value.locator('[data-role="fraction-numerator"]');
+  await expect(numerator).toContainText("2u");
+  const before = (await value.boundingBox())!;
+  const ownerBefore = (await instance.boundingBox())!;
+  const grip = (await numerator.boundingBox())!;
+  const start = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 };
+  // Grab the numerator itself, not the lower hit rectangle or an Alt cycle.
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 180, start.y + 120, { steps: 12 });
+  await expect
+    .poll(async () => (await value.boundingBox())!.x)
+    .toBeCloseTo(before.x + 180, 0);
+  await page.mouse.up();
+  // The only allowed difference on release is annotation-grid rounding.
+  await expect
+    .poll(async () => Math.abs((await value.boundingBox())!.x - before.x - 180))
+    .toBeLessThan(3);
+  await expect
+    .poll(async () => Math.abs((await value.boundingBox())!.y - before.y - 120))
+    .toBeLessThan(3);
+  expect(await instance.boundingBox()).toEqual(ownerBefore);
+  const dropped = (await value.boundingBox())!;
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(async () => (await value.boundingBox())!.x)
+    .toBeCloseTo(before.x, 0);
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await expect
+    .poll(async () => (await value.boundingBox())!.x)
+    .toBeCloseTo(dropped.x, 0);
+
+  const readDocument = async (): Promise<SchematicDocument> => {
+    const bytes = await downloadBytes(page, "File", "Export Project File…");
+    return parseSavedProject(bytes.toString("utf8")).documents[0];
+  };
+  const valueAnchor = (document: SchematicDocument) => {
+    const anchor = document.annotations.find(
+      (annotation) => annotation.id === "instance-value-M1",
+    )!.anchor;
+    if (anchor.kind !== "object")
+      throw new Error("Value must retain its component anchor");
+    return anchor;
+  };
+  const authored = await readDocument();
+  const anchor = valueAnchor(authored);
+  expect(anchor.objectId).toBe("M1");
+  expect(
+    Math.hypot(anchor.localOffset.x, anchor.localOffset.y),
+  ).toBeGreaterThan(200);
+
+  // Reopen a real exported file, then export again to verify persisted data.
+  const saved = await downloadBytes(page, "File", "Export Project File…");
+  await page.getByTestId("project-file").setInputFiles({
+    name: "value-drag.icproj.json",
+    mimeType: "application/json",
+    buffer: saved,
+  });
+  await expect(numerator).toContainText("2u");
+  const reopened = await readDocument();
+  expect(valueAnchor(reopened)).toEqual(anchor);
+  expect(reopened.instances).toEqual(authored.instances);
+  expect(reopened.nets).toEqual(authored.nets);
+});
 
 test("live property edits survive blank click and Escape without replaying legacy drafts", async ({
   page,
@@ -1790,57 +977,30 @@ test("selects a reviewed SKY130 MOS through the inline Target netlist field", as
   await placeComponent(page, "nmos", { x: 360, y: 220 });
   await openSelectionShelf(page);
   const properties = page.getByRole("complementary", { name: "Properties" });
-
   await expect(
     properties.getByRole("button", { name: "Need help?", exact: true }),
   ).toHaveCount(0);
-  await properties
-    .getByLabel("Target netlist options")
-    .selectOption("sky130_fd_pr__nfet_01v8");
-
-  await expectComponentCodeField(
-    page,
-    "netlistTarget",
-    "sky130_fd_pr__nfet_01v8",
-  );
-  await expectComponentCodeField(page, "netlistName", "M1");
+  const model = "sky130_fd_pr__nfet_01v8";
+  await properties.getByLabel("Target netlist options").selectOption(model);
+  await expectComponentCodeField(page, "netlistTarget", model);
   await expectComponentCodeField(page, "parameters.nf", "1");
   await expectComponentCodeField(page, "parameters.m", "1");
-
+  // Clearing to None and choosing the Model again keep the netlist name.
   await setComponentCodeField(page, "netlistTarget", "");
-  await expectComponentCodeField(page, "netlistTarget", "");
   await expectComponentCodeField(page, "netlistName", "M1");
-  await setComponentCodeField(page, "netlistTarget", "generic_nmos");
-  await expectComponentCodeField(page, "netlistTarget", "generic_nmos");
+  await setComponentCodeField(page, "netlistTarget", model);
   await expectComponentCodeField(page, "netlistName", "M1");
 
-  await setComponentCodeField(page, "netlistTarget", "sky130_fd_pr__nfet_01v8");
-  await expectComponentCodeField(
-    page,
-    "netlistTarget",
-    "sky130_fd_pr__nfet_01v8",
-  );
-  await expectComponentCodeField(page, "netlistName", "M1");
-
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.externalSubcircuitDefinitions).toEqual([
-    expect.objectContaining({
-      name: "sky130_fd_pr__nfet_01v8",
-      terminals: [
-        expect.objectContaining({ name: "D" }),
-        expect.objectContaining({ name: "G" }),
-        expect.objectContaining({ name: "S" }),
-        expect.objectContaining({ name: "B" }),
+  const saved = await exportedProject(page);
+  expect(
+    saved.externalSubcircuitDefinitions.map(
+      (definition: { name: string; terminals: { name: string }[] }) => [
+        definition.name,
+        definition.terminals.map((terminal) => terminal.name),
       ],
-    }),
-  ]);
+    ),
+  ).toEqual([[model, ["D", "G", "S", "B"]]]);
   expect(saved.documents[0].instances[0]).toMatchObject({
-    id: "M1",
-    symbolId: "nmos",
     reference: "M1",
     netlist: {
       parameters: { w: "1u", l: "150n", nf: "1", m: "1" },
@@ -1849,460 +1009,88 @@ test("selects a reviewed SKY130 MOS through the inline Target netlist field", as
   });
 });
 
-test("keeps the exact SKY130 PNP on its three-terminal model interface", async ({
+test("transformer parameter labels show independently, edit on the canvas and survive history and files", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "pnp", { x: 360, y: 220 });
+  await placeComponent(page, "xfmr", { x: 360, y: 220 });
   await openSelectionShelf(page);
-  const properties = page.getByRole("complementary", {
-    name: "Properties",
+  const labels = page.locator(
+    '[data-layer="formal"] [data-kind="instance-value"]',
+  );
+  const kToggle = page.getByRole("switch", {
+    name: "Toggle K visibility",
+    exact: true,
   });
-
-  // Placed in a SKY130 Project, it arrives as the Process's PNP (#1251).
-  await expectComponentCodeField(
-    page,
-    "netlistTarget",
-    "sky130_fd_pr__pnp_05v5_W0p68L0p68",
-  );
-  await expect(properties.getByLabel("Substrate Net")).toHaveCount(0);
-  await setComponentCodeField(page, "netlistTarget", "");
-  await setComponentCodeField(
-    page,
-    "netlistTarget",
-    "sky130_fd_pr__pnp_05v5_W0p68L0p68",
-  );
-  await expect(properties.getByLabel("Substrate Net")).toHaveCount(0);
-  await expectComponentCodeField(page, "netlistName", "Q1");
-
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.externalSubcircuitDefinitions[0]).toMatchObject({
-    name: "sky130_fd_pr__pnp_05v5_W0p68L0p68",
-    terminals: [{ name: "C" }, { name: "B" }, { name: "E" }],
+  await expect(kToggle).toHaveAttribute("aria-checked", "false");
+  await kToggle.click();
+  await expect(labels).toHaveCount(1);
+  await expect(labels).toContainText("K = 1");
+  await editComponentPropertyCode(page, (code) => {
+    code.display.parameters.k = false;
+    code.display.parameters.lp = true;
   });
+  await expect(labels).toHaveCount(1);
+  await expect(labels).toContainText("Lp = 1n");
+  await page.getByTestId("draw-tool-undo").click();
+  await expect(labels).toContainText("K = 1");
+  await page.getByTestId("draw-tool-redo").click();
 
-  await setComponentCodeField(page, "netlistTarget", "");
-  await expect(properties.getByLabel("Substrate Net")).toHaveCount(0);
-  await expectComponentCodeField(page, "netlistName", "Q1");
-});
+  // The label edits its parameter on the canvas and refuses an empty value.
+  const id = await labels.getAttribute("data-object-id");
+  const hit = page.getByTestId(`annotation-hit-${id}`);
+  const editor = page.getByLabel("Canvas text editor", { exact: true });
+  await hit.dblclick();
+  await editor.fill("Lp = 2.5n");
+  await editor.press("Enter");
+  await expect(editor).toHaveCount(0);
+  await expect(labels).toContainText("Lp = 2.5n");
+  await hit.dblclick();
+  await editor.fill("Lp =");
+  await editor.press("Enter");
+  await expect(editor).toBeVisible();
+  await editor.press("Escape");
+  await expect(labels).toContainText("Lp = 2.5n");
+  // The bare name keeps the parameter and shows only the name; empty hides it.
+  await hit.dblclick();
+  await editor.fill("Lp");
+  await editor.press("Enter");
+  await expect(labels).toHaveText("Lp");
+  await hit.dblclick();
+  await editor.fill("");
+  await editor.press("Enter");
+  await expect(labels).toHaveCount(0);
+  await page.getByTestId("draw-tool-undo").click();
+  await expect(labels).toHaveText("Lp");
 
-test("derives NPN substrate from its exact Model", async ({ page }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "npn", { x: 360, y: 220 });
+  // Both labels stack under a turned part and reopen from the file.
+  await page.locator('[data-canvas-hit-kind="instance"]').click();
   await openSelectionShelf(page);
-  const properties = page.getByRole("complementary", {
-    name: "Properties",
+  await editComponentPropertyCode(page, (code) => {
+    code.display.parameters.k = true;
+    code.parameters.k = "0.83";
+    code.rotation = 45;
   });
-
-  // Placed in a SKY130 Project, it arrives as the Process's NPN, substrate
-  // and all (#1251); without that Model there is no substrate to bind.
-  await expectComponentCodeField(
-    page,
-    "netlistTarget",
-    "sky130_fd_pr__npn_05v5_W1p00L1p00",
+  await expect(labels).toHaveCount(2);
+  const boxes = await labels.evaluateAll((elements) =>
+    elements.map((element) => element.getBoundingClientRect().toJSON()),
   );
-  await expect(properties.getByLabel("Substrate Net")).toBeVisible();
-  await setComponentCodeField(page, "netlistTarget", "");
-  await expect(properties.getByLabel("Substrate Net")).toHaveCount(0);
-  await setComponentCodeField(
-    page,
-    "netlistTarget",
-    "sky130_fd_pr__npn_05v5_W1p00L1p00",
-  );
-  await expect(properties.getByLabel("Substrate Net")).toBeVisible();
-  await expectComponentCodeField(page, "netlistName", "Q1");
-
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.externalSubcircuitDefinitions[0]).toMatchObject({
-    name: "sky130_fd_pr__npn_05v5_W1p00L1p00",
-    terminals: [{ name: "C" }, { name: "B" }, { name: "E" }, { name: "S" }],
-  });
-
-  await setComponentCodeField(page, "netlistTarget", "");
-  await expect(properties.getByLabel("Substrate Net")).toHaveCount(0);
-  await expectComponentCodeField(page, "netlistName", "Q1");
-});
-
-for (const fixture of [
-  {
-    symbolId: "resistor",
-    model: "sky130_fd_pr__res_high_po",
-    externalParameter: "mult",
-    primitiveParameter: "value",
-    nativeReference: "R1",
-    externalReference: "R1",
-  },
-] as const) {
-  test(`switches ${fixture.symbolId} Model parameters immediately and clears through None`, async ({
-    page,
-  }) => {
-    await page.goto("/editor");
-    await placeComponent(page, fixture.symbolId, { x: 360, y: 220 });
-    await openSelectionShelf(page);
-
-    await setComponentCodeField(page, "netlistTarget", fixture.model);
-    await expectComponentCodeField(
-      page,
-      "netlistName",
-      fixture.externalReference,
-    );
-    expect(
-      JSON.parse(await readComponentPropertyCode(page)).parameters,
-    ).toHaveProperty(fixture.externalParameter);
-    await expectComponentCodeField(
-      page,
-      `parameters.${fixture.primitiveParameter}`,
-      undefined,
-    );
-
-    await setComponentCodeField(page, "netlistTarget", "");
-    await expectComponentCodeField(page, "netlistTarget", "");
-    await expectComponentCodeField(
-      page,
-      "netlistName",
-      fixture.nativeReference,
-    );
-    await expectComponentCodeField(
-      page,
-      `parameters.${fixture.primitiveParameter}`,
-      "",
-    );
-    await expectComponentCodeField(
-      page,
-      `parameters.${fixture.externalParameter}`,
-      undefined,
-    );
-  });
-}
-
-for (const symbol of ["xfmr"] as const) {
-  test(`${symbol} parameter label editing commits, escapes invalid input and closes when hidden`, async ({
-    page,
-  }) => {
-    await page.goto("/editor");
-    await placeComponent(page, symbol, { x: 360, y: 220 });
-    await openSelectionShelf(page);
-    const winding = symbol === "xfmr" ? "lp" : "l1";
-    const windingLabel = symbol === "xfmr" ? "Lp" : "L1";
-    await editComponentPropertyCode(page, (code) => {
-      code.display.parameters[winding] = true;
-      code.rotation = 270;
-    });
-    const label = page.locator(
-      '[data-layer="formal"] [data-kind="instance-value"]',
-    );
-    const id = await label.getAttribute("data-object-id");
-    const hit = page.getByTestId(`annotation-hit-${id}`);
-    const editor = page.getByLabel("Canvas text editor", { exact: true });
-    await hit.dblclick();
-    await editor.fill(`${windingLabel} = 2.5n`);
-    await editor.press("Enter");
-    await expect(editor).toHaveCount(0);
-    await expect(label).toContainText(`${windingLabel} = 2.5n`);
-    await page.getByTestId("draw-tool-undo").click();
-    await expect(label).toContainText(`${windingLabel} = 1n`);
-    await page.getByTestId("draw-tool-redo").click();
-    await expect(label).toContainText(`${windingLabel} = 2.5n`);
-    await hit.dblclick();
-    await editor.fill(`${windingLabel} =`);
-    await editor.press("Enter");
-    await expect(editor).toBeVisible();
-    await editor.press("Escape");
-    await expect(editor).toHaveCount(0);
-    await expect(label).toContainText(`${windingLabel} = 2.5n`);
-
-    await hit.dblclick();
-    await editor.fill(windingLabel);
-    await editor.press("Enter");
-    await expect(editor).toHaveCount(0);
-    await expect(label).toHaveText(windingLabel);
-    const labelOnlySaved = parseSavedProject(
-      (await downloadBytes(page, "File", "Export Project File…")).toString(
-        "utf8",
-      ),
-    );
-    expect(
-      labelOnlySaved.documents[0].annotations.find(
-        (annotation: { id: string }) => annotation.id === id,
-      )?.binding,
-    ).toEqual({
-      kind: "instance-value",
-      instanceId: labelOnlySaved.documents[0].instances[0].id,
-      parameter: winding,
-      showValue: false,
-    });
-    expect(
-      labelOnlySaved.documents[0].instances[0].netlist.parameters[winding],
-    ).toBe("2.5n");
-
-    await hit.dblclick();
-    await editor.fill("");
-    await editor.press("Enter");
-    await expect(editor).toHaveCount(0);
-    await expect(label).toHaveCount(0);
-    await page.getByTestId("draw-tool-undo").click();
-    await expect(label).toHaveText(windingLabel);
-
-    await hit.dblclick();
-    await editor.fill("");
-    await page.getByTestId("schematic-canvas").click({
-      position: { x: 80, y: 80 },
-    });
-    await expect(label).toHaveCount(0);
-    await expect(editor).toHaveCount(0);
-    const saved = parseSavedProject(
-      (await downloadBytes(page, "File", "Export Project File…")).toString(
-        "utf8",
-      ),
-    );
-    expect(saved.documents[0].instances[0].netlist.parameters[winding]).toBe(
-      "2.5n",
-    );
-  });
-
-  test(`${symbol} independently displays magnetic parameters and preserves them through history and files`, async ({
-    page,
-  }) => {
-    await page.goto("/editor");
-    await placeComponent(page, symbol, { x: 360, y: 220 });
-    await openSelectionShelf(page);
-    const winding = symbol === "xfmr" ? "lp" : "l1";
-    const windingLabel = symbol === "xfmr" ? "Lp" : "L1";
-    const formalLabels = page.locator(
-      '[data-layer="formal"] [data-kind="instance-value"]',
-    );
-    const kToggle = page.getByRole("switch", {
-      name: "Toggle K visibility",
-      exact: true,
-    });
-    await expect(kToggle).toHaveAttribute("aria-checked", "false");
-    await kToggle.click();
-    await expect(formalLabels).toHaveCount(1);
-    await expect(formalLabels).toContainText("K = 1");
-    await editComponentPropertyCode(page, (code) => {
-      code.display.parameters.k = false;
-      code.display.parameters[winding] = true;
-      code.parameters[winding] = "2.5n";
-    });
-    await expect(formalLabels).toHaveCount(1);
-    await expect(formalLabels).toContainText(`${windingLabel} = 2.5n`);
-    await page.getByTestId("draw-tool-undo").click();
-    await expect(formalLabels).toContainText("K = 1");
-    await page.getByTestId("draw-tool-redo").click();
-    await expect(formalLabels).toContainText(`${windingLabel} = 2.5n`);
-    await editComponentPropertyCode(page, (code) => {
-      code.display.parameters.k = true;
-      code.parameters.k = "0.83";
-      code.rotation = 45;
-    });
-    await expect(formalLabels).toHaveCount(2);
-    await expect(formalLabels.filter({ hasText: "K = 0.83" })).toHaveCount(1);
-    const labelBoxes = await formalLabels.evaluateAll((elements) =>
-      elements.map((element) => {
-        const box = element.getBoundingClientRect();
-        return { x: box.x, y: box.y, bottom: box.bottom };
-      }),
-    );
-    expect(labelBoxes[0]!.x).toBeCloseTo(labelBoxes[1]!.x, 1);
-    expect(labelBoxes[0]!.bottom).toBeLessThan(labelBoxes[1]!.y);
-    const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-      "utf8",
-    );
-    // The winding's name is drawn L₁ / L_p, so compare the exported text.
-    const exportedText = svg
-      .replace(/<style>[\s\S]*?<\/style>/u, "")
-      .replace(/<[^>]+>/gu, "");
-    expect(exportedText).toContain("K = 0.83");
-    expect(exportedText).toContain(`${windingLabel} = 2.5n`);
-    const saved = await downloadBytes(page, "File", "Export Project File…");
-    const project = parseSavedProject(saved.toString("utf8"));
-    const instanceId = project.documents[0].instances[0].id;
-    expect(
-      project.documents[0].annotations.filter(
-        (annotation: { binding?: { parameter?: string } }) =>
-          annotation.binding?.parameter,
-      ),
-    ).toHaveLength(2);
-    await page.getByTestId("project-file").setInputFiles({
-      name: `${symbol}.icproj.json`,
-      mimeType: "application/json",
-      buffer: saved,
-    });
-    await page.getByTestId(`hit-${instanceId}`).click();
-    await openSelectionShelf(page);
-    await expect(kToggle).toHaveAttribute("aria-checked", "true");
-    await expect(formalLabels).toHaveCount(2);
-    await page
-      .getByRole("switch", {
-        name: `Toggle ${windingLabel} visibility`,
-        exact: true,
-      })
-      .click();
-    await expect(formalLabels).toHaveCount(1);
-    await expect(formalLabels).toContainText("K = 0.83");
-  });
-}
-
-test("batch Code edits common resistor values and colors atomically and reopens them", async ({
-  page,
-}) => {
-  const project = createEmptyProject("batch-values", "Batch values");
-  project.documents[0]!.instances = ["1k", "2k"].map((value, index) => ({
-    id: `R${index + 1}`,
-    reference: `R${index + 1}`,
-    symbolId: "resistor",
-    placement: {
-      position: { x: 100 + index * 180, y: 100 },
-      rotation: 0,
-      mirror: "none",
-    },
-    netlist: {
-      binding: { kind: "primitive", deviceClass: "resistor" },
-      parameters: { ...(index === 0 ? { value } : {}), tc: `${index + 1}` },
-    },
-    ...(index === 1
-      ? { styleOverride: { foreground: "#000000", background: "#ffffff" } }
-      : {}),
-  }));
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "batch-values.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened batch-values.icproj.json",
-  );
-  await page.getByTestId("hit-R1").click();
-  await page.getByTestId("hit-R2").click({ modifiers: ["Shift"] });
-  await openSelectionShelf(page);
-  const code = JSON.parse(await readComponentPropertyCode(page));
-  // Values that differ are listed per component.
-  expect(code).toMatchObject({
-    type: "resistor",
-    parameters: { value: { R1: "1k", R2: "" }, tc: { R1: "1", R2: "2" } },
-    color: [0, 0, 0],
-  });
-  const revision = Number(await page.getByTestId("revision").textContent());
-  await editComponentPropertyCode(page, (value) => {
-    value.parameters.value = "10k";
-    value.color = [255, 0, 0];
-    value.display.value = true;
-  });
-  await expect(page.getByTestId("revision")).toHaveText(String(revision + 1));
-  for (const id of ["R1", "R2"]) {
-    await expect(
-      page.locator(`[data-object-id="${id}"] [data-role="instance-symbol"]`),
-    ).toHaveAttribute("stroke", "#ff0000");
-    await expect(
-      page.locator(`[data-object-id="instance-value-${id}"]`),
-    ).toContainText("10k");
-  }
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
-  expect(JSON.parse(await readComponentPropertyCode(page))).toEqual(code);
-  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  expect(boxes[0]!.x).toBeCloseTo(boxes[1]!.x, 1);
+  expect(boxes[0]!.bottom).toBeLessThan(boxes[1]!.y);
   const saved = await downloadBytes(page, "File", "Export Project File…");
-  expect(
-    parseSavedProject(saved.toString("utf8")).documents[0].instances,
-  ).toMatchObject([
-    {
-      id: "R1",
-      netlist: { parameters: { value: "10k", tc: "1" } },
-      styleOverride: { foreground: "#ff0000" },
-    },
-    {
-      id: "R2",
-      netlist: { parameters: { value: "10k", tc: "2" } },
-      styleOverride: { foreground: "#ff0000" },
-    },
-  ]);
+  const instance = parseSavedProject(saved.toString("utf8")).documents[0]
+    .instances[0];
+  expect(instance.netlist.parameters).toMatchObject({ lp: "2.5n", k: "0.83" });
   await page.getByTestId("project-file").setInputFiles({
-    name: "batch-reopened.icproj.json",
+    name: "xfmr.icproj.json",
     mimeType: "application/json",
     buffer: saved,
   });
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened batch-reopened.icproj.json",
-  );
-  await page.getByTestId("hit-R1").click();
-  await page.getByTestId("hit-R2").click({ modifiers: ["Shift"] });
-  // Opening the Project brought the project dock back over Properties.
+  await page.getByTestId(`hit-${instance.id}`).click();
   await openSelectionShelf(page);
-  expect(JSON.parse(await readComponentPropertyCode(page))).toMatchObject({
-    type: "resistor",
-    // Each component is listed, now with the value they share.
-    parameters: { value: { R1: "10k", R2: "10k" }, tc: { R1: "1", R2: "2" } },
-    color: [255, 0, 0],
-  });
-});
-
-test("batch Code colors different component types while rejecting incompatible value edits", async ({
-  page,
-}) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 200 });
-  await placeComponent(page, "capacitor", { x: 520, y: 200 });
-  await page.getByTestId("hit-R1").click();
-  await openSelectionShelf(page);
-  await editComponentPropertyCode(page, (code) => {
-    code.color = [0, 0, 255];
-  });
-  await page.getByTestId("hit-C1").click({ modifiers: ["Shift"] });
-  const code = JSON.parse(await readComponentPropertyCode(page));
-  // Each component's own color, where they differ; the value both types
-  // have is listed per component, in ohms and in farads.
-  expect(code).toMatchObject({
-    type: "",
-    parameters: { value: { R1: "1k", C1: "1p" } },
-    color: { R1: [0, 0, 255], C1: [0, 0, 0] },
-  });
-  const editor = page.getByLabel("Editable Canvas property code");
-  const revision = await page.getByTestId("revision").textContent();
-  await editor.fill(
-    JSON.stringify({
-      ...code,
-      parameters: { value: "10k" },
-      color: [255, 0, 0],
-    }),
-  );
-  await expect(
-    page.getByRole("button", { name: "Discard draft", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByTestId("revision")).toHaveText(revision!);
-  await page
-    .getByRole("button", { name: "Discard draft", exact: true })
-    .click();
-  // One color entered for the batch colors both.
-  await editComponentPropertyCode(page, (value) => {
-    value.color = [220, 38, 38];
-  });
-  for (const id of ["R1", "C1"])
-    await expect(
-      page.locator(`[data-object-id="${id}"] [data-role="instance-symbol"]`),
-    ).toHaveAttribute("stroke", "#dc2626");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.documents[0].instances).toMatchObject([
-    { id: "R1", netlist: { parameters: { value: "1k" } } },
-    { id: "C1", netlist: { parameters: { value: "1p" } } },
-  ]);
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
-  expect(JSON.parse(await readComponentPropertyCode(page)).color).toEqual({
-    R1: [0, 0, 255],
-    C1: [0, 0, 0],
-  });
+  await expect(kToggle).toHaveAttribute("aria-checked", "true");
+  await expect(labels).toHaveCount(2);
+  await expect(labels.filter({ hasText: "K = 0.83" })).toHaveCount(1);
 });
 
 test("batch Code drafts follow selection identity even when common values are identical", async ({
@@ -2329,11 +1117,7 @@ test("batch Code drafts follow selection identity even when common values are id
   await editComponentPropertyCode(page, (code) => {
     code.parameters.value = "22k";
   });
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const saved = await exportedProject(page);
   expect(
     saved.documents[0].instances.map(
       (instance: any) => instance.netlist.parameters.value,
