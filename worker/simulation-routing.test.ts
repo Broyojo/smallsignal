@@ -157,6 +157,73 @@ describe("dual-engine Profile routing", () => {
   });
 });
 
+describe("the hosted SKY130 standard cells (#1596)", () => {
+  const raw = (dependencies: unknown) => ({
+    mode: "raw",
+    netlist: "",
+    testbench: '* cells\n.include "cells.spice"\n.end\n',
+    inputRevision: "cells",
+    environment: { profileId: ngspiceProfile.id },
+    entryPath: "run.cir",
+    files: [],
+    dependencies,
+  });
+
+  it("advertises the cell library beside the models and mounts it by identity", async () => {
+    const fetcher = vi.fn(async (_url: URL, _init: RequestInit) =>
+      Response.json({ error: "simulator-busy" }, { status: 503 }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const caps = (await (await routeSimulationRequest(
+      post({
+        operation: "capabilities",
+        environment: { profileId: ngspiceProfile.id },
+      }),
+      env,
+    ))!.json()) as any;
+    expect(caps.profiles[0].dependencies).toEqual([
+      {
+        id: "sky130A-continuous",
+        sha256: ngspiceProfile.models.contentSha256,
+      },
+      {
+        id: "sky130_fd_sc_hd",
+        sha256:
+          "6dec6626decd1ee15afacafab9925b1a336ab344b7b5e1bec9d7483f2a6badc3",
+      },
+    ]);
+    expect(caps.profiles[0].devices).toContain("sky130_fd_pr__pfet_01v8_hvt");
+    fetcher.mockClear();
+    const cells = {
+      ...caps.profiles[0].dependencies[1],
+      mountPath: "cells.spice",
+    };
+    await routeSimulationRequest(post(raw([cells])), env);
+    const run = fetcher.mock.calls.find(([url]) => url.pathname === "/run");
+    expect(JSON.parse(String(run?.[1].body)).dependencies).toEqual([cells]);
+  });
+
+  it("refuses a cell library of other bytes before Run", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const response = await routeSimulationRequest(
+      post(
+        raw([
+          {
+            id: "sky130_fd_sc_hd",
+            sha256: "e".repeat(64),
+            mountPath: "cells.spice",
+          },
+        ]),
+      ),
+      env,
+    );
+    expect(response!.status).toBe(400);
+    expect(await response!.json()).toEqual({ error: "invalid-input-files" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
 describe("signing in to simulate", () => {
   const signedIn = {
     AUTH: {

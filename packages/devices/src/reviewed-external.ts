@@ -1288,6 +1288,16 @@ const STANDARD_CELL_RULES: readonly StandardCellRule[] = [
   },
 ];
 
+/**
+ * Whether a name is a standard-cell library's. A simulation Profile's
+ * dependency of that id supplies the library's cells (#1596).
+ */
+export function isStandardCellLibraryId(
+  id: string,
+): id is StandardCellLibraryId {
+  return STANDARD_CELL_RULES.some((rule) => rule.libraryId === id);
+}
+
 /** A standard cell's binding id: this prefix and the cell's name. */
 const STANDARD_CELL_ID_PREFIX = "std-cell-";
 /** Cells read so far, reused while they last; cleared at 256 entries, since any drive number reads. */

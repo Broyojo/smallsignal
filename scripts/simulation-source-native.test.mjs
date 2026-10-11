@@ -18,13 +18,16 @@ import {
   compileHostedSky130Project,
   compileHostedSky130TransientProject,
   compileHostedSky130NoiseProject,
+  hostedSky130ExtendedDeviceRequest,
   profile,
 } from "./lib/preview-simulation-qualification.mjs";
 import {
   validateHostedSky130Result,
   validateHostedSky130TransientResult,
   validateHostedSky130NoiseResult,
+  validateHostedSky130ExtendedDeviceResult,
 } from "./lib/preview-simulation-sky130-validation.mjs";
+import { standardCellGates } from "../packages/simulation-service/test-support/standard-cell-gates.ts";
 
 // This opt-in layer exercises the candidate image, not a mock or the shared Preview.
 // container.yml always enables it before the operator-host rollout can occur.
@@ -276,6 +279,124 @@ describe.skipIf(!endpoint)("candidate ngspice46 source qualification", () => {
       160_000,
     );
   }
+
+  it("solves the extended devices, the HD cells' high-Vt PFET among them, at every corner", async () => {
+    for (const corner of profile.qualifiedScope.sections)
+      validateHostedSky130ExtendedDeviceResult(
+        await run(
+          hostedSky130ExtendedDeviceRequest(corner),
+          `extended-devices-${corner}`,
+        ),
+        "operator-host",
+        corner,
+      );
+  }, 160_000);
+
+  it("simulates Library gates bound to SKY130 HD standard cells (#1596)", async () => {
+    const caps = CapabilitiesSchema.parse(
+      await (await post({ operation: "capabilities" })).json(),
+    );
+    const { project, folder, entry } = standardCellGates(profile.id);
+    // The drawing names its nets; read them off the cells' calls, which
+    // also pins the cells' own pin order: A [B] VGND VNB VPB VPWR Y.
+    const draft = await prepareSourceExecutionInput(project, folder, caps);
+    expect(draft.ok, JSON.stringify(draft)).toBe(true);
+    const circuit = draft.input.files.find(
+      (file) => file.path === "circuit.spice",
+    ).text;
+    const nor =
+      /^X1 (\S+) (\S+) 0 0 VDD VDD (\S+) sky130_fd_sc_hd__nor2_1$/mu.exec(
+        circuit,
+      );
+    const inv = /^X2 (\S+) 0 0 VDD VDD (\S+) sky130_fd_sc_hd__inv_1$/mu.exec(
+      circuit,
+    );
+    const nand =
+      /^X3 (\S+) (\S+) 0 0 VDD VDD (\S+) sky130_fd_sc_hd__nand2_1$/mu.exec(
+        circuit,
+      );
+    expect(nor, circuit).not.toBeNull();
+    expect(inv, circuit).not.toBeNull();
+    expect(nand, circuit).not.toBeNull();
+    const [, a, b, y] = nor;
+    const [, invIn, yi] = inv;
+    const [, nandA, nandB, yn] = nand;
+    expect([invIn, nandA, nandB]).toEqual([a, a, b]);
+    entry.text = [
+      "* NOR2 and NAND2 truth tables and inverter transfer, HD cells",
+      '.include "circuit.spice"',
+      "VDD VDD 0 1.8",
+      `VA ${a} 0 0`,
+      `VB ${b} 0 0`,
+      ".control",
+      "set filetype=ascii",
+      "set appendwrite",
+      "op",
+      "write out.raw",
+      "alter VA dc=1.8",
+      "op",
+      "write out.raw",
+      "alter VB dc=1.8",
+      "op",
+      "write out.raw",
+      "alter VA dc=0",
+      "op",
+      "write out.raw",
+      "alter VB dc=0",
+      "dc VA 0 1.8 0.05",
+      "write out.raw",
+      ".endc",
+      ".end",
+      "",
+    ].join("\n");
+    const prepared = await prepareSourceExecutionInput(project, folder, caps);
+    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+    expect(prepared.input.dependencies.map((d) => d.id)).toEqual([
+      "sky130A-continuous",
+      "sky130_fd_sc_hd",
+    ]);
+    const result = await run(prepared.input, "standard-cell-gates");
+    expect(result.outcome.status, JSON.stringify(result)).toBe("completed");
+    const value = (analysis, name) =>
+      analysis.probes.find((probe) => probe.name === `v(${name})`).value;
+    const ops = result.data.analyses.filter((item) => item.analysis === "op");
+    // (A, B) = (0, 0), (1, 0), (1, 1), (0, 1): only both low drives Y high.
+    expect(ops.map((op) => value(op, y) > 1.7)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    for (const op of ops.slice(1)) expect(value(op, y)).toBeLessThan(0.1);
+    expect(ops.map((op) => value(op, yn) > 1.7)).toEqual([
+      true,
+      true,
+      false,
+      true,
+    ]);
+    expect(value(ops[2], yn)).toBeLessThan(0.1);
+    expect(ops.map((op) => value(op, yi) > 1.7)).toEqual([
+      true,
+      false,
+      false,
+      true,
+    ]);
+    const dc = result.data.analyses.find((item) => item.analysis === "dc");
+    const input = dc.sweep.values;
+    const output = value(dc, yi);
+    expect(input).toHaveLength(37);
+    expect(output[0]).toBeGreaterThan(1.79);
+    expect(output.at(-1)).toBeLessThan(0.01);
+    // Falls through the whole sweep, crossing mid-rail once.
+    for (let index = 1; index < output.length; index++)
+      expect(output[index]).toBeLessThanOrEqual(output[index - 1] + 1e-6);
+    const crossing = output.findIndex((volts) => volts < 0.9);
+    expect(input[crossing]).toBeGreaterThan(0.6);
+    expect(input[crossing]).toBeLessThan(1.1);
+    // The NOR with B low inverts A as well.
+    expect(value(dc, y)[0]).toBeGreaterThan(1.79);
+    expect(value(dc, y).at(-1)).toBeLessThan(0.01);
+  }, 160_000);
 
   it("keeps repeated native records and recovers after an engine error", async () => {
     const response = await post({ operation: "capabilities" });

@@ -146,7 +146,9 @@ runs SKY130's 16 V and 20 V devices but does not list them (#1485). Its library
 has no varactor, so other unlisted devices still need a named Profile. An
 experiment without
 a Cell uses no PDK device. No Profile qualifies ideal blocks, the generic diode
-or authored models, so they do not count. A Profile that lists no qualified
+or authored models, so they do not count; nor does a gate bound to a standard
+cell, whose library Prepare finds among the Profile's dependencies
+([Execution](simulation-execution.md#standard-cells)). A Profile that lists no qualified
 devices is never the default. With several such Profiles, or none, the author
 names one. The Agent's `simulation_folder` create refuses with
 `SIMULATION_PROFILE_REQUIRED` and the candidates.

@@ -4,11 +4,13 @@
 // merely runaway deck would. None of these need ngspice, on purpose — the
 // question here is the box around the simulator, not the simulator.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
   stat,
@@ -598,6 +600,118 @@ describeHarness("health", () => {
     expect(payload.status).toBe("not-ready");
     expect(payload.error).toContain("test-profile-v1");
     expect(payload.error).toContain("expected");
+  });
+});
+
+describeHarness("a Profile's standard-cell library (#1596)", () => {
+  /**
+   * A Profile this harness matches in every measured identity, with one
+   * cell library beside the models: read off a harness that runs without a
+   * Profile, so only the cell library's digest is under test.
+   */
+  async function pinnedProfile(binary, cellSha256) {
+    const startupPath = join(workspace, "cells.spiceinit");
+    await writeFile(startupPath, "set filetype=ascii\n", "utf8");
+    const cellsPath = join(workspace, "sky130_fd_sc_hd.spice");
+    await writeFile(
+      cellsPath,
+      ".subckt sky130_fd_sc_hd__inv_1 A VGND VNB VPB VPWR Y\n.ends\n",
+      "utf8",
+    );
+    const observed = await startHarness(binary);
+    const { environment } = await (
+      await fetch(`http://127.0.0.1:${observed.port}/health`)
+    ).json();
+    observed.stop();
+    const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+    const profilePath = join(workspace, "cells-profile.json");
+    await writeFile(
+      profilePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "test-cells-v1",
+        platform: environment.platform,
+        simulator: {
+          name: "ngspice",
+          version: environment.simulator.version,
+          binarySha256: environment.simulator.binarySha256,
+        },
+        models: {
+          id: "test-models",
+          contentSha256: environment.models.contentSha256,
+          library: {
+            directive: "lib",
+            runtimePath: join(modelRoot, "sky130.lib.spice"),
+          },
+        },
+        cellLibraries: [
+          {
+            id: "sky130_fd_sc_hd",
+            contentSha256:
+              cellSha256 ?? sha256(await readFile(cellsPath, "utf8")),
+            library: { directive: "include", runtimePath: cellsPath },
+          },
+        ],
+        startup: { contentSha256: sha256("set filetype=ascii\n") },
+      }),
+      "utf8",
+    );
+    return {
+      SIMULATION_PROFILE_PATH: profilePath,
+      SIMULATION_STARTUP_PATH: startupPath,
+    };
+  }
+
+  it("measures the cell library and mounts it by identity", async () => {
+    const binary = await simulator(
+      "cells.sh",
+      'cat "$2"\ncat pdk/cells.spice\n',
+    );
+    const { port } = await startHarness(binary, await pinnedProfile(binary));
+    const health = await (
+      await fetch(`http://127.0.0.1:${port}/health`)
+    ).json();
+    expect(health.status).toBe("ready");
+    expect(health.environment.profileId).toBe("test-cells-v1");
+    const cells = health.dependencies.find(
+      (dependency) => dependency.id === "sky130_fd_sc_hd",
+    );
+    expect(health.dependencies.map((dependency) => dependency.id)).toEqual([
+      "test-models",
+      "sky130_fd_sc_hd",
+    ]);
+    const request = {
+      deck: '* cells\n.include "pdk/cells.spice"\n.end\n',
+      dependencies: [{ ...cells, mountPath: "pdk/cells.spice" }],
+    };
+    const reply = await json(await run(port, request));
+    expect(reply.status, JSON.stringify(reply.payload)).toBe(200);
+    expect(reply.payload.log).toContain(".subckt sky130_fd_sc_hd__inv_1");
+    // The id alone is not the library: its bytes are.
+    const changed = await json(
+      await run(port, {
+        ...request,
+        dependencies: [
+          { ...cells, sha256: "f".repeat(64), mountPath: "pdk/cells.spice" },
+        ],
+      }),
+    );
+    expect(changed.status).toBe(400);
+    expect(changed.payload.error).toBe("simulation-dependency-unavailable");
+  });
+
+  it("is not ready with a cell library whose bytes differ from the Profile", async () => {
+    const binary = await simulator("cells-mismatch.sh", "echo no-run\n");
+    const { port } = await startHarness(
+      binary,
+      await pinnedProfile(binary, "3".repeat(64)),
+    );
+    const response = await fetch(`http://127.0.0.1:${port}/health`);
+    const payload = await response.json();
+    expect(response.status).toBe(503);
+    expect(payload.error).toContain(
+      `cell library sky130_fd_sc_hd SHA-256 expected ${"3".repeat(64)}`,
+    );
   });
 });
 

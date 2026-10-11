@@ -562,6 +562,7 @@ export function validateHostedSky130ExtendedDeviceResult(
   const actual = {
     lvtNfetCurrentA: scalar("i(vdnl)"),
     lvtPfetSourceCurrentA: scalar("i(vspl)"),
+    hvtPfetSourceCurrentA: scalar("i(vsph)"),
     resistorOutputV: scalar("v(rout)"),
     resistorSupplyCurrentA: scalar("i(vrin)"),
     pnpEmitterCurrentA: scalar("i(vpe)"),
@@ -573,6 +574,7 @@ export function validateHostedSky130ExtendedDeviceResult(
   const checks = [
     ["lvtNfetCurrentA", tolerances.mosCurrentA],
     ["lvtPfetSourceCurrentA", tolerances.mosCurrentA],
+    ["hvtPfetSourceCurrentA", tolerances.mosCurrentA],
     ["resistorOutputV", tolerances.resistorVoltageV],
     ["resistorSupplyCurrentA", tolerances.resistorCurrentA],
     ["pnpEmitterCurrentA", tolerances.pnpCurrentA],

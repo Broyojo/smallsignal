@@ -245,9 +245,12 @@ publishing the website alone does not change an already-running collector.
 Verify `/health` reports the intended `limits.outputBytes` and `limits.logBytes`,
 and verify public capabilities reflect that running waveform limit.
 Verify its selected image and the measured
-binary/model/startup identities against the
+binary/model/startup identities, and the standard-cell library digests `/health`
+lists under `dependencies`, against the
 [hosted Profile](../containers/ngspice/hosted-sky130-profile.json), not just a
-reachable health endpoint. The restart policy must recover a harness that exits
+reachable health endpoint. Building the image fetches the SKY130 HD cell archive
+from its pinned GitHub release, so the host needs outbound HTTPS while it builds;
+the executor it starts still has none. The restart policy must recover a harness that exits
 because it cannot prove a timed-out process is gone.
 
 `metadata.environment.executor` describes the measured container environment;

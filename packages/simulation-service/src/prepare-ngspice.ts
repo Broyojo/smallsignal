@@ -3,7 +3,11 @@ import type {
   ProjectSimulationFolder,
   SimulationRunVariant,
 } from "@icm/model";
-import { reviewedExternalBindingForMaster } from "@icm/devices";
+import {
+  isStandardCellLibraryId,
+  reviewedExternalBindingForMaster,
+  standardCellBindingForMaster,
+} from "@icm/devices";
 import type { InstanceStatement } from "@icm/spice";
 import {
   compileNgspiceSourceSimulation,
@@ -134,7 +138,60 @@ export async function prepareNgspiceExecutionInput(
       circuitBindings: [],
     });
   const entryIndex = files.findIndex((file) => file.path === compiled.entry);
-  const entry = files[entryIndex]!;
+  /** A run-directory path no input or other mount takes, for a Profile library. */
+  const freeMountPath = (stem: string, extension: string) => {
+    const occupied = new Set([
+      ...files.map((file) => file.path),
+      ...dependencies.map((item) => item.mountPath),
+      folder.input.configPath,
+    ]);
+    let mountPath = `${stem}${extension}`;
+    for (
+      let index = 1;
+      occupied.has(mountPath) ||
+      [...occupied].some((path) => path.startsWith(`${mountPath}/`));
+      index++
+    )
+      mountPath = `${stem}-${index}${extension}`;
+    return mountPath;
+  };
+  // Generated loads follow the entry's title line, in the order they are made.
+  let generatedLoadsEnd: number | undefined;
+  /** Loads a mounted Profile library from the entry; false when its path cannot be spelled. */
+  const insertProfileLoad = (
+    comment: string,
+    mountPath: string,
+    section?: string,
+  ) => {
+    // Entry includes resolve relative to the entry's directory in ngspice 46.
+    const path = "../".repeat(compiled.entry.split("/").length - 1) + mountPath;
+    let directive: string;
+    try {
+      directive = formatModelLibrarySelection(
+        section === undefined
+          ? { directive: "include", path }
+          : { directive: "lib", path, section },
+      );
+    } catch {
+      return false;
+    }
+    const current = files[entryIndex]!;
+    const end = current.text.indexOf("\n");
+    const at = generatedLoadsEnd ?? (end < 0 ? current.text.length : end + 1);
+    const inserted =
+      (generatedLoadsEnd === undefined && end < 0 ? "\n" : "") +
+      `* ${comment}\n${directive}\n`;
+    const mapped = insertSimulationText(
+      { ...current, ...sourceMaps[entryIndex]! },
+      at,
+      inserted,
+      { kind: "generated", purpose: "environment" },
+    );
+    files[entryIndex] = { path: mapped.path, text: mapped.text };
+    sourceMaps[entryIndex] = { path: mapped.path, segments: mapped.segments };
+    generatedLoadsEnd = at + inserted.length;
+    return true;
+  };
   const initialGraph = projectedGraph();
   const callableMasters = new Set(
     initialGraph.statements
@@ -188,6 +245,32 @@ export async function prepareNgspiceExecutionInput(
       return [{ path, statement, origin }];
     },
   );
+  // A standard cell (#1596) is called from its Profile library, which the
+  // run mounts beside the primitive models it is built from.
+  const cellCalls = initialGraph.statements.flatMap(({ path, statement }) => {
+    if (
+      statement.kind !== "instance" ||
+      statement.family !== "subcircuit" ||
+      !statement.master ||
+      locallyResolved(statement)
+    )
+      return [];
+    const cell = standardCellBindingForMaster(statement.master);
+    return cell ? [{ path, statement, libraryId: cell.libraryId }] : [];
+  });
+  const unprovidedCellCalls = cellCalls.filter(
+    (call) => !available.has(call.libraryId),
+  );
+  if (unprovidedCellCalls.length)
+    return compilationProblem(
+      unprovidedCellCalls.map(({ path, statement, libraryId }) => ({
+        code: "STANDARD_CELL_LIBRARY_UNAVAILABLE",
+        severity: "error" as const,
+        message: `The selected Profile does not provide the standard-cell library ${libraryId} that ${statement.master} belongs to; select a Profile that does.`,
+        path,
+        sourceRef: statement.sourceRef,
+      })),
+    );
   const supported = new Set(profile.devices?.map((name) => name.toLowerCase()));
   const conflicts = reviewedCalls.filter(
     (call) =>
@@ -230,9 +313,17 @@ export async function prepareNgspiceExecutionInput(
   const declaredProfileLibraries = dependencies.filter(
     (d) => available.get(d.id) === d.sha256,
   );
+  // Primitive model libraries take a corner section; a standard-cell
+  // library is one plain file of cells built from those primitives.
+  const modelLibraries = (profile.dependencies ?? []).filter(
+    (d) => !isStandardCellLibraryId(d.id),
+  );
+  const declaredModelLibraries = declaredProfileLibraries.filter(
+    (d) => !isStandardCellLibraryId(d.id),
+  );
   const allLibrariesLoaded =
-    declaredProfileLibraries.length > 0 &&
-    declaredProfileLibraries.every((d) =>
+    declaredModelLibraries.length > 0 &&
+    declaredModelLibraries.every((d) =>
       initialGraph.includes.some((load) => load.target === d.mountPath),
     );
   for (const dependency of declaredProfileLibraries) {
@@ -275,17 +366,19 @@ export async function prepareNgspiceExecutionInput(
         !locallyResolved(statement) &&
         deckNeedsModelLibrary(statement.rawText),
     ) ||
-      reviewedCalls.length > 0) &&
+      reviewedCalls.length > 0 ||
+      cellCalls.length > 0) &&
     !allLibrariesLoaded;
   const requestedCorner = variant?.environment?.corner;
   if (
     needsCanvasModels ||
     requestedCorner !== undefined ||
-    (reviewedCalls.length > 0 && profile.dependencies?.length === 1)
+    ((reviewedCalls.length > 0 || cellCalls.length > 0) &&
+      modelLibraries.length === 1)
   ) {
     // Profile-owned models are mounted by identity/digest. Neither the client
     // nor the author needs to know the host's absolute model-library path.
-    const libraries = profile.dependencies ?? [];
+    const libraries = modelLibraries;
     if (libraries.length !== 1)
       return problem(
         "SIMULATION_MODEL_LIBRARY_UNAVAILABLE",
@@ -295,20 +388,10 @@ export async function prepareNgspiceExecutionInput(
     const library = libraries[0]!;
     let dependency = dependencies.find((item) => item.id === library.id);
     if (!dependency && needsCanvasModels) {
-      const occupied = new Set([
-        ...files.map((file) => file.path),
-        ...dependencies.map((item) => item.mountPath),
-        folder.input.configPath,
-      ]);
-      let mountPath = "icm-models.lib";
-      for (
-        let index = 1;
-        occupied.has(mountPath) ||
-        [...occupied].some((path) => path.startsWith(`${mountPath}/`));
-        index++
-      )
-        mountPath = `icm-models-${index}.lib`;
-      dependency = { ...library, mountPath };
+      dependency = {
+        ...library,
+        mountPath: freeMountPath("icm-models", ".lib"),
+      };
       dependencies.push(dependency);
     }
     if (!dependency)
@@ -440,38 +523,48 @@ export async function prepareNgspiceExecutionInput(
           "The requested corner has no Profile model-library load in this source",
           "prepare",
         );
-      // Entry includes resolve relative to the entry's directory in ngspice 46.
-      const relative =
-        "../".repeat(compiled.entry.split("/").length - 1) +
-        dependency.mountPath;
-      const end = entry.text.indexOf("\n");
-      let directive: string;
-      try {
-        directive = formatModelLibrarySelection({
-          directive: "lib",
-          path: relative,
-          section: selectedCorner,
-        });
-      } catch {
+      if (
+        !insertProfileLoad(
+          "Profile models (generated)",
+          dependency.mountPath,
+          selectedCorner,
+        )
+      )
         return problem(
           "SIMULATION_MODEL_PATH_INVALID",
           "The model mount cannot be represented as a literal SPICE include path",
           "prepare",
         );
-      }
-      const preamble = `* Profile models (generated)\n${directive}\n`;
-      const mapped = insertSimulationText(
-        { ...entry, ...sourceMaps[entryIndex]! },
-        end < 0 ? entry.text.length : end + 1,
-        (end < 0 ? "\n" : "") + preamble,
-        { kind: "generated", purpose: "environment" },
-      );
-      files[entryIndex] = { path: mapped.path, text: mapped.text };
-      sourceMaps[entryIndex] = { path: mapped.path, segments: mapped.segments };
     }
     // Record the actual native model selection in the execution receipt only.
     if (compiled.authority === "code")
       config.environment.corner = selectedCorner;
+  }
+  const loadedTargets = new Set(
+    projectedGraph().includes.map((load) => load.target),
+  );
+  for (const libraryId of new Set(cellCalls.map((call) => call.libraryId))) {
+    let dependency = dependencies.find((item) => item.id === libraryId);
+    if (dependency && loadedTargets.has(dependency.mountPath)) continue;
+    if (!dependency) {
+      dependency = {
+        id: libraryId,
+        sha256: available.get(libraryId)!,
+        mountPath: freeMountPath(libraryId, ".spice"),
+      };
+      dependencies.push(dependency);
+    }
+    if (
+      !insertProfileLoad(
+        "Profile standard cells (generated)",
+        dependency.mountPath,
+      )
+    )
+      return problem(
+        "SIMULATION_MODEL_PATH_INVALID",
+        "The cell library mount cannot be represented as a literal SPICE include path",
+        "prepare",
+      );
   }
   const output = config.collection.rawfile;
   if (

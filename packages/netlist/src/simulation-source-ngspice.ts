@@ -26,7 +26,7 @@ import {
 import { simulationNetlistDiagnostic } from "./simulation-diagnostic.js";
 import { reachableCircuitBindings } from "./source-file-graph.js";
 import { sha256Hex } from "@icm/derived";
-import { resolveReviewedExternalBinding } from "@icm/devices";
+import { resolveReviewedLibraryInterface } from "@icm/devices";
 import {
   mapSimulationFile,
   insertSimulationText,
@@ -163,9 +163,14 @@ export function compileNgspiceSourceSimulation(
     },
   );
   diagnostics.push(...projectModels.diagnostics);
-  const loadedDependency = folder.input.dependencies.some((d) =>
-    authoredGraph.paths.includes(d.mountPath),
-  );
+  // A definition without a body runs only when something defines it: a
+  // reviewed library interface, a PDK device or a standard cell in its exact
+  // pin order (#1596), whose library the Profile mounts and Preparation
+  // checks; or a .subckt of the experiment's own files. A loaded dependency
+  // no longer stands in for one (#1596): whether it defines this name, and in
+  // this pin order, is not known here, and an undefined or misordered call
+  // would reach ngspice. An unreviewed library name takes a Project model
+  // source or an authored .subckt.
   for (const id of modelReachability.definitionIds) {
     const definition = project.externalSubcircuitDefinitions.find(
       (d) => d.id === id,
@@ -173,7 +178,7 @@ export function compileNgspiceSourceSimulation(
     if (
       !definition ||
       definition.implementation ||
-      resolveReviewedExternalBinding(
+      resolveReviewedLibraryInterface(
         definition.name,
         definition.terminals.map((t) => t.name),
       )
@@ -184,7 +189,7 @@ export function compileNgspiceSourceSimulation(
         statement.kind === "subckt_start" &&
         statement.name.toLowerCase() === definition.name.toLowerCase(),
     );
-    if (!declaration && !loadedDependency)
+    if (!declaration)
       diagnostics.push({
         code: "MODEL_IMPLEMENTATION_MISSING",
         severity: "error",

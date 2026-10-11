@@ -11,6 +11,21 @@ capabilities, not a static count of SKY130 wrappers. Model-symbol information,
 when advertised, is tied to a dependency digest and section. Do not infer support
 for an entire family from one accepted device.
 
+A Profile dependency whose id names a standard-cell library supplies that
+library's cells. The hosted SKY130 ngspice Profile advertises
+`sky130_fd_sc_hd` beside its primitive models, so a Library gate bound to an
+HD gate cell (`sky130_fd_sc_hd__nor2_1`) runs there: Prepare mounts and
+`.include`s the cell file after the models' `.lib`, and the cell is called in
+its own pin order, `VGND VNB VPB VPWR` included. The cells are built from
+`nfet_01v8` and `pfet_01v8_hvt` at the continuous library's `scale=1.0u`.
+Only the gate cells a Library gate takes are reviewed; flip-flops, latches and
+other HD cells use `special_` devices the library does not define and do not
+run. A Profile without the cell's library refuses the run
+(`STANDARD_CELL_LIBRARY_UNAVAILABLE`). A definition without a body runs only
+when it is a reviewed library interface in its exact pin order or a `.subckt`
+of the experiment's files; a loaded dependency alone does not define it
+(`MODEL_IMPLEMENTATION_MISSING`).
+
 Use Snapshot external binding and `mosBulk` facts to check hidden body/substrate
 pins. Three-terminal artwork does not remove an electrical fourth terminal.
 Do not discard an external binding merely to obtain familiar artwork.

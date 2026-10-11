@@ -207,8 +207,10 @@ refused with their IDs; it never means the first of them.
   The gate keeps its symbol and pins; the SPICE netlist calls the cell in the
   library's pin order with the gate's VDD/VSS Nets on its rails (Auto
   resolves as for an unbound gate), and the library's own `.include` defines
-  it: a hosted run refuses the cell (`MODEL_IMPLEMENTATION_MISSING`) unless
-  the folder's files define it. A name of another function is refused with
+  it. Hosted ngspice runs simulate a SKY130 HD gate cell: the hosted Profile
+  mounts `sky130_fd_sc_hd.spice` and Prepare loads it beside the models.
+  An ngspice Profile without the cell's library, as for IHP and TSMC cells,
+  refuses it (`STANDARD_CELL_LIBRARY_UNAVAILABLE`). A name of another function is refused with
   the cells that fit; an empty model returns the gate to its ideal body with
   its default parameters. A cell imported from a SPICE file stays an external
   block with its own rail pins.

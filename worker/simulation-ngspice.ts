@@ -91,6 +91,21 @@ function advertisedMaxOutputBytes(env: SimulationEnv): number {
  */
 const CLOUDFLARE_CONTAINER_INSTANCE_KEY = `profile:${hostedSky130Profile.id}`;
 
+/**
+ * What a run may mount by identity: the sectioned primitive models, then
+ * each standard-cell library (#1596), whose id names the library it supplies.
+ */
+const PROFILE_DEPENDENCIES = [
+  {
+    id: hostedSky130Profile.models.id,
+    sha256: hostedSky130Profile.models.contentSha256,
+  },
+  ...hostedSky130Profile.cellLibraries.map((library) => ({
+    id: library.id,
+    sha256: library.contentSha256,
+  })),
+];
+
 export interface SimulationRequestBody {
   operation?: unknown;
   mode?: unknown;
@@ -340,12 +355,7 @@ export async function routeNgspiceSimulationRequest(
           label: hostedSky130Profile.displayName ?? hostedSky130Profile.id,
           corners: hostedSky130Profile.qualifiedScope.sections,
           devices: hostedSky130Profile.qualifiedScope.devices,
-          dependencies: [
-            {
-              id: hostedSky130Profile.models.id,
-              sha256: hostedSky130Profile.models.contentSha256,
-            },
-          ],
+          dependencies: PROFILE_DEPENDENCIES,
         },
       ],
       modelLibrary: {
@@ -435,8 +445,11 @@ export async function routeNgspiceSimulationRequest(
     dependencies.some(
       (dependency) =>
         !dependency ||
-        dependency.id !== hostedSky130Profile.models.id ||
-        dependency.sha256 !== hostedSky130Profile.models.contentSha256 ||
+        !PROFILE_DEPENDENCIES.some(
+          (available) =>
+            available.id === dependency.id &&
+            available.sha256 === dependency.sha256,
+        ) ||
         !safePath(dependency.mountPath),
     ) ||
     dependencies.some((dependency, index) =>

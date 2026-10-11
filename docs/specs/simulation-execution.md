@@ -176,14 +176,14 @@ runtime contract, not a sample circuit and not a promise about every device in
 the SKY130 PDK.
 
 At container startup the harness measures the real binary, model tree,
-platform, and `.spiceinit` bytes. It reports `reproducibility: "pinned"` and the
+platform, `.spiceinit` and standard-cell library bytes. It reports `reproducibility: "pinned"` and the
 Profile ID only when every measured identity matches. A missing, malformed, or
 mismatched Profile leaves `/health` and `/run` not ready; it is never silently
 downgraded to an observed hosted run. Local deployment is an optional adapter,
 not an implicit fallback to a program found on the user's machine.
 
 The qualified scope is deliberately exact and factual: core and LVT 1.8 V
-NFET/PFET wrappers, `res_high_po`, `cap_mim_m3_1`, and the fixed three-terminal
+NFET/PFET wrappers, the high-Vt 1.8 V PFET, `res_high_po`, `cap_mim_m3_1`, and the fixed three-terminal
 `pnp_05v5_W0p68L0p68` wrapper, over the Profile's qualified sections
 (`tt/ff/ss/fs/sf`). OP/DC/AC/TRAN/Noise remain covered by the hosted core-model
 acceptance fixture; a second OP/AC fixture verifies every added device at every
@@ -196,6 +196,36 @@ and the structured OTA's input/output spectral densities and integrated totals.
 Adding another corner or device family extends this same Profile
 contract only after a model-backed fixture passes the hosted
 gate; a locally available PDK is not evidence by itself.
+
+#### Standard cells
+
+The Profile's `cellLibraries` adds the SKY130 HD standard cells (#1596):
+`sky130_fd_sc_hd.spice` from the volare build of the base image's PDK version
+(open_pdks `c6d73a35…`, Apache-2.0). The image fetches it at build time by
+exact URL and checks the archive's and the file's SHA-256; it lives at
+`/opt/sky130-cells/`, outside the measured model tree, so the models' digest
+and the environment fingerprint stay those of the primitive library. The
+harness measures the file against the Profile digest, is not ready on a
+mismatch, mounts it by `{id, sha256}` like the models, and lists both in
+`/health` `dependencies`. Capabilities advertise it as a second Profile
+dependency whose id, `sky130_fd_sc_hd`, names the library it supplies.
+
+Preparation mounts and `.include`s it after the generated model `.lib` when
+the source calls a gate cell of that library (an author's own load of the
+same dependency is kept), and refuses a cell whose library the Profile lacks
+with `STANDARD_CELL_LIBRARY_UNAVAILABLE`. A Project definition without a body
+runs only as a reviewed library interface in its exact pin order or as a
+`.subckt` of the experiment's own files. Before #1596 any loaded dependency
+also counted as its body; a folder that relied on that, for a library name
+outside the reviewed set, now stops with `MODEL_IMPLEMENTATION_MISSING` and
+needs a Project model source for the name. The cells use the continuous
+library's `scale=1.0u`: `w=650000u l=150000u` is a 0.65 µm by 0.15 µm
+device. Only the gate cells a Library gate takes are reviewed; they are built
+from `nfet_01v8` and `pfet_01v8_hvt`. Flip-flops, latches and a few other
+cells call `special_nfet_01v8`/`special_pfet_01v8_hvt`, which the continuous
+library does not define. The candidate-image acceptance
+(`scripts/simulation-source-native.test.mjs`) checks NOR2 and NAND2 truth tables
+and an inverter's DC transfer from bound Library gates.
 
 The Profile deliberately excludes a SKY130 diode because the selected
 continuous library does not resolve the candidate model. It also excludes the

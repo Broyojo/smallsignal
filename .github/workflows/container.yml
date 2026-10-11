@@ -73,7 +73,7 @@ jobs:
           fi
           # The model tree and the simulator are the base image's, not ours,
           # so their permissions are asserted rather than assumed.
-          for path in /opt/sky130 /opt/ngspice /opt/harness; do
+          for path in /opt/sky130 /opt/sky130-cells /opt/ngspice /opt/harness; do
             if docker run --rm icm-ngspice:pr \
                 sh -c "touch $path/written-by-a-deck" 2>/dev/null; then
               echo "$path is writable by the account a deck runs as."
@@ -104,6 +104,11 @@ jobs:
           docker run --rm icm-ngspice:pr \
             sh -c 'test -f /opt/sky130/continuous/sky130.lib.spice' \
             || { echo "The pinned base no longer carries the continuous library."; exit 1; }
+          # The HD standard cells this image adds beside the models (#1596);
+          # the harness checks their digest against the Profile at startup.
+          docker run --rm icm-ngspice:pr \
+            sh -c 'test -f /opt/sky130-cells/sky130_fd_sc_hd.spice' \
+            || { echo "The image does not carry the HD standard cells."; exit 1; }
 
       - name: Simulate one circuit in the image
         run: |

@@ -211,6 +211,7 @@ function extendedDeviceResult(target, corner = "ff") {
   const expected = {
     lvtNfetCurrentA: -0.0001329127936535723,
     lvtPfetSourceCurrentA: -0.00006968745845296193,
+    hvtPfetSourceCurrentA: -0.0001390822188942903,
     resistorOutputV: 0.313487576360055,
     resistorSupplyCurrentA: -0.000313487576360055,
     pnpEmitterCurrentA: -2.149132309996193e-7,
@@ -238,6 +239,7 @@ function extendedDeviceResult(target, corner = "ff") {
           probes: [
             { name: "i(vdnl)", value: expected.lvtNfetCurrentA },
             { name: "i(vspl)", value: expected.lvtPfetSourceCurrentA },
+            { name: "i(vsph)", value: expected.hvtPfetSourceCurrentA },
             { name: "v(rout)", value: expected.resistorOutputV },
             { name: "i(vrin)", value: expected.resistorSupplyCurrentA },
             { name: "i(vpe)", value: expected.pnpEmitterCurrentA },
@@ -520,6 +522,7 @@ describe("the hosted SKY130 qualification", () => {
     const request = hostedSky130ExtendedDeviceRequest("ff");
     expect(request.netlist).toContain("sky130_fd_pr__nfet_01v8_lvt");
     expect(request.netlist).toContain("sky130_fd_pr__pfet_01v8_lvt");
+    expect(request.netlist).toContain("sky130_fd_pr__pfet_01v8_hvt");
     expect(request.netlist).toContain("sky130_fd_pr__res_high_po");
     expect(request.netlist).toContain("sky130_fd_pr__cap_mim_m3_1");
     expect(request.netlist).toContain(
