@@ -18,31 +18,89 @@ import {
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
 
-/** Each shown run of text's font size and place, in content-stream order. */
-function pdfTextRuns(
-  pdf: Buffer,
-): { fontSize: number; x: number; y: number }[] {
+/**
+ * Each shown run of text with its size and place. Text in an embedded face
+ * (all of it since #1413) is hex glyph codes, read through that font's
+ * ToUnicode map; a built-in face's is a literal string.
+ */
+function pdfTextRuns(pdf: Buffer): PdfTextRun[] {
   const raw = pdf.toString("latin1");
-  const runs: { fontSize: number; x: number; y: number }[] = [];
+  // Every stream, by its object number, inflated when Flate-encoded.
+  const streams = new Map<number, string>();
   for (const match of raw.matchAll(
-    /\d+ 0 obj\s*<<((?:(?!endobj)[\s\S])*?)>>\s*stream\r?\n/gu,
+    /(\d+) 0 obj\s*<<((?:(?!endobj)[\s\S])*?)>>\s*stream\r?\n/gu,
   )) {
     const start = match.index + match[0].length;
     const bytes = pdf.subarray(start, raw.indexOf("\nendstream", start));
-    const stream = (
-      match[1]!.includes("/FlateDecode") ? inflateSync(bytes) : bytes
-    ).toString("latin1");
-    for (const [, block] of stream.matchAll(/BT\s+([\s\S]*?)\s+ET/gu)) {
-      const font = /\/F\d+\s+([\d.]+)\s+Tf/u.exec(block!);
-      const at =
-        /[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+([-\d.]+)\s+([-\d.]+)\s+Tm/u.exec(
-          block!,
+    streams.set(
+      Number(match[1]),
+      match[2]!.includes("/FlateDecode")
+        ? inflateSync(bytes).toString("latin1")
+        : bytes.toString("latin1"),
+    );
+  }
+  // Each font resource name, and the text its glyph codes stand for.
+  const fonts = new Map<string, Map<string, string>>();
+  const resources = /\/Font\s*<<([^>]*)>>/u.exec(raw)?.[1] ?? "";
+  for (const [, name, object] of resources.matchAll(/\/(F\d+)\s+(\d+) 0 R/gu)) {
+    const font = new RegExp(
+      String.raw`(?:^|\s)${object} 0 obj\s*<<((?:(?!endobj)[\s\S])*?)endobj`,
+      "u",
+    ).exec(raw)?.[1];
+    const map = /\/ToUnicode (\d+) 0 R/u.exec(font ?? "")?.[1];
+    const codes = new Map<string, string>();
+    for (const block of (streams.get(Number(map)) ?? "").matchAll(
+      /beginbfchar([\s\S]*?)endbfchar/gu,
+    ))
+      for (const [, code, text] of block[1]!.matchAll(
+        /<([0-9a-f]+)>\s*<([0-9a-f]+)>/giu,
+      ))
+        codes.set(
+          code!.toLowerCase(),
+          String.fromCodePoint(
+            ...text!.match(/.{4}/gu)!.map((hex) => Number.parseInt(hex, 16)),
+          ),
         );
-      if (font && at && /\bTj\b/u.test(block!))
-        runs.push({ fontSize: +font[1]!, x: +at[1]!, y: +at[2]! });
+    fonts.set(name!, codes);
+  }
+
+  const runs: PdfTextRun[] = [];
+  const textBlock = /BT\s+([\s\S]*?)\s+ET/gu;
+  const font = /\/(F\d+)\s+([\d.]+)\s+Tf/u;
+  const matrix =
+    /[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+([-\d.]+)\s+([-\d.]+)\s+Tm/u;
+  const literal = /\(([^)]*)\)\s+Tj/u;
+  const glyphs = /<([0-9a-f]+)>\s+Tj/iu;
+  for (const stream of streams.values()) {
+    for (const block of stream.matchAll(textBlock)) {
+      const fontMatch = font.exec(block[1]!);
+      const matrixMatch = matrix.exec(block[1]!);
+      const literalMatch = literal.exec(block[1]!);
+      const glyphMatch = glyphs.exec(block[1]!);
+      if (!fontMatch || !matrixMatch || !(literalMatch || glyphMatch)) continue;
+      const codes = fonts.get(fontMatch[1]!);
+      runs.push({
+        fontSize: Number(fontMatch[2]),
+        x: Number(matrixMatch[1]),
+        y: Number(matrixMatch[2]),
+        text: literalMatch
+          ? literalMatch[1]!
+          : glyphMatch![1]!
+              .toLowerCase()
+              .match(/.{4}/gu)!
+              .map((code) => codes?.get(code) ?? "\uFFFD")
+              .join(""),
+      });
     }
   }
   return runs;
+}
+
+interface PdfTextRun {
+  fontSize: number;
+  text: string;
+  x: number;
+  y: number;
 }
 
 test("keeps rejected SPICE import diagnostics in a historical report", async ({
@@ -244,17 +302,29 @@ test("exports the formal scene as a vector PDF with its scripts in place", async
   expect(pdfText).not.toContain("/Subtype /Image");
   expect(pdfText).toContain("/Type /Font");
 
-  // Each subscript (I_out, C_GS, C_GD, M_1, R_D, R_S, V_in, V_DD) is set
-  // smaller than its base run, and placed after it, below its baseline.
+  // Each subscript decodes to its own text after its base, smaller, and
+  // placed after and below it.
   const runs = pdfTextRuns(pdf);
-  const scripts = runs.filter(
-    (run, index) =>
-      index > 0 &&
-      Math.abs(run.fontSize / runs[index - 1]!.fontSize - 0.76) < 0.01,
-  );
-  expect(scripts.length).toBeGreaterThanOrEqual(8);
-  for (const script of scripts) {
-    const base = runs[runs.indexOf(script) - 1]!;
+  for (const pair of [
+    "I_out",
+    "C_GS",
+    "C_GD",
+    "M_1",
+    "R_D",
+    "R_S",
+    "V_in",
+    "V_DD",
+  ]) {
+    const [baseText, scriptText] = pair.split("_");
+    const index = runs.findIndex(
+      (run, at) =>
+        at > 0 &&
+        run.text.trim() === scriptText &&
+        runs[at - 1]!.text === baseText,
+    );
+    expect(index, `${pair} is present`).toBeGreaterThan(0);
+    const [base, script] = [runs[index - 1]!, runs[index]!];
+    expect(script.fontSize).toBeCloseTo(base.fontSize * 0.76, 2);
     expect(script.x).toBeGreaterThan(base.x);
     expect(script.y).toBeGreaterThan(base.y);
   }
@@ -604,6 +674,7 @@ test("edits output configuration without creating another electrical authority, 
     .first()
     .click();
   await expect(page.getByTestId("status")).toContainText("Preflight:");
+  await expect(page.getByTestId("active-document-name")).toHaveText("dut");
   await expect(report).toBeVisible();
   const reportBodyBox = await report
     .locator(".netlist-preflight-body")

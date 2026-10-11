@@ -200,6 +200,40 @@ test("explicit inspectors yield to Netlist for a replacement while ordinary edit
   await expect(code).toHaveCount(0);
 });
 
+test("lists every netlist issue and shows the one clicked on the canvas", async ({
+  page,
+}) => {
+  // Parts no netlist can describe; the panel used to name only the first.
+  const project = createEmptyProject("netlist-issues", "Netlist issues");
+  for (const [index, id] of ["D1", "D2"].entries())
+    project.documents[0]!.instances.push({
+      id,
+      reference: id,
+      symbolId: "delay-cell",
+      placement: {
+        position: { x: 200 + index * 200, y: 200 },
+        rotation: 0,
+        mirror: "none",
+      },
+    });
+  await page.goto("/editor");
+  await awaitEditorReady(page);
+  await openProjectFile(page, project);
+  const list = page.getByTestId("netlist-issues");
+  const issues = page.getByTestId("netlist-issue");
+  await expect(list).toContainText("2 issues");
+  await expect(issues.nth(1)).toContainText("D2");
+  await issues.nth(1).click();
+  const halo = page.getByTestId("selection-halo-selected");
+  await expect(halo.locator('[data-object-id="D2"]')).toBeVisible();
+  await expect(halo.locator('[data-object-id="D1"]')).toHaveCount(0);
+  // The list stays in the dock, one click from the next finding.
+  await expect(list).toBeVisible();
+  await expect(page.getByTestId("status")).toContainText(
+    "Netlist: Symbol delay-cell has no reviewed netlist definition",
+  );
+});
+
 test("opens editable netlist by default, links cards and parts both ways, and synchronizes names and values with undo", async ({
   page,
 }) => {
