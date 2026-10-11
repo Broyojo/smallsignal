@@ -108,6 +108,40 @@ describe("canonical RichText helpers", () => {
     expect(flattenRichText(normalizeRichText(content))).toBe("10um/150nm");
   });
 
+  it("bounds nesting at four levels and keeps formulas out of spans", () => {
+    const text = { kind: "text", value: "x" };
+    const span = (child: unknown, levels: number): unknown =>
+      levels === 0
+        ? child
+        : {
+            kind: "span",
+            style: "bold",
+            children: [span(child, levels - 1)],
+          };
+    const fraction = (inner: unknown, levels: number): unknown =>
+      levels === 0
+        ? inner
+        : {
+            kind: "fraction",
+            numerator: { runs: [fraction(inner, levels - 1)] },
+            denominator: { runs: [text] },
+          };
+    const math = { kind: "math", latex: "V", display: "inline" };
+    const accepts = (run: unknown) =>
+      RichTextDocumentSchema.safeParse({ runs: [run] }).success;
+
+    expect(accepts(span(text, 4))).toBe(true);
+    expect(accepts(span(text, 5))).toBe(false);
+    expect(accepts(fraction(text, 4))).toBe(true);
+    expect(accepts(fraction(text, 5))).toBe(false);
+    expect(accepts(fraction(span(text, 1), 3))).toBe(true);
+    expect(accepts(fraction(span(text, 1), 4))).toBe(false);
+    // A formula is a whole document: inside a fraction side, never a span.
+    expect(accepts(fraction(math, 4))).toBe(true);
+    expect(accepts(span(math, 1))).toBe(false);
+    expect(accepts(fraction(span(math, 1), 1))).toBe(false);
+  });
+
   it("rejects an empty fraction side", () => {
     expect(
       RichTextDocumentSchema.safeParse({

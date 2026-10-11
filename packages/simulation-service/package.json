@@ -9,6 +9,11 @@
       "types": "./dist/contract.d.ts",
       "default": "./dist/contract.js"
     },
+    "./profile-engine": {
+      "development": "./src/profile-engine.ts",
+      "types": "./dist/profile-engine.d.ts",
+      "default": "./dist/profile-engine.js"
+    },
     "./files": {
       "development": "./src/files.ts",
       "types": "./dist/files.d.ts",

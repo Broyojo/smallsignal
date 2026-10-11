@@ -93,8 +93,10 @@ describe("mcp resources single-source projection", () => {
       "utf8",
     );
     const resource = readResourceContent(ADVANCED_EDITS_RESOURCE_URI);
+    // The source already shares its rich-text schemas through $defs (#1645);
+    // the resource interns every other repeat: 108,816 of 228,208 bytes.
     expect(Buffer.byteLength(resource.text)).toBeLessThan(
-      Buffer.byteLength(source) / 3,
+      Buffer.byteLength(source) / 2,
     );
     expect(expandSchema(JSON.parse(resource.text))).toEqual(
       expandSchema(JSON.parse(source)),
