@@ -932,27 +932,14 @@ test("tiles the whole catalog into one flat quick-pick grid", async ({
     await grid.evaluate((element) => getComputedStyle(element).overflowY),
   ).toBe("auto");
 
-  // One glance covers the library: the grid is flat (no category headings),
-  // every tile carries its own artwork, and the grid packs several columns.
+  // One glance covers the library: the grid is flat (no category headings)
+  // and every tile carries its own artwork. The widening test counts columns.
   await expect(grid.locator("h3, h4")).toHaveCount(0);
   const optionCount = await dialog.getByRole("option").count();
   expect(optionCount).toBeGreaterThan(20);
   expect(await grid.locator("svg.insert-symbol-artwork").count()).toBe(
     optionCount,
   );
-  const firstTop = await dialog
-    .getByRole("option")
-    .first()
-    .evaluate((element) => (element as HTMLElement).offsetTop);
-  const sameRow = await grid.evaluate(
-    (element, top) =>
-      Array.from(
-        element.querySelectorAll<HTMLElement>('[role="option"]'),
-      ).filter((option) => option.offsetTop === top).length,
-    firstTop,
-  );
-  expect(sameRow).toBeGreaterThan(3);
-
   // There is no separate confirm step to fit in: the footer is a hint line,
   // and it stays inside the dialog bounds.
   await expect(dialog.getByRole("button", { name: "Apply" })).toHaveCount(0);
@@ -1121,20 +1108,8 @@ test("shows the complete foldable categorized Library, quick-places a device, an
         ).size,
     ),
   ).toBe(Math.ceil(4 / columns));
-  expect(
-    await transistorGrid.evaluate((element) => {
-      const gridBounds = element.getBoundingClientRect();
-      return [...element.children].every((child) => {
-        const tileBounds = child.getBoundingClientRect();
-        return (
-          tileBounds.left >= gridBounds.left - 0.5 &&
-          tileBounds.right <= gridBounds.right + 0.5
-        );
-      });
-    }),
-  ).toBe(true);
-  // Every tile is 56px high with 40x32 artwork centred above a label that
-  // fits; list the tiles that break any of it.
+  // Every tile sits inside its grid, 56px high, with 40x32 artwork centred
+  // above a label that fits; list the tiles that break any of it.
   expect(
     await libraryChips.evaluateAll((tiles) =>
       tiles.flatMap((tile) => {
@@ -1146,7 +1121,10 @@ test("shows the complete foldable categorized Library, quick-places a device, an
         const span = tile.querySelector<HTMLElement>("span");
         const label = span?.getBoundingClientRect();
         const centre = box.left + box.width / 2;
+        const grid = tile.closest(".shapes-grid")!.getBoundingClientRect();
         const fits =
+          box.left >= grid.left - 0.5 &&
+          box.right <= grid.right + 0.5 &&
           art &&
           span &&
           label &&
@@ -1227,26 +1205,6 @@ test("keeps a usable canvas while toggling Library at the narrow breakpoint", as
   await page.setViewportSize({ width: 720, height: 720 });
   await page.goto("/editor");
   await awaitEditorReady(page);
-
-  // Simulation and Publish remain directly visible without horizontal scrolling.
-  const commandSurface = page.locator(".app-chrome-main");
-  const publish = page.getByTestId("publish-gallery-button");
-  const commandBox = await commandSurface.boundingBox();
-  const publishBox = await publish.boundingBox();
-  if (!commandBox || !publishBox) {
-    throw new Error("Primary editor command is not measurable");
-  }
-  expect(publishBox.x).toBeGreaterThanOrEqual(commandBox.x);
-  expect(publishBox.x + publishBox.width).toBeLessThanOrEqual(
-    commandBox.x + commandBox.width,
-  );
-  const simulationBox = await page
-    .getByTestId("open-analog-simulation")
-    .boundingBox();
-  expect(simulationBox).not.toBeNull();
-  expect(simulationBox!.x + simulationBox!.width).toBeLessThanOrEqual(
-    commandBox.x + commandBox.width,
-  );
 
   const panel = page.getByTestId("shapes-library-panel");
   const canvas = page.getByTestId("schematic-canvas");

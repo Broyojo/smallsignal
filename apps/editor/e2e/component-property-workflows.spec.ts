@@ -115,6 +115,50 @@ test("Rail Properties switches Cell Pin and Global atomically, survives reload a
   );
 });
 
+test("Cell Pin Properties edits the formal name even without a canvas label", async ({
+  page,
+}) => {
+  // A copied Pin keeps its formal name while its canvas label is absent.
+  const project = createEmptyProject("pin-name", "Pin name");
+  const document = project.documents[0]!;
+  document.instances.push({
+    id: "P2-copy-1",
+    symbolId: "port",
+    placement: { position: { x: 300, y: 200 }, rotation: 0, mirror: "none" },
+  });
+  document.nets.push({
+    id: "net-voc",
+    terminals: [{ instanceId: "P2-copy-1", pinName: "P" }],
+  });
+  document.netlist = {
+    name: document.name,
+    formalParameters: [],
+    terminals: [
+      {
+        id: "terminal-voc",
+        name: "Voc",
+        netId: "net-voc",
+        direction: "passive",
+        interfaceInstanceIds: ["P2-copy-1"],
+      },
+    ],
+  };
+  await page.goto("/editor");
+  await awaitEditorReady(page);
+  await page.getByTestId("project-file").setInputFiles({
+    name: "pin-name.icproj.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeProject(project)),
+  });
+  await page.getByTestId("hit-P2-copy-1").click();
+  await openSelectionShelf(page);
+  await expectComponentCodeField(page, "name", "Voc");
+  await editComponentPropertyCode(page, (code) => {
+    code.name = "Vcm";
+  });
+  await expectComponentCodeField(page, "name", "Vcm");
+});
+
 test("property inspection and remounts keep canvas keyboard ownership", async ({
   page,
 }) => {
@@ -416,6 +460,10 @@ test("Properties resizes from 300px with plain selectable code and its inline co
       ),
     ).toContain(`"${key}"`);
   }
+  await editor
+    .getByRole("button", { name: "Rotate clockwise 90 degrees" })
+    .click();
+  await expectComponentCodeField(page, "rotation", 90);
   const layout = await editor.evaluate((section) => ({
     overflow: section.scrollWidth > section.clientWidth,
     editable: Boolean(section.querySelector('[contenteditable="true"]')),
@@ -611,6 +659,12 @@ test("batch Code lists differing values, edits them atomically and refuses incom
     await expect(
       page.locator(`[data-object-id="${id}"] [data-role="instance-symbol"]`),
     ).toHaveAttribute("stroke", "#dc2626");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  expect(JSON.parse(await readComponentPropertyCode(page)).color).toEqual({
+    R1: [255, 0, 0],
+    R2: [255, 0, 0],
+    C1: [0, 0, 0],
+  });
 });
 
 test("Properties keeps component and Annotation text colors independent", async ({
