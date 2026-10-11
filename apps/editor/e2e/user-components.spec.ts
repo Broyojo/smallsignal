@@ -356,6 +356,8 @@ test("public symbol placement connects contacts atomically and keeps the clicked
     });
   await openUserComponents(page);
   await button(page, "Place Contact block").click();
+  // Click only once the canvas takes placement input; an earlier click is lost.
+  await expect(page.getByTestId("component-input-plane")).toBeVisible();
   let resume!: () => void;
   const hold = new Promise<void>((resolve) => {
     resume = resolve;
