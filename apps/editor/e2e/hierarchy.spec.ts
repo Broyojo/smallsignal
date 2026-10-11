@@ -227,65 +227,79 @@ test("starts an external model with English comments and copies only its applied
   await expect(copy).toBeDisabled();
 });
 
-// The narrow Manager is covered by the compact Apply & Place case below.
-test("external Manager keeps primary actions visible beside its symbol at 1440×900", async ({
-  page,
-}) => {
-  const viewport = { width: 1440, height: 900 };
-  await page.setViewportSize(viewport);
-  await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
+// 1440×900 sets the symbol beside its controls; 720×450 is the short
+// viewport in the 680–860 px band, where the controls stack after Apply. The
+// 430 px Apply & Place case below closes the Manager instead.
+for (const viewport of [
+  { width: 1440, height: 900 },
+  { width: 720, height: 450 },
+]) {
+  test(`external Manager keeps primary actions and symbol layout visible at ${viewport.width}×${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/editor");
+    await openCellManager(page);
+    const manager = page.getByRole("dialog", {
+      name: "Cell Manager",
+      exact: true,
+    });
+    await manager
+      .getByRole("tab", { name: "External Circuits", exact: true })
+      .click();
+    await manager
+      .getByLabel("External model netlist")
+      .fill(".subckt layout A B\nR1 A B 1k\n.ends layout\n");
+    const box = await manager
+      .getByRole("button", { name: "Apply & Place" })
+      .boundingBox();
+    expect(
+      await manager.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+    const interfaceBox = await manager
+      .getByLabel("Parsed model interface")
+      .boundingBox();
+    expect(interfaceBox!.y + interfaceBox!.height).toBeLessThanOrEqual(box!.y);
+    await manager
+      .getByRole("button", { name: "Apply model", exact: true })
+      .click();
+    const controls = manager.getByLabel("Cell symbol layout", { exact: true });
+    const preview = manager.getByLabel("Symbol preview", { exact: true });
+    await expect(preview).toBeVisible();
+    await expect(manager).not.toContainText("Applied version");
+    await expect(manager.locator(".external-model-path")).toHaveCount(0);
+    const controlBox = await controls.boundingBox();
+    const previewBox = await preview.boundingBox();
+    if (viewport.width >= 1024) {
+      expect(previewBox!.x).toBeGreaterThanOrEqual(
+        controlBox!.x + controlBox!.width,
+      );
+      const a = await manager.getByLabel("Model A direction").boundingBox();
+      const b = await manager.getByLabel("Model B direction").boundingBox();
+      expect(a!.y).toBe(b!.y);
+      expect(b!.x).toBeGreaterThan(a!.x);
+    }
+    expect(
+      await controls.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    expect(
+      await controls.evaluate((el) => {
+        const bounds = el.getBoundingClientRect();
+        return Array.from(el.querySelectorAll("input, select"), (control) => {
+          const box = control.getBoundingClientRect();
+          return box.left >= bounds.left && box.right <= bounds.right;
+        }).every(Boolean);
+      }),
+    ).toBe(true);
+    expect(
+      await manager.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    await manager.getByLabel("Model A direction").selectOption("input");
+    await expect(manager.getByLabel("Model A direction")).toHaveValue("input");
   });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  await manager
-    .getByLabel("External model netlist")
-    .fill(".subckt layout A B\nR1 A B 1k\n.ends layout\n");
-  const box = await manager
-    .getByRole("button", { name: "Apply & Place" })
-    .boundingBox();
-  expect(box!.y).toBeGreaterThanOrEqual(0);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
-  const interfaceBox = await manager
-    .getByLabel("Parsed model interface")
-    .boundingBox();
-  expect(interfaceBox!.y + interfaceBox!.height).toBeLessThanOrEqual(box!.y);
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
-  const controls = manager.getByLabel("Cell symbol layout", { exact: true });
-  const preview = manager.getByLabel("Symbol preview", { exact: true });
-  await expect(preview).toBeVisible();
-  await expect(manager).not.toContainText("Applied version");
-  await expect(manager.locator(".external-model-path")).toHaveCount(0);
-  const controlBox = await controls.boundingBox();
-  const previewBox = await preview.boundingBox();
-  expect(previewBox!.x).toBeGreaterThanOrEqual(
-    controlBox!.x + controlBox!.width,
-  );
-  const a = await manager.getByLabel("Model A direction").boundingBox();
-  const b = await manager.getByLabel("Model B direction").boundingBox();
-  expect(a!.y).toBe(b!.y);
-  expect(b!.x).toBeGreaterThan(a!.x);
-  expect(
-    await controls.evaluate((el) => {
-      const bounds = el.getBoundingClientRect();
-      return Array.from(el.querySelectorAll("input, select"), (control) => {
-        const box = control.getBoundingClientRect();
-        return box.left >= bounds.left && box.right <= bounds.right;
-      }).every(Boolean);
-    }),
-  ).toBe(true);
-  expect(await manager.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
-    true,
-  );
-  await manager.getByLabel("Model A direction").selectOption("input");
-  await expect(manager.getByLabel("Model A direction")).toHaveValue("input");
-});
+}
 
 test("searches definitions without discarding the selected model", async ({
   page,
@@ -339,6 +353,18 @@ test("applies and places an external model in a compact narrow Manager", async (
   await manager
     .getByLabel("External model netlist")
     .fill(".subckt compact A B\nR1 A B 1k\n.ends compact\n");
+  // Closing or switching tabs asks before an unsaved model is dropped.
+  const guard = page.getByRole("dialog", { name: "Unsaved model" });
+  for (const leave of [
+    manager.getByRole("button", { name: "Close Cell Manager" }),
+    manager.getByRole("tab", { name: "Cells", exact: true }),
+  ]) {
+    await leave.click();
+    await guard.getByRole("button", { name: "Keep editing" }).click();
+    await expect(manager.getByLabel("External model netlist")).toContainText(
+      "R1 A B 1k",
+    );
+  }
   const applyPlace = manager.getByRole("button", {
     name: "Apply & Place",
     exact: true,
@@ -374,7 +400,6 @@ test("applies and places an external model in a compact narrow Manager", async (
     .fill(".subckt compact A B\nR1 A B 2k\n.ends compact\n");
   await manager.getByText("Callers (1)", { exact: true }).click();
   await manager.getByRole("button", { name: "Jump to caller" }).click();
-  const guard = page.getByRole("dialog", { name: "Unsaved model" });
   await expect(guard).toBeVisible();
   await guard.getByRole("button", { name: "Keep editing" }).click();
   await expect(manager.getByLabel("External model netlist")).toContainText(

@@ -139,8 +139,6 @@ test("drawing tools keep a visible locator before the first point and clear queu
   });
   const canvas = page.getByTestId("schematic-canvas");
   await expect(page.getByTestId("hit-R1")).toBeVisible();
-  // The arrow is drawn from the Library and the annotation menu only.
-  await expect(page.getByTestId("draw-tool-arrow")).toHaveCount(0);
   for (const name of ["line", "rectangle", "circle", "polyline", "arrow"]) {
     await page.getByTestId("annotation-menu").locator("summary").click();
     await page.getByTestId(`annotation-shortcut-annotation-${name}`).click();
@@ -305,18 +303,6 @@ test("adds formatted drafting text and undo/redo restores it", async ({
   await expectForeignObjectContentsContained(
     page.getByTestId("canvas-text-editor"),
   );
-  const [canvasBounds, editorBounds] = await Promise.all([
-    page.getByTestId("schematic-canvas").boundingBox(),
-    page.getByTestId("canvas-text-editor").boundingBox(),
-  ]);
-  if (!canvasBounds || !editorBounds) {
-    throw new Error("Canvas text editor geometry is not measurable");
-  }
-  expect(editorBounds.x).toBeGreaterThanOrEqual(canvasBounds.x);
-  expect(editorBounds.x + editorBounds.width).toBeLessThanOrEqual(
-    canvasBounds.x + canvasBounds.width + 1,
-  );
-  expect(editorBounds.width).toBeCloseTo(344, 0);
   // Formatting sits on one row; alignment shares the commit row below it.
   const top = (name: string) => controlTop(page.getByRole("button", { name }));
   const [boldTop, increaseTop, applyTop, deleteTop, alignLeftTop] =
@@ -332,6 +318,18 @@ test("adds formatted drafting text and undo/redo restores it", async ({
   expect(Math.abs(alignLeftTop - applyTop)).toBeLessThan(1);
   expect(applyTop).toBeGreaterThan(increaseTop);
 
+  // A long note wraps inside the compact editor instead of running past it.
+  await draftInput.fill(
+    "A deliberately long annotation that wraps inside the compact canvas text editor instead of extending beyond it",
+  );
+  await expectForeignObjectContentsContained(
+    page.getByTestId("canvas-text-editor"),
+  );
+  expect(
+    await draftInput.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1,
+    ),
+  ).toBe(true);
   const initialFontSize = await draftInput.evaluate((element) =>
     Number.parseFloat(getComputedStyle(element).fontSize),
   );
@@ -653,6 +651,148 @@ test("keeps unsafe formula source out of the Project", async ({ page }) => {
   await expect(page.locator('[data-role="formula"]')).toHaveCount(0);
 });
 
+// Half a laptop screen at its lowest zoom (22%): the collapsed Properties rail floats over
+// the canvas's right edge, which the editor must measure as covered, and the
+// editor frame is at its tightest for a long display formula.
+test("keeps the text editor clear of a docked panel and a long formula inside its frame at the lowest zoom", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 720, height: 720 });
+  await page.goto("/editor");
+  await awaitEditorReady(page);
+  const netlist = page.getByRole("button", {
+    name: "Netlist",
+    exact: true,
+    pressed: true,
+  });
+  if (await netlist.isVisible()) await netlist.click();
+  while (
+    Number.parseInt((await page.getByLabel("Current zoom").textContent())!) > 25
+  ) {
+    await page.getByRole("button", { name: "Zoom out", exact: true }).click();
+  }
+  const canvas = page.getByTestId("schematic-canvas");
+  const rail = page.getByRole("complementary", { name: "Properties" });
+  await expect(rail).toBeVisible();
+  const [canvasBounds, railBounds] = await Promise.all([
+    canvas.boundingBox(),
+    rail.boundingBox(),
+  ]);
+  if (!canvasBounds || !railBounds) throw new Error("Layout is not measurable");
+  expect(railBounds.x).toBeGreaterThan(canvasBounds.x + 400);
+  const viewBox = await canvas.getAttribute("viewBox");
+
+  // Text placed just left of the rail would open its 344 px editor across it.
+  await placeText(page, { x: railBounds.x - canvasBounds.x - 40, y: 320 });
+  const frame = page.getByTestId("canvas-text-editor");
+  const checkFrame = async () => {
+    await expect
+      .poll(async () => {
+        const [bounds, docks] = await Promise.all([
+          frame.boundingBox(),
+          page.locator("[data-canvas-overlay]").evaluateAll((elements) =>
+            elements
+              .filter(
+                (element) => getComputedStyle(element).visibility !== "hidden",
+              )
+              .map((element) => element.getBoundingClientRect())
+              .filter((rect) => rect.width > 0 && rect.height > 0)
+              .map((rect) => ({ left: rect.left, right: rect.right })),
+          ),
+        ]);
+        if (!bounds) return "unmeasured";
+        const right = bounds.x + bounds.width;
+        return docks.every(
+          (dock) => right <= dock.left + 1 || bounds.x >= dock.right - 1,
+        )
+          ? "clear"
+          : `editor ${Math.round(bounds.x)}–${Math.round(right)} overlaps ${JSON.stringify(docks)}`;
+      })
+      .toBe("clear");
+    // Every control fits the visible foreignObject, including its right
+    // edge; Playwright's visibility check alone accepts clipped descendants.
+    await expect
+      .poll(() =>
+        frame.evaluate((element) => {
+          const outer = element.getBoundingClientRect();
+          const controls = element.querySelectorAll(
+            ".rich-text-floating-toolbar, .rich-text-formula-popover, .rich-text-editable, button",
+          );
+          return [...controls].every((control) => {
+            const rect = control.getBoundingClientRect();
+            if (!rect.width || !rect.height) return true;
+            return rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+          });
+        }),
+      )
+      .toBe(true);
+    await expect(canvas).toHaveAttribute("viewBox", viewBox!);
+    const bounds = (await frame.boundingBox())!;
+    expect(bounds.width).toBeCloseTo(344, 0);
+    expect(bounds.x).toBeGreaterThanOrEqual(canvasBounds.x);
+  };
+  await checkFrame();
+
+  // At this width the commit row wraps below the formatting row, and the
+  // symbol menu stays within the editor.
+  const top = (name: string) => controlTop(page.getByRole("button", { name }));
+  await expect
+    .poll(async () =>
+      Math.abs((await top("Increase text size")) - (await top("Bold"))),
+    )
+    .toBeLessThan(1);
+  expect(await top("Apply text changes")).toBeGreaterThan(
+    await top("Increase text size"),
+  );
+  await page.getByLabel("Insert circuit symbol").click();
+  const menuBounds = (await page
+    .getByRole("menu", { name: "Circuit symbols" })
+    .boundingBox())!;
+  const editorBounds = (await frame.boundingBox())!;
+  expect(menuBounds.x).toBeGreaterThanOrEqual(editorBounds.x - 1);
+  expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(
+    editorBounds.x + editorBounds.width + 1,
+  );
+  await page.getByLabel("Insert circuit symbol").click();
+
+  const dialog = page.getByRole("dialog", { name: "Formula", exact: true });
+  const source = page.getByRole("textbox", { name: "Formula LaTeX source" });
+  const display = dialog.getByRole("button", { name: "Display", exact: true });
+  const latex = String.raw`NTF=\frac{\left(1-z^{-1}\right)\left(1-0.75z^{-1}\right)^2}{\left(1-p_1z^{-1}\right)\left(1-p_2z^{-1}\right)}`;
+  const openFormula = async () => {
+    await page
+      .getByRole("button", { name: "Insert formula", exact: true })
+      .click();
+    await expect(dialog.locator("math-field")).toBeVisible();
+  };
+  await openFormula();
+  await source.fill(latex);
+  await display.click();
+  await expect(display).toHaveAttribute("aria-pressed", "true");
+  await checkFrame();
+  await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+  await expect(frame.locator("[data-rich-text-math]")).toHaveAttribute(
+    "data-latex",
+    latex,
+  );
+  await checkFrame();
+  await page.getByRole("button", { name: "Apply text changes" }).click();
+  await expect(frame).toHaveCount(0);
+
+  // Reopened, the formula and its Display choice return inside the frame.
+  await page.getByTestId(/^drafting-hit-note-/).dblclick();
+  await checkFrame();
+  await openFormula();
+  await expect(source).toHaveValue(latex);
+  await expect(display).toHaveAttribute("aria-pressed", "true");
+  await checkFrame();
+  // Both the dialog's close control and the outer cancel remain reachable.
+  await dialog.getByRole("button", { name: "Close formula editor" }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole("button", { name: "Cancel text changes" }).click();
+  await expect(frame).toHaveCount(0);
+});
+
 async function snappedCanvasPoint(
   canvas: Locator,
   client: { x: number; y: number },
@@ -917,6 +1057,8 @@ test("line arrow clicks add bends and snap through to an arbitrary rectangle edg
 }) => {
   await page.goto("/editor");
   await awaitEditorReady(page);
+  // The arrow is drawn from the Library and the annotation menu only.
+  await expect(page.getByTestId("draw-tool-arrow")).toHaveCount(0);
   await clickDrawTool(page, "rectangle");
   await clickCreate(page, { x: 430, y: 220 }, { x: 650, y: 400 });
   const rectangle = page.locator('[data-kind="draft-rectangle"]');
