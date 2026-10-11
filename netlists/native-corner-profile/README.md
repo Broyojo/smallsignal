@@ -27,13 +27,9 @@ of one capability Profile. Set that Profile's `corners` to `sections` and its
 Supply the exact package path in the existing runtime dependency registry; do not
 copy the 10 MB library into every Project or grow the user-input limit.
 
-Run `containers/vacask/sectioned-library-journey.test.mjs` with `VACASK_BIN`,
-`VACASK_MODULES`, and `ICM_VACASK_SECTIONED_MANIFEST` pointing to the real package.
-`ICM_VACASK_LIBRARY_PATH` supports the selected Linux binary's loader assets.
-Optional `ICM_VACASK_EVIDENCE_DIR` retains a fresh `sectioned-profile-*/runs.json`,
-including input and output for unsuccessful runs. Missing runtime inputs skip
-the test and are not acceptance. The test uses the real HTTP entrypoint and shared
-Prepare, no simulated executor responses.
+The opt-in test that ran this Project through a real VACASK binary
+(`sectioned-library-journey.test.mjs`) was removed in #1646; nothing set its
+environment, so it never ran.
 
 The circuit uses core/LVT NFET and PFET, a high-poly resistor, a MIM capacitor,
 the fixed PNP, and native sources/load resistance at 1.8 V and 27 °C. The PNP

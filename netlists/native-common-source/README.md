@@ -46,9 +46,10 @@ This Profile is **not a fully qualified hosted environment**; among the
 committed Worker configurations, only Preview routes it to the isolated VACASK
 executor.
 
-`containers/vacask/starter-journey.test.mjs` verifies source/helper identity and,
-with explicit local binary/module/model/Python paths, executes all four folders
-through Prepare/Start/Read and paged File/CSV output. Checks include nine finite
+`containers/vacask/starter-journey.test.mjs` verifies source/helper identity.
+The opt-in runs against a real VACASK binary were removed in #1646; nothing set
+their environment, so they never ran. They executed all four folders
+through Prepare/Start/Read and paged File/CSV output, checking nine finite
 OP outputs, OP/DC KCL below 1 nA, all 181 DC biases, all 641 AC gain samples, both
 native transient groups without resampling/loss, the exact sine stimulus and
 measurements recomputed from the returned arrays. RC/RLC analytical acceptance

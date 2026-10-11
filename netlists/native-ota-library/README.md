@@ -56,12 +56,10 @@ Noise density takes the square root of native PSD; the native integral is labell
 ## Validation boundary
 
 `containers/vacask/starter-journey.test.mjs` checks exact circuit preservation,
-source/report identity, wrapper-selected device parameters, all twelve public
-Prepare/Run/Read flows, measurements independently recomputed from returned
-arrays, analysis ranges, original waveforms, and downloadable CSVs. Runtime
-checks require the explicit VACASK/Python/model variables documented in the
-adjacent starter READMEs, with `ICM_VACASK_SECTIONED_MANIFEST` selecting the
-package containing all five sections. No per-corner runtime or Profile is needed.
+source/report identity and wrapper-selected device parameters. The opt-in
+runs against a real VACASK binary were removed in #1646; nothing set their
+environment, so they never ran. They covered all twelve public Prepare/Run/Read flows, measurements recomputed
+from returned arrays, analysis ranges, original waveforms and CSVs.
 
 Local execution with VACASK 0.3.4, corrected BSIM4 4.8.3 and Python 3.12 passes
 all sixteen source/runtime tests, exercising 31 folders (19 starters plus these
