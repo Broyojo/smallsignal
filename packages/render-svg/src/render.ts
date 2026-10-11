@@ -210,12 +210,16 @@ export function buildSvgScene(
       ),
     });
   }
+  const contactEvidence =
+    options.contactEvidence ??
+    deriveDocumentContactEvidence(document, resolver, routingGeometry);
   const viewBox = options.bounds
     ? RectSchema.parse(options.bounds)
     : deriveBounds(
         document,
         resolver,
         routingGeometry,
+        contactEvidence,
         margin,
         resolvedAnnotations,
         profile,
@@ -389,9 +393,6 @@ export function buildSvgScene(
     })
     .join("");
   const routes = `${conductorInk}${routeIdentities}`;
-  const contactEvidence =
-    options.contactEvidence ??
-    deriveDocumentContactEvidence(document, resolver, routingGeometry);
   const junctions = contactEvidence.contacts
     .filter(
       (contact) =>
