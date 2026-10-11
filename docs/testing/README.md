@@ -273,6 +273,12 @@ reachable. Remove or merge a test only when all are true:
    safety assertion for the behavior.
 3. The target plan records the replacement protection or why none is needed.
 
+A browser test meets condition 1 when a named lower-layer test covers the
+same behavior, unless the browser itself is the point, for example real
+pointer or focus, layout, font metrics, clipboard or download, cross-tab
+behavior, or it is the only test of that flow's GUI wiring. Before removing
+it, push any assertion no lower-layer test covers down to one.
+
 Split an oversized suite by protected behavior, not by arbitrary line count.
 Prefer small shared fixture builders over copying an entire Project when only a
 few facts are relevant.
