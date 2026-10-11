@@ -116,6 +116,70 @@ describe("legacy authoring candidates", () => {
       project.documents[0]!.noConnects,
     );
   });
+  it("keeps a repaired caller's selected symbol variant", () => {
+    const baseline = ComponentDefinitionSchema.parse({
+      ...legacyDefinition(),
+      symbol: {
+        ...legacyDefinition().symbol,
+        variants: [
+          { id: "base", hiddenPinNames: [] },
+          {
+            id: "alternate",
+            hiddenPinNames: [],
+            additionalPrimitives: [
+              { kind: "circle", center: { x: 0, y: 0 }, radius: 10 },
+            ],
+          },
+        ],
+        defaultVariantId: "base",
+      },
+    });
+    const project = createEmptyProject("legacy-variant", "Legacy variant");
+    project.componentDefinitions = [baseline];
+    project.documents[0]!.instances.push({
+      id: "X1",
+      reference: "X1",
+      symbolId: baseline.symbol.id,
+      symbolVariantId: "alternate",
+      placement: { position: { x: 0, y: 0 }, rotation: 0, mirror: "none" },
+      netlist: {
+        parameters: {},
+        binding: { kind: "unresolved-subcircuit", name: "custom_block" },
+      },
+    });
+    const repair = prepareLegacyCircuitRepair(project, baseline, "variant");
+    const applied = prepareLegacyCircuitRepair(project, baseline, "variant", {
+      implementation: {
+        kind: "apply_model_source",
+        source: {
+          id: "variant-source",
+          revision: 0,
+          language: "spice",
+          entry: "model.spice",
+          dependencies: [],
+          files: [
+            {
+              path: "model.spice",
+              text: ".subckt custom_block VDD VSS IN OUT\nR1 IN OUT 1k\n.ends custom_block\n",
+            },
+          ],
+        },
+        definitions: [
+          {
+            definitionId: repair.definitionId,
+            entry: "custom_block",
+            symbol: repair.project.componentDefinitions!.find(
+              (definition) => definition.symbol.id === repair.symbolId,
+            )!,
+          },
+        ],
+      },
+    });
+    const caller = applied.project.documents[0]!.instances[0]!;
+    expect(caller.netlist!.binding!.kind).toBe("external-subcircuit");
+    expect(caller.symbolId).not.toBe(baseline.symbol.id);
+    expect(caller.symbolVariantId).toBe("alternate");
+  });
   it("requires explicit disconnection of a removed legacy terminal and clears its No Connect atomically", () => {
     const baseline = legacyDefinition();
     const project = createEmptyProject(

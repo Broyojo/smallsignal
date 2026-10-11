@@ -450,25 +450,36 @@ export function parseSavedProject(text: string): any {
   return parseProject(text);
 }
 
-/** The Project as File > Export Project File… saves it, decoded. */
-export async function exportedProject(page: Page): Promise<any> {
-  return parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-}
-
-/** Open the editor on a Project a test built, through the Project file input. */
-export async function openProject(
+/** Open a Project file (an object, its text or its bytes) as File > Open does. */
+export async function openProjectFile(
   page: Page,
-  project: unknown,
-  name = "fixture.icproj.json",
+  project: object | string,
+  name = "project.icproj.json",
 ): Promise<void> {
-  await page.goto("/editor");
   await page.getByTestId("project-file").setInputFiles({
     name,
     mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
+    buffer: Buffer.isBuffer(project)
+      ? project
+      : Buffer.from(
+          typeof project === "string" ? project : JSON.stringify(project),
+        ),
   });
+}
+
+/** The active Project as File > Export Project File… writes it. */
+export async function exportedProject(page: Page): Promise<any> {
+  return parseSavedProject(
+    (await downloadBytes(page, "File", "Export Project File…")).toString(),
+  );
+}
+
+/** Open the editor on a Project a test built. */
+export async function openProject(
+  page: Page,
+  project: object,
+  name?: string,
+): Promise<void> {
+  await page.goto("/editor");
+  await openProjectFile(page, project, name);
 }
