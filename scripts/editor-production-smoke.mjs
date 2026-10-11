@@ -236,6 +236,13 @@ async function main() {
   const nodeCryptoExternalized = await builtJavaScriptContains(
     "node:crypto has been externalized",
   );
+  // An inline script waits for every stylesheet above it.
+  const builtHtml = await readFile(resolve(editorDist, "index.html"), "utf8");
+  const routePreload = builtHtml.indexOf("<script>const galleryResources");
+  const firstStylesheet = builtHtml.search(/<link\b[^>]*\brel="stylesheet"/u);
+  const routePreloadBeforeStylesheets =
+    routePreload !== -1 &&
+    (firstStylesheet === -1 || routePreload < firstStylesheet);
   const report = {
     mounted,
     consoleErrors,
@@ -248,6 +255,7 @@ async function main() {
     galleryPdfRuntimeLoaded,
     editorPdfRuntimeLoaded,
     editorSimulationServiceLoaded,
+    routePreloadBeforeStylesheets,
   };
 
   if (check) {
@@ -280,6 +288,9 @@ async function main() {
   }
   if (report.editorSimulationServiceLoaded) {
     throw new Error("Editor loaded the simulation service on startup");
+  }
+  if (!report.routePreloadBeforeStylesheets) {
+    throw new Error("Route preload script waits for a stylesheet");
   }
   if (report.consoleErrors.length > 0) {
     throw new Error(

@@ -2,48 +2,67 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { editorPreload } from "./editor-preload";
 
+const builtHead = `<head>
+    <meta charset="UTF-8" />
+    <title>Analog Canvas</title>
+    <script>document.documentElement.classList.add("light");</script>
+    <script type="module" crossorigin src="/assets/index-12345678.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/jsx-runtime-12345678.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-12345678.css">
+  </head>`;
+
+function transform(html: string) {
+  const handler = (
+    editorPreload().transformIndexHtml as {
+      handler: (html: string, context: unknown) => string;
+    }
+  ).handler;
+  return handler(html, { bundle });
+}
+
+function preloadScript(html: string): string {
+  const script = /<script>(const galleryResources[^<]*)<\/script>/u.exec(html);
+  if (!script) throw new Error("No route preload script");
+  return script[1]!;
+}
+
+const bundle = {
+  "assets/web-editor-12345678.js": {
+    type: "chunk",
+    fileName: "assets/web-editor-12345678.js",
+    facadeModuleId: "E:\\repo\\src\\entries\\web-editor.tsx",
+    imports: ["assets/App-12345678.js", "assets/web-services-12345678.js"],
+  },
+  "assets/web-services-12345678.js": { type: "chunk", imports: [] },
+  "assets/App-12345678.js": {
+    type: "chunk",
+    fileName: "assets/App-12345678.js",
+    facadeModuleId: "E:\\repo\\src\\app\\App.tsx",
+    imports: ["assets/shared-12345678.js"],
+    dynamicImports: ["assets/math-12345678.js"],
+    viteMetadata: { importedCss: new Set(["assets/App-12345678.css"]) },
+  },
+  "assets/shared-12345678.js": { type: "chunk", imports: [] },
+  "assets/math-12345678.js": { type: "chunk", imports: [] },
+  "assets/gallery-feed-12345678.js": {
+    type: "chunk",
+    fileName: "assets/gallery-feed-12345678.js",
+    facadeModuleId: "E:\\repo\\src\\components\\gallery-feed.tsx",
+    imports: ["assets/gallery-shared-12345678.js"],
+    viteMetadata: {
+      importedCss: new Set(["assets/gallery-feed-12345678.css"]),
+    },
+  },
+  "assets/gallery-shared-12345678.js": { type: "chunk", imports: [] },
+};
+
 function preload(
   path: string,
   hostname = "analog-canvas.test",
   replica = false,
 ) {
-  const handler = (
-    editorPreload().transformIndexHtml as {
-      handler: (html: string, context: unknown) => { children: string }[];
-    }
-  ).handler;
-  const bundle = {
-    "assets/web-editor-12345678.js": {
-      type: "chunk",
-      fileName: "assets/web-editor-12345678.js",
-      facadeModuleId: "E:\\repo\\src\\entries\\web-editor.tsx",
-      imports: ["assets/App-12345678.js", "assets/web-services-12345678.js"],
-    },
-    "assets/web-services-12345678.js": { type: "chunk", imports: [] },
-    "assets/App-12345678.js": {
-      type: "chunk",
-      fileName: "assets/App-12345678.js",
-      facadeModuleId: "E:\\repo\\src\\app\\App.tsx",
-      imports: ["assets/shared-12345678.js"],
-      dynamicImports: ["assets/math-12345678.js"],
-      viteMetadata: { importedCss: new Set(["assets/App-12345678.css"]) },
-    },
-    "assets/shared-12345678.js": { type: "chunk", imports: [] },
-    "assets/math-12345678.js": { type: "chunk", imports: [] },
-    "assets/gallery-feed-12345678.js": {
-      type: "chunk",
-      fileName: "assets/gallery-feed-12345678.js",
-      facadeModuleId: "E:\\repo\\src\\components\\gallery-feed.tsx",
-      imports: ["assets/gallery-shared-12345678.js"],
-      viteMetadata: {
-        importedCss: new Set(["assets/gallery-feed-12345678.css"]),
-      },
-    },
-    "assets/gallery-shared-12345678.js": { type: "chunk", imports: [] },
-  };
-  const tags = handler("", { bundle });
   const links: { rel: string; href: string; as?: string }[] = [];
-  runInNewContext(tags[0]!.children, {
+  runInNewContext(preloadScript(transform(builtHead)), {
     location: { pathname: path, hostname },
     window: { __icmLocalGalleryReplica: replica },
     document: {
@@ -55,6 +74,14 @@ function preload(
 }
 
 describe("route resource preload", () => {
+  it("runs before any stylesheet, which an inline script would wait for", () => {
+    const html = transform(builtHead);
+    const script = html.indexOf("<script>const galleryResources");
+    expect(script).toBeGreaterThan(html.indexOf('<meta charset="UTF-8" />'));
+    expect(script).toBeLessThan(html.indexOf('rel="stylesheet"'));
+    expect(script).toBeLessThan(html.indexOf('type="module"'));
+  });
+
   it.each(["localhost", "127.0.0.1", "[::1]"])(
     "does not preload Gallery on ordinary %s, but keeps explicit replica support",
     (hostname) => {

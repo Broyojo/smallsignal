@@ -9,5 +9,6 @@
   "editorStylesLoaded": true,
   "galleryPdfRuntimeLoaded": false,
   "editorPdfRuntimeLoaded": false,
-  "editorSimulationServiceLoaded": false
+  "editorSimulationServiceLoaded": false,
+  "routePreloadBeforeStylesheets": true
 }
