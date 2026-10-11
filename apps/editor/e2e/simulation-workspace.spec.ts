@@ -563,6 +563,99 @@ test("human simulation refuses a bad output, survives minimizing, cancels, and k
   expect(executions).toBe(2);
 });
 
+test("a new experiment's setup fits its card, creates only on Create, and asks for an environment when none fits (#1489)", async ({
+  page,
+}) => {
+  const project = parseProject(JSON.stringify(ota));
+  project.simulationFolders = [];
+  // The SIN testbench also holds the SKY130 varactor, which no environment
+  // qualifies.
+  project.documents
+    .find((cell) => cell.id === "document-ota-5t-testbench-sin")!
+    .instances.push({
+      id: "varactor",
+      reference: "C9",
+      symbolId: "capacitor",
+      placement: null,
+      netlist: {
+        binding: {
+          kind: "model",
+          deviceClass: "capacitor",
+          name: "sky130_fd_pr__cap_var_lvt",
+        },
+        parameters: {},
+      },
+    });
+  const vacask = {
+    id: "vacask-sky130-candidate",
+    engine: "vacask",
+    corners: [],
+  };
+  await page.route("**/api/simulate", (route) =>
+    route.fulfill({
+      json: { ...capabilities, profiles: [...capabilities.profiles, vacask] },
+    }),
+  );
+  await page.goto("/editor");
+  await openProjectFile(page, project);
+  await page.getByTestId("open-analog-simulation").click();
+  const setUp = page.getByRole("button", {
+    name: "Set up manually",
+    exact: true,
+  });
+  const name = page.getByLabel("New simulation folder name");
+  const cell = page.getByRole("combobox", {
+    name: "Simulation Cell",
+    exact: true,
+  });
+  const environment = page.getByLabel("Simulation environment", {
+    exact: true,
+  });
+  const card = page.locator(
+    ".simulation-start-workspace > .workspace-inline-name",
+  );
+  const folder = page.getByRole("treeitem", {
+    name: "Folder SIN check",
+    exact: true,
+  });
+  await setUp.click();
+  expect((await card.boundingBox())!.width).toBeLessThanOrEqual(360);
+  await name.press("Escape");
+  await page
+    .getByRole("button", { name: "Maximize simulation", exact: true })
+    .click();
+  await setUp.click();
+  expect((await card.boundingBox())!.width).toBeLessThanOrEqual(360);
+  // Moving from the name to the Cell creates nothing.
+  await name.fill("SIN check");
+  await name.press("Tab");
+  await expect(cell).toBeFocused();
+  await cell.selectOption("document-ota-5t-testbench-sin");
+  await expect(name).toBeVisible();
+  await expect(folder).toHaveCount(0);
+  // None fits the SIN testbench: Create asks, as the Agent's create refuses.
+  await expect(environment).toHaveValue("");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(
+    page.getByRole("status").filter({
+      hasText:
+        "Choose an environment. No Profile qualifies sky130_fd_pr__cap_var_lvt.",
+    }),
+  ).toBeVisible();
+  await expect(folder).toHaveCount(0);
+  await environment.selectOption(vacask.id);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(folder).toBeVisible();
+  await page
+    .getByRole("button", { name: "Restore simulation panel", exact: true })
+    .click();
+  expect(
+    readSimulationExperimentConfig(
+      (await exportedProject(page)).simulationFolders[0],
+    ),
+  ).toMatchObject({ config: { environment: { profileId: vacask.id } } });
+});
+
 test("Simulation defaults a new experiment to an ordinary authored Cell", async ({
   page,
 }) => {
