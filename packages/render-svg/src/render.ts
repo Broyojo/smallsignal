@@ -210,12 +210,49 @@ export function buildSvgScene(
       ),
     });
   }
+  const contactEvidence =
+    options.contactEvidence ??
+    deriveDocumentContactEvidence(document, resolver, routingGeometry);
+  // The contacts this drawing paints a dot at; the bounds count a Junction
+  // only by this same decision (#1637).
+  const dottedContacts = contactEvidence.contacts
+    .filter(
+      (contact) =>
+        !objectIds ||
+        contact.incidents.some((incident) => included(incident.objectId)) ||
+        contact.endpoints.some((endpoint) =>
+          endpoint.kind === "junction"
+            ? included(endpoint.junctionId)
+            : included(endpoint.instanceId),
+        ),
+    )
+    .filter((contact) => {
+      if (
+        contact.incidents.some(
+          (incident) =>
+            incident.kind === "route" &&
+            powerRailRouteIds.has(incident.objectId),
+        )
+      ) {
+        return false;
+      }
+      // All terminal kinds consume the shared visible-branch decision.
+      return contactRequiresJunctionDot(contact);
+    });
+  const dottedJunctionIds = new Set(
+    dottedContacts.flatMap((contact) =>
+      contact.endpoints.flatMap((endpoint) =>
+        endpoint.kind === "junction" ? [endpoint.junctionId] : [],
+      ),
+    ),
+  );
   const viewBox = options.bounds
     ? RectSchema.parse(options.bounds)
     : deriveBounds(
         document,
         resolver,
         routingGeometry,
+        dottedJunctionIds,
         margin,
         resolvedAnnotations,
         profile,
@@ -389,33 +426,7 @@ export function buildSvgScene(
     })
     .join("");
   const routes = `${conductorInk}${routeIdentities}`;
-  const contactEvidence =
-    options.contactEvidence ??
-    deriveDocumentContactEvidence(document, resolver, routingGeometry);
-  const junctions = contactEvidence.contacts
-    .filter(
-      (contact) =>
-        !objectIds ||
-        contact.incidents.some((incident) => included(incident.objectId)) ||
-        contact.endpoints.some((endpoint) =>
-          endpoint.kind === "junction"
-            ? included(endpoint.junctionId)
-            : included(endpoint.instanceId),
-        ),
-    )
-    .filter((contact) => {
-      if (
-        contact.incidents.some(
-          (incident) =>
-            incident.kind === "route" &&
-            powerRailRouteIds.has(incident.objectId),
-        )
-      ) {
-        return false;
-      }
-      // All terminal kinds consume the shared visible-branch decision.
-      return contactRequiresJunctionDot(contact);
-    })
+  const junctions = dottedContacts
     .sort((left, right) => left.id.localeCompare(right.id, "en"))
     .map((contact) => {
       const junctionEndpoint = contact.endpoints.find(

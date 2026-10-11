@@ -104,6 +104,7 @@ export function deriveBounds(
   document: SchematicDocument,
   resolver: SymbolResolver,
   routingGeometry: ResolvedDocumentRoutingGeometry,
+  dottedJunctionIds: ReadonlySet<string>,
   margin: number,
   annotations: readonly ResolvedSvgAnnotation[],
   profile: SchematicStyleProfile,
@@ -154,8 +155,11 @@ export function deriveBounds(
       bounds.push({ x: point.x, y: point.y, width: 0, height: 0 });
     }
   }
+  // A Route's own points cover the Junctions it meets; a Junction adds ink
+  // only by its dot, and one that draws nothing never widens a drawing (#1637).
   for (const junction of document.junctions) {
     if (objectIds && !objectIds.has(junction.id)) continue;
+    if (!dottedJunctionIds.has(junction.id)) continue;
     bounds.push({
       x: junction.position.x,
       y: junction.position.y,
