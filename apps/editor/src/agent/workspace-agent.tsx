@@ -22,7 +22,7 @@ import {
   exposeAgentPairing,
 } from "./headless-pairing";
 import { PUBLIC_AGENT_UI_ENABLED } from "./public-agent-ui";
-import { workspaceAgentSession } from "./workspace-agent-session";
+import type { AgentConnectionStatus } from "./connect-agent-panel";
 import type {
   UseAgentSessionOptions,
   UseAgentSessionResult,
@@ -52,6 +52,68 @@ export function WorkspaceAgentProvider({
   );
 }
 
+async function nothing(): Promise<void> {}
+function ignore(): void {}
+
+/** Statuses from which Connect Agent starts a new connection. */
+const UNCONNECTED: readonly AgentConnectionStatus[] = [
+  "idle",
+  "revoked",
+  "expired",
+];
+
+/**
+ * The workspace's Agent session as the page sees it. Once the runtime has
+ * loaded, its session. Before then, "not connected", and Connect asks for
+ * the runtime. A connection asked for but not yet started is one being
+ * created, as it was the moment Connect started it before (#1673);
+ * cancelling it then leaves nothing to revoke.
+ */
+function workspaceAgentSession({
+  runtimeSession,
+  connectRequested,
+  loadError,
+  requestConnection,
+  cancelConnection,
+}: {
+  runtimeSession: UseAgentSessionResult | null;
+  connectRequested: boolean;
+  /** Why the runtime could not load, shown until Connect is tried again. */
+  loadError: string | null;
+  requestConnection: () => Promise<void>;
+  cancelConnection: () => Promise<void>;
+}): UseAgentSessionResult {
+  const base: UseAgentSessionResult = runtimeSession ?? {
+    pendingOperation: null,
+    status: "idle",
+    claimCode: null,
+    claimExpiresAt: null,
+    scopes: [],
+    expiresAt: null,
+    expiringSoon: false,
+    error: loadError,
+    backgroundRequests: false,
+    transportDiagnostics: [],
+    pause: nothing,
+    resume: nothing,
+    keepConnected: ignore,
+    reconnect: ignore,
+    newConnection: requestConnection,
+    revoke: nothing,
+  };
+  return connectRequested && UNCONNECTED.includes(base.status)
+    ? {
+        ...base,
+        status: "creating",
+        pendingOperation: "creating",
+        claimCode: null,
+        claimExpiresAt: null,
+        error: null,
+        revoke: cancelConnection,
+      }
+    : base;
+}
+
 /**
  * Owns the workspace's Agent connection without loading the Agent runtime
  * (#1673). Until the runtime loads, the connection is "not connected", and
@@ -73,9 +135,8 @@ function WorkspaceAgentOwner({
   );
   const [connectRequested, setConnectRequested] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [published, setPublished] = useState<UseAgentSessionResult | null>(
-    null,
-  );
+  const [runtimeSession, setRuntimeSession] =
+    useState<UseAgentSessionResult | null>(null);
   useEffect(() => {
     if (runtime || !(neededOnLoad || connectRequested)) return;
     let current = true;
@@ -93,7 +154,7 @@ function WorkspaceAgentOwner({
       current = false;
     };
   }, [connectRequested, neededOnLoad, runtime]);
-  const onConnectStarted = useCallback(() => setConnectRequested(false), []);
+  const onConnectHandled = useCallback(() => setConnectRequested(false), []);
   const requestConnection = useCallback(async () => {
     if (!enabled) return;
     setLoadError(null);
@@ -105,7 +166,7 @@ function WorkspaceAgentOwner({
   const session = useMemo(
     () =>
       workspaceAgentSession({
-        published,
+        runtimeSession,
         connectRequested,
         loadError,
         requestConnection,
@@ -115,7 +176,7 @@ function WorkspaceAgentOwner({
       cancelConnection,
       connectRequested,
       loadError,
-      published,
+      runtimeSession,
       requestConnection,
     ],
   );
@@ -128,8 +189,8 @@ function WorkspaceAgentOwner({
           context={context}
           enabled={enabled}
           connectRequested={connectRequested}
-          onSession={setPublished}
-          onConnectStarted={onConnectStarted}
+          onSession={setRuntimeSession}
+          onConnectHandled={onConnectHandled}
         />
       ) : null}
     </WorkspaceAgent.Provider>

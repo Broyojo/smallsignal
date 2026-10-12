@@ -30,10 +30,12 @@ export function mountWebEditor() {
   // resume a saved session or pair automation loads it beside the route's
   // chunks, so the session is there as the page first renders. Its small
   // loader is itself loaded here, so the shell stays as it was.
+  // A runtime that fails to load here does not hold up the editor: the
+  // workspace provider tries again and shows the failure if it recurs.
   const agentRuntimeOnLoad = () =>
-    import("../agent/agent-runtime-loader").then((loader) =>
-      loader.loadAgentRuntimeNeededOnLoad(),
-    );
+    import("../agent/agent-runtime-loader")
+      .then((loader) => loader.loadAgentRuntimeNeededOnLoad())
+      .catch(() => null);
   const WorkspaceAgentProvider = lazy(() =>
     guardedRouteChunk(() =>
       Promise.all([

@@ -29,14 +29,14 @@ export const AgentSessionRuntime = memo(function AgentSessionRuntime({
   enabled,
   connectRequested,
   onSession,
-  onConnectStarted,
+  onConnectHandled,
 }: {
   context: UseAgentSessionOptions | null;
   enabled: boolean;
   /** Connect Agent was asked for before this runtime had loaded. */
   connectRequested: boolean;
   onSession: (session: UseAgentSessionResult) => void;
-  onConnectStarted: () => void;
+  onConnectHandled: () => void;
 }) {
   const [empty] = useState(() => {
     const project = createEmptyProject(
@@ -62,11 +62,14 @@ export const AgentSessionRuntime = memo(function AgentSessionRuntime({
     onSession(session);
   });
   // The click that loaded this runtime connects once the editor is bound,
-  // as it would have connected at once had the runtime been here.
+  // as Connect Agent does: only when no connection is in place or being
+  // resumed. A saved session being recovered is kept, never replaced, so
+  // its record is not cleared and the old session is not orphaned.
   useEffect(() => {
     if (!connectRequested || !context) return;
-    onConnectStarted();
-    void session.newConnection();
-  }, [connectRequested, context, onConnectStarted, session]);
+    onConnectHandled();
+    if (["idle", "revoked", "expired"].includes(session.status))
+      void session.newConnection();
+  }, [connectRequested, context, onConnectHandled, session]);
   return null;
 });
