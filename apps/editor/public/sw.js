@@ -30,24 +30,17 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    Promise.all([
-      caches
-        .keys()
-        .then((keys) =>
-          Promise.all(
-            keys
-              .filter(
-                (key) => key.startsWith("icm-static-shell-") && key !== CACHE,
-              )
-              .map((key) => caches.delete(key)),
-          ),
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter(
+              (key) => key.startsWith("icm-static-shell-") && key !== CACHE,
+            )
+            .map((key) => caches.delete(key)),
         ),
-      // The browser requests a page while this worker starts, instead of
-      // after (#1673). Without navigation preload, or when it cannot be
-      // turned on, the fetch handler requests the page as before; activation
-      // never fails for it.
-      self.registration.navigationPreload?.enable().catch(() => undefined),
-    ]),
+      ),
   );
 });
 
@@ -109,28 +102,20 @@ function storeResponse(event, key, response) {
   );
 }
 
-// The page the browser already requested for a navigation, or, without
-// navigation preload, a request made now.
-async function navigationResponse(event) {
-  return (await event.preloadResponse) ?? fetch(event.request);
-}
-
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  // APIs own their own HTTP caching policy. In particular, Gallery previews
+  // use revisioned URLs; putting them in the build-scoped shell cache would
+  // ignore that policy and keep an old or access-controlled image alive.
+  if (isSameOriginApi(event.request)) return;
+
+  // Navigation is network-first so a deployed build can replace index.html and
+  // point at its fresh, content-hashed Vite assets. Offline falls back only to
+  // the known shell, never to a Project or arbitrary cached request.
   if (event.request.mode === "navigate") {
-    // A navigation to an API, such as signing in, stays uncached. Where the
-    // browser preloads it, it is answered with that response so that the
-    // request is not made twice.
-    if (isSameOriginApi(event.request)) {
-      if (event.preloadResponse) event.respondWith(navigationResponse(event));
-      return;
-    }
-    // Navigation is network-first so a deployed build can replace index.html
-    // and point at its fresh, content-hashed Vite assets. Offline falls back
-    // only to the known shell, never to a Project or arbitrary cached request.
     event.respondWith(
-      navigationResponse(event)
+      fetch(event.request)
         .then((response) => {
           if (response.ok) {
             storeResponse(event, scopeUrl(), response);
@@ -141,11 +126,6 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-
-  // APIs own their own HTTP caching policy. In particular, Gallery previews
-  // use revisioned URLs; putting them in the build-scoped shell cache would
-  // ignore that policy and keep an old or access-controlled image alive.
-  if (isSameOriginApi(event.request)) return;
 
   // Only same-origin static assets are cached. This intentionally excludes
   // arbitrary GETs, imported files, Project downloads, and future APIs.

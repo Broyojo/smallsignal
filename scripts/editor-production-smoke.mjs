@@ -203,7 +203,6 @@ async function main() {
   let editorNetlistLayoutChangedOnLoad = true;
   let editorSimulationServiceLoaded = true;
   let editorSchematicFonts = [];
-  let serviceWorkerNavigationPreload = false;
   try {
     server = await preview({
       root: editorRoot,
@@ -334,11 +333,6 @@ async function main() {
     });
     if (!cachedEditorScript)
       throw new Error("Service worker did not cache the editor script");
-    // The browser requests a page while the worker starts (#1673).
-    serviceWorkerNavigationPreload = await page.evaluate(async () => {
-      const registration = await navigator.serviceWorker.ready;
-      return (await registration.navigationPreload?.getState())?.enabled;
-    });
     mounted = true;
     // Browser recovery is Project data and must never leak into the PWA
     // asset caches (Cache Storage) or the service-worker precache.
@@ -421,7 +415,6 @@ async function main() {
     routePreloadBeforeStylesheets,
     editorFirstLoadJsonParser,
     editorSchematicFonts,
-    serviceWorkerNavigationPreload,
     artifactCodecWorkerBundlesModel,
   };
 
@@ -479,9 +472,6 @@ async function main() {
     throw new Error(
       `Schematic fonts must be preloaded WOFF2: ${lateFonts.join(", ") || "none loaded"}`,
     );
-  }
-  if (report.serviceWorkerNavigationPreload !== true) {
-    throw new Error("The service worker does not use navigation preload");
   }
   if (report.artifactCodecWorkerBundlesModel) {
     throw new Error("The artifact codec worker bundles the circuit model");

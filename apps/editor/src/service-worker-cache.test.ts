@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 /**
  * The static shell worker is plain script, not a module, so it is evaluated
@@ -11,9 +11,8 @@ import { describe, expect, it, vi } from "vitest";
  * the name will never mean anything else.
  */
 type Listener = (event: {
-  request?: Request;
-  preloadResponse?: Promise<Response | undefined>;
-  respondWith?(value: Promise<Response>): void;
+  request: Request;
+  respondWith(value: Promise<Response>): void;
   waitUntil(value: Promise<unknown>): void;
 }) => void;
 
@@ -21,7 +20,6 @@ function loadWorker(
   fetchImpl: typeof fetch,
   openGate = Promise.resolve(),
   failStorage = false,
-  navigationPreload?: { enable(): Promise<void> },
 ) {
   const listeners = new Map<string, Listener>();
   const stored = new Map<string, Response>();
@@ -48,7 +46,7 @@ function loadWorker(
   const scope = {
     addEventListener: (name: string, listener: Listener) =>
       listeners.set(name, listener),
-    registration: { scope: "https://analog-canvas.test/", navigationPreload },
+    registration: { scope: "https://analog-canvas.test/" },
   };
   const caches = {
     open: () => openGate.then(() => cache),
@@ -259,78 +257,5 @@ describe("static shell cache policy", () => {
       }),
     );
     expect(stored.has("/assets/App-abc.js")).toBe(false);
-  });
-  it("turns on navigation preload where the browser has it", async () => {
-    const enable = vi.fn(() => Promise.resolve());
-    const refused = { enable: () => Promise.reject(new Error("refused")) };
-    for (const preload of [{ enable }, refused, undefined]) {
-      const { listeners } = loadWorker(
-        fetch,
-        Promise.resolve(),
-        false,
-        preload,
-      );
-      const pending: Promise<unknown>[] = [];
-      listeners.get("activate")!({ waitUntil: (value) => pending.push(value) });
-      // Without it, or when it is refused, activation still completes.
-      await expect(Promise.all(pending)).resolves.toHaveLength(1);
-    }
-    expect(enable).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["/editor", "/"],
-    ["/api/auth/github/start", null],
-  ])(
-    "answers a navigation to %s with its preloaded response, not a second request",
-    async (path, kept) => {
-      const fetchImpl = vi.fn(() =>
-        Promise.reject(new Error("the page was already requested")),
-      );
-      const { listeners, stored } = loadWorker(
-        fetchImpl as unknown as typeof fetch,
-      );
-      const request = new Request(`https://analog-canvas.test${path}`);
-      Object.defineProperty(request, "mode", { value: "navigate" });
-      let served!: Promise<Response>;
-      const pending: Promise<unknown>[] = [];
-      listeners.get("fetch")!({
-        request,
-        preloadResponse: Promise.resolve(
-          new Response("preloaded", {
-            headers: { "content-type": "text/html" },
-          }),
-        ),
-        respondWith: (value) => {
-          served = value;
-        },
-        waitUntil: (value) => {
-          pending.push(value);
-        },
-      });
-      expect(await (await served).text()).toBe("preloaded");
-      await Promise.all(pending);
-      expect(fetchImpl).not.toHaveBeenCalled();
-      // The shell is kept for offline use; an API answer never is.
-      expect([...stored.keys()]).toEqual(kept ? [kept] : []);
-    },
-  );
-
-  it("leaves an API navigation alone where the browser has no navigation preload", () => {
-    const { listeners } = loadWorker((() =>
-      Promise.reject(new Error("must not fetch"))) as typeof fetch);
-    const request = new Request(
-      "https://analog-canvas.test/api/auth/github/start",
-    );
-    Object.defineProperty(request, "mode", { value: "navigate" });
-    let responded = false;
-    listeners.get("fetch")!({
-      request,
-      respondWith: () => {
-        responded = true;
-      },
-      waitUntil: () => undefined,
-    });
-    expect(responded).toBe(false);
   });
 });
