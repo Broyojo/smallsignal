@@ -22,19 +22,15 @@ acceptance reviews, not missing feature implementations. Candidate receipts and
 commits carry their evidence. Investigate concrete gaps revealed by those reviews;
 do not recreate an already implemented subsystem.
 
-## Issue handoff
+## Deferred desktop fork features
 
-[Open issues after the 2026-10-03 batch](open-issues-2026-10-03.md) lists what
-is left partly done, what is deferred to the simulation batch, the next work,
-and the questions waiting for a decision.
-
-## Desktop fork integration
-
-[Issue #1003 review and migration proposal](desktop-fork/README.md) records the
-fixed fork/upstream sources, divergence analysis, sharing boundaries and proposed
-first local integration. It separates upstream preparation, the first desktop
-features and deferred contract/release discussions; no product implementation is
-claimed by these reports.
+The offline desktop's project management is delivered (see the
+[desktop README](../../apps/desktop/README.md)). Still deferred: Visio export,
+the MATLAB palette, the seven-cell coarse grid, jumpers/line width, the Q
+property form, new power devices, AGND/DGND, signing, an installer, automatic
+updates and macOS, and Web local-file formal Save (#1121). Their fork sources
+and adaptation rules are in the
+[last migration plan](https://github.com/cascode-ai/analog-canvas/blob/378eff4707ab0ea56cda4f3558eff9b0c4610b15/docs/roadmap/desktop-fork/05-local-merge-plan.md).
 
 ## Connectivity and naming acceptance
 

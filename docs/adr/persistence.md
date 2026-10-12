@@ -36,32 +36,13 @@ still sees one shape. This costs maintained adapters and focused tests, rather
 than scattered legacy branches. Ambiguous electrical data must be refused with
 a located explanation, not silently converted into guessed connectivity.
 
-## Internal desktop preview decision (2026-09-26)
+## Offline desktop
 
-### Desktop completion (2026-10-11)
-
-The [accepted completion plan](../roadmap/desktop-fork/06-desktop-completion-plan.md)
-adds a default user-owned project library, independent Save As, three previous
-save versions and checked workspace/preview recovery. Canonical project files
-remain authoritative instead of introducing a second content database; opaque
-main-process grants isolate file authority from renderer display paths. Stable
-user data survives ZIP replacement, and an opt-in `.icproj` filename association
-avoids taking over every `.json` file. Web Save remains Cloud-backed. The older
-paragraphs below record the preview's successive, smaller boundaries.
-
-The minimum desktop follow-up extends the preview to file-bound Save/Save As,
-recent Projects and all-tab close protection, using the same Project protocol
-and upstream save coordination. Main-process grants own paths and acknowledged
-bytes; the renderer cannot supply write authority. See the desktop file ownership
-section in [persistence and recovery](../specs/persistence-and-recovery.md).
-Web Cloud Save is unchanged. Palette/grid/Visio/schema fork migrations and formal
-installer/update work are deferred after this minimum version. The paragraph
-below records the original export-only preview boundary.
-
-Add an isolated Electron preview alongside the Web/loopback products to test
-bundled rendering and canonical file roundtrips. It uses an application origin,
-no listening socket, and blocked external navigation/network. It does not
-change the Web Save contract or introduce a second Project schema. Its first
-file workflow is explicit export/import, not native file binding; see the
-[preview contract](../specs/persistence-and-recovery.md#internal-desktop-preview).
-The full D-A native file lifecycle remains separate from this preview.
+The offline desktop adds a default user-owned project library, independent
+Save As, three previous save versions and checked workspace recovery.
+Canonical project files remain authoritative instead of introducing a second
+content database; opaque main-process grants isolate file authority from
+renderer display paths. Stable user data survives ZIP replacement, and an
+opt-in `.icproj` filename association avoids taking over every `.json` file.
+Web Save remains Cloud-backed. See the desktop file ownership section in
+[persistence and recovery](../specs/persistence-and-recovery.md).

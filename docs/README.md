@@ -18,7 +18,6 @@ archive of completed plans.
 | [Testing](testing/README.md)                                             | Validation policy and contract ownership                                |
 | [Development workflow](development-workflow.md)                          | Original-skill stages, handoff and completion boundaries                |
 | [Skill references](../references/README.md#development-skill-references) | Fixed originals, setup, installation and updates                        |
-| [Experience](experience/README.md)                                       | Human-requested, evidence-backed reusable lessons                       |
 
 ## Contributor reading order
 
@@ -72,8 +71,6 @@ about the current system. Reuse the existing topic owner before creating a file.
 - **Roadmaps:** unresolved outcomes and acceptance boundaries only. Local task
   plans, progress, completed work packages and delivery evidence belong in
   ignored `plan/` or the owning commit/PR, not in current product documentation.
-- **Experience:** human-requested transferable judgment with evidence and limits,
-  never another contract, path inventory or implementation diary.
 
 Architecture and indexes provide navigation, not another copy of each topic.
 Templates are starting points, not mandatory forms: omit empty or irrelevant
