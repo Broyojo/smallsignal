@@ -31,7 +31,6 @@ import {
   defaultHighlightStyle,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { json } from "@codemirror/lang-json";
 import { searchKeymap } from "@codemirror/search";
 
 import { spiceCodeLanguage } from "../simulation/code-spice-language";
@@ -62,6 +61,26 @@ interface Props {
 }
 
 const externalUpdate = Annotation.define<boolean>();
+
+// JSON mode loads only when a JSON view opens: the Netlist panel, open by
+// default, needs SPICE alone (#1673).
+let jsonLanguage: Extension | undefined;
+let jsonLanguageLoad: Promise<Extension> | undefined;
+function loadJsonLanguage(): Promise<Extension> {
+  jsonLanguageLoad ??= import("@codemirror/lang-json").then(
+    ({ json }) => (jsonLanguage = json()),
+    (error: unknown) => {
+      // The next JSON view tries again.
+      jsonLanguageLoad = undefined;
+      throw error;
+    },
+  );
+  return jsonLanguageLoad;
+}
+function languageExtension(language: ProjectTextLanguage): Extension {
+  // Until JSON mode arrives the text shows uncoloured.
+  return language === "json" ? (jsonLanguage ?? []) : spiceCodeLanguage;
+}
 
 export interface HighlightedRange {
   from: number;
@@ -127,6 +146,7 @@ export default function ProjectTextEditor(props: Props) {
   const latest = useRef(props);
   latest.current = props;
   const configuration = useRef(new Compartment());
+  const language = useRef(new Compartment());
 
   useLayoutEffect(() => {
     if (!parent.current) return;
@@ -149,6 +169,7 @@ export default function ProjectTextEditor(props: Props) {
           highlightField,
           bracketMatching(),
           syntaxHighlighting(defaultHighlightStyle),
+          language.current.of(languageExtension(read().language)),
           configuration.current.of(configuredExtensions(read())),
           keymap.of([
             { key: "Shift-Enter", run: insertNewline },
@@ -203,7 +224,29 @@ export default function ProjectTextEditor(props: Props) {
     viewRef.current?.dispatch({
       effects: configuration.current.reconfigure(configuredExtensions(props)),
     });
-  }, [props.ariaLabel, props.invalid, props.language, props.readOnly]);
+  }, [props.ariaLabel, props.invalid, props.readOnly]);
+
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: language.current.reconfigure(languageExtension(props.language)),
+    });
+    if (props.language !== "json" || jsonLanguage) return;
+    let current = true;
+    loadJsonLanguage().then(
+      (extension) => {
+        if (current)
+          view.dispatch({ effects: language.current.reconfigure(extension) });
+      },
+      () => {
+        // A failed load leaves the code readable and editable, uncoloured.
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [props.language]);
 
   useLayoutEffect(() => {
     const view = viewRef.current;
@@ -273,7 +316,6 @@ export default function ProjectTextEditor(props: Props) {
 
 function configuredExtensions(props: Props): Extension[] {
   return [
-    props.language === "json" ? json() : spiceCodeLanguage,
     // Read-only text still takes focus and a cursor: a click on a line is how
     // it names that line's part, and its text can be selected and copied.
     EditorState.readOnly.of(Boolean(props.readOnly)),

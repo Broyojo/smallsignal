@@ -7,11 +7,11 @@ import type { SymbolResolver } from "@icm/symbols";
 import { AnnotationPropertyCodeEditor } from "./annotation-property-code-editor";
 import {
   parseRoutePropertyCode,
-  routePropertyCodeAdapter,
   routePropertyCodeValue,
   serializeRoutePropertyCode,
   type RoutePropertyCodeValue,
 } from "./route-property-code";
+import { routePropertyCodeAdapter } from "./route-property-code-assists";
 
 type Route = SchematicDocument["routes"][number];
 

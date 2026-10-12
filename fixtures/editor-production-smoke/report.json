@@ -12,8 +12,18 @@
   "editorLoadingScreens": [
     "Loading editor…"
   ],
+  "editorNetlistLayoutChangedOnLoad": false,
   "editorSimulationServiceLoaded": false,
   "editorAgentRuntimeLoaded": false,
   "editorAgentRuntimePreloaded": false,
-  "routePreloadBeforeStylesheets": true
+  "routePreloadBeforeStylesheets": true,
+  "editorFirstLoadJsonParser": false,
+  "editorJsonParserLoaded": false,
+  "editorSchematicFonts": [
+    "Metropolis-Bold.schematic.woff2 link",
+    "Metropolis-BoldItalic.schematic.woff2 link",
+    "Metropolis-Regular.schematic.woff2 link",
+    "Metropolis-RegularItalic.schematic.woff2 link"
+  ],
+  "artifactCodecWorkerBundlesModel": false
 }

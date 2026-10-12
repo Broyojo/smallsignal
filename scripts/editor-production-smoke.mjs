@@ -23,6 +23,24 @@ async function builtJavaScriptContains(needle) {
   return contents.some((content) => content.includes(needle));
 }
 
+// Whether a script the route preloads, and so every first visit downloads,
+// contains the needle. Read from the built page, not from one loaded page,
+// so code that loads later (the Netlist panel's editor) does not count.
+async function routePreloadContains(html, route, needle) {
+  const match = new RegExp(
+    `const ${route}Resources = (\\[\\[.*?\\]\\]);`,
+    "s",
+  ).exec(html);
+  if (!match) throw new Error(`No ${route} preload resources in index.html`);
+  const scripts = JSON.parse(match[1])
+    .filter(([rel]) => rel === "modulepreload")
+    .map(([, href]) => href.replace(/^\/+/u, ""));
+  const contents = await Promise.all(
+    scripts.map((path) => readFile(resolve(editorDist, path), "utf8")),
+  );
+  return contents.some((content) => content.includes(needle));
+}
+
 async function loadedJavaScriptContains(page, needle) {
   const paths = await page.evaluate(() =>
     performance
@@ -71,17 +89,50 @@ async function loadedStylesheetContains(page, needle) {
   return contents.some((content) => content.includes(needle));
 }
 
+// Where the Netlist panel's code sits: the line-number gutter's width and
+// the first character of code, relative to the panel's code box. "plain" is
+// code with no gutter, such as a bare text box.
+function netlistCodeLayout() {
+  const view = document.querySelector(".netlist-code-viewport > *");
+  if (!view) return null;
+  const gutter = view.querySelector(".cm-gutters, .static-code-gutter");
+  const content = view.querySelector(".cm-content, .static-code-content");
+  if (!gutter || !content) return "plain";
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node && !/\S/u.test(node.data)) node = walker.nextNode();
+  if (!node) return "empty";
+  const start = node.data.search(/\S/u);
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, start + 1);
+  const box = view.getBoundingClientRect();
+  const text = range.getBoundingClientRect();
+  const edge = gutter.getBoundingClientRect();
+  // The middle of a line, unlike its glyphs' top, hardly moves with the
+  // font: a web font arriving meanwhile is not a change of layout.
+  return [edge.width, text.x - box.x, text.y + text.height / 2 - box.y];
+}
+
 // Every loading screen a first /editor visit reveals, in order, on a fresh
 // profile over a slow link where the route's chunks arrive over time. React
 // keeps a revealed fallback for at least 300 ms, so each further stage costs
-// that much (#1645).
+// that much (#1645). The Netlist panel, open by default, loads its code
+// editor after the editor appears; whatever it shows first must already be
+// laid out as that editor lays out its code (#1673).
 async function editorLoadingScreensOf(browser, url) {
   const context = await browser.newContext({ serviceWorkers: "block" });
   try {
     const page = await context.newPage();
+    await page.addInitScript(
+      `window.__icmNetlistCodeLayout = ${netlistCodeLayout}`,
+    );
     await page.addInitScript(() => {
       const seen = (window.__icmLoadingScreens = []);
       new MutationObserver((records) => {
+        // Observers run before the browser paints what the records added.
+        window.__icmFirstNetlistLayout ??=
+          window.__icmNetlistCodeLayout() ?? undefined;
         for (const record of records)
           for (const node of record.addedNodes) {
             if (!(node instanceof Element)) continue;
@@ -103,7 +154,30 @@ async function editorLoadingScreensOf(browser, url) {
     await page.waitForSelector('[data-testid="schematic-canvas"]', {
       timeout: 30_000,
     });
-    return await page.evaluate(() => window.__icmLoadingScreens);
+    const screens = await page.evaluate(() => window.__icmLoadingScreens);
+    await page.waitForSelector(".netlist-code-viewport .cm-content", {
+      timeout: 30_000,
+    });
+    const [first, loaded] = await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() =>
+              done([
+                window.__icmFirstNetlistLayout,
+                window.__icmNetlistCodeLayout(),
+              ]),
+            ),
+          ),
+        ),
+    );
+    // Within a pixel: subpixel text positions are not a visible move.
+    const netlistLayoutChangedOnLoad = !(
+      Array.isArray(first) &&
+      Array.isArray(loaded) &&
+      first.every((value, index) => Math.abs(value - loaded[index]) <= 1)
+    );
+    return { screens, netlistLayoutChangedOnLoad };
   } finally {
     await context.close();
   }
@@ -126,7 +200,10 @@ async function main() {
   let galleryPdfRuntimeLoaded = true;
   let editorPdfRuntimeLoaded = true;
   let editorLoadingScreens = [];
+  let editorNetlistLayoutChangedOnLoad = true;
   let editorSimulationServiceLoaded = true;
+  let editorSchematicFonts = [];
+  let editorJsonParserLoaded = true;
   let editorAgentRuntimeLoaded = true;
   try {
     server = await preview({
@@ -140,7 +217,10 @@ async function main() {
         ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
         : { channel: process.env.CI ? undefined : "chrome" },
     );
-    editorLoadingScreens = await editorLoadingScreensOf(browser, url);
+    ({
+      screens: editorLoadingScreens,
+      netlistLayoutChangedOnLoad: editorNetlistLayoutChangedOnLoad,
+    } = await editorLoadingScreensOf(browser, url));
     const page = await browser.newPage();
     // This acceptance checks the hosted Gallery contract on a loopback server.
     // Ordinary loopback Examples have their own browser workflow.
@@ -211,11 +291,32 @@ async function main() {
       page,
       "browser-pdf-",
     );
+    // The schematic faces the canvas asked for, by name and initiator
+    // (#1673).
+    editorSchematicFonts = await page.evaluate(() =>
+      performance
+        .getEntriesByType("resource")
+        .filter((entry) => /\.schematic-[^/]*$/u.test(entry.name))
+        .map(
+          (entry) =>
+            `${new URL(entry.name).pathname
+              .replace(/^.*\//u, "")
+              .replace(
+                /\.schematic-.*(\.\w+)$/u,
+                ".schematic$1",
+              )} ${entry.initiatorType}`,
+        )
+        .sort(),
+    );
     // Netlist is requested by the default editor workspace. Its CodeMirror
     // runtime must load here; only the Gallery keeps editor code deferred.
     await page.waitForSelector(
       '[aria-label="Netlist code"][contenteditable="true"]',
     );
+    // That editor's SPICE mode needs no JSON grammar: a JSON view loads it
+    // when one opens (#1673).
+    await page.waitForLoadState("networkidle");
+    editorJsonParserLoaded = await loadedJavaScriptContains(page, "JsonText");
     await page.getByTestId("examples-toggle").click();
     await page.getByTestId("examples-panel").waitFor();
     await page.waitForLoadState("networkidle");
@@ -295,6 +396,24 @@ async function main() {
   const routePreloadBeforeStylesheets =
     routePreload !== -1 &&
     (firstStylesheet === -1 || routePreload < firstStylesheet);
+  // The artifact codec worker only compresses and digests files; the
+  // circuit model's schema (its "structureRevision" field) has no place in
+  // it (#1673).
+  const codecWorkers = (await readdir(resolve(editorDist, "assets"))).filter(
+    (name) => /^artifact-codec\.worker-.*\.js$/u.test(name),
+  );
+  if (codecWorkers.length !== 1)
+    throw new Error("The build has no single artifact codec worker");
+  const artifactCodecWorkerBundlesModel = (
+    await readFile(resolve(editorDist, "assets", codecWorkers[0]), "utf8")
+  ).includes("structureRevision");
+  // The JSON grammar behind the property code views' inline controls loads
+  // with those views (#1673). "JsonText" is its top node's name.
+  const editorFirstLoadJsonParser = await routePreloadContains(
+    builtHtml,
+    "editor",
+    "JsonText",
+  );
   // Nor does the /editor route preload list name the runtime's chunk.
   const editorRoutePreload =
     /const editorResources = (\[\[.*?\]\]);/su.exec(builtHtml)?.[1] ?? "";
@@ -313,10 +432,15 @@ async function main() {
     galleryPdfRuntimeLoaded,
     editorPdfRuntimeLoaded,
     editorLoadingScreens,
+    editorNetlistLayoutChangedOnLoad,
     editorSimulationServiceLoaded,
     editorAgentRuntimeLoaded,
     editorAgentRuntimePreloaded,
     routePreloadBeforeStylesheets,
+    editorFirstLoadJsonParser,
+    editorJsonParserLoaded,
+    editorSchematicFonts,
+    artifactCodecWorkerBundlesModel,
   };
 
   if (check) {
@@ -352,6 +476,11 @@ async function main() {
       `Editor revealed more than one loading screen: ${report.editorLoadingScreens.join(", ")}`,
     );
   }
+  if (report.editorNetlistLayoutChangedOnLoad) {
+    throw new Error(
+      "The Netlist panel's code moved when its code editor loaded",
+    );
+  }
   if (report.editorSimulationServiceLoaded) {
     throw new Error("Editor loaded the simulation service on startup");
   }
@@ -360,6 +489,30 @@ async function main() {
   }
   if (!report.routePreloadBeforeStylesheets) {
     throw new Error("Route preload script waits for a stylesheet");
+  }
+  if (report.editorFirstLoadJsonParser) {
+    throw new Error("Editor first load includes the JSON property-code parser");
+  }
+  if (report.editorJsonParserLoaded) {
+    throw new Error("Opening the editor loaded the JSON parser");
+  }
+  // Every face is WOFF2. Metropolis, which every label uses, comes from the
+  // route preload; DejaVu Sans loads on demand when a symbol needs it.
+  const metropolis = report.editorSchematicFonts.filter((font) =>
+    font.startsWith("Metropolis-"),
+  );
+  const misfetched = report.editorSchematicFonts.filter(
+    (font) =>
+      !/\.woff2 /u.test(font) ||
+      (font.startsWith("Metropolis-") && !font.endsWith(" link")),
+  );
+  if (metropolis.length === 0 || misfetched.length > 0) {
+    throw new Error(
+      `Metropolis must be preloaded WOFF2, other faces WOFF2: ${misfetched.join(", ") || "no Metropolis loaded"}`,
+    );
+  }
+  if (report.artifactCodecWorkerBundlesModel) {
+    throw new Error("The artifact codec worker bundles the circuit model");
   }
   if (report.consoleErrors.length > 0) {
     throw new Error(

@@ -45,7 +45,7 @@ describe("a PNG carries the schematic faces (#1413)", () => {
     const fetched: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
       fetched.push(url);
-      return new Response(new Uint8Array([119, 79, 70, 70]));
+      return new Response(new Uint8Array([119, 79, 70, 50]));
     });
     await rasterizeFormalSvgInBrowser(labelled);
     const svg = await drawn[0]!.text();
@@ -61,7 +61,7 @@ describe("a PNG carries the schematic faces (#1413)", () => {
     ).toHaveLength(4);
     expect(
       rules.every((rule) =>
-        rule.includes('url("data:font/woff;base64,d09GRg==")'),
+        rule.includes('url("data:font/woff2;base64,d09GMg==")'),
       ),
     ).toBe(true);
     expect(rules.every((rule) => rule.includes("font-display:swap"))).toBe(

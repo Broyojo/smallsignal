@@ -8,11 +8,11 @@ import { resolveAnnotationText, resolveVisualAnchor } from "@icm/derived";
 import type { SymbolResolver } from "@icm/symbols";
 import { AnnotationPropertyCodeEditor } from "./annotation-property-code-editor";
 import {
-  annotationPropertyAdapter,
   annotationPropertyValue,
   parseAnnotationPropertyCode,
   serializeAnnotationPropertyCode,
 } from "./annotation-property-code";
+import { annotationPropertyAdapter } from "./annotation-property-code-assists";
 
 export function AnnotationColorProperties({
   annotation,

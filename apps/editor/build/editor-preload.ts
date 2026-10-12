@@ -54,6 +54,7 @@ export function editorPreload(): Plugin {
         function resourcesFor(entryName: string): string[][] {
           const scripts = new Set<string>();
           const styles = new Set<string>();
+          const fonts = new Set<string>();
           function visit(name: string) {
             if (scripts.has(name)) return;
             const chunk = bundle![name];
@@ -61,21 +62,33 @@ export function editorPreload(): Plugin {
             scripts.add(name);
             const metadata = (
               chunk as typeof chunk & {
-                viteMetadata?: { importedCss: Set<string> };
+                viteMetadata?: {
+                  importedCss: Set<string>;
+                  importedAssets: Set<string>;
+                };
               }
             ).viteMetadata;
             metadata?.importedCss.forEach((css) => styles.add(css));
+            // Metropolis draws every schematic label, so the canvas asks for
+            // its faces as soon as it appears (#1673). DejaVu Sans only
+            // draws the symbols Metropolis lacks and loads when one shows.
+            metadata?.importedAssets.forEach((asset) => {
+              if (/(?:^|\/)Metropolis-[^/]*\.woff2$/u.test(asset))
+                fonts.add(asset);
+            });
             chunk.imports.forEach(visit);
           }
           visit(entryName);
           return [...scripts]
             .map((name) => ["modulepreload", "/" + name])
-            .concat([...styles].map((name) => ["preload", "/" + name]));
+            .concat(
+              [...styles, ...fonts].map((name) => ["preload", "/" + name]),
+            );
         }
         const editorResources = resourcesFor(editorEntry.fileName);
         const galleryResources = resourcesFor(galleryEntry.fileName);
         const agentResources = resourcesFor(agentRuntime.fileName);
-        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const agentResources = ${JSON.stringify(agentResources).replaceAll("<", "\\u003c")}; const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const routeResources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? editorResources : []; let agentNeeded = false; try { agentNeeded = new URLSearchParams(location.search).get("agent") === "pair" || sessionStorage.getItem(${JSON.stringify(AGENT_SESSION_RECOVERY_STORAGE_KEY)}) !== null; } catch {} const resources = agentNeeded ? routeResources.concat(agentResources.filter(([, href]) => !routeResources.some((resource) => resource[1] === href))) : routeResources; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = "style"; document.head.appendChild(link); }</script>`;
+        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const agentResources = ${JSON.stringify(agentResources).replaceAll("<", "\\u003c")}; const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const routeResources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? editorResources : []; let agentNeeded = false; try { agentNeeded = new URLSearchParams(location.search).get("agent") === "pair" || sessionStorage.getItem(${JSON.stringify(AGENT_SESSION_RECOVERY_STORAGE_KEY)}) !== null; } catch {} const resources = agentNeeded ? routeResources.concat(agentResources.filter(([, href]) => !routeResources.some((resource) => resource[1] === href))) : routeResources; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = href.endsWith(".css") ? "style" : "font"; document.head.appendChild(link); }</script>`;
         const first = html.search(
           /<(?:link\b[^>]*\brel="stylesheet"|script\b[^>]*\btype="module")/u,
         );

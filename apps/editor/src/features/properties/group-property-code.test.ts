@@ -3,12 +3,14 @@ import type { Instance } from "@icm/model";
 
 import {
   formatGroupPropertyCode,
-  groupPropertyCodeChanges,
-  groupPropertyCodeSpans,
   groupPropertyItemNames,
   parseGroupPropertyCode,
   type GroupPropertyCodeContext,
 } from "./group-property-code";
+import {
+  groupPropertyCodeChanges,
+  groupPropertyCodeSpans,
+} from "./group-property-code-assists";
 import {
   groupVisibilityTargets,
   planGroupPropertyCodeEdits,

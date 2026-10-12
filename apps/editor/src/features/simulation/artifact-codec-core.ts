@@ -1,5 +1,8 @@
 import type { ArtifactRef } from "@icm/simulation-service/contract";
-import { MAX_ARTIFACT_BYTES, sha256 } from "@icm/simulation-service/files";
+import {
+  MAX_ARTIFACT_BYTES,
+  sha256,
+} from "@icm/simulation-service/artifact-bytes";
 
 export type EncodedArtifact = {
   body: Blob;

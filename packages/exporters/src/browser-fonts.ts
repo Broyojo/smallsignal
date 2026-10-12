@@ -1,11 +1,11 @@
-import sansUrl from "../fonts/DejaVuSans.schematic.woff?url";
-import sansBoldUrl from "../fonts/DejaVuSans-Bold.schematic.woff?url";
-import sansBoldObliqueUrl from "../fonts/DejaVuSans-BoldOblique.schematic.woff?url";
-import sansObliqueUrl from "../fonts/DejaVuSans-Oblique.schematic.woff?url";
-import metropolisUrl from "../fonts/Metropolis-Regular.schematic.woff?url";
-import metropolisBoldUrl from "../fonts/Metropolis-Bold.schematic.woff?url";
-import metropolisItalicUrl from "../fonts/Metropolis-RegularItalic.schematic.woff?url";
-import metropolisBoldItalicUrl from "../fonts/Metropolis-BoldItalic.schematic.woff?url";
+import sansUrl from "../fonts/DejaVuSans.schematic.woff2?url";
+import sansBoldUrl from "../fonts/DejaVuSans-Bold.schematic.woff2?url";
+import sansBoldObliqueUrl from "../fonts/DejaVuSans-BoldOblique.schematic.woff2?url";
+import sansObliqueUrl from "../fonts/DejaVuSans-Oblique.schematic.woff2?url";
+import metropolisUrl from "../fonts/Metropolis-Regular.schematic.woff2?url";
+import metropolisBoldUrl from "../fonts/Metropolis-Bold.schematic.woff2?url";
+import metropolisItalicUrl from "../fonts/Metropolis-RegularItalic.schematic.woff2?url";
+import metropolisBoldItalicUrl from "../fonts/Metropolis-BoldItalic.schematic.woff2?url";
 
 /**
  * Metropolis approximates the reference textbook's Proxima Nova lettering.
@@ -70,7 +70,7 @@ function fontFaceRule(face: (typeof FACES)[number], source: string): string {
  * first needs it.
  */
 export const schematicWebFontFaceCss = FACES.map((face) =>
-  fontFaceRule(face, `url("${face.url}") format("woff")`),
+  fontFaceRule(face, `url("${face.url}") format("woff2")`),
 ).join("");
 
 let inlined: Promise<string> | undefined;
@@ -94,7 +94,7 @@ export function inlineSchematicWebFontFaceCss(
         binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
       return fontFaceRule(
         face,
-        `url("data:font/woff;base64,${btoa(binary)}") format("woff")`,
+        `url("data:font/woff2;base64,${btoa(binary)}") format("woff2")`,
       );
     }),
   )

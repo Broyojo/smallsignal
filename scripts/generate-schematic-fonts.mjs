@@ -9,7 +9,9 @@
  * (scripts/unkern-metropolis-underscore.py); the committed sources stay as
  * published.
  *
- * Needs Python's fontTools (python3 -m fontTools.subset). --check rebuilds
+ * Needs Python's fontTools (python3 -m fontTools.subset) with brotli, which
+ * WOFF2 is compressed with (pip install fonttools brotli; the committed faces
+ * were written with fontTools 4.60.2 and brotli 1.2.0). --check rebuilds
  * into a temporary directory and fails when a committed face differs. A
  * local check: the faces change only with this script or the font package.
  */
@@ -92,14 +94,16 @@ function subset(face, directory, metropolis) {
       "fontTools.subset",
       join(face.startsWith("Metropolis-") ? metropolis : ttf, `${face}.ttf`),
       `--unicodes=${SCHEMATIC_FONT_UNICODES.join(",")}`,
-      "--flavor=woff",
+      // WOFF2 is about a quarter smaller than WOFF, and every browser the
+      // editor supports reads it (#1673).
+      "--flavor=woff2",
       // Hinting is most of each face; browsers that use it draw well
       // without, and the advances label measurement reads are unchanged.
       "--no-hinting",
       // Every name record, the copyright and licence with them, as the
       // licence asks of a copy.
       "--name-IDs=*",
-      `--output-file=${join(directory, `${face}.schematic.woff`)}`,
+      `--output-file=${join(directory, `${face}.schematic.woff2`)}`,
     ],
     { encoding: "utf8" },
   );
@@ -126,7 +130,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const face of SCHEMATIC_FONT_FACES) {
       subset(face, directory, metropolis);
       if (!check) continue;
-      const name = `${face}.schematic.woff`;
+      const name = `${face}.schematic.woff2`;
       if (
         !readFileSync(join(directory, name)).equals(
           readFileSync(join(output, name)),

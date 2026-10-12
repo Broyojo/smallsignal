@@ -359,8 +359,7 @@
 }
 .project-source-editor,
 .project-code-panel > textarea,
-.netlist-profile-code > textarea,
-.netlist-code-viewport > textarea {
+.netlist-profile-code > textarea {
   width: 100%;
   height: 60dvh;
   min-height: 24rem;
@@ -372,17 +371,17 @@
   color: var(--icm-text);
   font: 12px/1.6 var(--font-mono);
   tab-size: 2;
+  /* Above the first line and below the last, in the code and its gutter. */
+  --code-block-padding: 10px;
 }
 .project-code-panel > textarea,
-.netlist-profile-code > textarea,
-.netlist-code-viewport > textarea {
+.netlist-profile-code > textarea {
   padding: 10px;
   resize: vertical;
 }
 .project-source-editor[data-invalid="true"],
 .project-code-panel > textarea[aria-invalid="true"],
-.netlist-profile-code > textarea[aria-invalid="true"],
-.netlist-code-viewport > textarea[aria-invalid="true"] {
+.netlist-profile-code > textarea[aria-invalid="true"] {
   border-color: var(--icm-error);
 }
 .project-source-editor:focus-within {
@@ -411,30 +410,60 @@
 .project-source-editor .cm-code-warning {
   background: rgb(var(--icm-warning-rgb) / 24%);
 }
-.project-source-editor .cm-scroller {
+.project-source-editor .cm-scroller,
+.static-code-scroller {
   overflow: auto;
   font-family: inherit;
   line-height: 1.6;
 }
-.project-source-editor .cm-gutters {
+.project-source-editor .cm-gutters,
+.static-code-gutter {
   border-right: 1px solid var(--icm-border);
   background: var(--icm-surface-muted);
   color: var(--icm-text-muted);
 }
-.project-source-editor .cm-lineNumbers .cm-gutterElement {
+.project-source-editor .cm-lineNumbers .cm-gutterElement,
+.static-code-gutter > div {
   min-width: 2.25rem;
   padding: 0 9px 0 6px;
 }
-.project-source-editor .cm-content {
-  padding: 10px 0;
+.project-source-editor .cm-content,
+.static-code-content {
+  padding: var(--code-block-padding) 0;
   caret-color: var(--icm-text);
 }
-.project-source-editor .cm-line {
+.project-source-editor .cm-line,
+.static-code-content > div {
   padding: 0 12px 0 10px;
 }
 .project-source-editor .cm-activeLine,
-.project-source-editor .cm-activeLineGutter {
+.project-source-editor .cm-activeLineGutter,
+.static-code-view .static-code-active {
   background: color-mix(in srgb, var(--icm-accent) 7%, transparent);
+}
+/* The code editor's own layout, which its stylesheet gives it once loaded. */
+.static-code-scroller {
+  display: flex;
+  align-items: flex-start;
+  height: 100%;
+  white-space: pre;
+}
+.static-code-gutter {
+  position: sticky;
+  left: 0;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 100%;
+  padding-top: var(--code-block-padding);
+  text-align: right;
+}
+.static-code-gutter > div {
+  box-sizing: border-box;
+}
+.static-code-content {
+  flex: 2 0 auto;
+  box-sizing: border-box;
+  min-height: 100%;
 }
 /* The live netlist takes the room the dock has. Its code area grows with the
    netlist as far as the dock allows. The controls and findings under it may
@@ -450,8 +479,7 @@
   /* Ten lines are 214px and thirty 598px, at the editor's 19.2px line. */
   min-height: clamp(214px, var(--netlist-editor-height), 598px);
 }
-.netlist-code-viewport > .project-source-editor,
-.netlist-code-viewport > textarea {
+.netlist-code-viewport > .project-source-editor {
   height: 100%;
   min-height: 0;
 }
