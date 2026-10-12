@@ -2203,6 +2203,59 @@ test("native User Components bind an existing owner, guard unsaved text and keep
   await expect(manager).toContainText("Saved draft");
 });
 
+test("native Save draft keeps an existing placeholder owner's name and terminals", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const project = createEmptyProject("placeholder-owner", "Placeholder owner");
+  project.externalSubcircuitDefinitions.push({
+    id: "legacy",
+    name: "legacy_gain",
+    interfaceStatus: "declared",
+    terminals: [
+      { id: "a", name: "A", direction: "input" },
+      { id: "b", name: "B", direction: "output" },
+    ],
+    formalParameters: [{ name: "gain", defaultValue: "2" }],
+  });
+  await openProjectFile(page, project);
+  await awaitEditorReady(page);
+  // Cell Manager saves the interface-only owner's first draft.
+  let manager = await openExternalCircuit(page, "legacy_gain");
+  await button(manager, "Define implementation…").click();
+  await netlist(manager).fill(".subckt legacy_gain A B\n");
+  await text(manager, "More").click();
+  await button(manager, "Save draft").click();
+  await expect(manager.getByRole("status")).toContainText("Saved draft");
+  await manager.getByLabel("Close Cell Manager").click();
+  const linked = await readProject(page);
+  const source = linked.modelSources![0]!;
+  const owner = linked.externalSubcircuitDefinitions[0]!;
+  expect(owner).toEqual({
+    ...project.externalSubcircuitDefinitions[0],
+    implementation: { kind: "placeholder", sourceId: source.id },
+  });
+  // The native editor reopens that draft for the same owner, then names
+  // a different entry.
+  const editor = await openNativeComponent(page);
+  await authoringView(editor, "Circuit");
+  await choose(editor, "External model source owner", source.id);
+  await netlist(editor).fill(".subckt other_gain P Q\n");
+  await text(editor, "More").click();
+  await button(editor, "Save draft").click();
+  await expect(editor.getByRole("status")).toContainText("Saved draft");
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  const saved = await readProject(page);
+  expect(saved.externalSubcircuitDefinitions).toEqual([owner]);
+  expect(saved.modelSources![0]!.draft!.files[0]!.text).toBe(
+    ".subckt other_gain P Q\n",
+  );
+  manager = await openExternalCircuit(page, "legacy_gain");
+  await expect(netlist(manager)).toContainText(".subckt other_gain P Q");
+  await expect(manager).toContainText("Saved draft");
+});
+
 test("complete same-name custom artwork initializes checked mappings", async ({
   page,
   service,

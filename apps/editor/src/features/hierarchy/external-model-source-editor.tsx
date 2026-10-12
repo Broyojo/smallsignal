@@ -596,27 +596,37 @@ export function ExternalModelSourceEditor({
         },
       });
     }
-    // A draft naming no applied entry gets its own placeholder owner, but an
-    // applied owner keeps its binding: its draft is stored beside it. Any
-    // source counts, not only this one, so a draft never unbinds an owner
-    // applied elsewhere.
-    const ownerIsApplied = project.externalSubcircuitDefinitions.some(
-      (d) =>
-        d.id === selectedDefinitionId && d.implementation?.kind === "source",
+    // A draft never rewrites an owner the Project already has: its name,
+    // terminals and formal parameters stay, and callers keep their wiring.
+    // An applied owner (from any source) keeps its binding and the draft is
+    // stored beside it; another owner is only linked to this draft's source
+    // so reopening it finds the draft. Only a new id gets a placeholder owner.
+    const owner = project.externalSubcircuitDefinitions.find(
+      (d) => d.id === selectedDefinitionId,
     );
-    if ((!existing || !selectedDefinition) && !ownerIsApplied) {
+    if (owner) {
+      if (
+        owner.implementation?.kind !== "source" &&
+        owner.implementation?.sourceId !== sourceId
+      )
+        edits.push({
+          kind: "upsert_external_subcircuit_definition",
+          definition: {
+            ...owner,
+            implementation: { kind: "placeholder", sourceId },
+          },
+        });
+    } else {
       edits.push({
         kind: "upsert_external_subcircuit_definition",
         definition: {
-          ...definition,
           id: selectedDefinitionId,
           name:
-            definition?.name ??
             selected?.name ??
             inspection.entries[0]?.name ??
             "model_" + definitionId.slice(-8),
-          terminals: definition?.terminals ?? [],
-          formalParameters: definition?.formalParameters ?? [],
+          terminals: [],
+          formalParameters: [],
           interfaceStatus: "declared",
           implementation: { kind: "placeholder", sourceId },
         },
