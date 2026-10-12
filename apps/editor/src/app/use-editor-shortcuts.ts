@@ -1,5 +1,6 @@
 // The editor's keyboard shortcuts, and the outside press that closes open
 // menus and commits text being edited.
+import { gateAfterManualCloudSave } from "../components/arena-gate-request";
 import {
   useEffect,
   useLayoutEffect,
@@ -342,11 +343,12 @@ function createEditorShortcutHandler({
       if (event.key === "Escape") setUserComponentsOpen(false);
       return;
     }
-    // The source workbench owns its keyboard scope, including portalled menus.
+    // The source workbench owns its keyboard scope, including portalled
+    // menus, and so does the Arena gate over the editor.
     if (
       event.target instanceof Element &&
       event.target.closest(
-        ".simulation-code-workspace, [data-workspace-interaction], .inline-confirm",
+        ".simulation-code-workspace, [data-workspace-interaction], .inline-confirm, .arena-gate",
       )
     )
       return;
@@ -511,7 +513,7 @@ function createEditorShortcutHandler({
         void (nativeProjectStore
           ? saveProjectToNative()
           : projectStore
-            ? saveProjectToCloud()
+            ? saveProjectToCloud().then(gateAfterManualCloudSave)
             : exportProjectFile());
         return;
       case "open":

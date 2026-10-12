@@ -1,4 +1,5 @@
 import { editorSnapshotDerived } from "./editor-snapshot-derived-cache";
+import { gateAfterManualCloudSave } from "../components/arena-gate-request";
 import {
   holdWorkspaceWindow,
   workspaceWindowId,
@@ -1925,7 +1926,9 @@ function WorkspaceEditor({
     sessionId: projectSessionId,
     resolver,
     index: projectConnectivityIndex,
-    save: saveProjectToCloud,
+    // Check and save is a manual Cloud Save, after which the Arena gate opens.
+    save: (candidate) =>
+      saveProjectToCloud(candidate).then(gateAfterManualCloudSave),
     beforeCheck: captureAuthoredProject,
     isSaving: isSaveInFlight,
     openIssues: openIssuesPanel,

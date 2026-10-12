@@ -1,5 +1,9 @@
 // The editor's menus bound to its commands: the header with its project tabs,
 // File, Edit and Circuit menus and toolbars, and the canvas context menu.
+import {
+  gateAfterManualCloudSave,
+  requestArenaGate,
+} from "../components/arena-gate-request";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import {
   deriveRoutingAffectedClosure,
@@ -363,6 +367,8 @@ export function EditorMenuBar({
             onDeleteShelf={deleteShelfProject}
             onRefreshShelf={() => {
               void reloadCloudProjects();
+              // Every opening of the Cloud shelf opens the Arena gate.
+              requestArenaGate();
             }}
             onOpenShelf={(id) => {
               void openCloudProjectById(id, true);
@@ -435,7 +441,7 @@ export function EditorMenuBar({
           void (nativeProjectStore
             ? saveProjectToNative()
             : projectStore
-              ? saveProjectToCloud()
+              ? saveProjectToCloud().then(gateAfterManualCloudSave)
               : exportProjectFile()),
         onImportProject: (file) => void openProjectFile(file),
         onImportSpice: (files, namingProfile) =>

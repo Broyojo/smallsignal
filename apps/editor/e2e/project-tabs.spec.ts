@@ -526,6 +526,161 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
   ).toHaveCount(0);
 });
 
+/**
+ * A stand-in for the Schematic Arena's battle page: like the real page, it
+ * asks Arena for a Battle as it loads and sends each Vote with fetch.
+ */
+const ARENA_PAGE = `<!doctype html><title>Arena</title>
+<button id="vote" disabled>Vote</button><p id="state">Loading</p>
+<script>
+  let cast = 0;
+  fetch("/api/arena/battles/next", { method: "POST", body: "{}" }).then((r) => {
+    document.getElementById("state").textContent = r.ok ? "Battle" : "No battle";
+    document.getElementById("vote").disabled = !r.ok;
+  });
+  document.getElementById("vote").onclick = () =>
+    fetch("/api/arena/battles/b-" + ++cast + "/vote", {
+      method: "POST",
+      body: JSON.stringify({ choice: "A" }),
+    });
+</script>`;
+
+test("the Arena gate opens after a manual Cloud Save and on every Shelf opening, and closes after five new votes or when Arena has nothing to offer (#1681)", async ({
+  page,
+}) => {
+  await signIn(page, author);
+  let revision = 0;
+  await page.route("**/api/projects", (route) => {
+    if (route.request().method() !== "POST")
+      return route.fulfill({ json: { projects: [] } });
+    const body = route.request().postDataJSON();
+    return route.fulfill({
+      status: 201,
+      json: {
+        project: {
+          id: "cloud-gate",
+          name: body.name,
+          revision: ++revision,
+          schemaVersion: parseSavedProject(body.projectText).schemaVersion,
+          updatedAt: "2026-10-12T00:00:00Z",
+          projectText: body.projectText,
+        },
+      },
+    });
+  });
+  await page.route("**/api/projects/cloud-gate", (route) => {
+    const body = route.request().postDataJSON();
+    return route.fulfill({
+      json: {
+        project: {
+          id: "cloud-gate",
+          name: body.name,
+          revision: ++revision,
+          schemaVersion: parseSavedProject(body.projectText).schemaVersion,
+          updatedAt: "2026-10-12T00:00:00Z",
+          projectText: body.projectText,
+        },
+      },
+    });
+  });
+  // The Voter's own voted Battles, newest first; one voted before any gate.
+  const voted = ["old"];
+  let arenaUp = true;
+  let offering = true;
+  await page.route("**/api/arena/battles/past", (route) =>
+    arenaUp
+      ? route.fulfill({
+          json: {
+            battles: voted.map((id) => ({ id })),
+            more: false,
+            total: voted.length,
+          },
+        })
+      : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
+  );
+  await page.route("**/api/arena/battles/next", (route) =>
+    offering
+      ? route.fulfill({ status: 201, json: { id: "b-next" } })
+      : route.fulfill({
+          status: 404,
+          json: {
+            error: "exhausted",
+            message: "You've voted on every pairing.",
+          },
+        }),
+  );
+  await page.route("**/api/arena/battles/*/vote", (route) => {
+    voted.unshift(route.request().url().split("/").at(-2)!);
+    return route.fulfill({ json: { voted: true } });
+  });
+  await page.route(/\/schematic$/u, (route) =>
+    route.fulfill({ contentType: "text/html", body: ARENA_PAGE }),
+  );
+
+  await page.goto("/editor?new=1");
+  await awaitEditorReady(page);
+  const gate = page.getByTestId("arena-gate");
+  const close = gate.getByRole("button", { name: "Close", exact: true });
+  const count = page.getByTestId("arena-gate-count");
+
+  // The save completes first; then the gate opens and holds.
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(gate).toBeVisible();
+  expect(revision).toBe(1);
+  await expect(count).toHaveText("Voted 0 / 5");
+  await expect(close).toHaveAttribute("aria-disabled", "true");
+  await expect(gate).toContainText("Close unlocks after 5 new votes: 5 to go.");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.activeElement?.closest("[data-testid=arena-gate]") !== null,
+      ),
+    )
+    .toBe(true);
+  // Neither Escape, Close nor the backdrop gets past it yet.
+  await page.keyboard.press("Escape");
+  // Playwright waits for an aria-disabled button; a person can still press it.
+  await close.click({ force: true });
+  await page.mouse.click(4, 4);
+  await expect(gate).toBeVisible();
+
+  const arena = page.frameLocator('iframe[title="Schematic Arena battle"]');
+  await expect(arena.getByText("Battle", { exact: true })).toBeVisible();
+  for (let vote = 1; vote <= 5; vote++) {
+    await arena.getByRole("button", { name: "Vote" }).click();
+    await expect(count).toHaveText(`Voted ${vote} / 5`);
+  }
+  await expect(close).toHaveAttribute("aria-disabled", "false");
+  await close.click();
+  await expect(gate).toHaveCount(0);
+
+  // Every Shelf opening opens it again; with no Battle to offer, it closes at once.
+  offering = false;
+  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  await expect(gate).toBeVisible();
+  await expect(gate).toContainText(
+    "Arena has no battle for you right now, so you can close this.",
+  );
+  await gate.focus();
+  await page.keyboard.press("Escape");
+  await expect(gate).toHaveCount(0);
+
+  // An unreachable Arena never traps anyone either.
+  await placeComponentAt(page, "resistor", { x: 400, y: 240 });
+  arenaUp = false;
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(gate).toContainText(
+    "Arena can't be reached right now, so you can close this.",
+  );
+  await expect(
+    page.locator('iframe[title="Schematic Arena battle"]'),
+  ).toHaveCount(0);
+  await close.click();
+  await expect(gate).toHaveCount(0);
+  expect(revision).toBe(2);
+});
+
 test("plain C/V works between internal tabs when system clipboard permission is denied", async ({
   page,
 }) => {

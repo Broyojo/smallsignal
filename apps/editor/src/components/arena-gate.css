@@ -1,0 +1,105 @@
+/* The Arena gate (#1681): the Schematic Arena's battle page in a panel over
+   the whole page, with its count and the reason Close waits. */
+
+.arena-gate-backdrop {
+  position: fixed;
+  z-index: 2000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgb(55 53 47 / 36%);
+  backdrop-filter: blur(4px);
+}
+
+.arena-gate {
+  display: flex;
+  flex-direction: column;
+  width: min(80rem, 100%);
+  height: min(60rem, 100%);
+  overflow: hidden;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-lg);
+  background: var(--icm-surface);
+  box-shadow: var(--icm-shadow-lg);
+  color: var(--icm-text);
+}
+
+.arena-gate:focus {
+  outline: none;
+}
+
+.arena-gate-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--icm-border);
+}
+
+.arena-gate-header > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.arena-gate-header h2 {
+  margin: 0;
+  font-size: var(--icm-font-lg);
+}
+
+.arena-gate-status {
+  margin: 0.15rem 0 0;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-sm);
+}
+
+.arena-gate-status[data-nudged] {
+  color: var(--icm-warning);
+  font-weight: 600;
+}
+
+.arena-gate-count {
+  font-size: var(--icm-font-md);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.arena-gate-close {
+  height: var(--icm-control-h-lg);
+  padding: 0 0.9rem;
+  border: 1px solid transparent;
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-accent);
+  color: #fff;
+  font: inherit;
+  font-size: var(--icm-font-md);
+  cursor: pointer;
+}
+
+.arena-gate-close[aria-disabled="true"] {
+  border-color: var(--icm-border-strong);
+  background: var(--icm-surface-muted);
+  color: var(--icm-text-disabled);
+  cursor: not-allowed;
+}
+
+.arena-gate-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+}
+
+@media (max-width: 600px) {
+  .arena-gate-backdrop {
+    padding: 0;
+  }
+
+  .arena-gate {
+    border-radius: 0;
+  }
+
+  .arena-gate-header {
+    flex-wrap: wrap;
+  }
+}
