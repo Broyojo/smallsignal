@@ -302,8 +302,28 @@ function changesForPreparedCode(
     .sort((a, b) => a.from - b.from);
   // Validate requested values against the committed context, without committing
   // or replacing any other draft bytes (which may contain invalid values).
+  // A coupling entry typed into the draft has nothing committed to check
+  // against; one of its own choices is all its inline control can offer.
+  const draftOnly = Object.entries(values).filter(
+    ([path]) =>
+      /^coupling\.[^.]+\.(?:with|arrow)$/u.test(path) &&
+      !baselineSpans.some((item) => item.field.path === path),
+  );
+  for (const [path, value] of draftOnly) {
+    const field = spans.find((item) => item.field.path === path)!.field;
+    if (
+      field.kind === "boolean"
+        ? typeof value !== "boolean"
+        : !field.options?.some((option) => option.value === value)
+    )
+      return [];
+  }
+  const committed = Object.entries(values).filter(
+    ([path]) => !draftOnly.some(([draftPath]) => draftPath === path),
+  );
+  if (!committed.length) return sorted;
   let candidate = baseline;
-  const validationChanges = Object.entries(values).map(([path, value]) => {
+  const validationChanges = committed.map(([path, value]) => {
     const span = baselineSpans.find((item) => item.field.path === path);
     return span ? { ...span, insert: JSON.stringify(value) } : null;
   });

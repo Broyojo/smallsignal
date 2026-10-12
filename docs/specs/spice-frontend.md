@@ -126,6 +126,11 @@ evidence and in Circuit IR; it does not change parsing or elaboration.
 - Net identity is scoped to a cell. `0` and explicit `.global` names are global;
   other names are local.
 - Root candidates are defined cells not called by another bound subcircuit.
+- A `K` card of two inductors of its cell imports as a Document coupling
+  named as the card, its coupling text as k and each inductor dotted at the
+  pin its first node lands on. A card naming another count of inductors, a
+  missing or repeated inductor, or a pair already coupled is left out with
+  `SPICE_IMPORT_COUPLING_SKIPPED`.
 - Parameters and models retain raw expressions. Bounded condition evaluation
   does not simulate devices or execute analyses/control commands.
 

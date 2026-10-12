@@ -110,9 +110,12 @@ describe("ngspice 46 core structural baseline", () => {
         (item) => item.code === "SPICE_IMPORT_UNSUPPORTED_SYMBOL",
       ).length,
     ).toBeGreaterThan(0);
-    expect(imported.diagnostics.map((item) => item.code)).toContain(
+    // K12, the one card without terminals, couples L1 and L2 (#1648).
+    for (const code of [
       "SPICE_IMPORT_NON_VISUAL_INSTANCE",
-    );
+      "SPICE_IMPORT_COUPLING_SKIPPED",
+    ])
+      expect(imported.diagnostics.map((item) => item.code)).not.toContain(code);
   });
 
   it("recognizes every matrix dot command without turning it opaque", () => {
