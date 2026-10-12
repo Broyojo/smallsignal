@@ -48,6 +48,12 @@ when its host and path call for it:
   Arena page on AnalogArena's host, `/arena…` becoming `/schematic…`, with
   the query kept, through the [sign-in handoff](#sign-in-handoff) (`302` to
   its beginning). This is Analog Canvas's way to AnalogArena.
+  - A `/schematic` or `/schematic/…` request whose `Sec-Fetch-Dest` is
+    present and is not `document` stays and is forwarded: the editor's Arena
+    gate (cascode-ai/analog-canvas#1681) shows the battle page in a frame on
+    Analog Canvas's own origin, signed in as Analog Canvas is, and the frame
+    loads its files and pages there. A visit in the browser's window, or a
+    request without the header, still goes through the handoff.
 - Elsewhere (local development), `/arena` and `/arena/…` go to the same path
   under `/schematic` on the same origin (`301`).
 
@@ -212,6 +218,7 @@ signing out on one leaves the other signed in.
 Sign-in stays Analog Canvas's.
 `GET /api/auth/<github|google>/start?return=<return>` comes back to
 `<return>` after a successful sign-in when `<return>` is either
+
 - a path on the same origin whose normalized path is `/schematic` or starts
   with `/schematic/`, or
 - the full address of such a page on AnalogArena's host,
@@ -236,7 +243,8 @@ that asked for it and takes no return.
   binding: the vouched account and its facts, a forged header dropped, the
   credentials kept from Arena, other paths left alone (the account
   deletion's path among them), the failure answers, the hosts' redirects,
-  the sign-in handoff, the sign-in return, and
+  the sign-in handoff, the Arena gate's frame on Analog Canvas's host,
+  the sign-in return, and
   account deletion's call to Arena with its failures, retry and absent
   binding.
 - [`apps/editor/src/components/privacy-page.test.tsx`](../../apps/editor/src/components/privacy-page.test.tsx)

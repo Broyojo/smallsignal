@@ -216,6 +216,35 @@ describe("static shell cache policy", () => {
     expect(stored.size).toBe(0);
   });
 
+  it.each([
+    ["/schematic", "iframe", "navigate"],
+    ["/schematic/history", "iframe", "navigate"],
+    ["/schematic/assets/index-1.js", "script", "cors"],
+  ] as const)(
+    "leaves the Schematic Arena's %s in the Arena gate's frame to Arena",
+    (path, destination, mode) => {
+      // Arena's page is not the editor's shell: keeping it as the offline
+      // shell, or its files under the editor's build, would be wrong (#1681).
+      const { listeners, stored } = loadWorker((() =>
+        Promise.reject(
+          new Error("the service worker must not fetch Arena itself"),
+        )) as typeof fetch);
+      const request = new Request(`https://analog-canvas.test${path}`);
+      Object.defineProperty(request, "destination", { value: destination });
+      Object.defineProperty(request, "mode", { value: mode });
+      let responded = false;
+      listeners.get("fetch")!({
+        request,
+        respondWith: () => {
+          responded = true;
+        },
+        waitUntil: () => undefined,
+      });
+      expect(responded).toBe(false);
+      expect(stored.size).toBe(0);
+    },
+  );
+
   it("keeps a font file read with fetch(), as the PDF exporter reads its faces", async () => {
     const fetched = (path: string) => {
       const { listeners, stored } = loadWorker(
