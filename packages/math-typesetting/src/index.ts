@@ -5,15 +5,11 @@ import "@mathjax/src/js/input/tex/ams/AmsConfiguration.js";
 import "@mathjax/src/js/input/tex/cases/CasesConfiguration.js";
 import "@mathjax/src/js/input/tex/configmacros/ConfigMacrosConfiguration.js";
 import { mathjax } from "@mathjax/src/js/mathjax.js";
-// Bundle the existing font's sans glyphs with the lazy formula chunk. Worker
-// rendering cannot fetch MathJax font modules dynamically during conversion.
+// Every formula is set in the drawing's sans face, so its glyphs ship with the
+// formula chunk itself.
 import "@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif.js";
-import "@mathjax/mathjax-newcm-font/js/svg/dynamic/double-struck.js";
-import "@mathjax/mathjax-newcm-font/js/svg/dynamic/calligraphic.js";
-import "@mathjax/mathjax-newcm-font/js/svg/dynamic/script.js";
-import "@mathjax/mathjax-newcm-font/js/svg/dynamic/fraktur.js";
-import "@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace.js";
 import { MathJaxNewcmFont } from "@mathjax/mathjax-newcm-font/js/svg.js";
+import type { DynamicFile } from "@mathjax/src/js/output/common/FontData.js";
 import { SVG } from "@mathjax/src/js/output/svg.js";
 import {
   CANONICAL_FORMULA_FONT_SIZE,
@@ -121,29 +117,126 @@ function extractSvg(
   };
 }
 
+// The glyph files a formula loads the first time it reaches one of their
+// glyphs: the five alphabets (\mathbb, \mathcal, \mathscr, \mathfrak,
+// \mathtt and their bold and Unicode forms) and the files behind common
+// operators and symbols: math (\perp, \lll, \ggg, \triangleq, ...), shapes
+// (\checkmark, \sharp, \bigstar, ...) and arrows (\leadsto,
+// \rightsquigarrow, ...). Sans-serif is bundled, since every formula is set
+// in it. The remaining newcm files (other scripts, \digamma, \yen, accented
+// Latin letters) are left out to keep the Worker bundle small; a formula that
+// needs one is refused. Static import() paths let bundlers emit each file as
+// its own chunk and keep worker bundles self-contained: MathJax's own loader
+// would fetch a URL instead.
+const fontFileModules = {
+  "double-struck": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/double-struck.js"),
+  calligraphic: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/calligraphic.js"),
+  script: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/script.js"),
+  fraktur: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/fraktur.js"),
+  monospace: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace.js"),
+  math: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/math.js"),
+  shapes: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/shapes.js"),
+  arrows: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/arrows.js"),
+} satisfies Record<string, () => Promise<unknown>>;
+
+/** A MathJax glyph file that loads only when a formula reaches one of its glyphs. */
+export type FormulaFontFile = keyof typeof fontFileModules;
+
+/** The default loader; tests wrap it to observe or fail loads. */
+export async function loadFormulaFontFile(
+  file: FormulaFontFile,
+): Promise<void> {
+  await fontFileModules[file]();
+}
+
+function isFormulaFontFile(file: string): file is FormulaFontFile {
+  return Object.hasOwn(fontFileModules, file);
+}
+
+/** Tests replace the loader to observe or fail font file loads. */
+export interface FormulaTypesetterOptions {
+  loadFontFile?: (file: FormulaFontFile) => Promise<void>;
+}
+
 export interface FormulaTypesetter {
-  typesetSync(request: FormulaRequest): FormulaTypesetResult;
   typeset(request: FormulaRequest): Promise<FormulaTypesetResult>;
 }
 
+class FontFileUnavailableError extends Error {}
+
 class SchematicFormulaFont extends MathJaxNewcmFont {
-  constructor() {
+  /** Font file loads still in flight; no conversion may run beside one. */
+  readonly pendingLoads = new Set<Promise<void>>();
+  /** Started loads by file, kept once they succeed. */
+  private readonly fontFileLoads = new Map<string, Promise<void>>();
+
+  constructor(
+    private readonly loadFontFile: (file: FormulaFontFile) => Promise<void>,
+  ) {
     super();
-    // Explicit alphabet commands also appear in accepted formulas; the
-    // synchronous export path must not request their glyphs over the network.
-    for (const family of [
-      "sans-serif",
-      "double-struck",
-      "calligraphic",
-      "script",
-      "fraktur",
-      "monospace",
-    ])
-      SchematicFormulaFont.dynamicFiles[family]!.setup(this);
+    SchematicFormulaFont.dynamicFiles["sans-serif"]!.setup(this);
+  }
+
+  // MathJax calls this when a conversion first reaches a glyph of a font file
+  // it has not set up; it removes that glyph's placeholder and abandons the
+  // conversion until the returned promise settles.
+  override loadDynamicFile(dynamic: DynamicFile): Promise<void> {
+    const file = dynamic.file;
+    const existing = this.fontFileLoads.get(file);
+    if (existing) return existing;
+    const load = (
+      isFormulaFontFile(file)
+        ? this.loadFontFile(file).catch((error: unknown) => {
+            throw new FontFileUnavailableError(
+              error instanceof Error ? error.message : String(error),
+            );
+          })
+        : Promise.reject(
+            new Error(
+              `The formula uses characters the formula font does not include (MathJax ${file} glyphs).`,
+            ),
+          )
+    ).then(
+      () => dynamic.setup(this),
+      (error: unknown) => {
+        // Restore the placeholders so the next conversion reaches the file
+        // again rather than drawing those glyphs as missing.
+        this.fontFileLoads.delete(file);
+        this.defineDynamicCharacters({ [file]: dynamic });
+        throw error;
+      },
+    );
+    this.fontFileLoads.set(file, load);
+    this.pendingLoads.add(load);
+    const settle = () => this.pendingLoads.delete(load);
+    void load.then(settle, settle);
+    return load;
   }
 }
 
-export function createFormulaTypesetter(): FormulaTypesetter {
+function renderError(error: unknown): FormulaTypesetResult {
+  return {
+    ok: false,
+    diagnostic: {
+      code: "FORMULA_RENDER_ERROR",
+      message: error instanceof Error ? error.message : String(error),
+    },
+  };
+}
+
+function retryPromise(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "retry" in error
+    ? error.retry
+    : undefined;
+}
+
+export function createFormulaTypesetter(
+  options: FormulaTypesetterOptions = {},
+): FormulaTypesetter {
   const adaptor = liteAdaptor();
   RegisterHTMLHandler(adaptor);
   const input = new TeX({
@@ -152,13 +245,16 @@ export function createFormulaTypesetter(): FormulaTypesetter {
       differentialD: String.raw`\mathrm{d}`,
     },
   });
+  const font = new SchematicFormulaFont(
+    options.loadFontFile ?? loadFormulaFontFile,
+  );
   // A Formula artifact is one self-contained SVG. MathJax 4 enables inline
   // line breaking by default and otherwise emits sibling SVG fragments around
   // operators (for example, `x` and `+y`). That shape cannot be embedded as a
   // single drafting object, so keep the expression on one MathJax line and let
   // the editor's formula source panel handle horizontal overflow.
   const output = new SVG({
-    fontData: new SchematicFormulaFont(),
+    fontData: font,
     fontCache: "none",
     linebreaks: { inline: false },
   });
@@ -166,68 +262,86 @@ export function createFormulaTypesetter(): FormulaTypesetter {
     InputJax: input,
     OutputJax: output,
   });
+
+  function convert(request: FormulaRequest): FormulaTypesetResult {
+    const command =
+      request.bold === false
+        ? request.italic
+          ? "mathsfit"
+          : "mathsf"
+        : request.italic
+          ? "mathbfsfit"
+          : "mathbfsf";
+    // A surrounding default keeps explicit \mathrm/\mathit/etc. authored
+    // inside the expression effective. Do not rewrite the stored LaTeX.
+    const node = document.convert(`\\${command}{${request.latex}}`, {
+      display: request.display === "block",
+      em: CANONICAL_FORMULA_FONT_SIZE,
+      ex: CANONICAL_FORMULA_FONT_SIZE / 2,
+      containerWidth: 4096,
+    });
+    const markup = adaptor.outerHTML(node);
+    if (markup.includes('data-mml-node="merror"')) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "FORMULA_PARSE_ERROR",
+          message:
+            adaptor.textContent(node).trim() || "Invalid formula source.",
+        },
+      };
+    }
+    const artifact = extractSvg(markup, request);
+    return {
+      ok: true,
+      artifact: {
+        ...artifact,
+        sourceHash: formulaSourceHash(request),
+      },
+    };
+  }
+
   return {
-    typesetSync(request) {
+    async typeset(request) {
       const diagnostic = validateFormulaRequest(request);
       if (diagnostic) return { ok: false, diagnostic };
 
-      try {
-        const command =
-          request.bold === false
-            ? request.italic
-              ? "mathsfit"
-              : "mathsf"
-            : request.italic
-              ? "mathbfsfit"
-              : "mathbfsf";
-        // A surrounding default keeps explicit \mathrm/\mathit/etc. authored
-        // inside the expression effective. Do not rewrite the stored LaTeX.
-        const node = document.convert(`\\${command}{${request.latex}}`, {
-          display: request.display === "block",
-          em: CANONICAL_FORMULA_FONT_SIZE,
-          ex: CANONICAL_FORMULA_FONT_SIZE / 2,
-          containerWidth: 4096,
-        });
-        const markup = adaptor.outerHTML(node);
-        if (markup.includes('data-mml-node="merror"')) {
-          return {
-            ok: false,
-            diagnostic: {
-              code: "FORMULA_PARSE_ERROR",
-              message:
-                adaptor.textContent(node).trim() || "Invalid formula source.",
-            },
-          };
+      for (;;) {
+        // MathJax removed the placeholders of glyphs whose file is loading, so
+        // a conversion beside a pending load could draw them as missing. No
+        // await may separate this check from the conversion.
+        while (font.pendingLoads.size > 0)
+          await Promise.allSettled(font.pendingLoads);
+        try {
+          return convert(request);
+        } catch (error) {
+          const retry = retryPromise(error);
+          if (!(retry instanceof Promise) || !font.pendingLoads.has(retry))
+            return renderError(error);
+          try {
+            await retry;
+          } catch (loadError) {
+            if (!(loadError instanceof FontFileUnavailableError))
+              return renderError(loadError);
+            return {
+              ok: false,
+              diagnostic: {
+                code: "FORMULA_FONT_UNAVAILABLE",
+                message: `Formula glyphs could not be loaded: ${loadError.message}`,
+              },
+            };
+          }
         }
-        const artifact = extractSvg(markup, request);
-        return {
-          ok: true,
-          artifact: {
-            ...artifact,
-            sourceHash: formulaSourceHash(request),
-          },
-        };
-      } catch (error) {
-        return {
-          ok: false,
-          diagnostic: {
-            code: "FORMULA_RENDER_ERROR",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        };
       }
-    },
-    async typeset(request) {
-      return this.typesetSync(request);
     },
   };
 }
 
 const defaultFormulaTypesetter = createFormulaTypesetter();
 
-/** Synchronous boundary used by the deterministic schematic render pipeline. */
-export function typesetFormulaSync(
+/** Typesets one formula, loading the glyph files it uses before it resolves. */
+export function typesetFormula(
   request: FormulaRequest,
-): FormulaTypesetResult {
-  return defaultFormulaTypesetter.typesetSync(request);
+): Promise<FormulaTypesetResult> {
+  return defaultFormulaTypesetter.typeset(request);
 }
