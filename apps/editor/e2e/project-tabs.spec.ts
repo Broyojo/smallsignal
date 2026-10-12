@@ -569,7 +569,8 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   let arenaUp = true;
   let aiAccount = false;
   let pastReads = 0;
-  let season: string | null = "s1";
+  let battlesLeft = 40;
+  let sessionReads = 0;
   await page.route("**/api/arena/battles/past", (route) =>
     ++pastReads && aiAccount
       ? route.fulfill({ status: 403, json: { error: "ai-account" } })
@@ -580,10 +581,25 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
           })
         : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
   );
-  // Arena's example Battle is null exactly when no Season serves Battles.
-  await page.route("**/api/arena/example", (route) =>
-    route.fulfill({ json: { example: season && { task: { id: "T001" } } } }),
-  );
+  // Arena's session: the Battles left to this Voter (0 for an AI seat).
+  await page.route("**/api/arena/session", (route) => {
+    sessionReads++;
+    return route.fulfill({
+      json: {
+        signedIn: true,
+        aiAccount,
+        consented: true,
+        votes: 1,
+        battlesLeft: aiAccount ? 0 : battlesLeft,
+      },
+    });
+  });
+  // Chip Arena's animated Battle, stubbed: no test reaches chip-arena.com.
+  let previews = 0;
+  await context.route("https://chip-arena.com/**", (route) => {
+    previews++;
+    return route.fulfill({ contentType: "text/html", body: "<p>Battle</p>" });
+  });
   // Arena's own window, wherever it opens.
   await context.route(/\/schematic\?/u, (route) =>
     route.fulfill({ contentType: "text/html", body: "<title>Arena</title>" }),
@@ -604,10 +620,17 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await page.keyboard.press("ControlOrMeta+s");
   await expect(gate).toBeVisible();
   expect(revision).toBe(1);
-  await expect(gate).toContainText(
-    "Vote in 5 Schematic Arena battles to continue",
+  await expect(gate).toContainText("Vote on 5 Battles to continue");
+  // Five dots, none filled; readers hear the count.
+  await expect(count.locator("[aria-hidden]")).toHaveCount(5);
+  await expect(count.locator("[data-filled]")).toHaveCount(0);
+  await expect(count).toHaveText("Voted 0 of 5");
+  // Chip Arena's animated Battle, framed from chip-arena.com itself.
+  await expect(gate.locator("iframe")).toHaveAttribute(
+    "src",
+    "https://chip-arena.com/schematic/preview",
   );
-  await expect(count).toHaveText("Voted 0 / 5");
+  await expect.poll(() => previews).toBeGreaterThan(0);
   await expect(close).toHaveAttribute("aria-disabled", "true");
   await expect
     .poll(() =>
@@ -627,7 +650,7 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   // The battle page opens in a window of its own, marked as the gate's.
   const [arena] = await Promise.all([
     context.waitForEvent("page"),
-    gate.getByRole("link", { name: "Open the battle page" }).click(),
+    gate.getByRole("link", { name: "Start voting →" }).click(),
   ]);
   expect(new URL(arena.url()).pathname + new URL(arena.url()).search).toBe(
     "/schematic?from=canvas-gate",
@@ -637,29 +660,41 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
     votes.unshift({ id: `new-${vote}`, castAt: new Date().toISOString() });
   await arena.close();
   await page.bringToFront();
-  await expect(count).toHaveText("Voted 5 / 5", { timeout: 10_000 });
+  await expect(count).toHaveText("Voted 5 of 5", { timeout: 10_000 });
+  await expect(count.locator("[data-filled]")).toHaveCount(5);
   await expect(close).toHaveAttribute("aria-disabled", "false");
   await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
 
-  // Every Shelf opening opens it again; with no Season serving Battles, it
-  // closes at once.
-  season = null;
-  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  // Every Shelf opening opens it again. With 3 Battles left it asks for 3,
+  // and when they run out it lets the person go.
+  battlesLeft = 3;
+  const shelf = page.getByLabel("Open Shelf project in tab", { exact: true });
+  await shelf.click();
+  await expect(gate).toContainText("Vote on 3 Battles to continue");
+  await expect(count).toHaveText("Voted 0 of 3");
+  await expect(count.locator("[aria-hidden]")).toHaveCount(3);
+  battlesLeft = 0;
   await expect(gate).toContainText(
-    "Arena has no battle to offer right now, so you can close this.",
+    "Arena has no more Battles for you right now.",
+    { timeout: 10_000 },
   );
   await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
+  // With none left, opening the Shelf (shut, then open) shows no panel.
+  await shelf.click();
+  const sessionReadsBefore = sessionReads;
+  await shelf.click();
+  await expect.poll(() => sessionReads).toBe(sessionReadsBefore + 1);
+  await awaitTwoFrames(page);
+  await expect(gate).toHaveCount(0);
 
   // An unreachable Arena never traps anyone either.
-  season = "s1";
+  battlesLeft = 40;
   await placeComponentAt(page, "resistor", { x: 400, y: 240 });
   arenaUp = false;
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(gate).toContainText(
-    "Arena can't be reached right now, so you can close this.",
-  );
+  await expect(gate).toContainText("Arena can't be reached right now.");
   await expect(gate.getByRole("link")).toHaveCount(0);
   await close.click();
   await expect(gate).toHaveCount(0);
@@ -685,6 +720,9 @@ test("only the person's own opening of the Cloud shelf opens the Arena gate, so 
   await page.addInitScript(() => {
     Object.assign(window, { __icmLocalGalleryReplica: true });
   });
+  await page.route("https://chip-arena.com/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<p>Battle</p>" }),
+  );
   await signIn(page, author);
   await page.route("**/api/projects", (route) =>
     route.fulfill({ json: { projects: [] } }),
@@ -697,8 +735,10 @@ test("only the person's own opening of the Cloud shelf opens the Arena gate, so 
       json: { battles: [], more: false, total: 0 },
     });
   });
-  await page.route("**/api/arena/example", (route) =>
-    route.fulfill({ json: { example: { task: { id: "T001" } } } }),
+  await page.route("**/api/arena/session", (route) =>
+    route.fulfill({
+      json: { signedIn: true, aiAccount: false, battlesLeft: 12 },
+    }),
   );
   const gate = page.getByTestId("arena-gate");
   const shelfTab = page.getByTestId("gallery-view-shelf");

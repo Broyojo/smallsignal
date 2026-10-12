@@ -1,5 +1,5 @@
-/* The Arena gate (#1681): a locked card over the whole page with the count,
-   the way to Arena's battle page and the reason Close waits. */
+/* The Arena gate (#1681, #1683): a locked card over the whole page with
+   Arena's animated Battle, a dot per Vote asked for, and the way to vote. */
 
 .arena-gate-backdrop {
   position: fixed;
@@ -8,15 +8,16 @@
   display: grid;
   place-items: center;
   padding: 1rem;
+  overflow-y: auto;
   background: rgb(55 53 47 / 36%);
   backdrop-filter: blur(4px);
 }
 
 .arena-gate {
   display: grid;
-  gap: 0.6rem;
-  width: min(30rem, 100%);
-  padding: 1.15rem 1.25rem 1rem;
+  gap: 0.75rem;
+  width: min(34rem, 100%);
+  padding: 1.1rem 1.25rem 1rem;
   border: 1px solid var(--icm-border);
   border-radius: var(--icm-radius-lg);
   background: var(--icm-surface);
@@ -30,27 +31,81 @@
 
 .arena-gate h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   line-height: var(--icm-line-tight);
 }
 
-.arena-gate-count {
-  margin: 0;
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
+/* Arena's own voting view, laid out at 832×520 and scaled to the card's
+   width; the space stays reserved if the frame cannot load. */
+.arena-gate-preview {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-md);
+  background: var(--icm-chrome-bg);
 }
 
-.arena-gate-status {
+.arena-gate-preview iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 0;
+  transform: scale(var(--fit, 0.6));
+  transform-origin: 0 0;
+}
+
+.arena-gate-dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.arena-gate-dots > span[aria-hidden] {
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid var(--icm-accent);
+  border-radius: 50%;
+  transition: background-color 160ms ease;
+}
+
+.arena-gate-dots > span[data-filled] {
+  background: var(--icm-accent);
+}
+
+.arena-gate-dots[data-nudged] > span[aria-hidden] {
+  animation: arena-gate-nudge 320ms ease;
+}
+
+@keyframes arena-gate-nudge {
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arena-gate-dots[data-nudged] > span[aria-hidden] {
+    animation: none;
+  }
+}
+
+.arena-gate-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.arena-gate-note {
   margin: 0;
   color: var(--icm-text-muted);
   font-size: var(--icm-font-md);
-  line-height: var(--icm-line);
-}
-
-.arena-gate-status[data-nudged] {
-  color: var(--icm-warning);
-  font-weight: 600;
+  text-align: center;
 }
 
 .arena-gate-actions {
@@ -58,13 +113,13 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
-  margin-top: 0.4rem;
 }
 
 .arena-gate-open,
 .arena-gate-close {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: var(--icm-control-h-lg);
   padding: 0 0.9rem;
   border: 1px solid var(--icm-border-strong);
@@ -91,4 +146,18 @@
   background: var(--icm-surface-muted);
   color: var(--icm-text-disabled);
   cursor: not-allowed;
+}
+
+@media (max-width: 480px) {
+  .arena-gate-backdrop {
+    padding: 0.75rem;
+  }
+
+  .arena-gate {
+    padding: 1rem;
+  }
+
+  .arena-gate-actions > * {
+    flex: 1 1 auto;
+  }
 }

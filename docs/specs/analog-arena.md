@@ -119,11 +119,19 @@ it designed.
 
 After a manual Cloud Save, and whenever the person opens the Cloud shelf
 themselves (the editor's Shelf menu, the Gallery's My shelf tab, the account
-page's Cloud Projects tab), the editor asks a signed-in person for five Votes
-before its panel closes (cascode-ai/analog-canvas#1681). A page that loads
-already on the shelf, as on a reload, opens no gate. The person votes in Arena's own window on
-AnalogArena's host; Analog Canvas only counts. Arena's pages never run on
-Analog Canvas's origin.
+page's Cloud Projects tab), the editor asks a signed-in person for five
+Votes, or for as many as Arena has Battles left for them if fewer, before its
+panel closes (cascode-ai/analog-canvas#1681). A page that loads already on
+the shelf, as on a reload, opens no gate. The person votes in Arena's own
+window on AnalogArena's host; Analog Canvas only counts. Arena's pages never
+run on Analog Canvas's origin.
+
+The panel shows Chip Arena's animated Battle by framing
+`https://chip-arena.com/schematic/preview` (cascode-ai/analog-canvas#1683),
+the page Chip Arena's front page frames: a fixed Battle that reads and
+records nothing. It is framed from AnalogArena's own host, sandboxed to its
+own scripts and origin, with no referrer, and takes no pointer or focus; the
+panel works without it.
 
 ### Vote source
 
@@ -150,22 +158,23 @@ vouched account:
   the person returns to the window, one read at a time.
 - `403 consent-required` still opens the gate: the person agrees in Arena's
   window, and Votes count once the list answers.
-- `401`, `403 ai-account`, or an answer that is not JSON (no Arena behind
-  the server) shows no panel.
-- `GET /api/arena/example` answering `example: null` means no Season serves
-  Battles, a Season over or frozen with no next one: the panel may close at
-  once. It is read-only and open to anyone, read when the gate opens and when
-  the person returns to the window. The gate never asks
-  `POST /api/arena/battles/next`, which assigns Battles.
-- A failure as the gate opens (unreachable, `5xx`, the Worker's
-  `arena-unavailable`), or three failed reads in a row while counting, lets
-  the panel close at once.
+- `GET /api/arena/session`, read with every count: `signedIn`, `aiAccount`
+  and `battlesLeft`, the active Season's pairings the account has no Vote on
+  (new, or shown and left), 0 with no Season open and for an AI seat. It is
+  never cached and creates no Battle (Arcadia-1/chip-arena#238). The gate
+  asks for `min(5, battlesLeft)` Votes as it opens and shows
+  "Voted x / N"; with `battlesLeft` 0 it shows no panel; when `battlesLeft`
+  reaches 0 before the Votes are in, the panel may close at once. The gate
+  never asks `POST /api/arena/battles/next`, which assigns Battles.
+- `signedIn: false`, `aiAccount: true`, a `401` or `403 ai-account` from
+  the list, or an answer that is not JSON (no Arena behind the server)
+  shows no panel.
+- A failure of either read as the gate opens (unreachable, `5xx`, the
+  Worker's `arena-unavailable`), or three failed reads in a row while
+  counting, lets the panel close at once.
 
-Arena has no read-only signal yet for a Voter who has voted on every
-pairing; the Owner has asked the Arena side for one ("battles left"). Until
-then a reload is that Voter's way out: the gate keeps nothing across a
-reload and no page opens one as it loads. Anyone can end a gate the same
-way, and that bypass is accepted.
+The gate keeps nothing across a reload, and no page opens one as it loads,
+so anyone can end a gate by reloading. That bypass is accepted.
 
 ## Drawing delivery
 
@@ -292,10 +301,11 @@ that asked for it and takes no return.
   account deletion's call to Arena with its failures, retry and absent
   binding.
 - [`apps/editor/src/components/arena-gate.test.ts`](../../apps/editor/src/components/arena-gate.test.ts)
-  checks the gate's count, its unlocking signals, that no panel is made for
-  someone who sees none, and the page it opens;
-  `worker/arena.test.ts` brings that page to AnalogArena with its query and
-  forwards the count's read on Analog Canvas's host with the account.
+  checks the gate's count, the Votes it asks for from `battlesLeft`, its
+  unlocking signals, that no panel is made for someone who sees none, and the
+  page it opens; `worker/arena.test.ts` brings that page to AnalogArena with
+  its query and forwards the gate's reads (`battles/past`, `session`) on
+  Analog Canvas's host with the account.
 - [`apps/editor/src/components/privacy-page.test.tsx`](../../apps/editor/src/components/privacy-page.test.tsx)
   checks that the privacy notice describes AnalogArena.
 - [`worker/index.test.ts`](../../worker/index.test.ts) pins the binding and the

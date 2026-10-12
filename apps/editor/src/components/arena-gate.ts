@@ -7,11 +7,13 @@
 // signed-in account). A Vote counts when its Battle was not listed as the
 // gate opened and it was cast since then, by Arena's own clock.
 //
-// The gate never traps anyone: when Arena fails as it opens, keeps failing
-// while counting, or has no Season serving Battles, the panel may close at
-// once. Someone Arena will not count (signed out, or an AI account, which may
-// not vote) never sees it, and neither does anyone on a server with no Arena
-// behind it.
+// The gate never traps anyone. Arena's session says how many Battles the
+// Voter has left (`battlesLeft`, read-only, chip-arena#238): the gate asks
+// for at most that many Votes, shows nothing when none are left, and lets
+// go when they run out. When Arena fails as it opens or keeps failing while
+// counting, the panel may close at once. Someone Arena will not count
+// (signed out, or an AI account, which may not vote) never sees it, and
+// neither does anyone on a server with no Arena behind it.
 
 /**
  * The Schematic Arena's battle page as the gate opens it. On Analog Canvas's
@@ -21,14 +23,14 @@
  */
 export const ARENA_GATE_PAGE = "/schematic?from=canvas-gate";
 
-/** The Votes a gate asks for. */
+/** The Votes a gate asks for, at most: fewer when fewer Battles are left. */
 export const VOTES_REQUIRED = 5;
 
 /** Failed reads in a row, while counting, after which the panel unlocks. */
 export const FAILURES_ALLOWED = 3;
 
 const PAST_PATH = "/api/arena/battles/past";
-const EXAMPLE_PATH = "/api/arena/example";
+const SESSION_PATH = "/api/arena/session";
 
 /** Why the panel may close before the Votes are in. */
 export type ArenaGateFreeReason =
@@ -38,7 +40,7 @@ export type ArenaGateState =
   | { status: "checking" }
   /** Nothing to show: no Arena here, or nobody Arena would count. */
   | { status: "closed" }
-  | { status: "voting"; voted: number }
+  | { status: "voting"; voted: number; required: number }
   | { status: "free"; reason: ArenaGateFreeReason };
 
 type VotedBattle = { id: string; castAt: number };
@@ -93,20 +95,46 @@ async function readPast(fetchLike: typeof fetch): Promise<PastRead> {
   };
 }
 
+type SessionRead =
+  /** A Voter, and the Battles Arena has left for them. */
+  | { kind: "voter"; battlesLeft: number }
+  | { kind: "signed-out" }
+  | { kind: "ai-account" }
+  | { kind: "unavailable" }
+  | { kind: "absent" };
+
 /**
- * Whether a Season serves Battles: Arena's example Battle, read-only and
- * open to anyone, is null exactly when none does (a Season over or frozen
- * with no next one). When it cannot say, it says yes, and the count's own
- * failures decide.
+ * Arena's session: who is visiting and, for a Voter, `battlesLeft`, the
+ * active Season's pairings they have no Vote on (0 with no Season open).
+ * A read, never an assignment (docs/specs/analog-arena.md#counting).
  */
-async function battleOffered(fetchLike: typeof fetch): Promise<boolean> {
+async function readSession(fetchLike: typeof fetch): Promise<SessionRead> {
+  let response: Response;
   try {
-    const response = await fetchLike(EXAMPLE_PATH, READ_OPTIONS);
-    if (!response.ok) return true;
-    return (await response.json())?.example !== null;
+    response = await fetchLike(SESSION_PATH, READ_OPTIONS);
   } catch {
-    return true;
+    return { kind: "unavailable" };
   }
+  let body: {
+    signedIn?: unknown;
+    aiAccount?: unknown;
+    battlesLeft?: unknown;
+  } | null;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: "absent" };
+  }
+  if (!response.ok || typeof body?.signedIn !== "boolean")
+    return { kind: "unavailable" };
+  if (!body.signedIn) return { kind: "signed-out" };
+  if (body.aiAccount === true) return { kind: "ai-account" };
+  return {
+    kind: "voter",
+    // An Arena that does not say yet asks for the full count.
+    battlesLeft:
+      typeof body.battlesLeft === "number" ? body.battlesLeft : VOTES_REQUIRED,
+  };
 }
 
 /** Whether the panel may close now. */
@@ -114,15 +142,15 @@ export function gateClosable(state: ArenaGateState): boolean {
   return (
     state.status === "free" ||
     state.status === "closed" ||
-    (state.status === "voting" && state.voted >= VOTES_REQUIRED)
+    (state.status === "voting" && state.voted >= state.required)
   );
 }
 
 /**
- * One opening of the gate. `start` notes what Arena listed as it opened;
- * `recount` reads the count again, and with `season` also whether a Season
- * still serves Battles. A recount asked while one is reading joins it. Once
- * the panel may close, it stays closable.
+ * One opening of the gate. `start` notes what Arena listed as it opened and
+ * how many Votes to ask for; `recount` reads the count and the Battles left
+ * again. A recount asked while one is reading joins it. Once the panel may
+ * close, it stays closable.
  */
 export function createArenaGate(fetchLike: typeof fetch = fetch) {
   let state: ArenaGateState = { status: "checking" };
@@ -130,6 +158,8 @@ export function createArenaGate(fetchLike: typeof fetch = fetch) {
   let seen = new Set<string>();
   /** When the gate opened, by Arena's clock; null where it did not say. */
   let since: number | null = null;
+  /** The Votes this gate asks for: five, or the Battles left if fewer. */
+  let required = VOTES_REQUIRED;
   let failures = 0;
   let reading: Promise<ArenaGateState> | null = null;
 
@@ -147,25 +177,34 @@ export function createArenaGate(fetchLike: typeof fetch = fetch) {
           ).length
         : 0;
     const before = state.status === "voting" ? state.voted : 0;
-    return Math.min(Math.max(voted, before), VOTES_REQUIRED);
+    return Math.min(Math.max(voted, before), required);
   };
 
-  async function readAgain(season: boolean): Promise<ArenaGateState> {
-    const [read, offered] = await Promise.all([
+  async function readAgain(): Promise<ArenaGateState> {
+    const [read, session] = await Promise.all([
       readPast(fetchLike),
-      season ? battleOffered(fetchLike) : true,
+      readSession(fetchLike),
     ]);
     if (read.kind === "signed-out" || read.kind === "ai-account")
       return settle({ status: "free", reason: read.kind });
-    if (read.kind === "unavailable" || read.kind === "absent") {
+    if (session.kind === "signed-out" || session.kind === "ai-account")
+      return settle({ status: "free", reason: session.kind });
+    if (
+      (read.kind !== "listed" && read.kind !== "consent") ||
+      session.kind !== "voter"
+    ) {
       failures += 1;
       return failures >= FAILURES_ALLOWED
         ? settle({ status: "free", reason: "unavailable" })
         : state;
     }
     failures = 0;
-    const next = settle({ status: "voting", voted: counted(read) });
-    if (!offered && !gateClosable(next))
+    const next = settle({
+      status: "voting",
+      voted: counted(read),
+      required,
+    });
+    if (session.battlesLeft === 0 && !gateClosable(next))
       return settle({ status: "free", reason: "no-battle" });
     return next;
   }
@@ -173,24 +212,32 @@ export function createArenaGate(fetchLike: typeof fetch = fetch) {
   return {
     state: () => state,
     async start(): Promise<ArenaGateState> {
-      const [read, offered] = await Promise.all([
+      const [read, session] = await Promise.all([
         readPast(fetchLike),
-        battleOffered(fetchLike),
+        readSession(fetchLike),
       ]);
-      if (read.kind === "unavailable")
-        return settle({ status: "free", reason: "unavailable" });
-      if (read.kind !== "listed" && read.kind !== "consent")
+      // Nobody Arena counts, or no Arena here: no panel.
+      const uncounted = (kind: string) =>
+        kind === "absent" || kind === "signed-out" || kind === "ai-account";
+      if (uncounted(read.kind) || uncounted(session.kind))
         return settle({ status: "closed" });
-      if (!offered) return settle({ status: "free", reason: "no-battle" });
+      if (
+        (read.kind !== "listed" && read.kind !== "consent") ||
+        session.kind !== "voter"
+      )
+        return settle({ status: "free", reason: "unavailable" });
+      // Nothing left to vote on, no Season open included: no panel.
+      if (session.battlesLeft <= 0) return settle({ status: "closed" });
+      required = Math.min(VOTES_REQUIRED, session.battlesLeft);
       since = read.at;
       if (read.kind === "listed")
         seen = new Set(read.battles.map((battle) => battle.id));
-      return settle({ status: "voting", voted: 0 });
+      return settle({ status: "voting", voted: 0, required });
     },
-    recount({ season = false }: { season?: boolean } = {}) {
+    recount() {
       if (state.status !== "voting" || gateClosable(state))
         return Promise.resolve(state);
-      reading ??= readAgain(season).finally(() => {
+      reading ??= readAgain().finally(() => {
         reading = null;
       });
       return reading;

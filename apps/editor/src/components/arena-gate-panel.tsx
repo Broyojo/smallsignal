@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 
 import {
@@ -16,6 +17,17 @@ import "./arena-gate.css";
 const RECOUNT_MS = 4000;
 
 /**
+ * Chip Arena's animated Battle, the page its own front page frames: a fixed
+ * Battle of the five-transistor OTA, A and B chosen in turn, never cast. It
+ * reads and records nothing. It is framed from chip-arena.com itself, so
+ * Arena's code never runs on Analog Canvas's origin (#1683).
+ */
+export const ARENA_PREVIEW = "https://chip-arena.com/schematic/preview";
+
+/** The size Arena lays the preview out at, scaled to the panel's width. */
+const PREVIEW = { width: 832, height: 520 };
+
+/**
  * Asks Arena first, and shows the gate over the page only when there is a
  * panel to show, in a root of its own, so every page that opens it (the
  * editor, the Gallery's shelf, the account page) shows the same panel.
@@ -23,9 +35,12 @@ const RECOUNT_MS = 4000;
  * in the panel. Nothing of it is kept: a reload ends it.
  */
 export async function mountArenaGate({
+  saved,
   shown,
   closed,
 }: {
+  /** Opened after a Cloud Save, rather than as the shelf opened. */
+  saved: boolean;
   shown(): void;
   closed(): void;
 }): Promise<void> {
@@ -55,61 +70,193 @@ export async function mountArenaGate({
         closed();
       });
     };
-    root.render(<ArenaGatePanel gate={gate} first={state} onClose={close} />);
+    root.render(
+      <ArenaGatePanel
+        gate={gate}
+        first={state}
+        saved={saved}
+        onClose={close}
+      />,
+    );
     shown();
   });
   if (!showed) closed();
 }
 
-function statusLine(state: ArenaGateState): string {
-  if (state.status === "free")
-    return {
-      "no-battle":
-        "Arena has no battle to offer right now, so you can close this.",
-      "signed-out":
-        "You're no longer signed in to Arena, so you can close this.",
-      "ai-account": "AI accounts can't vote in Arena, so you can close this.",
-      unavailable: "Arena can't be reached right now, so you can close this.",
-    }[state.reason];
-  if (state.status !== "voting") return "";
-  const left = VOTES_REQUIRED - state.voted;
-  return left > 0
-    ? `Your work is safe. Vote on the battle page; Close unlocks after ${VOTES_REQUIRED} new votes: ${left} to go.`
-    : "Thank you! Your votes are in, so you can close this.";
+/** Why the gate let the person go before the Votes were in. */
+const FREE_REASONS: Record<
+  Extract<ArenaGateState, { status: "free" }>["reason"],
+  string
+> = {
+  "no-battle": "Arena has no more Battles for you right now.",
+  "signed-out": "You're no longer signed in to Arena.",
+  "ai-account": "AI accounts can't vote in Arena.",
+  unavailable: "Arena can't be reached right now.",
+};
+
+/**
+ * Arena's animated Battle, laid out at its own size and scaled to the
+ * panel's width. It only shows: it takes no pointer and no focus, and a
+ * frame that cannot load leaves only its reserved space.
+ */
+function ArenaPreview() {
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const element = box.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const fit = () =>
+      element.style.setProperty(
+        "--fit",
+        String(element.clientWidth / PREVIEW.width),
+      );
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div
+      className="arena-gate-preview"
+      ref={box}
+      style={{ aspectRatio: `${PREVIEW.width} / ${PREVIEW.height}` }}
+    >
+      <iframe
+        src={ARENA_PREVIEW}
+        title="A Battle in the Schematic Arena"
+        aria-hidden="true"
+        width={PREVIEW.width}
+        height={PREVIEW.height}
+        tabIndex={-1}
+        // Its own scripts on its own origin, chip-arena.com; nothing else.
+        sandbox="allow-scripts allow-same-origin"
+        referrerPolicy="no-referrer"
+        style={{ pointerEvents: "none" } as CSSProperties}
+      />
+    </div>
+  );
+}
+
+/** What the gate shows, from its state; the panel below keeps the state. */
+export function ArenaGateView({
+  state,
+  required,
+  saved,
+  nudged,
+  onClose,
+}: {
+  state: ArenaGateState;
+  /** The Votes this gate asks for: five, or the Battles left if fewer. */
+  required: number;
+  saved: boolean;
+  /** A locked Close or Escape was just pressed. */
+  nudged: boolean;
+  onClose(): void;
+}) {
+  const closable = gateClosable(state);
+  const voted = state.status === "voting" ? Math.min(state.voted, required) : 0;
+  return (
+    <section
+      className="arena-gate"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="arena-gate-title"
+      tabIndex={-1}
+      data-testid="arena-gate"
+    >
+      <h2 id="arena-gate-title">
+        {`Vote on ${required} Battle${required === 1 ? "" : "s"} to continue`}
+      </h2>
+      <ArenaPreview />
+      {state.status === "voting" ? (
+        <div
+          className="arena-gate-dots"
+          data-nudged={nudged && !closable ? "" : undefined}
+          data-testid="arena-gate-count"
+        >
+          {Array.from({ length: required }, (_, index) => (
+            <span
+              key={index}
+              aria-hidden="true"
+              data-filled={index < voted ? "" : undefined}
+            />
+          ))}
+          <span className="arena-gate-hidden" aria-live="polite">
+            {`Voted ${voted} of ${required}`}
+          </span>
+        </div>
+      ) : null}
+      {state.status === "free" ? (
+        <p className="arena-gate-note" aria-live="polite">
+          {FREE_REASONS[state.reason]}
+        </p>
+      ) : saved ? (
+        <p className="arena-gate-note">Your work is saved.</p>
+      ) : null}
+      <div className="arena-gate-actions">
+        {state.status === "voting" && !closable ? (
+          // A link opened by the person's own click: a new tab or window
+          // that no popup blocker stops, on chip-arena.com signed in.
+          <a
+            className="arena-gate-open"
+            href={ARENA_GATE_PAGE}
+            target="_blank"
+            rel="noopener"
+          >
+            Start voting →
+          </a>
+        ) : null}
+        <button
+          type="button"
+          className="arena-gate-close"
+          aria-disabled={!closable}
+          title={
+            closable
+              ? "Close"
+              : `Close unlocks after ${required} new vote${required === 1 ? "" : "s"}`
+          }
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function ArenaGatePanel({
   gate,
   first,
+  saved,
   onClose,
 }: {
   gate: ArenaGate;
   first: ArenaGateState;
+  saved: boolean;
   onClose(): void;
 }) {
   const [state, setState] = useState(first);
   const [nudged, setNudged] = useState(false);
-  const dialogRef = useRef<HTMLElement | null>(null);
-  useEffect(() => dialogRef.current?.focus(), []);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
+  useEffect(
+    () => backdropRef.current?.querySelector<HTMLElement>("section")?.focus(),
+    [],
+  );
 
   const closable = gateClosable(state);
+  const required = first.status === "voting" ? first.required : VOTES_REQUIRED;
   const counting = state.status === "voting" && !closable;
-  const recount = useCallback(
-    (season = false) => {
-      void gate.recount({ season }).then(setState);
-    },
-    [gate],
-  );
-  // Read again every few seconds while the page is seen, and at once, with
-  // whether a Season still serves Battles, when the person comes back from
-  // Arena's window.
+  const recount = useCallback(() => {
+    void gate.recount().then(setState);
+  }, [gate]);
+  // Read again every few seconds while the page is seen, and at once when
+  // the person comes back from Arena's window.
   useEffect(() => {
     if (!counting) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") recount();
     }, RECOUNT_MS);
     const returned = () => {
-      if (document.visibilityState === "visible") recount(true);
+      if (document.visibilityState === "visible") recount();
     };
     window.addEventListener("focus", returned);
     document.addEventListener("visibilitychange", returned);
@@ -133,12 +280,9 @@ function ArenaGatePanel({
     return () => window.removeEventListener("keydown", escape, true);
   }, [closable, onClose]);
 
-  const tryClose = () => {
-    if (closable) onClose();
-    else setNudged(true);
-  };
   return (
     <div
+      ref={backdropRef}
       className="arena-gate-backdrop"
       // Focus stays in the panel: a press outside it moves nothing.
       onMouseDown={(event) => {
@@ -148,60 +292,16 @@ function ArenaGatePanel({
         if (event.target === event.currentTarget && closable) onClose();
       }}
     >
-      <section
-        ref={dialogRef}
-        className="arena-gate"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="arena-gate-title"
-        aria-describedby="arena-gate-status"
-        tabIndex={-1}
-        data-testid="arena-gate"
-      >
-        <h2 id="arena-gate-title">
-          Vote in {VOTES_REQUIRED} Schematic Arena battles to continue
-        </h2>
-        {state.status === "voting" ? (
-          <p className="arena-gate-count" data-testid="arena-gate-count">
-            Voted {state.voted} / {VOTES_REQUIRED}
-          </p>
-        ) : null}
-        <p
-          id="arena-gate-status"
-          className="arena-gate-status"
-          data-nudged={nudged && !closable ? "" : undefined}
-          aria-live="polite"
-        >
-          {statusLine(state)}
-        </p>
-        <div className="arena-gate-actions">
-          {state.status === "voting" ? (
-            // A link opened by the person's own click: a new tab or window
-            // that no popup blocker stops, on chip-arena.com signed in.
-            <a
-              className="arena-gate-open"
-              href={ARENA_GATE_PAGE}
-              target="_blank"
-              rel="noopener"
-            >
-              Open the battle page
-            </a>
-          ) : null}
-          <button
-            type="button"
-            className="arena-gate-close"
-            aria-disabled={!closable}
-            title={
-              closable
-                ? "Close"
-                : `Close unlocks after ${VOTES_REQUIRED} new votes`
-            }
-            onClick={tryClose}
-          >
-            Close
-          </button>
-        </div>
-      </section>
+      <ArenaGateView
+        state={state}
+        required={required}
+        saved={saved}
+        nudged={nudged}
+        onClose={() => {
+          if (closable) onClose();
+          else setNudged(true);
+        }}
+      />
     </div>
   );
 }
