@@ -1,7 +1,9 @@
+// The startup recovery peek runs on every editor load; the scope subpath
+// keeps the Agent adapter off that load (#1673).
 import {
   isAgentSessionScope,
   type AgentSessionScope,
-} from "@icm/agent-adapter";
+} from "@icm/agent-adapter/session-scope";
 import {
   AGENT_SESSION_RECOVERY_STORAGE_KEY,
   type BrowserStorageLike,
