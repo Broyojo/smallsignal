@@ -2,12 +2,15 @@ import {
   awaitEditorReady,
   clickCommand,
   parseSavedProject,
-  clickDrawTool,
   copyNetlistText,
   downloadBytes,
-  openCellManager,
+  openCellManagerTab,
+  openProjectFile as openFile,
+  openEditor,
 } from "./editor-fixtures";
 import { openSelectionShelf, placeComponent } from "./manual-editor-fixtures";
+import { placedInstance, onScreen, drawWire } from "./canvas-fixtures";
+import { mockProviders, sessionUser, signIn } from "./gallery-fixtures";
 import { analyzeDesignNetlist, createDesignNetlistExport } from "@icm/netlist";
 import { builtInSymbols, createProjectSymbolResolver } from "@icm/symbols";
 import { resolveEndpointPoint, resolveRouteGeometry } from "@icm/derived";
@@ -63,28 +66,38 @@ function library() {
         JSON.stringify(definition),
       );
     },
+    /** Seeds revision 1 of a new component definition named `name`. */
+    seedPublished(id: string, name: string) {
+      const definition = newComponentDefinition();
+      definition.symbol.name = name;
+      this.seedHistoricalDefinition(id, publishedDefinition(definition, id, 1));
+      return definition;
+    },
+    /** Signs the page's browser in as `identity` (null: signed out), then opens a new editor. */
+    async openEditorAs(page: Page, identity: string | null) {
+      await this.connect(page.context(), identity);
+      await openBlankEditor(page);
+    },
     dropNextPublicationResponse: () => {
       dropPublicationResponse = true;
     },
     close: () => db.close(),
     async connect(context: BrowserContext, identity: string | null) {
       const user = identity
-        ? {
+        ? sessionUser({
             id: identity,
             displayName: identity,
             email: `${identity}@example.com`,
-            role: "user",
-            provider: "github",
             isAdmin: identity === "admin",
-          }
+          })
         : null;
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-      await context.route("**/api/auth/me", (route) =>
-        route.fulfill({ json: { user } }),
-      );
-      await context.route("**/api/auth/providers", (route) =>
-        route.fulfill({ json: { github: true, google: false, email: false } }),
-      );
+      await signIn(context, user);
+      await mockProviders(context, {
+        github: true,
+        google: false,
+        email: false,
+      });
       await context.route("**/api/components**", async (route) => {
         const headers = {
           ...route.request().headers(),
@@ -137,9 +150,8 @@ const test = base.extend<{ service: ReturnType<typeof library> }>({
   },
 });
 
-async function openEditor(page: Page) {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+async function openBlankEditor(page: Page) {
+  await openEditor(page, "/editor?new=1");
   await expect(page.getByTestId("shapes-category-user-defined")).toHaveCount(0);
 }
 
@@ -162,57 +174,45 @@ const libraryEntries = (page: Page) =>
   page.evaluate(
     async () => (await (await fetch("/api/components")).json()).entries,
   );
-/** Writes a public record through the real library API, returning its status. */
-const putComponent = (page: Page, id: string, body: unknown) =>
+/** Sends one JSON request to the real library API, returning its status. */
+const requestComponent = (
+  page: Page,
+  id: string,
+  method: string,
+  body: unknown,
+) =>
   page.evaluate(
-    async ({ id, body }) =>
+    async ({ id, method, body }) =>
       (
         await fetch(`/api/components/${id}`, {
-          method: "PUT",
+          method,
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         })
       ).status,
-    { id, body },
+    { id, method, body },
   );
+/** Writes a public record through the real library API, returning its status. */
+const putComponent = (page: Page, id: string, body: unknown) =>
+  requestComponent(page, id, "PUT", body);
 /** An administrator's soft deletion of revision 1, returning its status. */
 const deleteComponent = (page: Page, id: string) =>
-  page.evaluate(
-    async (id) =>
-      (
-        await fetch(`/api/components/${id}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ revision: 1, status: "deleted" }),
-        })
-      ).status,
-    id,
-  );
+  requestComponent(page, id, "PATCH", { revision: 1, status: "deleted" });
 async function copyText(page: Page, field: Locator) {
   await field.focus();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ControlOrMeta+c");
   return page.evaluate(() => navigator.clipboard.readText());
 }
-async function openProjectFile(page: Page, project: CircuitProject | Buffer) {
-  await page.getByTestId("project-file").setInputFiles({
-    name: "project.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.isBuffer(project)
-      ? project
-      : Buffer.from(serializeProject(project)),
-  });
-}
+const openProjectFile = (page: Page, project: CircuitProject | Buffer) =>
+  openFile(
+    page,
+    Buffer.isBuffer(project) ? project : serializeProject(project),
+  );
 async function markNoConnect(page: Page, terminal: string) {
   await page.getByTestId(terminal).click({ button: "right" });
   await openSelectionShelf(page);
   await button(page, "Mark No Connect").click();
-  await page.keyboard.press("Escape");
-}
-async function wire(page: Page, from: string, to: string) {
-  await clickDrawTool(page, "wire");
-  await page.getByTestId(from).click();
-  await page.getByTestId(to).click();
   await page.keyboard.press("Escape");
 }
 /** Pairs a real Agent session with this Editor: a concurrent Project writer. */
@@ -233,6 +233,7 @@ async function pairAgent(page: Page, baseUrl: string) {
 async function editWithKey(page: Page, reference: string) {
   await page.getByTestId(`hit-${reference}`).click();
   await page.keyboard.press("e");
+  return componentEditor(page);
 }
 async function editFromMenu(page: Page, reference: string) {
   await page.getByTestId(`hit-${reference}`).click({ button: "right" });
@@ -242,16 +243,10 @@ async function editFromMenu(page: Page, reference: string) {
       exact: true,
     })
     .click();
+  return componentEditor(page);
 }
 async function openExternalCircuit(page: Page, name: string) {
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  const manager = await openCellManagerTab(page, "External Circuits");
   await manager
     .locator(".cell-manager-list-item")
     .filter({ hasText: name })
@@ -260,8 +255,91 @@ async function openExternalCircuit(page: Page, name: string) {
   return manager;
 }
 async function openUserComponents(page: Page) {
+  const dialog = libraryDialog(page);
   await clickCommand(page, "Edit", "User Components…");
-  await expect(libraryDialog(page)).toBeVisible();
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+/** Places the named library component from a newly opened User Components. */
+async function placeFromLibrary(
+  page: Page,
+  name: string,
+  x?: number,
+  y?: number,
+) {
+  await openUserComponents(page);
+  await button(page, `Place ${name}`).click();
+  await place(page, x, y);
+}
+/** Reopens the Project's one draft from User Components. */
+async function openProjectDraft(page: Page, name: string | RegExp) {
+  await openUserComponents(page);
+  await text(page, "Project drafts (1)").click();
+  await button(page, name).click();
+}
+/** Publishes revision 1 of `definition` through the real library API. */
+async function publishComponent(page: Page, id: string, definition: unknown) {
+  expect(await putComponent(page, id, { revision: 0, definition })).toBe(200);
+}
+/** A symbol-only definition named `name`. */
+const symbolDefinition = (name: string) => ({
+  symbol: { ...newComponentDefinition().symbol, name },
+});
+/** A historical definition whose interface maps IN only, leaving OUT missing. */
+function legacyDefinition(interfaceId: string, name: string) {
+  const legacy = {
+    ...newComponentDefinition(),
+    subcircuit: {
+      id: interfaceId,
+      symbolId: "custom-component",
+      target: "legacy",
+      ports: [{ name: "IN", pinName: "IN", direction: "input" }],
+    },
+  };
+  legacy.subcircuit.symbolId = legacy.symbol.id;
+  legacy.symbol.name = name;
+  return legacy;
+}
+/** A closed polyline around the box from (left, top) to (right, bottom). */
+const boxOutline = (
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+) => ({
+  kind: "polyline" as const,
+  points: [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: bottom },
+    { x: left, y: bottom },
+    { x: left, y: top },
+  ],
+});
+/** Chooses an option of the scope's exactly labelled select. */
+const choose = (
+  scope: Page | Locator,
+  label: string,
+  option: string | { label: string },
+) => scope.getByLabel(label, { exact: true }).selectOption(option);
+const symbolJson = (scope: Locator) =>
+  scope.getByLabel("Circuit symbol JSON", { exact: true });
+/** The Project's component definition for this symbol. */
+const definitionOf = (project: CircuitProject, symbolId: string) =>
+  project.componentDefinitions!.find((item) => item.symbol.id === symbolId)!;
+/** The Project's first-Cell instance with this ID. */
+const instanceOf = (project: CircuitProject, id: string) =>
+  project.documents[0]!.instances.find((item) => item.id === id)!;
+/** Applies the model and waits until the editor reports it applied. */
+async function applyModel(scope: Locator) {
+  await button(scope, "Apply model").click();
+  await expect(scope.getByRole("status")).toContainText("Applied");
+}
+/** Applies the model and places one instance on the editor's page. */
+async function applyAndPlace(editor: Locator, x?: number, y?: number) {
+  await button(editor, "Apply & Place").click();
+  await expect(editor).toHaveCount(0);
+  await place(editor.page(), x, y);
 }
 async function readProject(page: Page): Promise<CircuitProject> {
   // Sharing journeys return to an earlier editor window. Clipboard reads
@@ -301,16 +379,9 @@ test("reopening details hides a cached public component that is no longer access
   context,
   service,
 }) => {
-  const definition = newComponentDefinition();
-  definition.symbol.name = "Retained detail";
-  service.seedHistoricalDefinition(
-    "retained-detail",
-    publishedDefinition(definition, "retained-detail", 1),
-  );
-  await service.connect(context, "admin");
-  await openEditor(page);
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  service.seedPublished("retained-detail", "Retained detail");
+  await service.openEditorAs(page, "admin");
+  const dialog = await openUserComponents(page);
   await button(dialog, "Details for Retained detail").click();
   await expect(
     dialog.getByRole("heading", { name: "Retained detail", exact: true }),
@@ -333,27 +404,15 @@ test("public symbol placement connects contacts atomically and keeps the clicked
   context,
   service,
 }) => {
-  const definition = newComponentDefinition();
-  definition.symbol.name = "Contact block";
-  service.seedHistoricalDefinition(
-    "contact-block",
-    publishedDefinition(definition, "contact-block", 1),
-  );
-  await service.connect(context, "alice");
-  await openEditor(page);
-  await openUserComponents(page);
-  await button(page, "Place Contact block").click();
-  await place(page);
+  service.seedPublished("contact-block", "Contact block");
+  await service.openEditorAs(page, "alice");
+  await placeFromLibrary(page, "Contact block");
   const before = await readProject(page);
   const first = before.documents[0]!.instances[0]!;
-  const nextPoint = await page
-    .locator(`[data-object-id="${first.id}"][data-symbol-id] > g`)
-    .first()
-    .evaluate((element) => {
-      const matrix = (element as SVGGElement).getScreenCTM()!;
-      const point = new DOMPoint(80, 0).matrixTransform(matrix);
-      return { x: point.x, y: point.y };
-    });
+  const [nextPoint] = await onScreen(
+    page.locator(`[data-object-id="${first.id}"][data-symbol-id] > g`).first(),
+    [{ x: 80, y: 0 }],
+  );
   await openUserComponents(page);
   await button(page, "Place Contact block").click();
   // Click only once the canvas takes placement input; an earlier click is lost.
@@ -404,19 +463,11 @@ test("public symbol placement connects contacts atomically and keeps the clicked
 
 test("library selection refuses a revision changed during preview and editing returns to the library", async ({
   page,
-  context,
   service,
 }) => {
-  const definition = newComponentDefinition();
-  definition.symbol.name = "Revision guard";
-  service.seedHistoricalDefinition(
-    "revision-guard",
-    publishedDefinition(definition, "revision-guard", 1),
-  );
-  await service.connect(context, "alice");
-  await openEditor(page);
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  const definition = service.seedPublished("revision-guard", "Revision guard");
+  await service.openEditorAs(page, "alice");
+  const dialog = await openUserComponents(page);
   await button(dialog, "Details for Revision guard").click();
   await expect(
     dialog.getByRole("heading", { name: "Revision guard", exact: true }),
@@ -507,20 +558,18 @@ test("reopening User Components retains loaded cards without another list reques
   context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
-  const definition = { symbol: newComponentDefinition().symbol };
-  definition.symbol.name = "Reusable device";
-  expect(
-    await putComponent(page, "reusable-device", { revision: 0, definition }),
-  ).toBe(200);
+  await service.openEditorAs(page, "alice");
+  await publishComponent(
+    page,
+    "reusable-device",
+    symbolDefinition("Reusable device"),
+  );
   let listRequests = 0;
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === "/api/components")
       listRequests += 1;
   });
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  const dialog = await openUserComponents(page);
   await expect(button(dialog, "Place Reusable device")).toBeVisible();
   await button(dialog, "Close").click();
   await context.route("**/api/components?**", (route) => route.abort("failed"));
@@ -542,47 +591,24 @@ test("reopening User Components retains loaded cards without another list reques
 
 test("historical invalid pin mappings remain inspectable without blocking valid library cards", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const healthy = {
     symbol: structuredClone(
       builtInSymbols.find((symbol) => symbol.id === "resistor")!,
     ),
   };
   healthy.symbol.name = "Healthy device";
-  expect(
-    await putComponent(page, "healthy-device", {
-      revision: 0,
-      definition: healthy,
-    }),
-  ).toBe(200);
-  const legacy = {
-    ...newComponentDefinition(),
-    subcircuit: {
-      id: "legacy-interface",
-      symbolId: "custom-component",
-      target: "legacy",
-      ports: [{ name: "IN", pinName: "IN", direction: "input" }],
-    },
-  };
-  legacy.subcircuit.symbolId = legacy.symbol.id;
-  legacy.symbol.name = "Legacy device";
+  await publishComponent(page, "healthy-device", healthy);
+  const legacy = legacyDefinition("legacy-interface", "Legacy device");
   service.seedHistoricalDefinition("legacy-device", legacy);
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  const dialog = await openUserComponents(page);
   await expect(button(dialog, "Place Healthy device")).toBeVisible();
-  await expect(dialog.getByTestId("rejected-user-component")).toContainText(
-    "Legacy device",
-  );
-  await expect(dialog.getByTestId("rejected-user-component")).toContainText(
-    "Alice",
-  );
-  await expect(dialog.getByTestId("rejected-user-component")).toContainText(
-    "missing OUT",
-  );
+  const rejected = dialog.getByTestId("rejected-user-component");
+  await expect(rejected).toContainText("Legacy device");
+  await expect(rejected).toContainText("Alice");
+  await expect(rejected).toContainText("missing OUT");
   await expect(button(dialog, "Place Legacy device")).toHaveCount(0);
   await button(dialog, "Copy raw record for Legacy device").click();
   await expect(
@@ -601,7 +627,7 @@ test("historical invalid pin mappings remain inspectable without blocking valid 
     .getByRole("textbox", { name: "Search User Defined components" })
     .fill("Legacy");
   await expect(button(dialog, "Place Healthy device")).toHaveCount(0);
-  await expect(dialog.getByTestId("rejected-user-component")).toBeVisible();
+  await expect(rejected).toBeVisible();
   await expect(
     text(dialog, "No user components match this search."),
   ).toHaveCount(0);
@@ -613,16 +639,14 @@ test("reopening deleted components after sign-out does not retain administrator 
   context,
   service,
 }) => {
-  await service.connect(context, "admin");
-  await openEditor(page);
-  const definition = { symbol: newComponentDefinition().symbol };
-  definition.symbol.name = "Deleted device";
-  expect(
-    await putComponent(page, "deleted-device", { revision: 0, definition }),
-  ).toBe(200);
+  await service.openEditorAs(page, "admin");
+  await publishComponent(
+    page,
+    "deleted-device",
+    symbolDefinition("Deleted device"),
+  );
   expect(await deleteComponent(page, "deleted-device")).toBe(200);
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  const dialog = await openUserComponents(page);
   await button(dialog, "Review deleted components").click();
   await expect(button(dialog, "Place Deleted device")).toBeVisible();
   await page.clock.install();
@@ -641,8 +665,7 @@ test("a failed first or next page retains cards and Try Again retries that page"
   context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const definition = { symbol: newComponentDefinition().symbol };
   await page.evaluate(async (definition) => {
     for (let index = 0; index < 23; index += 1) {
@@ -659,17 +682,10 @@ test("a failed first or next page retains cards and Try Again retries that page"
       if (!response.ok) throw Error(await response.text());
     }
   }, definition);
-  const legacy = {
-    ...newComponentDefinition(),
-    subcircuit: {
-      id: "legacy-paged-interface",
-      symbolId: "custom-component",
-      target: "legacy",
-      ports: [{ name: "IN", pinName: "IN", direction: "input" }],
-    },
-  };
-  legacy.subcircuit.symbolId = legacy.symbol.id;
-  legacy.symbol.name = "Legacy paged device";
+  const legacy = legacyDefinition(
+    "legacy-paged-interface",
+    "Legacy paged device",
+  );
   service.seedHistoricalDefinition("paged-device-23", legacy);
   let failNextPage = true;
   let failFirstPage = true;
@@ -684,19 +700,17 @@ test("a failed first or next page retains cards and Try Again retries that page"
       });
     else await route.fallback();
   });
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  const dialog = await openUserComponents(page);
+  const refreshFailed = text(
+    dialog,
+    "Couldn’t refresh components. Loaded components are still available.",
+  );
   await expect(text(dialog, "Couldn’t load user components.")).toBeVisible();
   failFirstPage = false;
   await button(dialog, "Try Again").click();
   await expect(dialog.locator(".user-component-tile")).toHaveCount(20);
   await button(dialog, "Load More").click();
-  await expect(
-    dialog.getByText(
-      "Couldn’t refresh components. Loaded components are still available.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(refreshFailed).toBeVisible();
   await expect(dialog.locator(".user-component-tile")).toHaveCount(20);
   failNextPage = false;
   await button(dialog, "Try Again").click();
@@ -714,12 +728,7 @@ test("a failed first or next page retains cards and Try Again retries that page"
   expect(cursors).toHaveLength(4);
   failFirstPage = true;
   await button(dialog, "Refresh").click();
-  await expect(
-    dialog.getByText(
-      "Couldn’t refresh components. Loaded components are still available.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(refreshFailed).toBeVisible();
   await expect(dialog.locator(".user-component-tile")).toHaveCount(24);
   await expect(rejected).toContainText("OUT");
   expect(cursors).toEqual([
@@ -733,7 +742,6 @@ test("a failed first or next page retains cards and Try Again retries that page"
 
 test("library preview fits actual off-viewBox artwork without changing the stored definition", async ({
   page,
-  context,
   service,
 }) => {
   const definition = newComponentDefinition();
@@ -748,21 +756,9 @@ test("library preview fits actual off-viewBox artwork without changing the store
       presentation: { visibility: "visible" },
     },
   ];
-  definition.symbol.primitives = [
-    {
-      kind: "polyline",
-      points: [
-        { x: 500, y: 200 },
-        { x: 600, y: 200 },
-        { x: 600, y: 280 },
-        { x: 500, y: 280 },
-        { x: 500, y: 200 },
-      ],
-    },
-  ];
+  definition.symbol.primitives = [boxOutline(500, 200, 600, 280)];
   service.seedHistoricalDefinition("offset-symbol", definition);
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   await openUserComponents(page);
   const tile = button(page, "Place Offset symbol");
   await expect(tile).toBeVisible();
@@ -801,45 +797,20 @@ test("library cards separate artwork, long titles and authors at narrow and zoom
   const name =
     "Precision amplifier with configurable gain and output filtering";
   await service.connect(context, author);
-  await openEditor(page);
+  await openBlankEditor(page);
   const tall = { symbol: newComponentDefinition().symbol };
   tall.symbol.id = "tall-library-artwork";
   tall.symbol.name = name;
   tall.symbol.viewBox = { x: -40, y: -150, width: 80, height: 300 };
-  tall.symbol.primitives[0] = {
-    kind: "polyline",
-    points: [
-      { x: -20, y: -120 },
-      { x: 20, y: -120 },
-      { x: 20, y: 120 },
-      { x: -20, y: 120 },
-      { x: -20, y: -120 },
-    ],
-  };
+  tall.symbol.primitives[0] = boxOutline(-20, -120, 20, 120);
   const wide = structuredClone(tall);
   wide.symbol.id = "wide-library-artwork";
   wide.symbol.name = "Wide artwork";
   wide.symbol.viewBox = { x: -180, y: -30, width: 360, height: 60 };
-  wide.symbol.primitives[0] = {
-    kind: "polyline",
-    points: [
-      { x: -160, y: -20 },
-      { x: 160, y: -20 },
-      { x: 160, y: 20 },
-      { x: -160, y: 20 },
-      { x: -160, y: -20 },
-    ],
-  };
-  for (const definition of [tall, wide]) {
-    expect(
-      await putComponent(page, definition.symbol.id, {
-        revision: 0,
-        definition,
-      }),
-    ).toBe(200);
-  }
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  wide.symbol.primitives[0] = boxOutline(-160, -20, 160, 20);
+  for (const definition of [tall, wide])
+    await publishComponent(page, definition.symbol.id, definition);
+  const dialog = await openUserComponents(page);
   await expect(dialog.locator(".user-component-tile")).toHaveCount(2);
   for (const card of await dialog.locator(".user-component-tile").all()) {
     await card.scrollIntoViewIfNeeded();
@@ -908,17 +879,11 @@ test("library cards separate artwork, long titles and authors at narrow and zoom
 
 test("Create from keeps a new publication destination through draft reopening even for the original author", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
-  const definition = {
-    symbol: { ...newComponentDefinition().symbol, name: "Original device" },
-  };
-  expect(
-    await putComponent(page, "original-device", { revision: 0, definition }),
-  ).toBe(200);
+  await service.openEditorAs(page, "alice");
+  const definition = symbolDefinition("Original device");
+  await publishComponent(page, "original-device", definition);
   await openUserComponents(page);
   await clickLibraryAction(page, "Create from Original device");
   const editor = componentEditor(page);
@@ -938,9 +903,7 @@ test("Create from keeps a new publication destination through draft reopening ev
   });
   await openProjectFile(page, saved);
   await awaitEditorReady(page);
-  await openUserComponents(page);
-  await text(page, "Project drafts (1)").click();
-  await button(page, "Library draft Original device").click();
+  await openProjectDraft(page, "Library draft Original device");
   await button(editor, "Publish as new component").click();
   await expect(editor.getByRole("status")).toContainText(
     "Published to the public library",
@@ -972,21 +935,13 @@ test("captured origin lookup failure preserves its target and refuses implicit n
   service.seedHistoricalDefinition(
     "origin-lookup-device",
     publishedDefinition(
-      {
-        symbol: {
-          ...newComponentDefinition().symbol,
-          name: "Origin lookup device",
-        },
-      },
+      symbolDefinition("Origin lookup device"),
       "origin-lookup-device",
       1,
     ),
   );
-  await service.connect(context, "alice");
-  await openEditor(page);
-  await openUserComponents(page);
-  await button(page, "Place Origin lookup device").click();
-  await place(page);
+  await service.openEditorAs(page, "alice");
+  await placeFromLibrary(page, "Origin lookup device");
   let originReads = 0;
   let newWrites = 0;
   await context.route("**/api/components/*", async (route) => {
@@ -1004,8 +959,7 @@ test("captured origin lookup failure preserves its target and refuses implicit n
       await route.fallback();
     }
   });
-  await editWithKey(page, "X1");
-  const editor = componentEditor(page);
+  const editor = await editWithKey(page, "X1");
   const recovery = editor.getByRole("group", {
     name: "Publication recovery",
   });
@@ -1016,12 +970,7 @@ test("captured origin lookup failure preserves its target and refuses implicit n
     .click();
   await expect.poll(() => originReads).toBe(2);
   expect(newWrites).toBe(0);
-  const variant = {
-    symbol: {
-      ...newComponentDefinition().symbol,
-      name: "Explicit origin copy",
-    },
-  };
+  const variant = symbolDefinition("Explicit origin copy");
   await editor
     .getByLabel("Component definition code")
     .fill(JSON.stringify(variant));
@@ -1035,24 +984,19 @@ test("publication conflicts retain update intent until explicit reload or create
   context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
-  const definition = { symbol: newComponentDefinition().symbol };
+  await service.openEditorAs(page, "alice");
   const publish = (revision: number, name: string) =>
     putComponent(page, "owned-device", {
       revision,
-      definition: { ...definition, symbol: { ...definition.symbol, name } },
+      definition: symbolDefinition(name),
     });
   expect(await publish(0, "Owned device")).toBe(200);
   await openUserComponents(page);
   await clickLibraryAction(page, "Edit Owned device definition");
   const editor = componentEditor(page);
-  await editor.getByLabel("Component definition code").fill(
-    JSON.stringify({
-      ...definition,
-      symbol: { ...definition.symbol, name: "My pending edit" },
-    }),
-  );
+  await editor
+    .getByLabel("Component definition code")
+    .fill(JSON.stringify(symbolDefinition("My pending edit")));
   await button(editor, "Apply").click();
   expect(await publish(1, "Concurrent revision")).toBe(200);
   await button(editor, "Update my component").click();
@@ -1092,11 +1036,9 @@ test("publication conflicts retain update intent until explicit reload or create
 
 test("new native publication survives a lost response, Project reopen and another edit without duplicating its public identity", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const editor = await openNativeComponent(page);
   await netlist(editor).fill(
     ".subckt retry_source IN OUT\nR1 IN OUT 1k\n.ends retry_source\n",
@@ -1115,9 +1057,7 @@ test("new native publication survives a lost response, Project reopen and anothe
   await openProjectFile(page, pending);
   await awaitEditorReady(page);
   async function reopenPublication() {
-    await openUserComponents(page);
-    await text(page, "Project drafts (1)").click();
-    await page.getByRole("button", { name: /^Library draft / }).click();
+    await openProjectDraft(page, /^Library draft /);
   }
   await reopenPublication();
   await button(editor, "Publish").click();
@@ -1147,11 +1087,9 @@ test("new native publication survives a lost response, Project reopen and anothe
 
 test("reopened artwork drafts require Apply before publishing and Place applies the displayed candidate", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const original = {
     symbol: {
       ...structuredClone(builtInSymbols.find((s) => s.id === "resistor")!),
@@ -1162,16 +1100,7 @@ test("reopened artwork drafts require Apply before publishing and Place applies 
   const initial = createEmptyProject("artwork-reopen", "Artwork reopen");
   initial.componentDefinitions = [original];
   initial.documents[0]!.instances = [
-    {
-      id: "X1",
-      reference: "X1",
-      symbolId: original.symbol.id,
-      placement: {
-        position: { x: 220, y: 200 },
-        rotation: 0,
-        mirror: "none",
-      },
-    },
+    { ...placedInstance("X1", original.symbol.id, 220, 200), reference: "X1" },
   ];
   await openProjectFile(page, initial);
   await awaitEditorReady(page);
@@ -1195,29 +1124,23 @@ test("reopened artwork drafts require Apply before publishing and Place applies 
   await editor.getByLabel("Close component editor").click();
   const saved = await readProject(page);
   expect(saved.componentDefinitions).toEqual([original]);
-  await openUserComponents(page);
-  await text(page, "Project drafts (1)").click();
-  await page.getByRole("button", { name: /^Artwork draft / }).click();
+  await openProjectDraft(page, /^Artwork draft /);
   await expect(button(editor, PUBLISH)).toBeDisabled();
   await button(editor, "Place").click();
   await place(page, 420, 230);
   const applied = await readProject(page);
   expect(applied.documents[0]!.instances).toHaveLength(2);
   for (const instance of applied.documents[0]!.instances)
-    expect(
-      applied.componentDefinitions!.find(
-        (d) => d.symbol.id === instance.symbolId,
-      )!.symbol.name,
-    ).toBe(candidate.symbol.name);
+    expect(definitionOf(applied, instance.symbolId).symbol.name).toBe(
+      candidate.symbol.name,
+    );
 });
 
 test("public circuit authoring drafts survive closing and portable reopening without changing drawing captures", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const editor = await openFiniteGain(page);
   await button(editor, "Apply model").click();
   await button(editor, PUBLISH).click();
@@ -1228,11 +1151,9 @@ test("public circuit authoring drafts survive closing and portable reopening wit
   await clickLibraryAction(page, "Edit finite_gain definition");
   await netlist(editor).fill(finiteGainSource.replace("gain=10", "gain=17"));
   await editor.getByRole("tab", { name: "Symbol", exact: true }).click();
-  await editor
-    .getByLabel("Symbol mode", { exact: true })
-    .selectOption("custom");
+  await choose(editor, "Symbol mode", "custom");
   const broken = '{ "symbol": unfinished library JSON';
-  await editor.getByLabel("Circuit symbol JSON", { exact: true }).fill(broken);
+  await symbolJson(editor).fill(broken);
   await editor.locator(".external-model-more > summary").click();
   await button(editor, "Save draft").click();
   await editor.getByLabel("Close component editor").click();
@@ -1244,33 +1165,25 @@ test("public circuit authoring drafts survive closing and portable reopening wit
   await openUserComponents(page);
   await clickLibraryAction(page, "Edit finite_gain definition");
   await editor.getByRole("tab", { name: "Symbol", exact: true }).click();
-  await expect(
-    editor.getByLabel("Circuit symbol JSON", { exact: true }),
-  ).toContainText(broken);
+  await expect(symbolJson(editor)).toContainText(broken);
   await expect(button(editor, PUBLISH)).toBeDisabled();
   await editor.getByLabel("Close component editor").click();
   await openProjectFile(page, saved);
   const discard = button(page, "Continue without saving");
   if (await discard.isVisible()) await discard.click();
   await awaitEditorReady(page);
-  await openUserComponents(page);
-  await text(page, "Project drafts (1)").click();
-  await button(page, "Library draft finite_gain").click();
+  await openProjectDraft(page, "Library draft finite_gain");
   await editor.getByRole("tab", { name: "Symbol", exact: true }).click();
-  await expect(
-    editor.getByLabel("Circuit symbol JSON", { exact: true }),
-  ).toContainText(broken);
+  await expect(symbolJson(editor)).toContainText(broken);
   await editor.getByRole("tab", { name: "Circuit", exact: true }).click();
   await expect(netlist(editor)).toContainText("gain=17");
 });
 
 test("new circuit authoring starts with native source and places a complete six-terminal component without public saving", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   await openUserComponents(page);
   await button(page, "Create Component…").click();
   const editor = componentEditor(page);
@@ -1290,16 +1203,10 @@ test("new circuit authoring starts with native source and places a complete six-
   await editor.getByLabel("Cell symbol width", { exact: true }).fill("140");
   await editor.getByLabel("Cell symbol width", { exact: true }).blur();
   await authoringView(editor, "Symbol");
-  await editor
-    .getByLabel("Symbol mode", { exact: true })
-    .selectOption("custom");
+  await choose(editor, "Symbol mode", "custom");
   await authoringView(editor, "Mapping");
-  await editor
-    .getByLabel("Map native INP", { exact: true })
-    .selectOption("pin:INN");
-  await editor
-    .getByLabel("Map native INN", { exact: true })
-    .selectOption("pin:INP");
+  await choose(editor, "Map native INP", "pin:INN");
+  await choose(editor, "Map native INN", "pin:INP");
   await editor.getByRole("tab", { name: "Circuit", exact: true }).click();
   await expect(netlist(editor)).toContainText(".subckt differential_gain");
   await button(editor, "Apply model").click();
@@ -1364,13 +1271,11 @@ test("selecting a second native source entry preserves the first owner's identit
     ],
   });
   if (!prepared.ok) throw Error(JSON.stringify(prepared.error));
-  await openEditor(page);
+  await openBlankEditor(page);
   await openProjectFile(page, prepared.project);
   const editor = await openNativeComponent(page);
   await authoringView(editor, "Circuit");
-  await editor
-    .getByLabel("External model source owner", { exact: true })
-    .selectOption({ label: "model.spice" });
+  await choose(editor, "External model source owner", { label: "model.spice" });
   await entry(editor).selectOption("second");
   await button(editor, "Apply & Place").click();
   await place(page);
@@ -1394,24 +1299,16 @@ test("selecting a second native source entry preserves the first owner's identit
 
 test("legacy four-to-six repair uses the full native pin editor, keeps a saved draft off the original class and preserves peers in one undo", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   const legacy = newComponentDefinition();
   const initial = createEmptyProject("legacy-six", "Legacy six");
   initial.componentDefinitions = [legacy];
   for (const [index, id] of ["X1", "X2"].entries())
     initial.documents[0]!.instances.push({
-      id,
+      ...placedInstance(id, legacy.symbol.id, 220 + index * 200, 200),
       reference: id,
-      symbolId: legacy.symbol.id,
-      placement: {
-        position: { x: 220 + index * 200, y: 200 },
-        rotation: 0,
-        mirror: "none",
-      },
       netlist: {
         parameters: { gain: "17" },
         binding: {
@@ -1448,23 +1345,18 @@ test("legacy four-to-six repair uses the full native pin editor, keeps a saved d
   if (!model.ok) throw Error(model.error.message);
   await openProjectFile(page, model.project);
   await awaitEditorReady(page);
-  await editWithKey(page, "X1");
-  const editor = componentEditor(page);
+  const editor = await editWithKey(page, "X1");
   await authoringView(editor, "Circuit");
-  await editor
-    .getByLabel("External model source owner", { exact: true })
-    .selectOption("six-source");
+  await choose(editor, "External model source owner", "six-source");
   await authoringView(editor, "Mapping");
   await expect(
     editor.getByLabel("Native pin mapping").locator("tbody tr"),
   ).toHaveCount(6);
-  await editor
-    .getByLabel("Map native INP", { exact: true })
-    .selectOption("pin:IN");
+  await choose(editor, "Map native INP", "pin:IN");
   await editor.getByLabel("Add pin for INN", { exact: true }).click();
   await editor.getByLabel("Add pin for REF", { exact: true }).click();
   await authoringView(editor, "Symbol");
-  const json = editor.getByLabel("Circuit symbol JSON", { exact: true });
+  const json = symbolJson(editor);
   const valid = await copyText(page, json);
   await json.fill('{"symbol": unfinished');
   await text(editor, "More").click();
@@ -1527,13 +1419,11 @@ test("Create keeps authoring views, custom artwork and commit actions usable in 
 }) => {
   await service.connect(context, null);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await openEditor(page);
+  await openBlankEditor(page);
   const editor = await openNativeComponent(page);
   await authoringView(editor, "Symbol");
-  await editor
-    .getByLabel("Symbol mode", { exact: true })
-    .selectOption("custom");
-  const code = editor.getByLabel("Circuit symbol JSON", { exact: true });
+  await choose(editor, "Symbol mode", "custom");
+  const code = symbolJson(editor);
   const preview = editor.getByLabel("Custom symbol preview", { exact: true });
   const codeBounds = (await editor
     .locator(".component-definition-code")
@@ -1589,11 +1479,9 @@ test("Create keeps authoring views, custom artwork and commit actions usable in 
 
 test("automatic layout only enables explicit offsets and distinguishes pending source from missing circuit", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   const editor = await openNativeComponent(page);
   await expect(button(editor, "Apply & Place")).toBeDisabled();
   await authoringView(editor, "Symbol");
@@ -1613,9 +1501,7 @@ test("automatic layout only enables explicit offsets and distinguishes pending s
     exact: true,
   });
   await expect(offset).toBeDisabled();
-  await editor
-    .getByLabel("Cell symbol IN pin side", { exact: true })
-    .selectOption("west");
+  await choose(editor, "Cell symbol IN pin side", "west");
   await expect(offset).toBeEnabled();
   await offset.fill("40");
   await offset.blur();
@@ -1630,7 +1516,6 @@ test("automatic layout only enables explicit offsets and distinguishes pending s
 
 test("publishes an applied native component and captures another user's complete revision on insertion", async ({
   page,
-  context,
   browser,
   baseURL,
   service,
@@ -1638,11 +1523,9 @@ test("publishes an applied native component and captures another user's complete
   test.setTimeout(90_000);
   const visitor = await browser.newContext({ baseURL: baseURL! });
   try {
-    await service.connect(context, "alice");
-    await openEditor(page);
+    await service.openEditorAs(page, "alice");
     const editor = await openFiniteGain(page, "custom");
-    await button(editor, "Apply model").click();
-    await expect(editor.getByRole("status")).toContainText("Applied");
+    await applyModel(editor);
     await expect(button(editor, PUBLISH)).toBeEnabled();
     await button(editor, PUBLISH).click();
     await expect(text(editor, "Saved to the public library.")).toBeVisible();
@@ -1659,7 +1542,7 @@ test("publishes an applied native component and captures another user's complete
     );
     await service.connect(visitor, "bob");
     const insertedPage = await visitor.newPage();
-    await openEditor(insertedPage);
+    await openBlankEditor(insertedPage);
     const beforePlacement = await readProject(insertedPage);
     await openUserComponents(insertedPage);
     await button(insertedPage, "Place finite_gain").click();
@@ -1667,9 +1550,7 @@ test("publishes an applied native component and captures another user's complete
     expect(resources(await readProject(insertedPage))).toEqual(
       resources(beforePlacement),
     );
-    await openUserComponents(insertedPage);
-    await button(insertedPage, "Place finite_gain").click();
-    await place(insertedPage, 400, 220);
+    await placeFromLibrary(insertedPage, "finite_gain", 400, 220);
     const inserted = await readProject(insertedPage);
     await button(insertedPage, "Undo").click();
     expect(resources(await readProject(insertedPage))).toEqual(
@@ -1685,13 +1566,9 @@ test("publishes an applied native component and captures another user's complete
       definitionId: owner.id,
     });
     expect(
-      inserted.componentDefinitions!.find(
-        (item) => item.symbol.id === instance.symbolId,
-      )!.circuitBinding!.definitionId,
+      definitionOf(inserted, instance.symbolId).circuitBinding!.definitionId,
     ).toBe(owner.id);
-    await openUserComponents(insertedPage);
-    await button(insertedPage, "Place finite_gain").click();
-    await place(insertedPage, 650, 320);
+    await placeFromLibrary(insertedPage, "finite_gain", 650, 320);
     await expect(instanceCount(insertedPage)).toHaveText("2");
     const repeated = await readProject(insertedPage);
     expect(resources(repeated)).toEqual(resources(inserted));
@@ -1772,9 +1649,7 @@ async function openFiniteGain(page: Page, symbolMode?: "custom") {
   await entry(editor).selectOption("finite_gain");
   if (symbolMode) {
     await authoringView(editor, "Symbol");
-    await editor
-      .getByLabel("Symbol mode", { exact: true })
-      .selectOption(symbolMode);
+    await choose(editor, "Symbol mode", symbolMode);
   }
   return editor;
 }
@@ -1788,12 +1663,10 @@ async function openNativeComponent(page: Page) {
 
 test("repairs a wired legacy custom component with explicit native port mapping in one undo", async ({
   page,
-  context,
   baseURL,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const symbol = structuredClone(
     builtInSymbols.find((item) => item.id === "resistor")!,
   );
@@ -1819,12 +1692,8 @@ test("repairs a wired legacy custom component with explicit native port mapping 
       ],
     },
   };
-  expect(
-    await putComponent(page, "legacy-repair", { definition, revision: 0 }),
-  ).toBe(200);
-  await openUserComponents(page);
-  await button(page, "Place Legacy gain").click();
-  await place(page, 400, 230);
+  await publishComponent(page, "legacy-repair", definition);
+  await placeFromLibrary(page, "Legacy gain", 400, 230);
   const label = await page
     .getByTestId("annotation-hit-instance-label-X1")
     .boundingBox();
@@ -1838,8 +1707,8 @@ test("repairs a wired legacy custom component with explicit native port mapping 
   for (const [from, to] of [
     ["V1-+", "X1-sense"],
     ["V1--", "GND1-0"],
-  ]) {
-    await wire(page, `terminal-${from}`, `terminal-${to}`);
+  ] as const) {
+    await drawWire(page, from, to);
   }
   await markNoConnect(page, "terminal-X1-drive");
   expect(
@@ -1847,8 +1716,7 @@ test("repairs a wired legacy custom component with explicit native port mapping 
       .status,
   ).toBe("blocked");
   const client = await pairAgent(page, baseURL!);
-  await editWithKey(page, "X1");
-  const dialog = componentEditor(page);
+  const dialog = await editWithKey(page, "X1");
   await authoringView(dialog, "Circuit");
   await expect(button(dialog, "Place")).toHaveCount(0);
   await netlist(dialog).fill(".subckt incomplete IN OUT VSS\n");
@@ -1940,16 +1808,13 @@ test("repairs a wired legacy custom component with explicit native port mapping 
 
 test("explicitly attaches a legacy class to an existing applied Project model without changing its draft or peers", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const native = await openFiniteGain(page);
   await button(native, "Apply & Place").click();
   await place(page, 650, 230);
-  await editWithKey(page, "X1");
-  const editor = componentEditor(page);
+  const editor = await editWithKey(page, "X1");
   await authoringView(editor, "Circuit");
   await netlist(editor).fill(finiteGainSource.replace("gain=10", "gain=25"));
   await text(editor, "More").click();
@@ -1985,9 +1850,7 @@ test("explicitly attaches a legacy class to an existing applied Project model wi
       ],
     },
   };
-  expect(
-    await putComponent(page, "legacy-attach", { definition, revision: 0 }),
-  ).toBe(200);
+  await publishComponent(page, "legacy-attach", definition);
   for (const x of [350, 500]) {
     await openUserComponents(page);
     if (x === 350) {
@@ -2002,9 +1865,7 @@ test("explicitly attaches a legacy class to an existing applied Project model wi
   );
   const implicit = structuredClone(captured);
   const legacyId = implicit.documents[0]!.instances[1]!.symbolId;
-  const shadow = implicit.componentDefinitions!.find(
-    (component) => component.symbol.id === legacyId,
-  )!;
+  const shadow = definitionOf(implicit, legacyId);
   shadow.symbol.id = "comparator";
   shadow.subcircuit!.symbolId = "comparator";
   for (const instance of implicit.documents[0]!.instances.slice(1, 3)) {
@@ -2019,21 +1880,16 @@ test("explicitly attaches a legacy class to an existing applied Project model wi
   expect(before.documents[0]!.instances[1]!.netlist?.binding).toBeUndefined();
   await editWithKey(page, "X2");
   await authoringView(editor, "Circuit");
-  await editor
-    .getByLabel("External model source owner", { exact: true })
-    .selectOption(before.modelSources![0]!.id);
+  await choose(
+    editor,
+    "External model source owner",
+    before.modelSources![0]!.id,
+  );
   await authoringView(editor, "Mapping");
-  await editor
-    .getByLabel("Map native IN", { exact: true })
-    .selectOption("pin:1");
-  await editor
-    .getByLabel("Map native OUT", { exact: true })
-    .selectOption("pin:2");
-  await editor
-    .getByLabel("Map native VSS", { exact: true })
-    .selectOption("supply:VSS");
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
+  await choose(editor, "Map native IN", "pin:1");
+  await choose(editor, "Map native OUT", "pin:2");
+  await choose(editor, "Map native VSS", "supply:VSS");
+  await applyModel(editor);
   await editor.getByLabel("Close component editor", { exact: true }).click();
   const repaired = await readProject(page);
   expect(repaired.modelSources).toEqual(before.modelSources);
@@ -2060,13 +1916,11 @@ test("explicitly attaches a legacy class to an existing applied Project model wi
 
 test("explicitly upgrades a symbol-only public entry without rewriting captured Projects", async ({
   page,
-  context,
   service,
 }) => {
   test.setTimeout(90_000);
   const body = ".subckt restored_model A B\nR1 A B 1k\n.ends restored_model\n";
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const symbol = {
     ...structuredClone(builtInSymbols.find((item) => item.id === "resistor")!),
     id: "legacy-public-art",
@@ -2084,9 +1938,7 @@ test("explicitly upgrades a symbol-only public entry without rewriting captured 
       ],
     },
   };
-  expect(
-    await putComponent(page, "legacy-upgrade", { definition, revision: 0 }),
-  ).toBe(200);
+  await publishComponent(page, "legacy-upgrade", definition);
   await openUserComponents(page);
   const tile = page
     .locator(".user-component-tile")
@@ -2109,8 +1961,7 @@ test("explicitly upgrades a symbol-only public entry without rewriting captured 
   const editor = componentEditor(page);
   await authoringView(editor, "Circuit");
   await netlist(editor).fill(body);
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
+  await applyModel(editor);
   await button(editor, "Update my component").click();
   await expect(text(editor, "Saved to the public library.")).toBeVisible();
   await editor.getByLabel("Close component editor", { exact: true }).click();
@@ -2132,19 +1983,12 @@ test("explicitly upgrades a symbol-only public entry without rewriting captured 
 
 test("live preview and the administrator lifecycle keep captured Projects", async ({
   page,
-  context,
   service,
 }) => {
-  const definition = newComponentDefinition();
-  definition.symbol.name = "Shared amplifier";
-  service.seedHistoricalDefinition(
-    "shared-amplifier",
-    publishedDefinition(definition, "shared-amplifier", 1),
-  );
+  service.seedPublished("shared-amplifier", "Shared amplifier");
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await service.connect(context, "admin");
-  await openEditor(page);
+  await service.openEditorAs(page, "admin");
   await openUserComponents(page);
   await button(page, "Create Component…").click();
   await editDefinition(page, "Previewed amplifier");
@@ -2153,9 +1997,7 @@ test("live preview and the administrator lifecycle keep captured Projects", asyn
   ).toHaveCount(1);
   await button(page, "Close component editor").click();
   await button(page, "Discard changes").click();
-  await openUserComponents(page);
-  await button(page, "Place Shared amplifier").click();
-  await place(page);
+  await placeFromLibrary(page, "Shared amplifier");
   const captured = (await readProject(page)).componentDefinitions;
   expect(captured).toHaveLength(1);
   await openUserComponents(page);
@@ -2180,16 +2022,12 @@ test("live preview and the administrator lifecycle keep captured Projects", asyn
 
 test("anonymous creation keeps public publication disabled and invalid code leaves the circuit untouched", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   await openUserComponents(page);
   await button(page, "Create Component…").click();
-  await page
-    .getByLabel("Definition type", { exact: true })
-    .selectOption("json");
+  await choose(page, "Definition type", "json");
   await expect(button(page, PUBLISH)).toBeDisabled();
   await expect(button(page, "Apply")).toBeEnabled();
   const code = page.getByRole("textbox", {
@@ -2208,12 +2046,10 @@ test("anonymous creation keeps public publication disabled and invalid code leav
 
 test("creates a native User Component through the shared model owner and places its automatic symbol", async ({
   page,
-  context,
   service,
 }) => {
   // Project Apply does not require or perform public-library publication.
-  await service.connect(context, "alice");
-  await openEditor(page);
+  await service.openEditorAs(page, "alice");
   const editor = await openFiniteGain(page);
   await button(editor, "Apply model").click();
   await expect(editor.getByLabel("Parsed model interface")).toContainText("IN");
@@ -2248,20 +2084,17 @@ test("creates a native User Component through the shared model owner and places 
       definitionId: definition.id,
     });
   await expect(page.locator('[data-pin-name="OUT"]').first()).toBeVisible();
-  await openUserComponents(page);
-  const dialog = libraryDialog(page);
+  const dialog = await openUserComponents(page);
   await expect(button(dialog, "Place finite_gain")).toHaveCount(0);
 });
 
 test("native User Components bind an existing owner, guard unsaved text and keep a stale draft on the latest version", async ({
   page,
-  context,
   baseURL,
   service,
 }) => {
   test.setTimeout(90_000);
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   let editor = await openFiniteGain(page);
   await button(editor, "Apply model").click();
   await editor.getByLabel("Close component editor", { exact: true }).click();
@@ -2270,9 +2103,7 @@ test("native User Components bind an existing owner, guard unsaved text and keep
   const owner = before.modelSources![0]!;
   editor = await openNativeComponent(page);
   await authoringView(editor, "Circuit");
-  await editor
-    .getByLabel("External model source owner", { exact: true })
-    .selectOption(owner.id);
+  await choose(editor, "External model source owner", owner.id);
   await authoringView(editor, "Circuit");
   await entry(editor).selectOption("finite_gain");
   const pendingText = finiteGainSource.replace("gain=10", "gain=17");
@@ -2354,25 +2185,19 @@ test("native User Components bind an existing owner, guard unsaved text and keep
 
 test("complete same-name custom artwork initializes checked mappings", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   const editor = await openFiniteGain(page, "custom");
   await authoringView(editor, "Symbol");
-  const code = editor.getByLabel("Circuit symbol JSON", { exact: true });
+  const code = symbolJson(editor);
   const component = JSON.parse(await copyText(page, code));
   delete component.circuitBinding;
   await code.fill(JSON.stringify(component, null, 2));
   await expect(editor.getByRole("alert")).toHaveCount(0);
-  await button(editor, "Apply & Place").click();
-  await expect(editor).toHaveCount(0);
-  await place(page);
+  await applyAndPlace(editor);
   const applied = await readProject(page);
-  const captured = applied.componentDefinitions!.find(
-    (d) => d.symbol.id === component.symbol.id,
-  )!;
+  const captured = definitionOf(applied, component.symbol.id);
   expect(
     captured.circuitBinding!.terminals.map((m) =>
       "pinName" in m ? m.pinName : m.supply,
@@ -2383,14 +2208,12 @@ test("complete same-name custom artwork initializes checked mappings", async ({
 
 test("custom circuit mappings reject collapsed ports and use an explicit property supply", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   const editor = await openFiniteGain(page, "custom");
   await authoringView(editor, "Symbol");
-  const code = editor.getByLabel("Circuit symbol JSON", { exact: true });
+  const code = symbolJson(editor);
   const component = JSON.parse(await copyText(page, code));
   const duplicate = structuredClone(component);
   duplicate.circuitBinding.terminals[1].pinName = "IN";
@@ -2410,17 +2233,15 @@ test("custom circuit mappings reject collapsed ports and use an explicit propert
     supply: "VSS",
   };
   await code.fill(JSON.stringify(component, null, 2));
-  await button(editor, "Apply & Place").click();
-  await expect(editor).toHaveCount(0);
-  await place(page, 400, 220);
+  await applyAndPlace(editor, 400, 220);
   await expect(page.getByTestId("terminal-X1-VSS")).toHaveCount(0);
   await placeComponent(page, "voltage-source", { x: 160, y: 350 });
   await placeComponent(page, "ground", { x: 440, y: 460 });
   for (const [from, to] of [
     ["V1-+", "X1-IN"],
     ["V1--", "GND1-0"],
-  ]) {
-    await wire(page, `terminal-${from}`, `terminal-${to}`);
+  ] as const) {
+    await drawWire(page, from, to);
   }
   await markNoConnect(page, "terminal-X1-OUT");
   const applied = await readProject(page);
@@ -2441,16 +2262,12 @@ test("custom circuit mappings reject collapsed ports and use an explicit propert
 
 test("editing connected custom artwork and switching modes preserves logical pins and captured peers", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   let editor = await openFiniteGain(page, "custom");
   await authoringView(editor, "Symbol");
-  const initialCode = editor.getByLabel("Circuit symbol JSON", {
-    exact: true,
-  });
+  const initialCode = symbolJson(editor);
   const initialArtwork = JSON.parse(await copyText(page, initialCode));
   initialArtwork.symbol.variants = [
     { id: "base", hiddenPinNames: [] },
@@ -2471,7 +2288,7 @@ test("editing connected custom artwork and switching modes preserves logical pin
   await canvas.click({ position: { x: 640, y: 320 } });
   await page.keyboard.press("Escape");
   await placeComponent(page, "voltage-source", { x: 140, y: 350 });
-  await wire(page, "terminal-V1-+", "terminal-X1-IN");
+  await drawWire(page, "V1-+", "X1-IN");
   const selectedVariants = await readProject(page);
   for (const instance of selectedVariants.documents[0]!.instances.filter(
     (item) => item.id === "X1" || item.id === "X2",
@@ -2481,36 +2298,28 @@ test("editing connected custom artwork and switching modes preserves logical pin
   await button(page, "Continue without saving").click();
   await awaitEditorReady(page);
   const before = await readProject(page);
-  const peer = before.documents[0]!.instances.find((i) => i.id === "X2")!;
-  expect(
-    before.documents[0]!.instances.find((i) => i.id === "X1")!.symbolVariantId,
-  ).toBe("alternate");
+  const peer = instanceOf(before, "X2");
+  expect(instanceOf(before, "X1").symbolVariantId).toBe("alternate");
   expect(peer.symbolVariantId).toBe("alternate");
-  await editFromMenu(page, "X1");
-  editor = componentEditor(page);
+  editor = await editFromMenu(page, "X1");
   await authoringView(editor, "Symbol");
   await expect(editor.getByLabel("Symbol mode")).toHaveValue("custom");
   await authoringView(editor, "Symbol");
-  const code = editor.getByLabel("Circuit symbol JSON", { exact: true });
+  const code = symbolJson(editor);
   const artwork = JSON.parse(await copyText(page, code));
   artwork.symbol.pins.find((pin: { name: string }) => pin.name === "IN").at.x -=
     20;
   await code.fill(JSON.stringify(artwork, null, 2));
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
+  await applyModel(editor);
   await editor.getByLabel("Close component editor", { exact: true }).click();
   const moved = await readProject(page);
-  expect(
-    moved.documents[0]!.instances.find((i) => i.id === "X1")!.symbolVariantId,
-  ).toBe("alternate");
+  expect(instanceOf(moved, "X1").symbolVariantId).toBe("alternate");
   expect(moved.documents[0]!.nets).toEqual(before.documents[0]!.nets);
   expect(moved.modelSources![0]!.files).toEqual(before.modelSources![0]!.files);
   expect(moved.externalSubcircuitDefinitions[0]!.terminals).toEqual(
     before.externalSubcircuitDefinitions[0]!.terminals,
   );
-  expect(moved.documents[0]!.instances.find((i) => i.id === "X2")).toEqual(
-    peer,
-  );
+  expect(instanceOf(moved, "X2")).toEqual(peer);
   const endpoint = {
     kind: "terminal" as const,
     instanceId: "X1",
@@ -2535,17 +2344,9 @@ test("editing connected custom artwork and switching modes preserves logical pin
       moved.documents[0]!.routes[0]!,
     )!.centerline.at(-1),
   ).toEqual(movedPoint);
-  expect(
-    moved.documents[0]!.instances.find((i) => i.id === "X1")!.symbolId,
-  ).not.toBe(artwork.symbol.id);
-  expect(
-    moved.componentDefinitions!.find(
-      (definition) => definition.symbol.id === artwork.symbol.id,
-    ),
-  ).toEqual(
-    before.componentDefinitions!.find(
-      (definition) => definition.symbol.id === artwork.symbol.id,
-    ),
+  expect(instanceOf(moved, "X1").symbolId).not.toBe(artwork.symbol.id);
+  expect(definitionOf(moved, artwork.symbol.id)).toEqual(
+    definitionOf(before, artwork.symbol.id),
   );
   await page.keyboard.press("ControlOrMeta+z");
   expect(await readProject(page)).toEqual({
@@ -2562,35 +2363,29 @@ test("editing connected custom artwork and switching modes preserves logical pin
   await editor.getByLabel("Symbol mode").selectOption("automatic");
   const discard = button(editor, "Discard changes");
   if (await discard.isVisible()) await discard.click();
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
+  await applyModel(editor);
+  await applyModel(editor);
   await editor.getByLabel("Close component editor", { exact: true }).click();
   const automatic = await readProject(page);
-  const caller = automatic.documents[0]!.instances.find((i) => i.id === "X1")!;
+  const caller = instanceOf(automatic, "X1");
   expect(caller.symbolVariantId).toBeUndefined();
   expect(caller.symbolId).not.toBe(artwork.symbol.id);
   expect(caller.netlist?.binding).toEqual(
-    before.documents[0]!.instances.find((i) => i.id === "X1")!.netlist?.binding,
+    instanceOf(before, "X1").netlist?.binding,
   );
   expect(automatic.modelSources![0]!.files).toEqual(
     before.modelSources![0]!.files,
   );
   expect(automatic.documents[0]!.nets).toEqual(before.documents[0]!.nets);
-  expect(automatic.documents[0]!.instances.find((i) => i.id === "X2")).toEqual(
-    peer,
-  );
+  expect(instanceOf(automatic, "X2")).toEqual(peer);
 });
 
 test("copying custom circuits keeps terminal identities scoped to each native owner", async ({
   page,
-  context,
   service,
 }) => {
   test.setTimeout(90_000);
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   for (const [name, x] of [
     ["finite_gain", 250],
     ["second_gain", 500],
@@ -2603,9 +2398,7 @@ test("copying custom circuits keeps terminal identities scoped to each native ow
         .replaceAll("finite_gain", name),
     );
     await authoringView(editor, "Symbol");
-    await editor
-      .getByLabel("Symbol mode", { exact: true })
-      .selectOption("custom");
+    await choose(editor, "Symbol mode", "custom");
     await button(editor, "Apply & Place").click();
     await place(page, x, 260);
   }
@@ -2647,9 +2440,7 @@ test("copying custom circuits keeps terminal identities scoped to each native ow
     const owner = copied.externalSubcircuitDefinitions.find(
       (item) => item.id === binding.definitionId,
     )!;
-    const artwork = copied.componentDefinitions!.find(
-      (item) => item.symbol.id === instance.symbolId,
-    )!;
+    const artwork = definitionOf(copied, instance.symbolId);
     expect(artwork.circuitBinding!.definitionId).toBe(owner.id);
     expect(
       artwork.circuitBinding!.terminals.map((item) => item.terminalId),
@@ -2664,18 +2455,13 @@ test("copying custom circuits keeps terminal identities scoped to each native ow
 
 test("native custom source changes diagnose missing mappings without crashing the Editor", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   let editor = await openFiniteGain(page, "custom");
-  await button(editor, "Apply & Place").click();
-  await expect(editor).toHaveCount(0);
-  await place(page);
+  await applyAndPlace(editor);
   const before = await readProject(page);
-  await editFromMenu(page, "X1");
-  editor = componentEditor(page);
+  editor = await editFromMenu(page, "X1");
   await authoringView(editor, "Circuit");
   await netlist(editor).fill(
     finiteGainSource.replace("IN OUT VSS params:", "IN OUT VSS EXTRA params:"),
@@ -2692,14 +2478,12 @@ test("native custom source changes diagnose missing mappings without crashing th
 
 test("connected custom native port rename preserves graphical mapping, Nets and No Connects in one undo", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   let editor = await openFiniteGain(page, "custom");
   await authoringView(editor, "Symbol");
-  const jsonCode = editor.getByLabel("Circuit symbol JSON", { exact: true });
+  const jsonCode = symbolJson(editor);
   const custom = JSON.parse(await copyText(page, jsonCode));
   custom.symbol.pins.find((pin: { name: string }) => pin.name === "IN").name =
     "sense";
@@ -2707,34 +2491,29 @@ test("connected custom native port rename preserves graphical mapping, Nets and 
     (mapping: { pinName: string }) => mapping.pinName === "IN",
   ).pinName = "sense";
   await jsonCode.fill(JSON.stringify(custom, null, 2));
-  await button(editor, "Apply & Place").click();
-  await expect(editor).toHaveCount(0);
-  await place(page, 400, 220);
+  await applyAndPlace(editor, 400, 220);
   await placeComponent(page, "voltage-source", { x: 150, y: 350 });
   await placeComponent(page, "ground", { x: 480, y: 460 });
   for (const [from, to] of [
     ["V1-+", "X1-IN"],
     ["V1--", "GND1-0"],
     ["X1-VSS", "GND1-0"],
-  ]) {
-    await wire(page, `terminal-${from}`, `terminal-${to}`);
+  ] as const) {
+    await drawWire(page, from, to);
   }
   await markNoConnect(page, "terminal-X1-OUT");
   const before = await readProject(page);
   const beforeOwner = before.externalSubcircuitDefinitions[0]!;
-  const originalArtwork = before.componentDefinitions!.find(
-    (item) =>
-      item.symbol.id ===
-      before.documents[0]!.instances.find((item) => item.id === "X1")!.symbolId,
-  )!;
-  await editFromMenu(page, "X1");
-  editor = componentEditor(page);
+  const originalArtwork = definitionOf(
+    before,
+    instanceOf(before, "X1").symbolId,
+  );
+  editor = await editFromMenu(page, "X1");
   await authoringView(editor, "Circuit");
   await netlist(editor).fill(finiteGainSource.replace(/\bIN\b/gu, "INPUT"));
   await authoringView(editor, "Circuit");
   await editor.getByLabel("Migrate finite_gain.IN").selectOption("INPUT");
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
+  await applyModel(editor);
   await editor.getByLabel("Close component editor", { exact: true }).click();
   const renamed = await readProject(page);
   expect(
@@ -2745,11 +2524,9 @@ test("connected custom native port rename preserves graphical mapping, Nets and 
   expect(renamed.externalSubcircuitDefinitions[0]!.terminals[0]!.id).toBe(
     beforeOwner.terminals[0]!.id,
   );
-  expect(
-    renamed.componentDefinitions!.find(
-      (item) => item.symbol.id === originalArtwork.symbol.id,
-    ),
-  ).toEqual(originalArtwork);
+  expect(definitionOf(renamed, originalArtwork.symbol.id)).toEqual(
+    originalArtwork,
+  );
   const expectedDocument = structuredClone(before.documents[0]!);
   for (const net of expectedDocument.nets)
     for (const terminal of net.terminals)
@@ -2782,18 +2559,14 @@ test("connected custom native port rename preserves graphical mapping, Nets and 
 
 test("native port removal captures repaired custom artwork and detaches removed No Connects in one undo", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   const editor = await openFiniteGain(page, "custom");
-  await button(editor, "Apply & Place").click();
-  await expect(editor).toHaveCount(0);
-  await place(page, 400, 220);
+  await applyAndPlace(editor, 400, 220);
   await placeComponent(page, "ground", { x: 480, y: 460 });
   for (const pin of ["IN", "VSS"]) {
-    await wire(page, `terminal-X1-${pin}`, "terminal-GND1-0");
+    await drawWire(page, `X1-${pin}`, "GND1-0");
   }
   await markNoConnect(page, "terminal-X1-OUT");
   const before = await readProject(page);
@@ -2807,8 +2580,7 @@ test("native port removal captures repaired custom artwork and detaches removed 
   await manager
     .getByLabel("Migrate finite_gain.OUT")
     .selectOption("__disconnect");
-  await button(manager, "Apply model").click();
-  await expect(manager.getByRole("status")).toContainText("Applied");
+  await applyModel(manager);
   await button(manager, "Close Cell Manager").click();
   const after = await readProject(page);
   expect(
@@ -2834,14 +2606,9 @@ test("native port removal captures repaired custom artwork and detaches removed 
   ).toBe(false);
   expect(after.documents[0]!.noConnects).toEqual([]);
   expect(
-    after
-      .componentDefinitions!.find(
-        (item) =>
-          item.symbol.id ===
-          after.documents[0]!.instances.find((item) => item.id === "X1")!
-            .symbolId,
-      )!
-      .symbol.pins.map((pin) => pin.name),
+    definitionOf(after, instanceOf(after, "X1").symbolId).symbol.pins.map(
+      (pin) => pin.name,
+    ),
   ).toEqual(["VSS"]);
   await button(page, "Undo").click();
   const undone = await readProject(page);
@@ -2853,14 +2620,11 @@ test("native port removal captures repaired custom artwork and detaches removed 
 
 test("native port removal migrates preferred artwork past a different placed capture", async ({
   page,
-  context,
   service,
 }) => {
-  await service.connect(context, null);
-  await openEditor(page);
+  await service.openEditorAs(page, null);
   let editor = await openFiniteGain(page, "custom");
-  await button(editor, "Apply model").click();
-  await expect(editor.getByRole("status")).toContainText("Applied");
+  await applyModel(editor);
   {
     await button(editor, "Place").click();
     await place(page, 400, 220);
@@ -2874,9 +2638,11 @@ test("native port removal migrates preferred artwork past a different placed cap
     });
     editor = await openNativeComponent(page);
     await authoringView(editor, "Circuit");
-    await editor
-      .getByLabel("External model source owner", { exact: true })
-      .selectOption(placed.modelSources![0]!.id);
+    await choose(
+      editor,
+      "External model source owner",
+      placed.modelSources![0]!.id,
+    );
     await authoringView(editor, "Circuit");
     await entry(editor).selectOption("finite_gain");
     await authoringView(editor, "Symbol");
@@ -2884,8 +2650,7 @@ test("native port removal migrates preferred artwork past a different placed cap
     await editor
       .getByRole("textbox", { name: "Circuit symbol JSON", exact: true })
       .fill(JSON.stringify(artwork, null, 2));
-    await button(editor, "Apply model").click();
-    await expect(editor.getByRole("status")).toContainText("Applied");
+    await applyModel(editor);
   }
   await editor.getByLabel("Close component editor", { exact: true }).click();
   const before = await readProject(page);
@@ -2900,8 +2665,7 @@ test("native port removal migrates preferred artwork past a different placed cap
   await manager
     .getByLabel("Migrate finite_gain.OUT")
     .selectOption("__disconnect");
-  await button(manager, "Apply model").click();
-  await expect(manager.getByRole("status")).toContainText("Applied");
+  await applyModel(manager);
   await button(manager, "Place").click();
   await place(page, 650, 320);
   for (const reference of ["X1", "X2"])
@@ -2915,22 +2679,16 @@ test("native port removal migrates preferred artwork past a different placed cap
     "VSS",
   ]);
   expect(definition.symbolId).not.toBe(oldPreference);
-  const preferred = after.componentDefinitions!.find(
-    (item) => item.symbol.id === definition.symbolId,
-  )!;
+  const preferred = definitionOf(after, definition.symbolId!);
   expect(preferred.symbol.pins.map((pin) => pin.name)).toEqual(["IN", "VSS"]);
   expect(preferred.symbol.primitives).toEqual(
-    before.componentDefinitions!.find(
-      (item) => item.symbol.id === oldPreference,
-    )!.symbol.primitives,
+    definitionOf(before, oldPreference).symbol.primitives,
   );
   expect(after.documents[0]!.instances.at(-1)!.symbolId).toBe(
     definition.symbolId,
   );
   for (const instance of after.documents[0]!.instances) {
-    const capture = after.componentDefinitions!.find(
-      (item) => item.symbol.id === instance.symbolId,
-    )!;
+    const capture = definitionOf(after, instance.symbolId);
     expect(capture.symbol.pins.map((pin) => pin.name)).toEqual(["IN", "VSS"]);
   }
   expect(await copyNetlistText(page, "spice")).toContain(

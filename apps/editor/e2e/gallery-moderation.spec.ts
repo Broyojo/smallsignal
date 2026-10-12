@@ -6,9 +6,10 @@
 import { expect, test } from "./gallery-test.js";
 import {
   ENTRY,
-  fulfillPreview,
   mockGallery,
+  mockGalleryApi,
   mockPreviews,
+  mockProviders,
   sessionUser,
   signIn,
 } from "./gallery-fixtures.js";
@@ -25,9 +26,7 @@ test("the Owner withdraws an entry from its tile menu and rejects another with a
 }) => {
   await page.setViewportSize({ width: 360, height: 500 });
   let sessionRequests = 0;
-  await page.route("**/api/auth/providers", (route) =>
-    route.fulfill({ json: { github: true, google: false, email: false } }),
-  );
+  await mockProviders(page, { github: true, google: false, email: false });
   await page.route("**/api/auth/me", (route) => {
     sessionRequests += 1;
     return route.fulfill({ json: { user: OWNER } });
@@ -346,36 +345,30 @@ test("authors can filter pending visual reviews and resolve their own drawing", 
     },
     assessedPreviewRevision: ENTRY.previewRevision,
   };
-  await page.route("**/api/gallery**", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/gallery/tags")
-      return route.fulfill({
-        json: {
-          tags: [{ tag: "amplifier", count: 1 }],
-        },
-      });
-    if (url.pathname === "/api/gallery/review-me/curation") {
+  await mockPreviews(page);
+  const tags = [{ tag: "amplifier", count: 1 }];
+  await mockGalleryApi(page, { tags }, async (url, route) => {
+    const included =
+      url.searchParams.get("attention") !== "1" ||
+      entry.attention.status === "needs-attention";
+    return route.fulfill({
+      json: {
+        entries: included ? [entry] : [],
+        nextCursor: null,
+        total: included ? 1 : 0,
+      },
+    });
+  });
+  await page.route(
+    (url) => url.pathname === "/api/gallery/review-me/curation",
+    (route) => {
       const body = route.request().postDataJSON();
       expect(body.expectedCurationRevision).toBe(1);
       expect(body.expectedPreviewRevision).toBe(ENTRY.previewRevision);
       entry = { ...entry, attention: body.attention, curationRevision: 2 };
       return route.fulfill({ json: { entry } });
-    }
-    if (url.pathname === "/api/gallery") {
-      const included =
-        url.searchParams.get("attention") !== "1" ||
-        entry.attention.status === "needs-attention";
-      return route.fulfill({
-        json: {
-          entries: included ? [entry] : [],
-          nextCursor: null,
-          total: included ? 1 : 0,
-        },
-      });
-    }
-    if (url.pathname.endsWith("/preview.svg")) return fulfillPreview(route);
-    return route.fallback();
-  });
+    },
+  );
   await page.goto("/");
   await expect(page.getByText("Categories", { exact: true })).toHaveCount(0);
   await expect(

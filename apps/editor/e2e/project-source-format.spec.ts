@@ -1,10 +1,18 @@
-import { expect, test } from "@playwright/test";
-import { createEmptyProject } from "@icm/model";
+import { expect, test, type Page } from "@playwright/test";
+import { createEmptyProject, type CircuitProject } from "@icm/model";
 import {
   serializeProject,
   CURRENT_PROJECT_FILE_VERSION,
 } from "@icm/project-protocol";
 import { withProjectComponentDefinitions } from "@icm/symbols";
+import { openProjectFile } from "./editor-fixtures.js";
+
+/** Open the Project in a new tab and show its Project Code. */
+async function openWithCode(page: Page, project: CircuitProject, name: string) {
+  await page.goto("/editor?new=1");
+  await openProjectFile(page, serializeProject(project), name);
+  await page.getByTestId("project-code-toggle").click();
+}
 
 // Pasting code from another Project is project-code's ("pastes all content
 // from another Project while retaining recipient identity"); native text copy
@@ -39,13 +47,7 @@ test("edits a complete instance in portable Project Code and undoes once", async
     rotation: 0,
     locked: false,
   });
-  await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "portable.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  await page.getByTestId("project-code-toggle").click();
+  await openWithCode(page, project, "portable.icproj.json");
   const editor = page.getByRole("textbox", {
     name: "Project code",
     exact: true,
@@ -100,13 +102,7 @@ test("lights the whole Project Code of a part selected on the canvas", async ({
       placement: { position: { x, y: 300 }, rotation: 0, mirror: "none" },
       netlist: { parameters: { value: "1k" } },
     });
-  await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "lit-code.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  await page.getByTestId("project-code-toggle").click();
+  await openWithCode(page, project, "lit-code.icproj.json");
   const panel = page.getByRole("region", { name: "Project Code" });
   const lit = panel.locator(".cm-code-highlight");
   await expect(

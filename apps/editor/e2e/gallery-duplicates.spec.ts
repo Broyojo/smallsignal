@@ -3,9 +3,15 @@
 // reload is the gallery-topology-task "durable topology observation" test.
 
 import { expect, test } from "./gallery-test.js";
-import { readFileSync } from "node:fs";
+import type { Page } from "@playwright/test";
 import { createEmptyProject } from "@icm/model";
-import { serializeProject, parseProject } from "@icm/project-protocol";
+import { serializeProject } from "@icm/project-protocol";
+import {
+  expectStatus,
+  openProjectFile,
+  exampleProject,
+  openProject,
+} from "./editor-fixtures.js";
 import {
   ENTRY,
   fulfillPreview,
@@ -13,6 +19,10 @@ import {
   sessionUser,
   signIn,
 } from "./gallery-fixtures.js";
+
+/** The SKY130 model fill, which the Gallery sidebar does not offer. */
+const fillModels = (page: Page) =>
+  page.getByRole("button", { name: "Fill missing SKY130 models", exact: true });
 
 test("admin checks duplicates and cleans selected copies with partial failure recovery", async ({
   page,
@@ -120,12 +130,7 @@ test("admin checks duplicates and cleans selected copies with partial failure re
   await expect(sidebar.locator(".gallery-sidebar-admin")).toContainText(
     "Check duplicates",
   );
-  await expect(
-    page.getByRole("button", {
-      name: "Fill missing SKY130 models",
-      exact: true,
-    }),
-  ).toHaveCount(0);
+  await expect(fillModels(page)).toHaveCount(0);
   await page.getByTestId("gallery-check-duplicates").click();
   const panel = page.getByTestId("gallery-duplicates");
   await expect(panel.getByRole("status")).toContainText(
@@ -200,12 +205,7 @@ test("duplicate check is hidden for a moderator", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toBeVisible();
   await expect(page.getByTestId("gallery-check-duplicates")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", {
-      name: "Fill missing SKY130 models",
-      exact: true,
-    }),
-  ).toHaveCount(0);
+  await expect(fillModels(page)).toHaveCount(0);
 });
 
 test("Publish checks exact, nearest and hierarchical duplicates without adding a Gallery control", async ({
@@ -256,13 +256,12 @@ test("Publish checks exact, nearest and hierarchical duplicates without adding a
     return route.fulfill({ status: 404, json: {} });
   });
 
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "current.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(galleryResistorProject())),
-  });
-  await expect(page.getByTestId("status")).toContainText("current.icproj.json");
+  await openProject(
+    page,
+    serializeProject(galleryResistorProject()),
+    "current.icproj.json",
+  );
+  await expectStatus(page, "current.icproj.json");
   await page.getByTestId("examples-toggle").click();
   const panel = page.getByTestId("examples-panel");
   await expect(panel.getByTestId("gallery-find-similar")).toHaveCount(0);
@@ -309,43 +308,30 @@ test("Publish checks exact, nearest and hierarchical duplicates without adding a
     .getByRole("button", { name: "View results" })
     .click();
   const results = dialog.getByTestId("gallery-topology-results");
-  await expect(results.getByRole("link")).toHaveCount(3);
-  await expect(results.getByRole("link").nth(0)).toContainText(
-    "Exact resistor pair",
-  );
-  await expect(results.locator("article").nth(0)).toContainText(
-    "Exact topology match",
-  );
-  await expect(results.getByRole("link").nth(1)).toContainText(
-    "Same topology, other value",
-  );
-  await expect(results.locator("article").nth(1)).toContainText(
-    "Exact topology match",
-  );
-  await expect(results.getByRole("link").nth(0)).toHaveAttribute(
-    "href",
-    "/g/exact",
-  );
-  await expect(results.locator("article").nth(0)).toContainText(
+  const links = results.getByRole("link");
+  const articles = results.locator("article");
+  await expect(links).toHaveCount(3);
+  await expect(links.nth(0)).toContainText("Exact resistor pair");
+  await expect(articles.nth(0)).toContainText("Exact topology match");
+  await expect(links.nth(1)).toContainText("Same topology, other value");
+  await expect(articles.nth(1)).toContainText("Exact topology match");
+  await expect(links.nth(0)).toHaveAttribute("href", "/g/exact");
+  await expect(articles.nth(0)).toContainText(
     "including models and parameters",
   );
-  await expect(results.locator("article").nth(1)).toContainText(
-    "netlist details differ",
-  );
+  await expect(articles.nth(1)).toContainText("netlist details differ");
   await expect(check).toBeEnabled();
   await expect(check).toHaveText("Check Again");
-  await expect(results.locator("article").nth(1)).toContainText("94% match");
+  await expect(articles.nth(1)).toContainText("94% match");
   await page.getByTestId("topology-compare-nearest").click();
   const comparison = page.getByRole("dialog", {
     name: "Circuit match comparison",
   });
   await expect(comparison).toBeVisible();
-  await expect(comparison.getByTestId("topology-highlight-source")).toHaveCount(
-    2,
-  );
-  await expect(comparison.getByTestId("topology-highlight-target")).toHaveCount(
-    2,
-  );
+  const source = comparison.getByTestId("topology-highlight-source");
+  const target = comparison.getByTestId("topology-highlight-target");
+  await expect(source).toHaveCount(2);
+  await expect(target).toHaveCount(2);
   // The comparison includes actual conductors, not just isolated symbol previews.
   await expect(
     comparison
@@ -354,13 +340,9 @@ test("Publish checks exact, nearest and hierarchical duplicates without adding a
       )
       .first(),
   ).toBeVisible();
-  await comparison.getByTestId("topology-highlight-source").first().click();
-  await expect(comparison.getByTestId("topology-highlight-source")).toHaveCount(
-    1,
-  );
-  await expect(comparison.getByTestId("topology-highlight-target")).toHaveCount(
-    1,
-  );
+  await source.first().click();
+  await expect(source).toHaveCount(1);
+  await expect(target).toHaveCount(1);
   const valueRow = comparison.getByRole("row", { name: "value 1k 2k" });
   await expect(valueRow).toBeVisible();
   await comparison
@@ -374,26 +356,14 @@ test("Publish checks exact, nearest and hierarchical duplicates without adding a
   // A frozen comparison of another Project or Cell, and a revised
   // candidate, are the gallery-topology-check and -match module tests.
   await page.getByTestId("topology-compare-partial").click();
-  await expect(comparison.getByTestId("topology-highlight-source")).toHaveCount(
-    1,
-  );
-  await expect(comparison.getByTestId("topology-highlight-target")).toHaveCount(
-    1,
-  );
+  await expect(source).toHaveCount(1);
+  await expect(target).toHaveCount(1);
   await expect(comparison).toContainText("1 matched devices");
   expect(detailRequests).toBe(3);
 
   // A hierarchical match enters the matched child Cell and shows its SKY130
   // parameter differences.
-  const ota = parseProject(
-    readFileSync(
-      new URL(
-        "../src/examples/five-transistor-ota-sky130.icproj.json",
-        import.meta.url,
-      ),
-      "utf8",
-    ),
-  );
+  const ota = exampleProject("five-transistor-ota-sky130.icproj.json");
   const sized = structuredClone(ota);
   sized.documents
     .find((doc) => doc.id === "document-ota-5t")!
@@ -407,16 +377,11 @@ test("Publish checks exact, nearest and hierarchical duplicates without adding a
     .getByRole("button", { name: "Cancel", exact: true })
     .first()
     .click();
-  await page.getByTestId("project-file").setInputFiles({
-    name: "ota.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(ota)),
-  });
-  await expect(page.getByTestId("status")).toContainText("ota.icproj.json");
+  await openProjectFile(page, serializeProject(ota), "ota.icproj.json");
+  await expectStatus(page, "ota.icproj.json");
   await page.getByTestId("publish-gallery-button").click();
   await check.click();
   await page.getByTestId("topology-compare-sized-ota").click();
-  const source = comparison.getByTestId("topology-highlight-source");
   const childInstance = comparison.locator(
     '[data-testid="topology-highlight-source"][data-instance-id="XDUT"]',
   );
@@ -425,9 +390,7 @@ test("Publish checks exact, nearest and hierarchical duplicates without adding a
     .getByRole("button", { name: "XDUT / XM1 ↔ XDUT / XM1", exact: true })
     .click();
   await expect(source).toHaveAttribute("data-instance-id", "M1");
-  await expect(
-    comparison.getByTestId("topology-highlight-target"),
-  ).toHaveAttribute("data-instance-id", "M1");
+  await expect(target).toHaveAttribute("data-instance-id", "M1");
   await expect(
     comparison.getByRole("row", { name: "w 96u 99u", exact: true }),
   ).toBeVisible();
