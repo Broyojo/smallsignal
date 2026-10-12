@@ -596,7 +596,13 @@ export function ExternalModelSourceEditor({
         },
       });
     }
-    if (!existing || !selectedDefinition) {
+    // A draft naming no applied entry gets its own placeholder owner, but an
+    // applied owner keeps its binding: its draft is stored beside it.
+    const appliedOwner = project.externalSubcircuitDefinitions.some(
+      (d) =>
+        d.id === selectedDefinitionId && d.implementation?.kind === "source",
+    );
+    if ((!existing || !selectedDefinition) && !appliedOwner) {
       edits.push({
         kind: "upsert_external_subcircuit_definition",
         definition: {

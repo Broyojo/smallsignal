@@ -2342,12 +2342,32 @@ test("native User Components bind an existing owner, guard unsaved text and keep
   expect(saved.modelSources![0]!.draft!.files[0]!.text).toBe(
     ".subckt unfinished A B\n",
   );
-  const manager = await openExternalCircuit(
-    page,
-    saved.externalSubcircuitDefinitions.find(
-      (definition) => definition.implementation?.sourceId === owner.id,
-    )!.name,
-  );
+  // Save draft stores the draft beside the applied owner, never over it.
+  const appliedOwner = applied.externalSubcircuitDefinitions![0]!;
+  expect(
+    saved.externalSubcircuitDefinitions.map(
+      ({ id, name, terminals, implementation }) => ({
+        id,
+        name,
+        terminals,
+        implementation,
+      }),
+    ),
+  ).toEqual([
+    {
+      id: appliedOwner.id,
+      name: "finite_gain",
+      terminals: appliedOwner.terminals,
+      implementation: appliedOwner.implementation,
+    },
+  ]);
+  expect(appliedOwner.terminals.map((terminal) => terminal.name)).toEqual([
+    "IN",
+    "OUT",
+    "VSS",
+  ]);
+  expect(appliedOwner.implementation?.kind).toBe("source");
+  const manager = await openExternalCircuit(page, "finite_gain");
   await expect(netlist(manager)).toContainText(".subckt unfinished A B");
   await expect(manager).toContainText("Saved draft");
 });
