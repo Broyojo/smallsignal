@@ -14,15 +14,22 @@ import { AGENT_SESSION_RECOVERY_STORAGE_KEY } from "../src/agent/session-recover
 import { WORKING_COPY_STORAGE_KEY } from "../src/document/recovery-coordinator";
 import { CLOUD_PROJECT_LIMIT } from "../src/features/editor-shell/cloud-projects";
 import {
-  awaitEditorReady,
   clickCommand,
   clickNetlistWorkflowCommand,
   downloadBytes,
+  expectStatus,
+  exportedProject,
   openMenu,
+  openProjectFile,
   parseSavedProject,
   placeResistors,
   recoveryProjectTexts,
+  openEditor,
+  expectRecovered,
+  openProject,
 } from "./editor-fixtures.js";
+import { sessionUser, signIn } from "./gallery-fixtures.js";
+import { placedInstance } from "./canvas-fixtures.js";
 
 async function mockCloudProjects(page: Page) {
   let stored: {
@@ -54,17 +61,12 @@ async function mockCloudProjects(page: Page) {
       json: { project: stored },
     });
   };
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Circuit Author",
-          email: "author@example.com",
-          provider: "github",
-          isAdmin: false,
-        },
-      },
+  await signIn(
+    page,
+    sessionUser({
+      displayName: "Circuit Author",
+      email: "author@example.com",
+      role: undefined,
     }),
   );
   await page.route("**/api/projects", (route) =>
@@ -104,26 +106,14 @@ test("fits and repairs an old booster symbol on open, and rejects invalid import
     },
   ];
   source.documents[0]!.instances.push({
-    id: "X1",
+    ...placedInstance("X1", symbol.id, 200, 200),
     reference: "X1",
-    symbolId: symbol.id,
-    placement: { position: { x: 200, y: 200 }, rotation: 0, mirror: "none" },
     netlist: { parameters: { gain: "20" } },
   });
-  const open = (name: string, buffer: Buffer) =>
-    page.getByTestId("project-file").setInputFiles({
-      name,
-      mimeType: "application/json",
-      buffer,
-    });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await open("old-booster.icproj.json", Buffer.from(JSON.stringify(source)));
+  await openProject(page, source, "old-booster.icproj.json");
   // An opened Project lands fitted, exactly as if F were pressed once, and
   // silently: the open's own status survives.
-  await expect(page.getByTestId("status")).toContainText(
-    "old-booster.icproj.json",
-  );
+  await expectStatus(page, "old-booster.icproj.json");
   const canvas = page.getByTestId("schematic-canvas");
   await expect
     .poll(() => canvas.getAttribute("viewBox"))
@@ -164,15 +154,13 @@ test("fits and repairs an old booster symbol on open, and rejects invalid import
       "INVALID_PROJECT",
     ],
   ] as const) {
-    await open(name, buffer);
-    await expect(page.getByTestId("status")).toContainText(code);
+    await openProjectFile(page, buffer, name);
+    await expectStatus(page, code);
     expect(await centers()).toEqual([-14]);
   }
   // Neither the live drawing nor its recovery copy is replaced.
   await expect(page.getByTestId("active-document-name")).toHaveText("dut");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"name": "Old booster"');
+  await expectRecovered(page, '"name": "Old booster"');
 });
 
 test("File menu falls back to one scroll area in a short viewport", async ({
@@ -224,13 +212,11 @@ test("Check and Save keeps its snapshot safe while the drawing is replaced or ed
 }) => {
   await mockCloudProjects(page);
   const releases: Array<() => void> = [];
-  let captured: ReturnType<typeof createEmptyProject> | null = null;
+  let captured: CircuitProject | null = null;
   await page.route("**/api/projects", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     const body = route.request().postDataJSON() as { projectText: string };
-    const project = JSON.parse(body.projectText) as ReturnType<
-      typeof createEmptyProject
-    >;
+    const project = JSON.parse(body.projectText) as CircuitProject;
     captured = project;
     await new Promise<void>((resolve) => releases.push(resolve));
     await route.fulfill({
@@ -286,9 +272,7 @@ test("Check and Save keeps its snapshot safe while the drawing is replaced or ed
   await expect(diagnostics.locator("button").first()).toBeDisabled();
   releases.shift()!();
   await expect(check).toBeEnabled();
-  await expect(page.getByTestId("status")).toContainText(
-    "newer edits remain unsaved",
-  );
+  await expectStatus(page, "newer edits remain unsaved");
   await expect(page.getByTestId("project-unsaved-indicator")).toBeVisible();
   expect(captured!.documents[0]!.instances).toHaveLength(1);
 });
@@ -302,13 +286,15 @@ test("paired refresh and Gallery return preserve the saved Cloud binding", async
 }) => {
   test.slow();
   const cloud = await mockCloudProjects(page);
+  const expectRestoredCount = (count: string) =>
+    expect(page.getByTestId("active-instance-count")).toHaveText(count, {
+      timeout: 15_000,
+    });
   await page.goto("/editor");
   await placeResistors(page, [360]);
   await page.keyboard.press("Control+s");
   await expect.poll(() => cloud.stored()?.revision).toBe(1);
-  await expect(page.getByTestId("status")).toContainText(
-    "Saved New Circuit to Cloud",
-  );
+  await expectStatus(page, "Saved New Circuit to Cloud");
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
   await page.getByTestId("open-agent").click();
   const panel = page.getByTestId("connect-agent-panel");
@@ -319,15 +305,11 @@ test("paired refresh and Gallery return preserve the saved Cloud binding", async
   await expect(panel.getByTestId("agent-status")).toHaveText("Connected");
   await expectAgentRecoveryAlongsideWorkingCopy(page, session.sessionId);
   await page.reload();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1", {
-    timeout: 15_000,
-  });
+  await expectRestoredCount("1");
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
   await page.keyboard.press("Control+s");
   await expect.poll(() => cloud.stored()?.revision).toBe(2);
-  await expect(page.getByTestId("status")).toContainText(
-    "Saved New Circuit to Cloud",
-  );
+  await expectStatus(page, "Saved New Circuit to Cloud");
   await expect
     .poll(
       async () =>
@@ -353,15 +335,7 @@ test("paired refresh and Gallery return preserve the saved Cloud binding", async
     edits: [
       {
         kind: "add_instance",
-        instance: {
-          id: "paired-R",
-          symbolId: "resistor",
-          placement: {
-            position: { x: 500, y: 200 },
-            rotation: 0,
-            mirror: "none",
-          },
-        },
+        instance: placedInstance("paired-R", "resistor", 500, 200),
       },
     ],
   });
@@ -371,23 +345,17 @@ test("paired refresh and Gallery return preserve the saved Cloud binding", async
   await expectAgentRecoveryAlongsideWorkingCopy(page, session.sessionId);
   page.on("dialog", (dialog) => void dialog.accept());
   await page.reload();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("2", {
-    timeout: 15_000,
-  });
+  await expectRestoredCount("2");
   await expect(page.getByTestId("project-unsaved-indicator")).toBeVisible();
   await page.keyboard.press("Control+s");
   await expect.poll(() => cloud.stored()?.revision).toBe(3);
-  await expect(page.getByTestId("status")).toContainText(
-    "Saved New Circuit to Cloud",
-  );
+  await expectStatus(page, "Saved New Circuit to Cloud");
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
 
   // Back from the Gallery, Ctrl+S still updates the same Cloud Project.
   await page.getByRole("link", { name: "Back to the gallery" }).click();
   await page.getByTestId("gallery-editor-link").click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("2", {
-    timeout: 15_000,
-  });
+  await expectRestoredCount("2");
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
   await page.keyboard.press("Control+s");
   await expect.poll(() => cloud.stored()?.revision).toBe(4);
@@ -403,9 +371,15 @@ test("Continue without saving to the Gallery drops the edits without a second br
   const guard = page.getByRole("dialog", {
     name: "Unsaved changes",
   });
-  // Back in the same window, its saved tabs are restored before anything
-  // is counted.
-  const returnToEditor = async () => {
+  const leaveAndReturn = async () => {
+    await page.getByRole("link", { name: "Back to the gallery" }).click();
+    await guard
+      .getByRole("button", { name: "Continue without saving" })
+      .click();
+    // A second, browser-owned prompt would have kept the page here.
+    await expect(page).toHaveURL(/\/$/u);
+    // Back in the same window, its saved tabs are restored before anything
+    // is counted.
     await page.goto("/editor");
     await expect(page.getByTestId("status")).toContainText(
       "Switched to New Circuit",
@@ -416,12 +390,8 @@ test("Continue without saving to the Gallery drops the edits without a second br
   await page.goto("/editor");
   // The guard protects meaningful drawings: three authored objects.
   await placeResistors(page, [300, 380, 460]);
-  await page.getByRole("link", { name: "Back to the gallery" }).click();
-  await guard.getByRole("button", { name: "Continue without saving" }).click();
-  // A second, browser-owned prompt would have kept the page here.
-  await expect(page).toHaveURL(/\/$/u);
   // A drawing never saved leaves the window's tabs (#1288).
-  await returnToEditor();
+  await leaveAndReturn();
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
 
   // A Cloud Project returns to its saved version.
@@ -430,10 +400,7 @@ test("Continue without saving to the Gallery drops the edits without a second br
   await expect.poll(() => cloud.stored()?.revision).toBe(1);
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
   await placeResistors(page, [380, 460]);
-  await page.getByRole("link", { name: "Back to the gallery" }).click();
-  await guard.getByRole("button", { name: "Continue without saving" }).click();
-  await expect(page).toHaveURL(/\/$/u);
-  await returnToEditor();
+  await leaveAndReturn();
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   await expect(page.getByTestId("project-unsaved-indicator")).toHaveCount(0);
 
@@ -450,15 +417,9 @@ test("imports an older Project, upgrades it and repairs split Ground markers bef
   const source = createEmptyProject("split-ground", "Split ground");
   const document = source.documents[0]!;
   for (const [index, id] of ["G1", "G2"].entries()) {
-    document.instances.push({
-      id,
-      symbolId: "ground",
-      placement: {
-        position: { x: 200 + index * 200, y: 300 },
-        rotation: 0,
-        mirror: "none",
-      },
-    });
+    document.instances.push(
+      placedInstance(id, "ground", 200 + index * 200, 300),
+    );
     document.nets.push({
       id: `net-${id}`,
       terminals: [{ instanceId: id, pinName: "0" }],
@@ -480,14 +441,11 @@ test("imports an older Project, upgrades it and repairs split Ground markers bef
     owner: { kind: "global-declaration", sourceNetId: "original-0" },
   });
   const previousVersion = CURRENT_MODEL_SCHEMA_VERSION - 1;
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: `split-ground-v${previousVersion}.icproj.json`,
-    mimeType: "application/json",
-    buffer: Buffer.from(
-      JSON.stringify({ ...source, schemaVersion: previousVersion }),
-    ),
-  });
+  await openProject(
+    page,
+    { ...source, schemaVersion: previousVersion },
+    `split-ground-v${previousVersion}.icproj.json`,
+  );
   const status = page.getByTestId("status");
   await expect(status).toContainText(
     `upgraded split-ground-v${previousVersion}.icproj.json`,
@@ -496,11 +454,7 @@ test("imports an older Project, upgrades it and repairs split Ground markers bef
     "normalized connectivity and Wire topology in 1 Cell",
   );
   await expect(status).toContainText("save to Cloud or export to keep the");
-  const exported = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ) as typeof source;
+  const exported = (await exportedProject(page)) as typeof source;
   expect(exported.schemaVersion).toBe(CURRENT_MODEL_SCHEMA_VERSION);
   const repaired = exported.documents[0]!;
   expect(repaired.sourceStatus).toBe("connectivity-modified");
@@ -562,13 +516,12 @@ test("Cloud Save keeps one binding through rename and revert while export stays 
   page,
 }) => {
   const cloud = await mockCloudProjects(page);
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await placeResistors(page, [320]);
   await expect(page.getByTestId("project-unsaved-indicator")).toBeVisible();
   // A local export is interchange: the drawing stays unsaved.
   await downloadBytes(page, "File", "Export Project File…");
-  await expect(page.getByTestId("status")).toContainText("Export requested");
+  await expectStatus(page, "Export requested");
   await expect(page.getByTestId("project-unsaved-indicator")).toBeVisible();
 
   await page.getByRole("tab", { selected: true }).dblclick();
@@ -601,11 +554,7 @@ test("Cloud Save keeps one binding through rename and revert while export stays 
     .toBe("Bandgap characterization");
   expect(cloud.stored()!.id).toBe(originalCloudId);
   expect(cloud.stored()!.revision).toBe(2);
-  const exported = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ) as { name?: string };
+  const exported = (await exportedProject(page)) as { name?: string };
   expect(exported.name).toBe("Bandgap characterization");
   // Saved Cloud Projects are listed in the tabs' Shelf, not in File.
   await expect(
@@ -647,11 +596,7 @@ test("native cross-window clipboard preserves an editable circuit and text-field
     (document) => document.id === source.topDocumentId,
   )!;
   await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "clipboard-source.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(source)),
-  });
+  await openProjectFile(page, source, "clipboard-source.icproj.json");
   await expect(page.getByTestId("active-instance-count")).toHaveText(
     String(active.instances.length),
   );
@@ -660,7 +605,7 @@ test("native cross-window clipboard preserves an editable circuit and text-field
     .click({ position: { x: 80, y: 80 } });
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ControlOrMeta+c");
-  await expect(page.getByTestId("status")).toContainText("Circuit copied");
+  await expectStatus(page, "Circuit copied");
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   expect(JSON.parse(clipboard).format).toBe("analog-canvas/clipboard");
 
@@ -678,7 +623,7 @@ test("native cross-window clipboard preserves an editable circuit and text-field
     const count = other.getByTestId("active-instance-count");
     await canvas.click({ position: { x: 90, y: 90 } });
     await other.keyboard.press("ControlOrMeta+v");
-    await expect(other.getByTestId("status")).toContainText("click to place");
+    await expectStatus(other, "click to place");
     const box = (await canvas.boundingBox())!;
     await other.mouse.move(box.x + 280, box.y + 240);
     await expect(other.getByTestId("copy-placement-preview")).toBeVisible();
@@ -700,9 +645,7 @@ test("native cross-window clipboard preserves an editable circuit and text-field
       ),
     );
     await other.keyboard.press("ControlOrMeta+v");
-    await expect(other.getByTestId("status")).toContainText(
-      "unsupported version",
-    );
+    await expectStatus(other, "unsupported version");
     await expect(count).toHaveText(String(active.instances.length));
     await expect(other.getByTestId("copy-placement-preview")).toHaveCount(0);
 

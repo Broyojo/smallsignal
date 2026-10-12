@@ -1,16 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { chooseComponent } from "./editor-fixtures";
-
-async function placeComponent(
-  page: Page,
-  symbolId: string,
-  position: { x: number; y: number },
-): Promise<void> {
-  await chooseComponent(page, symbolId);
-  await page.getByTestId("schematic-canvas").click({ position });
-  await page.keyboard.press("Escape");
-}
+import {
+  expectStatus,
+  placeComponentAt,
+  placeResistors,
+} from "./editor-fixtures";
 
 function instances(page: Page) {
   return page.locator('[data-canvas-hit-kind="instance"]');
@@ -20,7 +14,7 @@ test("C before selection picks up one copy and only subsequent clicks place it",
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 340, y: 220 });
+  await placeComponentAt(page, "resistor", { x: 340, y: 220 });
   const canvas = page.getByTestId("schematic-canvas");
   await canvas.click({ position: { x: 700, y: 500 } });
   const original = page.getByTestId("hit-R1");
@@ -29,7 +23,7 @@ test("C before selection picks up one copy and only subsequent clicks place it",
   const ghost = page.getByTestId("copy-placement-preview");
 
   await page.keyboard.press("c");
-  await expect(page.getByTestId("status")).toContainText("Copy: click a part");
+  await expectStatus(page, "Copy: click a part");
   await expect(ghost).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("revision")).toHaveText(revision!);
@@ -63,8 +57,7 @@ test("Delete, M and R pressed first arm their verb for the next clicks until Esc
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 280, y: 220 });
-  await placeComponent(page, "resistor", { x: 460, y: 220 });
+  await placeResistors(page, [280, 460], 220);
   const canvas = page.getByTestId("schematic-canvas");
   const status = page.getByTestId("status");
   const clickPart = async () => {
@@ -88,7 +81,7 @@ test("Delete, M and R pressed first arm their verb for the next clicks until Esc
   await expect(instances(page)).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(status).toContainText("Cancelled");
-  await placeComponent(page, "resistor", { x: 300, y: 250 });
+  await placeComponentAt(page, "resistor", { x: 300, y: 250 });
   await clickPart();
   await expect(instances(page)).toHaveCount(1);
 

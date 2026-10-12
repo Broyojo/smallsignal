@@ -1,30 +1,35 @@
 import { createEmptyProject } from "@icm/model";
 import {
-  chooseComponent,
   clickDrawTool,
   placeText,
-  clickCommand,
+  downloadBytes,
   editDocumentStyleCode,
+  expectStatus,
   openMenu,
   openProject,
+  placeComponentAt,
+  showNetlistPanel,
 } from "./editor-fixtures";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { centre, segmentPoint } from "./canvas-fixtures";
+
+/** What captureImageClipboard keeps on `window`. */
+type ClipboardCapture = {
+  copiedImage: { mime: string; bytes: number[] };
+  denyClipboard?: boolean;
+};
 
 async function captureImageClipboard(page: Page): Promise<void> {
   await page.addInitScript(() => {
     Object.defineProperty(navigator.clipboard, "write", {
       configurable: true,
       value: async (items: ClipboardItem[]) => {
-        if ((window as unknown as { denyClipboard?: boolean }).denyClipboard)
+        if ((window as unknown as ClipboardCapture).denyClipboard)
           throw new DOMException("Denied", "NotAllowedError");
         const item = items[0]!;
         const mime = item.types[0]!;
         const blob = await item.getType(mime);
-        (
-          window as unknown as {
-            copiedImage: { mime: string; bytes: number[] };
-          }
-        ).copiedImage = {
+        (window as unknown as ClipboardCapture).copiedImage = {
           mime,
           bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
         };
@@ -33,21 +38,11 @@ async function captureImageClipboard(page: Page): Promise<void> {
   });
 }
 
-async function placeComponent(
-  page: Page,
-  symbolId: string,
-  position: { x: number; y: number },
-): Promise<void> {
-  await chooseComponent(page, symbolId);
-  await page.getByTestId("schematic-canvas").click({ position });
-  await page.keyboard.press("Escape");
-}
-
 test("right-click on a device only offers direct selection actions", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "inductor", { x: 360, y: 240 });
+  await placeComponentAt(page, "inductor", { x: 360, y: 240 });
   const instance = page.locator('[data-canvas-hit-kind="instance"]').first();
   await instance.click({ button: "right" });
   const menu = page.getByTestId("canvas-context-menu");
@@ -84,7 +79,7 @@ test("drafting shapes, text and device labels join device selection from either 
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
+  await placeComponentAt(page, "resistor", { x: 300, y: 220 });
   await clickDrawTool(page, "rectangle");
   const canvas = page.getByTestId("schematic-canvas");
   await canvas.click({ position: { x: 420, y: 180 } });
@@ -157,18 +152,13 @@ test("drafting shapes, text and device labels join device selection from either 
   await expect(menu).toContainText("Align");
   await expect(menu).not.toContainText("Swap device");
   await page.getByTestId("context-align-left").click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Aligned 2 selected objects",
-  );
+  await expectStatus(page, "Aligned 2 selected objects");
 
   // Pressing the text member drags the whole mixed selection as one body,
   // and one Undo puts both back.
   const instanceBefore = (await instance.boundingBox())!;
   const textBefore = (await text.boundingBox())!;
-  const grab = {
-    x: textBefore.x + textBefore.width / 2,
-    y: textBefore.y + textBefore.height / 2,
-  };
+  const grab = centre(textBefore);
   await page.mouse.move(grab.x, grab.y);
   await page.mouse.down();
   await page.mouse.move(grab.x + 80, grab.y + 60, { steps: 4 });
@@ -244,9 +234,7 @@ test("bottom alignment lines up drawn text bottoms off the grid, a repeat is a n
     await page.getByTestId("context-align-bottom").click();
   };
   await alignBottom();
-  await expect(page.getByTestId("status")).toContainText(
-    "Aligned 3 selected objects",
-  );
+  await expectStatus(page, "Aligned 3 selected objects");
   const after = await labelRects();
   expect(after.map((rect) => rect.x)).toEqual(before.map((rect) => rect.x));
   const bottoms = await page
@@ -261,9 +249,7 @@ test("bottom alignment lines up drawn text bottoms off the grid, a repeat is a n
 
   // A second alignment is a true no-op; Undo still reverses the first one.
   await alignBottom();
-  await expect(page.getByTestId("status")).toContainText(
-    "Selection is already aligned",
-  );
+  await expectStatus(page, "Selection is already aligned");
   await page.keyboard.press("ControlOrMeta+z");
   expect(await labelRects()).toEqual(before);
   await page.keyboard.press("ControlOrMeta+Shift+z");
@@ -275,8 +261,8 @@ test("visual clipboard copies a mixed selection as its formal SVG and a lone Wir
 }) => {
   await captureImageClipboard(page);
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 280, y: 220 });
-  await placeComponent(page, "capacitor", { x: 540, y: 320 });
+  await placeComponentAt(page, "resistor", { x: 280, y: 220 });
+  await placeComponentAt(page, "capacitor", { x: 540, y: 320 });
   await placeText(page);
   await page.getByRole("textbox", { name: "Canvas text editor" }).fill("BIAS");
   await page.getByRole("button", { name: "Apply text changes" }).click();
@@ -291,24 +277,17 @@ test("visual clipboard copies a mixed selection as its formal SVG and a lone Wir
     "Copy as SVG",
   );
   await page.keyboard.press("Escape");
-  const copyImage = async (format: "SVG" | "PNG") => {
-    const editMenu = await openMenu(page, "Edit");
-    await editMenu
-      .getByRole("button", {
-        name: `Copy selection as ${format}`,
-        exact: true,
-      })
+  const clickCopyAs = async (format: "SVG" | "PNG") =>
+    (await openMenu(page, "Edit"))
+      .getByRole("button", { name: `Copy selection as ${format}`, exact: true })
       .click();
+  const copyImage = async (format: "SVG" | "PNG") => {
+    await clickCopyAs(format);
     await expect(page.getByTestId("status")).toHaveText(
       `Copied selection as ${format}`,
     );
     return page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            copiedImage: { mime: string; bytes: number[] };
-          }
-        ).copiedImage,
+      () => (window as unknown as ClipboardCapture).copiedImage,
     );
   };
   const copied = await copyImage("SVG");
@@ -341,16 +320,7 @@ test("visual clipboard copies a mixed selection as its formal SVG and a lone Wir
   await page.keyboard.press("Escape");
   const wire = page.locator('[data-canvas-hit-kind="route"]').first();
   await expect(wire).toHaveCount(1);
-  const midpoint = await wire.evaluate((element) => {
-    const line = element as SVGPolylineElement;
-    const from = line.points.getItem(0);
-    const to = line.points.getItem(1);
-    const point = new DOMPoint(
-      (from.x + to.x) / 2,
-      (from.y + to.y) / 2,
-    ).matrixTransform(line.getScreenCTM()!);
-    return { x: point.x, y: point.y };
-  });
+  const midpoint = await segmentPoint(wire);
   await page.mouse.click(midpoint.x, midpoint.y, { button: "right" });
   await page.keyboard.press("Escape");
   const raster = await copyImage("PNG");
@@ -385,16 +355,10 @@ test("visual clipboard copies a mixed selection as its formal SVG and a lone Wir
     downloads.push(download.suggestedFilename()),
   );
   await page.evaluate(() => {
-    (window as unknown as { denyClipboard: boolean }).denyClipboard = true;
+    (window as unknown as ClipboardCapture).denyClipboard = true;
   });
-  await (
-    await openMenu(page, "Edit")
-  )
-    .getByRole("button", { name: "Copy selection as PNG", exact: true })
-    .click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Clipboard access was denied",
-  );
+  await clickCopyAs("PNG");
+  await expectStatus(page, "Clipboard access was denied");
   expect(downloads).toEqual([]);
   // Copying images recorded nothing: one Undo removes the wire.
   await page.keyboard.press("ControlOrMeta+Z");
@@ -405,71 +369,37 @@ test("Netlist keeps format selection in the project panel while File keeps drawi
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 220 });
-  await placeComponent(page, "capacitor", { x: 550, y: 320 });
+  await placeComponentAt(page, "resistor", { x: 300, y: 220 });
+  await placeComponentAt(page, "capacitor", { x: 550, y: 320 });
   await page.locator('[data-canvas-hit-kind="instance"]').first().click();
+  const button = (menu: Locator, name: string) =>
+    menu.getByRole("button", { name, exact: true });
   const menu = await openMenu(page, "File");
-  await expect(
-    menu.getByRole("button", { name: "Export SVG", exact: true }),
-  ).toBeHidden();
+  await expect(button(menu, "Export SVG")).toBeHidden();
   // The File menu's contents are file-command-menu.test.tsx's; the copy
   // commands live in neither menu.
   const netlistMenu = await openMenu(page, "Netlist");
-  await expect(
-    netlistMenu.getByRole("button", {
-      name: "Copy SPICE netlist",
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await expect(
-    netlistMenu.getByRole("button", {
-      name: "Copy Spectre netlist",
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  if (
-    (await page
-      .getByTestId("netlist-panel-toggle")
-      .getAttribute("aria-pressed")) !== "true"
-  )
-    await page.getByTestId("netlist-panel-toggle").click();
-  const projectPanel = page.getByRole("region", {
-    name: "Live netlist",
-    exact: true,
-  });
+  await expect(button(netlistMenu, "Copy SPICE netlist")).toHaveCount(0);
+  await expect(button(netlistMenu, "Copy Spectre netlist")).toHaveCount(0);
+  const projectPanel = await showNetlistPanel(page);
   await expect(projectPanel.getByLabel("Netlist format")).toBeVisible();
   await openMenu(page, "File");
-  await menu.getByRole("button", { name: "Export", exact: true }).click();
-  await expect(
-    menu.getByRole("button", { name: "Export SVG", exact: true }),
-  ).toBeVisible();
+  await button(menu, "Export").click();
+  await expect(button(menu, "Export SVG")).toBeVisible();
   const viewBox = await page
     .getByTestId("schematic-canvas")
     .getAttribute("viewBox");
-  await menu
-    .getByRole("button", { name: "Export", exact: true })
-    .press("ArrowRight");
-  await expect(
-    menu.getByRole("button", { name: "Export Project File…", exact: true }),
-  ).toBeFocused();
+  await button(menu, "Export").press("ArrowRight");
+  await expect(button(menu, "Export Project File…")).toBeFocused();
   expect(
     await page.getByTestId("schematic-canvas").getAttribute("viewBox"),
   ).toBe(viewBox);
-  await menu
-    .getByRole("button", { name: "Export Project File…", exact: true })
-    .press("ArrowLeft");
-  await expect(
-    menu.getByRole("button", { name: "Export", exact: true }),
-  ).toBeFocused();
-  await expect(
-    menu.getByRole("button", { name: "Export SVG", exact: true }),
-  ).toBeHidden();
-  const download = page.waitForEvent("download");
-  await clickCommand(page, "File", "Export SVG");
-  const stream = await (await download).createReadStream();
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  const svg = Buffer.concat(chunks).toString("utf8");
+  await button(menu, "Export Project File…").press("ArrowLeft");
+  await expect(button(menu, "Export")).toBeFocused();
+  await expect(button(menu, "Export SVG")).toBeHidden();
+  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
+    "utf8",
+  );
   expect(svg).toContain('data-symbol-id="resistor"');
   expect(svg).toContain('data-symbol-id="capacitor"');
   // The command done, the header's menu closes.

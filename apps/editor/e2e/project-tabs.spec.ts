@@ -1,24 +1,58 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   awaitEditorReady,
-  chooseComponent,
   exportedProject,
   openMenu,
   openProjectFile,
   openProjectInfo,
   parseSavedProject,
+  placeComponentAt,
   renameProject,
+  openEditor,
+  renameShelfProject,
 } from "./editor-fixtures";
+import { sessionUser, signIn } from "./gallery-fixtures";
 import { createEmptyProject, type CircuitProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 import { AgentHttpClient } from "../../../packages/agent-client/src/http-client.js";
+import { placedInstance, onScreen } from "./canvas-fixtures.js";
 
-async function insert(page: Page, symbol: string, x: number, y: number) {
-  await chooseComponent(page, symbol);
+const saved = (page: Page): Promise<CircuitProject> => exportedProject(page);
+// The account the Cloud cases sign in as; it carries no role.
+const author = sessionUser({
+  displayName: "Author",
+  email: "author@example.com",
+  role: undefined,
+});
+
+const newProjectTab = (page: Page) =>
+  page.getByRole("button", { name: "New project tab", exact: true });
+
+const expectSelected = (tab: Locator) =>
+  expect(tab).toHaveAttribute("aria-selected", "true");
+
+/** Switch to the tab at this index and check how many parts it holds. */
+async function showTab(page: Page, index: number, count: string) {
+  await page.getByRole("tab").nth(index).click();
+  await expect(page.getByTestId("active-instance-count")).toHaveText(count);
+}
+
+/** Drop the copy in hand at a canvas point, then leave placement. */
+async function dropCopy(page: Page, x: number, y: number, count: string) {
   await page.getByTestId("schematic-canvas").click({ position: { x, y } });
   await page.keyboard.press("Escape");
+  await expect(page.getByTestId("active-instance-count")).toHaveText(count);
 }
-const saved = (page: Page): Promise<CircuitProject> => exportedProject(page);
+
+/** Open a Shelf project in a tab, which becomes the selected one. */
+async function openShelfProject(page: Page, name: string) {
+  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  await page
+    .locator(".project-tabs-shelf")
+    .getByRole("button", { name, exact: true })
+    .click();
+  await expectSelected(page.getByRole("tab", { name: new RegExp(`${name}$`) }));
+}
 
 test("project tabs append a partial selection and retain independent history, cameras and code drafts", async ({
   page,
@@ -31,9 +65,9 @@ test("project tabs append a partial selection and retain independent history, ca
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/editor?new=1");
   const canvas = page.getByTestId("schematic-canvas");
-  await insert(page, "nmos", 240, 220);
-  await insert(page, "nmos", 440, 220);
-  await insert(page, "pmos", 650, 330);
+  await placeComponentAt(page, "nmos", { x: 240, y: 220 });
+  await placeComponentAt(page, "nmos", { x: 440, y: 220 });
+  await placeComponentAt(page, "pmos", { x: 650, y: 330 });
   await page.keyboard.press("w");
   await page.getByTestId("terminal-M1-G").click();
   await page.getByTestId("terminal-M2-G").click();
@@ -50,15 +84,12 @@ test("project tabs append a partial selection and retain independent history, ca
   );
   await page.mouse.up();
   // The destination already holds a part; the copy must append beside it.
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
+  await newProjectTab(page).click();
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
-  await insert(page, "resistor", 260, 400);
+  await placeComponentAt(page, "resistor", { x: 260, y: 400 });
   const before = await saved(page);
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await showTab(page, 0, "3");
   await page.evaluate(() => navigator.clipboard.writeText("external text"));
   await page.keyboard.press("c");
   await expect(page.getByTestId("status")).toContainText("Circuit copied");
@@ -71,13 +102,10 @@ test("project tabs append a partial selection and retain independent history, ca
   const sourceView = await canvas.getAttribute("viewBox");
   const source = await saved(page);
   // C in one tab, a click in another: the copy stays in hand across tabs.
-  await page.getByRole("tab").nth(1).click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  await showTab(page, 1, "1");
   await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
   await expect(page.getByTestId("status")).toContainText("click to place");
-  await canvas.click({ position: { x: 480, y: 230 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await dropCopy(page, 480, 230, "3");
   const target = await saved(page);
   const original = before.documents[0]!.instances[0]!;
   expect(
@@ -91,8 +119,7 @@ test("project tabs append a partial selection and retain independent history, ca
     target.documents[0]!.instances.some((item) => item.symbolId === "pmos"),
   ).toBe(false);
   const targetView = await canvas.getAttribute("viewBox");
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await showTab(page, 0, "3");
   await expect(canvas).toHaveAttribute("viewBox", sourceView!);
   expect((await saved(page)).documents).toEqual(source.documents);
   await page.getByRole("tab").nth(1).click();
@@ -121,9 +148,7 @@ test("project tabs append a partial selection and retain independent history, ca
   expect(JSON.parse(encoded).project.documents[0].instances).toHaveLength(1);
   await page.getByRole("tab").nth(1).click();
   await page.keyboard.press("ControlOrMeta+v");
-  await canvas.click({ position: { x: 660, y: 380 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("4");
+  await dropCopy(page, 660, 380, "4");
   // The other modifier gets no clipboard event from the browser; the editor
   // runs the same copy and paste for it.
   const alternate = await page.evaluate(() =>
@@ -136,9 +161,7 @@ test("project tabs append a partial selection and retain independent history, ca
   await canvas.focus();
   await page.keyboard.press(`${alternate}+v`);
   await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
-  await canvas.click({ position: { x: 560, y: 440 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("5");
+  await dropCopy(page, 560, 440, "5");
   // Unapplied invalid text cannot be discarded by switching projects.
   await page.getByTestId("project-code-toggle").click();
   const code = page.getByRole("textbox", { name: "Project code", exact: true });
@@ -149,13 +172,9 @@ test("project tabs append a partial selection and retain independent history, ca
     "Can't switch project tabs yet: a code panel holds a draft that is not applied. No work was discarded.",
   );
   await expect(code).toHaveText("invalid project");
-  await expect(page.getByRole("tab").nth(1)).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab").nth(1));
   await page.getByRole("button", { name: /Reload/ }).click();
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await showTab(page, 0, "3");
 });
 
 test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the same", async ({
@@ -166,24 +185,17 @@ test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the sa
   // M1's gate is on the Net a Cell Pin names O; its source goes to ground.
   const project = createEmptyProject("fresh-tab-copy", "Fresh tab copy");
   const document = project.documents[0]!;
-  const placement = (x: number, y: number) => ({
-    position: { x, y },
-    rotation: 0 as const,
-    mirror: "none" as const,
-  });
   document.instances.push(
     {
-      id: "M1",
+      ...placedInstance("M1", "nmos", 300, 200),
       reference: "M1",
-      symbolId: "nmos",
-      placement: placement(300, 200),
       netlist: {
         binding: { kind: "model", deviceClass: "mos", name: "NMOS" },
         parameters: { w: "1u", l: "150n", nf: "1", m: "1" },
       },
     },
-    { id: "P1", symbolId: "port", placement: placement(200, 200) },
-    { id: "GND1", symbolId: "ground", placement: placement(320, 300) },
+    placedInstance("P1", "port", 200, 200),
+    placedInstance("GND1", "ground", 320, 300),
   );
   document.nets.push(
     {
@@ -208,11 +220,9 @@ test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the sa
     direction: "input",
     interfaceInstanceIds: ["P1"],
   });
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?new=1");
   await openProjectFile(page, serializeProject(project));
   await expect(page.getByTestId("hit-M1")).toBeVisible();
-  const canvas = page.getByTestId("schematic-canvas");
   const ghost = page.getByTestId("copy-placement-preview");
   const netLabels = page.locator(
     '[data-layer="annotations"] [data-kind="net-label"]',
@@ -222,17 +232,13 @@ test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the sa
   await page.keyboard.press("c");
   await expect(ghost).toBeVisible();
   await page.keyboard.press("r");
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
+  await newProjectTab(page).click();
   await expect(page.getByRole("tab")).toHaveCount(2);
   // Still in hand, still turned, and nothing from the source circuit rides
   // along: no O, no ground name.
   await expect(ghost).toBeVisible();
   await expect(ghost.locator('[data-kind="net-label"]')).toHaveCount(0);
-  await canvas.click({ position: { x: 400, y: 300 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  await dropCopy(page, 400, 300, "1");
   await expect(netLabels).toHaveCount(0);
   const carried = (await saved(page)).documents[0]!;
   expect(carried.instances[0]!.placement?.rotation).toEqual(expect.any(Number));
@@ -243,26 +249,20 @@ test("C carries a fresh copy into another tab, and V and Ctrl/Cmd+V paste the sa
   await page.keyboard.press("v");
   await expect(ghost).toBeVisible();
   await expect(ghost.locator('[data-kind="net-label"]')).toHaveCount(0);
-  await canvas.click({ position: { x: 560, y: 300 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("2");
+  await dropCopy(page, 560, 300, "2");
   await expect(netLabels).toHaveCount(0);
 
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await showTab(page, 0, "3");
   await expect(ghost).toHaveCount(0);
 
   // Ctrl/Cmd+C in one tab and Ctrl/Cmd+V in another place exactly what C does.
   await page.getByTestId("hit-M1").click();
   await page.keyboard.press("ControlOrMeta+c");
-  await page.getByRole("tab").nth(1).click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("2");
+  await showTab(page, 1, "2");
   await page.keyboard.press("ControlOrMeta+v");
   await expect(ghost).toBeVisible();
   await expect(ghost.locator('[data-kind="net-label"]')).toHaveCount(0);
-  await canvas.click({ position: { x: 480, y: 420 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await dropCopy(page, 480, 420, "3");
   await expect(netLabels).toHaveCount(0);
   const pasted = (await saved(page)).documents[0]!;
   expect(pasted.nets.flatMap((net) => net.terminals)).toEqual([]);
@@ -272,7 +272,7 @@ test("tab file opening is additive, and closing one tab, the others or all asks 
   page,
 }) => {
   await page.goto("/editor?new=1");
-  await insert(page, "resistor", 300, 220);
+  await placeComponentAt(page, "resistor", { x: 300, y: 220 });
   const exported = await saved(page);
   exported.name = "Second circuit";
   await page.getByTestId("tab-project-file").setInputFiles({
@@ -282,16 +282,14 @@ test("tab file opening is additive, and closing one tab, the others or all asks 
   });
   const tabs = page.getByRole("tab");
   await expect(tabs).toHaveCount(2);
-  await expect(
-    page.getByRole("tab", { name: "Second circuit" }),
-  ).toHaveAttribute("aria-selected", "true");
+  await expectSelected(page.getByRole("tab", { name: "Second circuit" }));
   await tabs.nth(1).focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
+  await expectSelected(tabs.first());
   await expect(tabs.first()).toBeFocused();
   await page.keyboard.press("ArrowRight");
-  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
-  await insert(page, "capacitor", 500, 260);
+  await expectSelected(tabs.nth(1));
+  await placeComponentAt(page, "capacitor", { x: 500, y: 260 });
   await page.setViewportSize({ width: 360, height: 600 });
   await page.getByRole("button", { name: "Close tab Second circuit" }).click();
   await expect(
@@ -323,10 +321,7 @@ test("tab file opening is additive, and closing one tab, the others or all asks 
 
   // A tab's right-click menu: Close Others keeps the tab right-clicked, and
   // clean tabs go without asking.
-  const newTab = page.getByRole("button", {
-    name: "New project tab",
-    exact: true,
-  });
+  const newTab = newProjectTab(page);
   const menu = page.getByTestId("project-tab-menu");
   await newTab.click();
   await newTab.click();
@@ -339,12 +334,12 @@ test("tab file opening is additive, and closing one tab, the others or all asks 
   ]);
   await menu.getByRole("menuitem", { name: "Close Others" }).click();
   await expect(tabs).toHaveCount(1);
-  await expect(tabs).toHaveAttribute("aria-selected", "true");
+  await expectSelected(tabs);
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
 
   // Close All asks once for the unsaved tabs, then leaves one blank tab.
   await newTab.click();
-  await insert(page, "capacitor", 300, 240);
+  await placeComponentAt(page, "capacitor", { x: 300, y: 240 });
   await tabs.first().click({ button: "right" });
   await menu.getByRole("menuitem", { name: "Close All" }).click();
   await expect(strip).toContainText("Close 2 tabs? 2 have unsaved changes.");
@@ -380,19 +375,9 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
   const creations: string[] = [];
   let finishDeletion = () => {};
   let deleteRequested = false;
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Author",
-          email: "author@example.com",
-          provider: "github",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
+  const stored = (index: number) =>
+    parseSavedProject(records[index]!.projectText);
+  await signIn(page, author);
   await page.route("**/api/projects", (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postDataJSON();
@@ -443,100 +428,46 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
   });
   await page.goto("/editor?new=1");
   const blankProjectId = (await saved(page)).id;
-  await shelf("Alpha");
+  await openShelfProject(page, "Alpha");
   await expect(page.getByRole("tab")).toHaveCount(2);
-  async function shelf(name: string) {
-    await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
-    await page
-      .locator(".project-tabs-shelf")
-      .getByRole("button", { name, exact: true })
-      .click();
-    await expect(
-      page.getByRole("tab", { name: new RegExp(`${name}$`) }),
-    ).toHaveAttribute("aria-selected", "true");
-  }
-  await insert(page, "nmos", 300, 240);
-  await shelf("Beta");
-  await insert(page, "resistor", 450, 240);
+  await placeComponentAt(page, "nmos", { x: 300, y: 240 });
+  await openShelfProject(page, "Beta");
+  await placeComponentAt(page, "resistor", { x: 450, y: 240 });
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => writes).toEqual(["cloud-1"]);
-  await shelf("Alpha");
+  await openShelfProject(page, "Alpha");
   await expect(page.getByRole("tab")).toHaveCount(3);
   await page.getByRole("tab").first().click();
   expect((await saved(page)).id).toBe(blankProjectId);
-  await shelf("Alpha");
+  await openShelfProject(page, "Alpha");
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   expect(reads).toEqual(["cloud-0", "cloud-1"]);
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => writes).toEqual(["cloud-1", "cloud-0"]);
-  expect(
-    parseSavedProject(records[0]!.projectText).documents[0]!.instances[0]!
-      .symbolId,
-  ).toBe("nmos");
-  expect(
-    parseSavedProject(records[1]!.projectText).documents[0]!.instances[0]!
-      .symbolId,
-  ).toBe("resistor");
+  expect(stored(0).documents[0]!.instances[0]!.symbolId).toBe("nmos");
+  expect(stored(1).documents[0]!.instances[0]!.symbolId).toBe("resistor");
   await page.getByRole("tab", { name: /Alpha$/ }).dblclick();
-  await page
-    .getByRole("textbox", { name: "Project name", exact: true })
-    .fill("Alpha local");
-  await page
-    .getByRole("textbox", { name: "Project name", exact: true })
-    .press("Enter");
-  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
-  const renamePanel = page.locator(".project-tabs-shelf");
-  await renamePanel.getByRole("button", { name: "Alpha", exact: true }).hover();
-  await renamePanel
-    .getByRole("button", { name: "Rename Alpha", exact: true })
-    .click();
-  await renamePanel
-    .getByRole("textbox", { name: "Shelf project name", exact: true })
-    .fill("Alpha stored");
-  await renamePanel
-    .getByRole("textbox", { name: "Shelf project name", exact: true })
-    .press("Enter");
-  await expect(
-    renamePanel.getByRole("button", { name: "Alpha stored", exact: true }),
-  ).toBeVisible();
+  const name = page.getByRole("textbox", { name: "Project name", exact: true });
+  await name.fill("Alpha local");
+  await name.press("Enter");
+  await renameShelfProject(page, "Alpha", "Alpha stored");
   await expect(
     page.getByRole("tab", { name: /Alpha local$/ }).getByLabel("Unsaved"),
   ).toBeVisible();
-  expect(parseSavedProject(records[0]!.projectText).name).toBe("Alpha stored");
+  expect(stored(0).name).toBe("Alpha stored");
   await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
   page.on("dialog", (dialog) => void dialog.accept());
   await page.goto("/");
-  await page.goto("/editor?project=cloud-1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?project=cloud-1");
   await expect(page.getByRole("tab")).toHaveCount(3);
-  await expect(page.getByRole("tab", { name: /Beta$/ })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab", { name: /Beta$/ }));
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-  await insert(page, "nmos", 300, 240);
-  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  await placeComponentAt(page, "nmos", { x: 300, y: 240 });
+  await renameShelfProject(page, "Beta", "Beta renamed");
   const shelfPanel = page.locator(".project-tabs-shelf");
-  await shelfPanel.getByRole("button", { name: "Beta", exact: true }).hover();
-  await shelfPanel
-    .getByRole("button", { name: "Rename Beta", exact: true })
-    .click();
-  await shelfPanel
-    .getByRole("textbox", { name: "Shelf project name", exact: true })
-    .fill("Beta renamed");
-  await shelfPanel
-    .getByRole("textbox", { name: "Shelf project name", exact: true })
-    .press("Enter");
-  await expect(
-    shelfPanel.getByRole("button", { name: "Beta renamed", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("tab", { name: /Beta renamed$/ }),
-  ).toHaveAttribute("aria-selected", "true");
+  await expectSelected(page.getByRole("tab", { name: /Beta renamed$/ }));
   await expect(page.getByTestId("active-instance-count")).toHaveText("2");
-  expect(
-    parseSavedProject(records[1]!.projectText).documents[0]!.instances,
-  ).toHaveLength(1);
+  expect(stored(1).documents[0]!.instances).toHaveLength(1);
   await expect(
     page.getByRole("tab", { name: /Beta renamed$/ }).getByLabel("Unsaved"),
   ).toBeVisible();
@@ -548,16 +479,16 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
   await shelfPanel
     .getByRole("button", { name: "Beta renamed", exact: true })
     .hover();
-  await shelfPanel
-    .getByRole("button", { name: "Delete Beta renamed", exact: true })
-    .click();
+  const deleteBeta = shelfPanel.getByRole("button", {
+    name: "Delete Beta renamed",
+    exact: true,
+  });
+  await deleteBeta.click();
   await shelfPanel
     .getByRole("button", { name: "Keep it", exact: true })
     .click();
   expect(deletes).toEqual([]);
-  await shelfPanel
-    .getByRole("button", { name: "Delete Beta renamed", exact: true })
-    .click();
+  await deleteBeta.click();
   await shelfPanel
     .getByRole("button", { name: "Really delete", exact: true })
     .click();
@@ -575,18 +506,12 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
     shelfPanel.getByRole("button", { name: "Beta renamed", exact: true }),
   ).toHaveCount(0);
   await expect(page.getByRole("tab", { name: /Beta renamed$/ })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /Alpha local$/ })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab", { name: /Alpha local$/ }));
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
   await page.reload();
   await awaitEditorReady(page);
-  await expect(page.getByRole("tab", { name: /Alpha local$/ })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab", { name: /Alpha local$/ }));
   await page.getByRole("tab", { name: /Beta renamed$/ }).click();
   await expect(page.getByTestId("active-instance-count")).toHaveText("2");
   await page.keyboard.press("ControlOrMeta+s");
@@ -605,31 +530,24 @@ test("plain C/V works between internal tabs when system clipboard permission is 
   page,
 }) => {
   await page.addInitScript(() => {
+    const denied = async () => {
+      document.documentElement.dataset.clipboardAccess = "requested";
+      throw new Error("denied");
+    };
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
-      value: {
-        writeText: async () => {
-          document.documentElement.dataset.clipboardAccess = "requested";
-          throw new Error("denied");
-        },
-        readText: async () => {
-          document.documentElement.dataset.clipboardAccess = "requested";
-          throw new Error("denied");
-        },
-      },
+      value: { writeText: denied, readText: denied },
     });
   });
   await page.goto("/editor?new=1");
-  await insert(page, "nmos", 300, 220);
-  await insert(page, "nmos", 470, 220);
-  await insert(page, "nmos", 630, 220);
+  await placeComponentAt(page, "nmos", { x: 300, y: 220 });
+  await placeComponentAt(page, "nmos", { x: 470, y: 220 });
+  await placeComponentAt(page, "nmos", { x: 630, y: 220 });
   await page.getByTestId("hit-M1").click();
   await page.keyboard.press("c");
   await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
   await page.keyboard.press("Escape");
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
+  await newProjectTab(page).click();
   // Unsaved work in an inactive tab continues protecting browser close/reload.
   expect(
     await page.evaluate(() => {
@@ -645,13 +563,8 @@ test("plain C/V works between internal tabs when system clipboard permission is 
   ).toBe(true);
   await page.keyboard.press("v");
   await expect(page.getByTestId("status")).toContainText("click to place");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 500, y: 240 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("3");
+  await dropCopy(page, 500, 240, "1");
+  await showTab(page, 0, "3");
   await expect(page.locator("html")).not.toHaveAttribute(
     "data-clipboard-access",
   );
@@ -664,11 +577,11 @@ test("refresh restores every unsaved tab and the active view, and a closed tab s
   const expected: CircuitProject[] = [];
   const views: (string | null)[] = [];
   for (const symbol of ["nmos", "resistor"]) {
-    if (expected.length)
-      await page
-        .getByRole("button", { name: "New project tab", exact: true })
-        .click();
-    await insert(page, symbol, 240 + expected.length * 30, 250);
+    if (expected.length) await newProjectTab(page).click();
+    await placeComponentAt(page, symbol, {
+      x: 240 + expected.length * 30,
+      y: 250,
+    });
     expected.push(await saved(page));
     views.push(
       await page.getByTestId("schematic-canvas").getAttribute("viewBox"),
@@ -678,13 +591,9 @@ test("refresh restores every unsaved tab and the active view, and a closed tab s
   page.on("dialog", (dialog) => dialog.accept());
   await page.reload();
   await expect(page.getByRole("tab")).toHaveCount(2);
-  await expect(page.getByRole("tab").first()).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab").first());
   for (let index = 0; index < expected.length; index++) {
-    await page.getByRole("tab").nth(index).click();
-    await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+    await showTab(page, index, "1");
     await expect(page.getByTestId("schematic-canvas")).toHaveAttribute(
       "viewBox",
       views[index]!,
@@ -742,19 +651,7 @@ test("a fresh browser tab offers the tabs a closed window left, reopens them onc
     schemaVersion: alpha.schemaVersion,
     updatedAt: "2026-10-10T00:00:00.000Z",
   };
-  await context.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Author",
-          email: "author@example.com",
-          provider: "github",
-          isAdmin: false,
-        },
-      },
-    }),
-  );
+  await signIn(context, author);
   await context.route("**/api/projects", (route) =>
     route.fulfill({ json: { projects: [summary] } }),
   );
@@ -767,17 +664,23 @@ test("a fresh browser tab offers the tabs a closed window left, reopens them onc
     target.getByRole("tab", { name: /Alpha$/ });
   const banner = (target: Page) =>
     target.getByTestId("workspace-reopen-banner");
+  const expectNothingOffered = async () => {
+    const other = await context.newPage();
+    await other.goto("/editor");
+    await awaitEditorReady(other);
+    await other.waitForTimeout(300);
+    await expect(banner(other)).toHaveCount(0);
+    await other.close();
+  };
 
   // Edit Cloud Project Alpha and a new circuit without saving either.
   const page = await context.newPage();
   await page.goto("/editor?project=cloud-alpha");
-  await expect(alphaTab(page)).toHaveAttribute("aria-selected", "true");
-  await insert(page, "resistor", 260, 240);
+  await expectSelected(alphaTab(page));
+  await placeComponentAt(page, "resistor", { x: 260, y: 240 });
   await expect(alphaTab(page).getByLabel("Unsaved")).toBeVisible();
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
-  await insert(page, "capacitor", 270, 250);
+  await newProjectTab(page).click();
+  await placeComponentAt(page, "capacitor", { x: 270, y: 250 });
   await expect
     .poll(() => savedTabs(page))
     .toEqual([
@@ -787,12 +690,7 @@ test("a fresh browser tab offers the tabs a closed window left, reopens them onc
     ]);
 
   // While that window is open, its tabs are its own.
-  const beside = await context.newPage();
-  await beside.goto("/editor");
-  await awaitEditorReady(beside);
-  await beside.waitForTimeout(300);
-  await expect(banner(beside)).toHaveCount(0);
-  await beside.close();
+  await expectNothingOffered();
 
   await page.close();
   const fresh = await context.newPage();
@@ -800,12 +698,7 @@ test("a fresh browser tab offers the tabs a closed window left, reopens them onc
   await expect(banner(fresh)).toContainText("3 tabs open");
   await expect(banner(fresh)).toContainText("Alpha");
   // Opened from the Shelf, Alpha is its saved version.
-  await fresh.getByLabel("Open Shelf project in tab", { exact: true }).click();
-  await fresh
-    .locator(".project-tabs-shelf")
-    .getByRole("button", { name: "Alpha", exact: true })
-    .click();
-  await expect(alphaTab(fresh)).toHaveAttribute("aria-selected", "true");
+  await openShelfProject(fresh, "Alpha");
   await expect(fresh.getByTestId("active-instance-count")).toHaveText("0");
 
   // Reopen tabs brings the edits back beside it, Alpha's bound to no Cloud
@@ -822,12 +715,7 @@ test("a fresh browser tab offers the tabs a closed window left, reopens them onc
   await expect(fresh.getByTestId("active-instance-count")).toHaveText("1");
 
   // Taken over, they are offered to no other window.
-  const later = await context.newPage();
-  await later.goto("/editor");
-  await awaitEditorReady(later);
-  await later.waitForTimeout(300);
-  await expect(banner(later)).toHaveCount(0);
-  await later.close();
+  await expectNothingOffered();
 });
 
 test("each blank Project has its own stable identity, and New Circuit opens a blank tab beside the circuit this window drew", async ({
@@ -844,16 +732,13 @@ test("each blank Project has its own stable identity, and New Circuit opens a bl
   await separateWindow.close();
   await page.reload();
   expect((await saved(page)).id).toBe(initialId);
-  await insert(page, "resistor", 240, 250);
+  await placeComponentAt(page, "resistor", { x: 240, y: 250 });
 
   // The Gallery's New Circuit again, in the same browser tab: the circuit
   // drawn before stays in its own tab and the new one starts empty.
   await page.goto("/editor?new=1");
   await expect(page.getByRole("tab")).toHaveCount(2);
-  await expect(page.getByRole("tab").nth(1)).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab").nth(1));
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
   const nextId = (await saved(page)).id;
   expect(nextId).toMatch(/^project-/);
@@ -863,8 +748,7 @@ test("each blank Project has its own stable identity, and New Circuit opens a bl
 
   await page.reload();
   await expect(page.getByRole("tab")).toHaveCount(2);
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  await showTab(page, 0, "1");
 
   // The blank tab is the open one from the start: the circuit brought back
   // beside it is never shown, and a file opened at once lands in the blank
@@ -889,34 +773,26 @@ test("each blank Project has its own stable identity, and New Circuit opens a bl
   );
   await expect(page.getByRole("tab")).toHaveCount(3);
   await expect(page.getByRole("tab").nth(2)).toContainText("Opened");
-  await expect(page.getByRole("tab").nth(2)).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expectSelected(page.getByRole("tab").nth(2));
   await expect(page.locator(".replace-guard-dialog")).toHaveCount(0);
   expect(
     await page.evaluate(
       () => (window as unknown as { drawnTabShown?: boolean }).drawnTabShown,
     ),
   ).toBeUndefined();
-  await page.getByRole("tab").first().click();
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  await showTab(page, 0, "1");
 });
 
 test("tab names edit in place as one undoable change and commit to their own tab through activation, New, Close and blur", async ({
   page,
 }) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?new=1");
   const tabs = page.getByRole("tab", { includeHidden: true });
   const first = tabs.first();
   const second = tabs.nth(1);
   const selected = page.getByRole("tab", { selected: true });
   const name = page.getByRole("textbox", { name: "Project name", exact: true });
-  const newTab = page.getByRole("button", {
-    name: "New project tab",
-    exact: true,
-  });
+  const newTab = newProjectTab(page);
   await first.dblclick();
   await expect(name).toBeFocused();
   await name.fill("OTA input stage");
@@ -946,7 +822,7 @@ test("tab names edit in place as one undoable change and commit to their own tab
   await expect(second).toContainText("Project B");
 
   // Text keys stay out of the canvas, and blur commits to the owning tab.
-  await insert(page, "resistor", 260, 220);
+  await placeComponentAt(page, "resistor", { x: 260, y: 220 });
   await first.dblclick();
   await name.fill("Project A revised");
   await name.press("Home");
@@ -955,16 +831,16 @@ test("tab names edit in place as one undoable change and commit to their own tab
   await name.press("r");
   await name.press("Delete");
   await expect(name).toBeFocused();
-  await expect(first).toHaveAttribute("aria-selected", "true");
+  await expectSelected(first);
   await expect(page.getByTestId("hit-R1")).toHaveCount(1);
   await name.fill("Project A revised");
   await second.click();
   await expect(name).toBeHidden();
-  await expect(second).toHaveAttribute("aria-selected", "true");
+  await expectSelected(second);
   await expect(first).toContainText("Project A revised");
   await expect(second).toContainText("Project B");
   await first.click();
-  await expect(first).toHaveAttribute("aria-selected", "true");
+  await expectSelected(first);
   await page.keyboard.press("ControlOrMeta+z");
   await expect(first).toContainText("Project A");
   await expect(first).not.toContainText("revised");
@@ -1002,8 +878,7 @@ test("unchanged imported or legacy names make no edit on Enter, blur or IME Ente
   page,
 }) => {
   const spaced = createEmptyProject("spaced-name", "  Preserved name  ");
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?new=1");
   await openProjectFile(page, serializeProject(spaced));
   const tab = page.getByRole("tab", { selected: true });
   const name = page.getByRole("textbox", { name: "Project name", exact: true });
@@ -1046,12 +921,9 @@ test("external tab activation cannot discard the focused name draft", async ({
   page,
   baseURL,
 }) => {
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?new=1");
   await renameProject(page, "Project A");
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
+  await newProjectTab(page).click();
   await expect(page.getByRole("tab", { selected: true })).toContainText(
     "New Circuit",
   );
@@ -1083,28 +955,25 @@ test("external tab activation cannot discard the focused name draft", async ({
   const target = list.result.projects.find(
     (item) => item.workspaceId !== activeWorkspaceId,
   )!;
+  const activateOther = (requestId: string) =>
+    client.projects(session.sessionId, session.agentToken, {
+      apiVersion: "3.0",
+      requestId,
+      operation: "workspace",
+      request: { action: "activate", workspaceId: target.workspaceId },
+    });
   await page.getByRole("tab", { selected: true }).dblclick();
   const name = page.getByRole("textbox", { name: "Project name", exact: true });
   await name.fill("Pending B");
   // The external caller is real; observations stay at the editor UI seam.
-  await client.projects(session.sessionId, session.agentToken, {
-    apiVersion: "3.0",
-    requestId: "activate-while-naming",
-    operation: "workspace",
-    request: { action: "activate", workspaceId: target.workspaceId },
-  });
+  await activateOther("activate-while-naming");
   await expect(name).toBeFocused();
   await expect(name).toHaveValue("Pending B");
   await expect(
     page.getByRole("tab", { includeHidden: true, selected: true }),
   ).toHaveAttribute("title", "Project B");
   await name.press("Enter");
-  await client.projects(session.sessionId, session.agentToken, {
-    apiVersion: "3.0",
-    requestId: "activate-after-naming",
-    operation: "workspace",
-    request: { action: "activate", workspaceId: target.workspaceId },
-  });
+  await activateOther("activate-after-naming");
   await expect(page.getByRole("tab", { selected: true })).toContainText(
     "Project A",
   );
@@ -1115,7 +984,7 @@ test("tab rename keeps header geometry and Project Info renames the circuit and 
   page,
 }) => {
   await page.goto("/editor?new=1");
-  await insert(page, "resistor", 260, 220);
+  await placeComponentAt(page, "resistor", { x: 260, y: 220 });
   const toggle = page.getByTestId("project-menu-toggle");
   const fileMenu = await openMenu(page, "File");
   // One New Project and no second list of the tabs: the tabs choose the
@@ -1145,9 +1014,7 @@ test("tab rename keeps header geometry and Project Info renames the circuit and 
   await expect(page.getByTestId("project-name")).toHaveText(longName);
   // The tab shows the name. The header's File menu keeps its short label
   // with the whole name as its tooltip, so a long name never widens it.
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    longName,
-  );
+  await expect(tab).toContainText(longName);
   await expect(toggle).toHaveAttribute("title", longName);
   await expect(toggle.locator(".project-menu-title")).toHaveText("File");
   for (const width of [1360, 720]) {
@@ -1198,9 +1065,7 @@ test("tab rename keeps header geometry and Project Info renames the circuit and 
   await expect(page.getByTestId("project-name")).toHaveText(
     "Bandgap reference",
   );
-  await expect(page.getByRole("tab", { selected: true })).toContainText(
-    "Bandgap reference",
-  );
+  await expect(tab).toContainText("Bandgap reference");
   await openProjectInfo(page);
   await expect(cellField).toHaveValue("bandgap_core");
   await page.keyboard.press("Escape");
@@ -1293,9 +1158,7 @@ test("attaches a Net Label copied across Projects with Ctrl+C/V to a wire with i
   };
   await page.goto("/editor?new=1");
   await open(project);
-  await page
-    .getByRole("button", { name: "New project tab", exact: true })
-    .click();
+  await newProjectTab(page).click();
   const destination = structuredClone(project);
   destination.id = "destination";
   destination.documents[0]!.annotations = [];
@@ -1308,11 +1171,7 @@ test("attaches a Net Label copied across Projects with Ctrl+C/V to a wire with i
   const canvas = page.getByTestId("schematic-canvas");
   await canvas.focus();
   await page.keyboard.press("Control+v");
-  const wirePoint = await canvas.evaluate((element) => {
-    const matrix = (element as SVGSVGElement).getScreenCTM()!;
-    const point = new DOMPoint(200, 300).matrixTransform(matrix);
-    return { x: point.x, y: point.y };
-  });
+  const [wirePoint] = await onScreen(canvas, [{ x: 200, y: 300 }]);
   // Screen-space distance, independent of the fitted camera's zoom.
   await page.mouse.move(wirePoint.x, wirePoint.y - 6);
   const ghost = page.getByTestId("copy-placement-preview");

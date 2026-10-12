@@ -45,6 +45,32 @@ export async function signIn(
   );
 }
 
+/** Offer these sign-in methods. */
+export async function mockProviders(
+  target: Page | BrowserContext,
+  providers: { github: boolean; google: boolean; email: boolean },
+): Promise<void> {
+  await target.route("**/api/auth/providers", (route) =>
+    route.fulfill({ json: providers }),
+  );
+}
+
+/** Answer the tag summary with `tags` and the list with `list`; any other
+ * Gallery path falls back to the routes registered before. */
+export async function mockGalleryApi(
+  target: Page | BrowserContext,
+  tags: object,
+  list: (url: URL, route: Route) => Promise<void>,
+): Promise<void> {
+  await target.route("**/api/gallery**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/gallery/tags")
+      return route.fulfill({ json: tags });
+    if (url.pathname !== "/api/gallery") return route.fallback();
+    return list(url, route);
+  });
+}
+
 /** One blank drawing for any preview a route answers. */
 export function fulfillPreview(route: Route): Promise<void> {
   return route.fulfill({
@@ -98,9 +124,11 @@ export function galleryResistorProject(value = "1k", count = 2) {
   return project;
 }
 
+/** List these entries, and open ENTRY as `project`. */
 export async function mockGallery(
   page: Page,
   entries: object[],
+  project = createEmptyProject("gallery-ring", ENTRY.name),
 ): Promise<void> {
   await page.route(galleryListUrl, (route) =>
     route.fulfill({ json: { entries, nextCursor: null } }),
@@ -108,12 +136,7 @@ export async function mockGallery(
   await page.route(`**/api/gallery/${ENTRY.id}/preview.svg*`, fulfillPreview);
   await page.route(`**/api/gallery/${ENTRY.id}`, (route) =>
     route.fulfill({
-      json: {
-        entry: ENTRY,
-        projectText: serializeProject(
-          createEmptyProject("gallery-ring", ENTRY.name),
-        ),
-      },
+      json: { entry: ENTRY, projectText: serializeProject(project) },
     }),
   );
 }

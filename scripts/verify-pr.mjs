@@ -15,8 +15,9 @@
  *    strictly, so a describe its deletions emptied fails here, not in the
  *    merge queue;
  * 5. the browser cases the change adds or edits, by `file:line`, on the built
- *    editor with 4 workers (a change a spec file's tests share runs that
- *    file). `--mapped` runs every spec the merge queue maps instead.
+ *    editor with the local one-worker default, so the run leaves the machine
+ *    usable (a change a spec file's tests share runs that file). `--mapped`
+ *    runs every spec the merge queue maps instead.
  *
  * The merge queue owns ci:static, the full unit suite, release:verify and
  * the mapped specs on the candidate merged with main, in a few minutes, so
@@ -181,12 +182,7 @@ else if (mapped) {
   if (!ciPlan.browser)
     skip("browser", `the merge queue maps none (${ciPlan.mode})`);
   else
-    step(
-      "browser",
-      "pnpm",
-      ["test:e2e:local", "--workers=4", ...ciPlan.e2eArgs],
-      browserEnv,
-    );
+    step("browser", "pnpm", ["test:e2e:local", ...ciPlan.e2eArgs], browserEnv);
 } else {
   const cases = changedCases();
   if (!cases.length)
@@ -194,13 +190,7 @@ else if (mapped) {
       "browser",
       `no browser case changed; the merge queue runs ${queued} mapped spec file${queued === 1 ? "" : "s"}`,
     );
-  else
-    step(
-      "browser",
-      "pnpm",
-      ["test:e2e:local", "--workers=4", ...cases],
-      browserEnv,
-    );
+  else step("browser", "pnpm", ["test:e2e:local", ...cases], browserEnv);
 }
 
 finish(0);

@@ -1,18 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
-  awaitEditorReady,
-  downloadBytes,
-  parseSavedProject,
+  exportedProject,
   placeResistors,
+  openEditor,
 } from "./editor-fixtures.js";
 
-async function projectFile(page: Page) {
-  return parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-}
 const visual = (page: Page) =>
   page.locator(
     '[data-layer="annotations"] [data-object-id="instance-label-R1"]',
@@ -21,8 +13,7 @@ const visual = (page: Page) =>
 test("canvas edits one visual annotation without changing the Netlist Reference, and restores it in place", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await placeResistors(page, [360], 240);
   await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
   await expect(
@@ -82,7 +73,7 @@ test("canvas edits one visual annotation without changing the Netlist Reference,
   // The one label keeps its anchor, drops its binding and holds the line
   // break (visual-instance-annotation's "edits arbitrary content in place…");
   // the device keeps its Reference.
-  const saved = await projectFile(page);
+  const saved = await exportedProject(page);
   expect(saved.documents[0].instances[0].reference).toBe("R1");
 
   // Undo / redo restores both source mode and authored content atomically.
@@ -100,7 +91,7 @@ test("canvas edits one visual annotation without changing the Netlist Reference,
   await expect(editor).toHaveText("R1");
   await page.getByRole("button", { name: "Apply text changes" }).click();
   await expect(visual(page)).toHaveText("R1");
-  const restored = (await projectFile(page)).documents[0].annotations.find(
+  const restored = (await exportedProject(page)).documents[0].annotations.find(
     (annotation: { id: string }) => annotation.id === "instance-label-R1",
   );
   expect(restored).toMatchObject({

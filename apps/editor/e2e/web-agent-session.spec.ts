@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { Page, Route, WebSocketRoute } from "@playwright/test";
+import type { Locator, Page, Route, WebSocketRoute } from "@playwright/test";
 import { createHash } from "node:crypto";
 
 import { createEmptyProject } from "@icm/model";
@@ -7,13 +7,16 @@ import { serializeProject } from "@icm/project-protocol";
 
 import { AgentHttpClient, AgentSessionClient } from "@icm/agent-client";
 import { openGalleryEntry } from "../../mcp-server/src/file-operations.js";
+import { placedInstance } from "./canvas-fixtures.js";
+import { sessionUser, signIn } from "./gallery-fixtures.js";
 import {
   revealPropertiesShelf,
   awaitEditorReady,
-  readComponentPropertyCode,
   setComponentParameter,
   openCellManager,
+  openEditor,
 } from "./editor-fixtures.js";
+import { readComponentCode } from "./manual-editor-fixtures.js";
 
 // The live-host cases open relay sockets and one test starts a sibling Vite
 // server. Keep this file in one worker while unrelated browser specs stay
@@ -34,8 +37,48 @@ async function pairAgent(page: Page, baseURL: string) {
   const client = new AgentHttpClient({ baseUrl: baseURL });
   const session = await client.claim(claimCode);
   await expect(panel.getByTestId("agent-status")).toHaveText("Connected");
-  return { panel, client, session };
+  return { panel, client, session, agent: boundTo(client, session) };
 }
+
+type WorkspaceRequest = Extract<
+  Parameters<AgentHttpClient["projects"]>[2],
+  { operation: "workspace" }
+>["request"];
+
+/** The client's Agent requests with this session's credentials. */
+function boundTo(
+  client: AgentHttpClient,
+  { sessionId, agentToken }: { sessionId: string; agentToken: string },
+) {
+  const status = () => client.status(sessionId, agentToken);
+  const workspaceRequest = (requestId: string, request: WorkspaceRequest) =>
+    client.projects(sessionId, agentToken, {
+      apiVersion: "3.0",
+      requestId,
+      operation: "workspace",
+      request,
+    });
+  return {
+    circuit: (request: Parameters<AgentHttpClient["circuit"]>[2]) =>
+      client.circuit(sessionId, agentToken, request),
+    /** A Circuit snapshot of one Cell. */
+    snapshot: (requestId: string, documentId: string) =>
+      client.circuit(sessionId, agentToken, {
+        apiVersion: "3.0",
+        requestId,
+        operation: "snapshot",
+        documentId,
+      }),
+    files: (request: Parameters<AgentHttpClient["files"]>[2]) =>
+      client.files(sessionId, agentToken, request),
+    status,
+    workspaceRequest,
+    /** A workspace request after reading the current context, as the Agent client does. */
+    workspace: (requestId: string, request: WorkspaceRequest) =>
+      status().then(() => workspaceRequest(requestId, request)),
+  };
+}
+type Agent = ReturnType<typeof boundTo>;
 
 /** A Circuit transaction that places one resistor. */
 function placeResistor(
@@ -54,39 +97,10 @@ function placeResistor(
     edits: [
       {
         kind: "add_instance" as const,
-        instance: {
-          id,
-          symbolId: "resistor",
-          placement: {
-            position: { x, y: 200 },
-            rotation: 0 as const,
-            mirror: "none" as const,
-          },
-        },
+        instance: placedInstance(id, "resistor", x, 200),
       },
     ],
   };
-}
-
-type WorkspaceRequest = Extract<
-  Parameters<AgentHttpClient["projects"]>[2],
-  { operation: "workspace" }
->["request"];
-
-/** A workspace request after reading the current context, as the Agent client does. */
-function workspaceOf(
-  client: AgentHttpClient,
-  session: { sessionId: string; agentToken: string },
-) {
-  return (requestId: string, request: WorkspaceRequest) =>
-    client.status(session.sessionId, session.agentToken).then(() =>
-      client.projects(session.sessionId, session.agentToken, {
-        apiVersion: "3.0",
-        requestId,
-        operation: "workspace",
-        request,
-      }),
-    );
 }
 
 /** The working copies a workspace list answered; a refusal throws. */
@@ -100,31 +114,34 @@ function listed(reply: Awaited<ReturnType<AgentHttpClient["projects"]>>) {
   return reply.result;
 }
 
+/** Waits until the handoff text carries this Claim code. */
+const expectClaimCode = (scope: Page | Locator, claimCode: string) =>
+  expect
+    .poll(() => scope.getByTestId("agent-copy-text").inputValue())
+    .toContain(JSON.stringify({ claimCode }));
+
+/** One file of a staging request, with its digest. */
+const stagedFile = (name: string, mediaType: string, bytes: Buffer) => ({
+  name,
+  mediaType,
+  encoding: "base64" as const,
+  data: bytes.toString("base64"),
+  byteLength: bytes.byteLength,
+  sha256: createHash("sha256").update(bytes).digest("hex"),
+});
+
 /** A structural SPICE file staged for the Agent to open or have approved. */
-async function stageSpice(
-  client: AgentHttpClient,
-  session: { sessionId: string; agentToken: string },
-  requestId: string,
-) {
+async function stageSpice(agent: Agent, requestId: string) {
   const bytes = Buffer.from(
     ".subckt stage vin vout\nR1 vin vout 1k\n.ends stage\n",
   );
-  const staged = await client.files(session.sessionId, session.agentToken, {
+  const staged = await agent.files({
     apiVersion: "3.0",
     requestId,
     operation: "stage",
     kind: "structural-spice",
     entryPath: "stage.spi",
-    files: [
-      {
-        name: "stage.spi",
-        mediaType: "text/plain",
-        encoding: "base64",
-        data: bytes.toString("base64"),
-        byteLength: bytes.byteLength,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-      },
-    ],
+    files: [stagedFile("stage.spi", "text/plain", bytes)],
   });
   if (!staged.ok || staged.operation !== "stage")
     throw new Error(JSON.stringify(staged));
@@ -136,8 +153,7 @@ test("Agent Gallery open returns each new working copy after the relay context c
   page,
   baseURL,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.getByTestId("open-agent").click();
   const panel = page.getByTestId("connect-agent-panel");
   const message = panel.getByTestId("agent-copy-text");
@@ -241,7 +257,21 @@ test("Agent Gallery open returns each new working copy after the relay context c
   }
 });
 
+/** The relay's answer to a created session. */
+const createdSession = (
+  sessionId: string,
+  editorSecret: string,
+  claimExpiresAt: number,
+  expiresAt: number,
+  claimCode = `${sessionId}.claim`,
+) => ({
+  ok: true,
+  session: { sessionId, editorSecret, claimCode, claimExpiresAt, expiresAt },
+});
+
+/** Installs the page clock and scripts the relay so a test answers each create. */
 async function controlledConnections(page: Page) {
+  await page.clock.install();
   const creates: Route[] = [];
   const controls: Route[] = [];
   const sockets: string[] = [];
@@ -280,19 +310,27 @@ async function controlledConnections(page: Page) {
     controls,
     sockets,
     socketRoutes,
+    /** Opens the editor's Agent dialog once its first create is requested. */
+    open: async () => {
+      await openEditor(page);
+      await page.getByRole("button", { name: "Agent", exact: true }).click();
+      await expect.poll(() => creates.length).toBe(1);
+      return page.getByTestId("connect-agent-panel");
+    },
+    /** Waits until the scope shows Claim `index`. */
+    expectClaim: (scope: Locator, index: number) =>
+      expect(scope.getByTestId("agent-copy-text")).toHaveValue(
+        new RegExp(`controlled-${index}\\.claim`),
+      ),
     complete: (index: number, claimLifetimeMs = 300_000) =>
       creates[index]!.fulfill({
         headers: { date: new Date().toUTCString() },
-        json: {
-          ok: true,
-          session: {
-            sessionId: `controlled-${index}`,
-            editorSecret: `secret-${index}`,
-            claimCode: `controlled-${index}.claim`,
-            claimExpiresAt: Date.now() + claimLifetimeMs,
-            expiresAt: Date.now() + 1_800_000,
-          },
-        },
+        json: createdSession(
+          `controlled-${index}`,
+          `secret-${index}`,
+          Date.now() + claimLifetimeMs,
+          Date.now() + 1_800_000,
+        ),
       }),
   };
 }
@@ -302,24 +340,15 @@ async function controlledConnections(page: Page) {
 test("a Claim survives a wall-clock jump, and once expired keeps its explanation after socket recovery and can be replaced", async ({
   page,
 }) => {
-  await page.clock.install();
   const relay = await controlledConnections(page);
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  const panel = page.getByTestId("connect-agent-panel");
-  await expect.poll(() => relay.creates.length).toBe(1);
+  const panel = await relay.open();
   await relay.complete(0, 4_000);
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-0\.claim/,
-  );
+  await relay.expectClaim(panel, 0);
   await page.clock.setSystemTime(
     (await page.evaluate(() => Date.now())) + 24 * 60 * 60_000,
   );
   await page.clock.runFor(1_100);
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-0\.claim/,
-  );
+  await relay.expectClaim(panel, 0);
   await expect(panel.getByTestId("agent-claim-expired")).toHaveCount(0);
   await page.clock.runFor(3_000);
   await expect(panel.getByTestId("agent-claim-expired")).toBeVisible();
@@ -337,15 +366,12 @@ test("a Claim survives a wall-clock jump, and once expired keeps its explanation
   await panel.getByTestId("agent-new-connection").click();
   await expect.poll(() => relay.creates.length).toBe(2);
   await relay.complete(1);
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-1\.claim/,
-  );
+  await relay.expectClaim(panel, 1);
 });
 
 test("a created Claim is visible before socket readiness and removed when setup times out", async ({
   page,
 }) => {
-  await page.clock.install();
   const relay = await controlledConnections(page);
   // Delay the external socket's open notification, not any Editor collaborator.
   await page.addInitScript(() => {
@@ -364,15 +390,9 @@ test("a created Claim is visible before socket readiness and removed when setup 
       }
     };
   });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  const panel = page.getByTestId("connect-agent-panel");
-  await expect.poll(() => relay.creates.length).toBe(1);
+  const panel = await relay.open();
   await relay.complete(0);
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-0\.claim/,
-  );
+  await relay.expectClaim(panel, 0);
   await expect(panel.getByTestId("agent-status")).toHaveText(
     "Creating connection…",
   );
@@ -388,15 +408,10 @@ test("a created Claim is visible before socket readiness and removed when setup 
 test("connection controls recover from a cancelled or hung create, and across dialog and Properties while old requests are pending", async ({
   page,
 }) => {
-  await page.clock.install();
   const relay = await controlledConnections(page);
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  const panel = page.getByTestId("connect-agent-panel");
   // A cancelled and a hung create are retried without refreshing; their late
   // answers change nothing.
-  await expect.poll(() => relay.creates.length).toBe(1);
+  const panel = await relay.open();
   await panel.getByRole("button", { name: "Cancel connection" }).click();
   await expect(panel.getByTestId("agent-status")).toHaveText("Disconnected");
   await panel.getByTestId("agent-new-connection").click();
@@ -411,9 +426,7 @@ test("connection controls recover from a cancelled or hung create, and across di
   );
   await relay.complete(0).catch(() => undefined);
   await relay.complete(1).catch(() => undefined);
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-2\.claim/,
-  );
+  await relay.expectClaim(panel, 2);
   expect(relay.sockets).toHaveLength(1);
   expect(relay.sockets[0]).toContain("controlled-2/editor");
   // Leave Pause and Revoke unanswered. Neither may mutate the replacement.
@@ -436,9 +449,7 @@ test("connection controls recover from a cancelled or hung create, and across di
   );
   await relay.controls[1]!.fulfill({ json: { ok: true } });
   await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await expect(panel.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-3\.claim/,
-  );
+  await relay.expectClaim(panel, 3);
   await panel.getByTestId("agent-pause").click();
   await expect.poll(() => relay.controls.length).toBe(3);
   expect(relay.controls[2]!.request().url()).toContain("controlled-3/control");
@@ -458,9 +469,7 @@ test("connection controls recover from a cancelled or hung create, and across di
   await properties.getByTestId("agent-connect").click();
   await expect.poll(() => relay.creates.length).toBe(6);
   await relay.complete(5);
-  await expect(properties.getByTestId("agent-copy-text")).toHaveValue(
-    /controlled-5\.claim/,
-  );
+  await relay.expectClaim(properties, 5);
 });
 
 type SessionMessage = {
@@ -496,16 +505,12 @@ test("retries a failed Agent connection without a permission picker", async ({
       return;
     }
     await route.fulfill({
-      json: {
-        ok: true,
-        session: {
-          sessionId: "retry-session",
-          editorSecret: "retry-editor-secret",
-          claimCode: "retry-session.claim",
-          claimExpiresAt: Date.now() + 300_000,
-          expiresAt: Date.now() + 3_600_000,
-        },
-      },
+      json: createdSession(
+        "retry-session",
+        "retry-editor-secret",
+        Date.now() + 300_000,
+        Date.now() + 3_600_000,
+      ),
     });
   });
 
@@ -521,9 +526,7 @@ test("retries a failed Agent connection without a permission picker", async ({
   await expect(panel.getByRole("alert")).toContainText("restart pnpm dev");
   expect(creates).toBe(1);
   await panel.getByTestId("agent-connect").click();
-  await expect
-    .poll(() => panel.getByTestId("agent-copy-text").inputValue())
-    .toContain(JSON.stringify({ claimCode: "retry-session.claim" }));
+  await expectClaimCode(panel, "retry-session.claim");
   await expect(panel.getByRole("alert")).toHaveCount(0);
   await expect(panel.getByTestId("agent-connect")).toHaveCount(0);
   expect(creates).toBe(2);
@@ -552,9 +555,7 @@ test("retries a failed Agent connection without a permission picker", async ({
   ).toBe(true);
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
   await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await expect
-    .poll(() => panel.getByTestId("agent-copy-text").inputValue())
-    .toContain(JSON.stringify({ claimCode: "retry-session.claim" }));
+  await expectClaimCode(panel, "retry-session.claim");
   expect(creates).toBe(2);
 });
 
@@ -626,16 +627,13 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
       );
       await route.fulfill({
         contentType: "application/json",
-        json: {
-          ok: true,
-          session: {
-            sessionId,
-            editorSecret,
-            claimCode: `${sessionId}.one-time-claim`,
-            claimExpiresAt: Date.now() + 300_000,
-            expiresAt: Date.now() + 3_600_000,
-          },
-        },
+        json: createdSession(
+          sessionId,
+          editorSecret,
+          Date.now() + 300_000,
+          Date.now() + 3_600_000,
+          `${sessionId}.one-time-claim`,
+        ),
       });
       return;
     }
@@ -658,9 +656,7 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
   await page.goto("/editor");
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.locator('[data-testid^="agent-preset-"]')).toHaveCount(0);
-  await expect
-    .poll(() => page.getByTestId("agent-copy-text").inputValue())
-    .toContain(JSON.stringify({ claimCode: `${sessionId}.one-time-claim` }));
+  await expectClaimCode(page, `${sessionId}.one-time-claim`);
   await expect.poll(() => browserSocket !== null).toBe(true);
   expect(sessionCreates).toBe(1);
   const socket = browserSocket!;
@@ -749,6 +745,13 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
       },
     ],
   };
+  /** Whether the editor has reported an event by this actor. */
+  const eventBy = (actorKind: string) =>
+    responses.some(
+      (message) =>
+        message.kind === "event" &&
+        (message.payload as { actorKind?: string }).actorKind === actorKind,
+    );
   const transaction = await send("circuit", "agent-edit", edit);
   expect(transaction.payload).toMatchObject({
     ok: true,
@@ -757,15 +760,7 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
     revision: 1,
   });
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-  await expect
-    .poll(() =>
-      responses.some(
-        (message) =>
-          message.kind === "event" &&
-          (message.payload as { actorKind?: string }).actorKind === "agent",
-      ),
-    )
-    .toBe(true);
+  await expect.poll(() => eventBy("agent")).toBe(true);
   // A replayed request gets the first answer, not a second edit.
   expect((await send("circuit", "agent-edit", edit)).payload).toEqual(
     transaction.payload,
@@ -778,15 +773,7 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
     .click();
   await page.getByTestId("draw-tool-undo").click();
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
-  await expect
-    .poll(() =>
-      responses.some(
-        (message) =>
-          message.kind === "event" &&
-          (message.payload as { actorKind?: string }).actorKind === "human",
-      ),
-    )
-    .toBe(true);
+  await expect.poll(() => eventBy("human")).toBe(true);
 
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   const panel = page.getByTestId("connect-agent-panel");
@@ -797,9 +784,7 @@ test("grants a browser Agent, edits through the live host, and shares undo", asy
   await panel.getByTestId("agent-new-connection").click();
   await expect.poll(() => sessionCreates).toBe(2);
   await expect.poll(() => revokeControls).toBe(1);
-  await expect
-    .poll(() => panel.getByTestId("agent-copy-text").inputValue())
-    .toContain(JSON.stringify({ claimCode: `${sessionId}.one-time-claim` }));
+  await expectClaimCode(panel, `${sessionId}.one-time-claim`);
   await expect(panel.getByTestId("agent-status")).toContainText(
     "Waiting for Agent",
   );
@@ -827,20 +812,14 @@ test("keeps one paired working copy through Cell switches, a render crash, refre
   });
   page.on("dialog", (dialog) => void dialog.accept());
   await page.goto("/editor");
-  const { panel, client, session } = await pairAgent(page, baseURL!);
+  const { panel, session, agent } = await pairAgent(page, baseURL!);
   const documentId = session.documentIds[0]!;
   const attached = () =>
-    expect
-      .poll(
-        async () =>
-          (await client.status(session.sessionId, session.agentToken)).editor,
-      )
-      .toBe("attached");
+    expect.poll(async () => (await agent.status()).editor).toBe("attached");
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
 
   // Switching Cells keeps the one Project session.
-  await openCellManager(page);
-  let manager = page.getByRole("dialog", { name: "Cell Manager" });
+  let manager = await openCellManager(page);
   await manager.getByRole("button", { name: "New Cell" }).click();
   const cellEditor = page.getByRole("dialog", { name: "New Cell" });
   await cellEditor.getByLabel("Cell name").fill("AgentLifecycleCell");
@@ -850,8 +829,7 @@ test("keeps one paired working copy through Cell switches, a render crash, refre
     .innerText();
   expect(childDocumentId).not.toBe(documentId);
   const openCell = async (name: string | RegExp) => {
-    await openCellManager(page);
-    manager = page.getByRole("dialog", { name: "Cell Manager" });
+    manager = await openCellManager(page);
     await manager
       .locator(".cell-manager-list-item")
       .filter({ hasText: name })
@@ -864,20 +842,13 @@ test("keeps one paired working copy through Cell switches, a render crash, refre
   );
   await attached();
   expect(
-    await client.circuit(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "cell-switch-snapshot",
-      operation: "snapshot",
-      documentId,
-    }),
+    await agent.snapshot("cell-switch-snapshot", documentId),
   ).toMatchObject({ ok: true, revision: 0 });
   await openCell(/Top/u);
 
   // An acknowledged Agent edit and a pause survive a render crash's reload.
   expect(
-    await client.circuit(
-      session.sessionId,
-      session.agentToken,
+    await agent.circuit(
       placeResistor(documentId, "crash-durable-edit", "crash-durable-R"),
     ),
   ).toMatchObject({ ok: true, revision: 1 });
@@ -896,9 +867,10 @@ test("keeps one paired working copy through Cell switches, a render crash, refre
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   await page.getByTestId("open-agent").click();
   await expect(panel.getByTestId("agent-status")).toHaveText("Paused");
-  expect(
-    await client.status(session.sessionId, session.agentToken),
-  ).toMatchObject({ authorization: "paused", editor: "attached" });
+  expect(await agent.status()).toMatchObject({
+    authorization: "paused",
+    editor: "attached",
+  });
   expect(sessionCreates).toBe(1);
 
   // The Gallery and back return to the same working copy, still paused.
@@ -910,14 +882,10 @@ test("keeps one paired working copy through Cell switches, a render crash, refre
   await page.getByTestId("open-agent").click();
   await expect(panel.getByTestId("agent-status")).toHaveText("Paused");
   await panel.getByTestId("agent-resume").click();
-  expect(
-    await client.circuit(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "restored-snapshot",
-      operation: "snapshot",
-      documentId,
-    }),
-  ).toMatchObject({ ok: true, revision: 1 });
+  expect(await agent.snapshot("restored-snapshot", documentId)).toMatchObject({
+    ok: true,
+    revision: 1,
+  });
   await page.goto("/editor?new=1");
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
   await attached();
@@ -929,22 +897,12 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   baseURL,
 }) => {
   test.setTimeout(90_000);
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "u1",
-          displayName: "Publisher",
-          email: "publisher@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: false,
-        },
-      },
-    }),
+  await signIn(
+    page,
+    sessionUser({ displayName: "Publisher", email: "publisher@example.com" }),
   );
   await page.goto("/editor");
-  const { panel, client, session } = await pairAgent(page, baseURL!);
+  const { panel, session, agent } = await pairAgent(page, baseURL!);
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
   const dialog = page.getByTestId("publish-gallery-dialog");
   const expectAgentNote = async (noted: boolean) => {
@@ -958,9 +916,7 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   // Pairing alone is not the Agent's work.
   await expectAgentNote(false);
 
-  await client.circuit(
-    session.sessionId,
-    session.agentToken,
+  await agent.circuit(
     placeResistor(session.documentIds[0]!, "agent-drawing", "agent-R"),
   );
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
@@ -970,11 +926,11 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   // without asking the person.
   const tabs = page.getByRole("tab");
   expect(
-    await client.files(session.sessionId, session.agentToken, {
+    await agent.files({
       apiVersion: "3.0",
       requestId: "open-staged",
       operation: "open",
-      candidateId: await stageSpice(client, session, "stage-to-open"),
+      candidateId: await stageSpice(agent, "stage-to-open"),
       background: false,
     }),
   ).toMatchObject({ ok: true, operation: "open" });
@@ -984,31 +940,28 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   await expectAgentNote(true);
   // The Agent follows the selected tab and reads its context first.
   await expect
-    .poll(
-      async () =>
-        (await client.status(session.sessionId, session.agentToken)).projectId,
-    )
+    .poll(async () => (await agent.status()).projectId)
     .not.toBe(session.projectId);
 
   // So does a file the person approves in place of the open Project.
   expect(
-    await client.files(session.sessionId, session.agentToken, {
+    await agent.files({
       apiVersion: "3.0",
       requestId: "approve-staged",
       operation: "request-approval",
-      candidateId: await stageSpice(client, session, "stage-to-approve"),
+      candidateId: await stageSpice(agent, "stage-to-approve"),
     }),
   ).toMatchObject({ ok: true, approval: "pending-human" });
   await page.getByTestId("agent-file-approve").click();
   await expect(page.getByTestId("status")).toContainText("Accepted Agent");
   await expectAgentNote(true);
   // A file the person rejects changes nothing.
-  await client.status(session.sessionId, session.agentToken);
-  await client.files(session.sessionId, session.agentToken, {
+  await agent.status();
+  await agent.files({
     apiVersion: "3.0",
     requestId: "reject-staged",
     operation: "request-approval",
-    candidateId: await stageSpice(client, session, "stage-to-reject"),
+    candidateId: await stageSpice(agent, "stage-to-reject"),
   });
   const approval = page.getByTestId("agent-file-approval");
   await expect(approval).toBeVisible();
@@ -1019,8 +972,7 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   await expect(page.getByTestId("revision")).toHaveText(revision);
 
   // A blank Project the Agent opens is not its work yet; renaming it is.
-  const workspace = workspaceOf(client, session);
-  const blank = await workspace("new-blank", {
+  const blank = await agent.workspace("new-blank", {
     action: "new",
     name: "Blank",
     background: true,
@@ -1032,7 +984,7 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   )
     throw new Error(JSON.stringify(blank));
   expect(
-    await workspace("show-blank", {
+    await agent.workspace("show-blank", {
       action: "activate",
       workspaceId: blank.result.workspaceId!,
     }),
@@ -1041,7 +993,7 @@ test("publishing by hand notes what an Agent drew, opened or had approved, leavi
   await expect(tabs.last()).toHaveAttribute("aria-selected", "true");
   await expectAgentNote(false);
   expect(
-    await workspace("rename-blank", { action: "rename", name: "Named" }),
+    await agent.workspace("rename-blank", { action: "rename", name: "Named" }),
   ).toMatchObject({ ok: true, result: { action: "rename", applied: true } });
   await expectAgentNote(true);
 
@@ -1057,25 +1009,17 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   baseURL,
 }) => {
   await page.goto("/editor?new=1");
-  const { panel, client, session } = await pairAgent(page, baseURL!);
+  const { panel, client, session, agent } = await pairAgent(page, baseURL!);
   const originalContext = client.contextRevision;
   const write = placeResistor(
     session.documentIds[0]!,
     "workspace-source",
     "workspace-R",
   );
-  expect(
-    await client.circuit(session.sessionId, session.agentToken, write),
-  ).toMatchObject({ ok: true });
-  const sourceSnapshot = {
-    apiVersion: "3.0" as const,
-    requestId: "workspace-source-snapshot",
-    operation: "snapshot" as const,
-    documentId: session.documentIds[0]!,
-  };
-  expect(
-    await client.circuit(session.sessionId, session.agentToken, sourceSnapshot),
-  ).toMatchObject({ ok: true, revision: 1 });
+  expect(await agent.circuit(write)).toMatchObject({ ok: true });
+  const sourceSnapshot = () =>
+    agent.snapshot("workspace-source-snapshot", session.documentIds[0]!);
+  expect(await sourceSnapshot()).toMatchObject({ ok: true, revision: 1 });
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
   await page
     .getByRole("button", { name: "New project tab", exact: true })
@@ -1099,31 +1043,21 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   expect(await rejected.json()).toMatchObject({
     error: { code: "PROJECT_CONTEXT_STALE" },
   });
-  const activeStatus = await client.status(
-    session.sessionId,
-    session.agentToken,
-  );
+  const activeStatus = await agent.status();
   expect(activeStatus).toMatchObject({
     authorization: "active",
     editor: "attached",
   });
   const switchedContext = client.contextRevision;
   expect(
-    await client.circuit(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "workspace-target-snapshot",
-      operation: "snapshot",
-      documentId: activeStatus.documentIds[0]!,
-    }),
+    await agent.snapshot(
+      "workspace-target-snapshot",
+      activeStatus.documentIds[0]!,
+    ),
   ).toMatchObject({ ok: true, operation: "snapshot", revision: 0 });
   expect(client.contextRevision).toBe(switchedContext);
   const list = listed(
-    await client.projects(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "workspace-list",
-      operation: "workspace",
-      request: { action: "list" },
-    }),
+    await agent.workspaceRequest("workspace-list", { action: "list" }),
   );
   expect(list.projects).toHaveLength(2);
   const target = list.projects.find(
@@ -1137,27 +1071,19 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   client.workspaceId = source.workspaceId;
   client.contextRevision = originalContext;
   // A request ID used in another scope is refused, not replayed into this one.
-  await expect(
-    client.circuit(session.sessionId, session.agentToken, sourceSnapshot),
-  ).rejects.toMatchObject({ code: "REQUEST_ID_REUSED" });
-  const backgroundSnapshot = await client.circuit(
-    session.sessionId,
-    session.agentToken,
-    {
-      apiVersion: "3.0",
-      requestId: "workspace-background-snapshot",
-      operation: "snapshot",
-      documentId: source.cells[0]!.documentId,
-    },
+  await expect(sourceSnapshot()).rejects.toMatchObject({
+    code: "REQUEST_ID_REUSED",
+  });
+  const backgroundSnapshot = await agent.snapshot(
+    "workspace-background-snapshot",
+    source.cells[0]!.documentId,
   );
   expect(backgroundSnapshot).toMatchObject({
     ok: true,
     operation: "snapshot",
     revision: 1,
   });
-  const backgroundEdit = await client.circuit(
-    session.sessionId,
-    session.agentToken,
+  const backgroundEdit = await agent.circuit(
     placeResistor(
       source.cells[0]!.documentId,
       "workspace-background-edit",
@@ -1173,22 +1099,17 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
   client.workspaceId = undefined;
   client.contextRevision = switchedContext;
-  const copy = await client.projects(session.sessionId, session.agentToken, {
-    apiVersion: "3.0",
-    requestId: "workspace-copy",
-    operation: "workspace",
-    request: {
-      action: "copy",
-      sourceWorkspaceId: source.workspaceId,
-      sourceDocumentId: source.cells[0]!.documentId,
-      sourceRevision: 2,
-      sourceStructureRevision: source.structureRevision,
-      targetWorkspaceId: target.workspaceId,
-      targetDocumentId: target.cells[0]!.documentId,
-      expectedRevision: target.cells[0]!.revision,
-      expectedStructureRevision: target.structureRevision,
-      offset: { x: 100, y: 100 },
-    },
+  const copy = await agent.workspaceRequest("workspace-copy", {
+    action: "copy",
+    sourceWorkspaceId: source.workspaceId,
+    sourceDocumentId: source.cells[0]!.documentId,
+    sourceRevision: 2,
+    sourceStructureRevision: source.structureRevision,
+    targetWorkspaceId: target.workspaceId,
+    targetDocumentId: target.cells[0]!.documentId,
+    expectedRevision: target.cells[0]!.revision,
+    expectedStructureRevision: target.structureRevision,
+    offset: { x: 100, y: 100 },
   });
   expect(copy).toMatchObject({
     ok: true,
@@ -1204,11 +1125,9 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   await page.keyboard.press("ControlOrMeta+z");
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
   expect(
-    await client.projects(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "workspace-activate",
-      operation: "workspace",
-      request: { action: "activate", workspaceId: source.workspaceId },
+    await agent.workspaceRequest("workspace-activate", {
+      action: "activate",
+      workspaceId: source.workspaceId,
     }),
   ).toMatchObject({ ok: true });
   await expect(page.getByTestId("active-instance-count")).toHaveText("2");
@@ -1224,19 +1143,16 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   await expect(page.getByRole("tab")).toHaveCount(1);
   client.workspaceId = source.workspaceId;
   expect(
-    await client.circuit(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "closed-workspace-snapshot",
-      operation: "snapshot",
-      documentId: source.cells[0]!.documentId,
-    }),
+    await agent.snapshot(
+      "closed-workspace-snapshot",
+      source.cells[0]!.documentId,
+    ),
   ).toMatchObject({ ok: false, error: { code: "WORKSPACE_NOT_FOUND" } });
   client.workspaceId = undefined;
 
   // A blank scratch copy and a name for each copy, without the GUI.
-  const workspace = workspaceOf(client, session);
   const tabs = page.getByRole("tab");
-  const created = await workspace("workspace-new", {
+  const created = await agent.workspace("workspace-new", {
     action: "new",
     name: "Scratch RC",
     background: true,
@@ -1253,7 +1169,7 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
   await expect(tabs.last()).toContainText("Scratch RC");
   expect(
-    await workspace("workspace-rename-background", {
+    await agent.workspace("workspace-rename-background", {
       action: "rename",
       workspaceId: scratch,
       name: "Telescopic redraw",
@@ -1265,7 +1181,7 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
   await expect(tabs.last()).toContainText("Telescopic redraw");
   // The bound (here the active) copy is renamed as the Project menu does.
   expect(
-    await workspace("workspace-rename-active", {
+    await agent.workspace("workspace-rename-active", {
       action: "rename",
       name: "Differential pair",
     }),
@@ -1274,13 +1190,18 @@ test("keeps pairing across Project tabs, rejects old writes and copies through t
     "title",
     "Differential pair",
   );
-  const names = listed(await workspace("workspace-names", { action: "list" }));
+  const names = listed(
+    await agent.workspace("workspace-names", { action: "list" }),
+  );
   expect(names.projects.map((project) => project.name)).toEqual([
     "Differential pair",
     "Telescopic redraw",
   ]);
   expect(
-    await workspace("workspace-rename-blank", { action: "rename", name: " " }),
+    await agent.workspace("workspace-rename-blank", {
+      action: "rename",
+      name: " ",
+    }),
   ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
 });
 
@@ -1290,39 +1211,26 @@ test("after an Agent opens a Project with the same Cell ID, an unnamed write goe
   baseURL,
 }) => {
   await page.goto("/editor?new=1");
-  const { client, session } = await pairAgent(page, baseURL!);
+  const { client, session, agent } = await pairAgent(page, baseURL!);
   const documentId = session.documentIds[0]!;
   const firstContext = client.contextRevision;
   expect(
-    await client.circuit(
-      session.sessionId,
-      session.agentToken,
-      placeResistor(documentId, "first-place", "first-R"),
-    ),
+    await agent.circuit(placeResistor(documentId, "first-place", "first-R")),
   ).toMatchObject({ ok: true, applied: true });
   const bytes = Buffer.from(
     serializeProject(createEmptyProject("binding-second", "Second Project")),
   );
-  const staged = await client.files(session.sessionId, session.agentToken, {
+  const staged = await agent.files({
     apiVersion: "3.0",
     requestId: "stage-second-project",
     operation: "stage",
     kind: "project",
-    files: [
-      {
-        name: "second.icproj.json",
-        mediaType: "application/json",
-        encoding: "base64",
-        data: bytes.toString("base64"),
-        byteLength: bytes.byteLength,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-      },
-    ],
+    files: [stagedFile("second.icproj.json", "application/json", bytes)],
   });
   if (!staged.ok || staged.operation !== "stage")
     throw new Error(JSON.stringify(staged));
   expect(
-    await client.files(session.sessionId, session.agentToken, {
+    await agent.files({
       apiVersion: "3.0",
       requestId: "open-second-project",
       operation: "open",
@@ -1332,30 +1240,21 @@ test("after an Agent opens a Project with the same Cell ID, an unnamed write goe
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
   await expect
     .poll(async () => {
-      await client.status(session.sessionId, session.agentToken);
+      await agent.status();
       return client.contextRevision;
     })
     .not.toBe(firstContext);
-  const current = await client.status(session.sessionId, session.agentToken);
+  const current = await agent.status();
   expect(current.documentIds[0]).toBe(documentId);
   expect(
-    await client.circuit(
-      session.sessionId,
-      session.agentToken,
-      placeResistor(documentId, "second-place", "second-R"),
-    ),
+    await agent.circuit(placeResistor(documentId, "second-place", "second-R")),
   ).toMatchObject({ ok: true, applied: true });
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
   const first = listed(
-    await workspaceOf(client, session)("list-first", { action: "list" }),
+    await agent.workspace("list-first", { action: "list" }),
   ).projects.find((project) => project.projectId === session.projectId)!;
   client.workspaceId = first.workspaceId;
-  const snapshot = await client.circuit(session.sessionId, session.agentToken, {
-    apiVersion: "3.0",
-    requestId: "first-snapshot",
-    operation: "snapshot",
-    documentId,
-  });
+  const snapshot = await agent.snapshot("first-snapshot", documentId);
   if (!snapshot.ok || !("snapshot" in snapshot))
     throw new Error(JSON.stringify(snapshot));
   expect(snapshot.snapshot.document.instances.map(({ id }) => id)).toEqual([
@@ -1413,16 +1312,11 @@ test("workspace Cloud operations reuse GUI open validation, save conflicts and S
     }),
   );
   await page.goto("/editor?new=1");
-  const { panel, client, session } = await pairAgent(page, baseURL!);
+  const { panel, client, agent } = await pairAgent(page, baseURL!);
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
   let requestNumber = 0;
   const workspace = (request: WorkspaceRequest) =>
-    client.projects(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      operation: "workspace",
-      requestId: `cloud-${++requestNumber}`,
-      request,
-    });
+    agent.workspaceRequest(`cloud-${++requestNumber}`, request);
   expect(
     await workspace({ action: "open", cloudProjectId: "cloud-invalid" }),
   ).toMatchObject({ ok: false });
@@ -1448,11 +1342,7 @@ test("workspace Cloud operations reuse GUI open validation, save conflicts and S
   ).toMatchObject({ ok: true });
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect
-    .poll(
-      async () =>
-        (await client.status(session.sessionId, session.agentToken))
-          .contextRevision,
-    )
+    .poll(async () => (await agent.status()).contextRevision)
     .not.toBe(oldContext);
   expect(await workspace({ action: "save" })).toMatchObject({
     ok: false,
@@ -1466,7 +1356,7 @@ test("workspace Cloud operations reuse GUI open validation, save conflicts and S
     await workspace({ action: "list" }),
   ).projects.find((item) => item.cloudProjectId === "cloud-copy")!.workspaceId;
   await page.getByRole("tab").first().click();
-  await client.status(session.sessionId, session.agentToken);
+  await agent.status();
   client.workspaceId = backgroundId;
   expect(await workspace({ action: "save", asNew: true })).toMatchObject({
     ok: true,
@@ -1534,6 +1424,7 @@ test("copies a working handoff through the normal local dev relay", async ({
   };
   const client = new AgentHttpClient({ baseUrl: baseURL! });
   const session = await client.claim(claimCode);
+  const agent = boundTo(client, session);
   const readIdleDeadline = () =>
     page.evaluate(() => {
       const record = JSON.parse(
@@ -1542,12 +1433,7 @@ test("copies a working handoff through the normal local dev relay", async ({
       return record?.expiresAt ?? 0;
     });
   const documentId = session.documentIds[0]!;
-  const snapshot = await client.circuit(session.sessionId, session.agentToken, {
-    apiVersion: "3.0",
-    requestId: "local-before",
-    operation: "snapshot",
-    documentId,
-  });
+  const snapshot = await agent.snapshot("local-before", documentId);
   expect(snapshot).toMatchObject({
     ok: true,
     operation: "snapshot",
@@ -1570,12 +1456,7 @@ test("copies a working handoff through the normal local dev relay", async ({
       async () => {
         try {
           return (
-            await client.circuit(session.sessionId, session.agentToken, {
-              apiVersion: "3.0",
-              operation: "snapshot",
-              documentId,
-              requestId: `after-reconnect-${Date.now()}`,
-            })
+            await agent.snapshot(`after-reconnect-${Date.now()}`, documentId)
           ).ok;
         } catch {
           return false;
@@ -1585,34 +1466,24 @@ test("copies a working handoff through the normal local dev relay", async ({
     )
     .toBe(true);
   await expect(panel.getByTestId("agent-status")).toHaveText("Connected");
-  const transaction = await client.circuit(
-    session.sessionId,
-    session.agentToken,
-    {
-      apiVersion: "3.0",
-      requestId: "local-edit",
-      operation: "transact",
-      documentId,
-      transactionId: "local-edit",
-      expectedRevision: 0,
-      edits: [
-        {
-          kind: "add_instance",
-          instance: {
-            id: "Rlocal",
-            reference: "R1",
-            symbolId: "resistor",
-            netlist: { parameters: { value: "1k" } },
-            placement: {
-              position: { x: 300, y: 200 },
-              rotation: 0,
-              mirror: "none",
-            },
-          },
+  const transaction = await agent.circuit({
+    apiVersion: "3.0",
+    requestId: "local-edit",
+    operation: "transact",
+    documentId,
+    transactionId: "local-edit",
+    expectedRevision: 0,
+    edits: [
+      {
+        kind: "add_instance",
+        instance: {
+          ...placedInstance("Rlocal", "resistor", 300, 200),
+          reference: "R1",
+          netlist: { parameters: { value: "1k" } },
         },
-      ],
-    },
-  );
+      },
+    ],
+  });
   expect(transaction).toMatchObject({ ok: true, applied: true, revision: 1 });
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
 
@@ -1652,12 +1523,7 @@ test("copies a working handoff through the normal local dev relay", async ({
   await setComponentParameter(page, "value", "2.2k");
   await expect.poll(readIdleDeadline).toBeGreaterThan(beforeManualEdit);
   const readSnapshot = async (requestId: string) => {
-    const result = await client.circuit(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId,
-      operation: "snapshot",
-      documentId,
-    });
+    const result = await agent.snapshot(requestId, documentId);
     if (
       !result.ok ||
       result.operation !== "snapshot" ||
@@ -1675,7 +1541,7 @@ test("copies a working handoff through the normal local dev relay", async ({
     }),
   ]);
   const editAgain = (expectedRevision: number) =>
-    client.circuit(session.sessionId, session.agentToken, {
+    agent.circuit({
       apiVersion: "3.0",
       requestId: `agent-value-${expectedRevision}`,
       operation: "transact",
@@ -1699,27 +1565,18 @@ test("copies a working handoff through the normal local dev relay", async ({
     applied: true,
     revision: 3,
   });
-  expect(
-    JSON.parse(await readComponentPropertyCode(page)).parameters.value,
-  ).toBe("3.3k");
+  expect((await readComponentCode(page)).parameters.value).toBe("3.3k");
 
   // Both writers share history without disconnecting or freezing the canvas.
   // Further GUI edits an Agent reads are agent-capability-parity tests.
   await page.getByTestId("draw-tool-undo").click();
-  expect(
-    JSON.parse(await readComponentPropertyCode(page)).parameters.value,
-  ).toBe("2.2k");
+  expect((await readComponentCode(page)).parameters.value).toBe("2.2k");
   await page.getByTestId("open-agent").click();
   await expect(panel.getByTestId("agent-status")).toContainText("Connected");
   await panel.getByTestId("agent-revoke").click();
   await expect(panel.getByTestId("agent-status")).toContainText("Disconnected");
   await expect(
-    client.circuit(session.sessionId, session.agentToken, {
-      apiVersion: "3.0",
-      requestId: "local-after-revoke",
-      operation: "snapshot",
-      documentId,
-    }),
+    agent.snapshot("local-after-revoke", documentId),
   ).rejects.toThrow();
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
   await page.getByTestId("draw-tool-undo").click();
@@ -1757,16 +1614,12 @@ test("keeps browser recovery on the renewed idle deadline and expires after inac
   await page.route("**/api/agent/sessions", (route) => {
     creates += 1;
     return route.fulfill({
-      json: {
-        ok: true,
-        session: {
-          sessionId: "idle-browser",
-          editorSecret: "editor-secret",
-          claimCode: "idle-browser.claim",
-          claimExpiresAt: start + idleMs,
-          expiresAt: deadline,
-        },
-      },
+      json: createdSession(
+        "idle-browser",
+        "editor-secret",
+        start + idleMs,
+        deadline,
+      ),
     });
   });
   await page.routeWebSocket(

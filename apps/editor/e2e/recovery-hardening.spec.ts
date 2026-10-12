@@ -3,11 +3,11 @@ import type { Page } from "@playwright/test";
 
 import { WORKING_COPY_STORAGE_KEY } from "../src/document/recovery-coordinator";
 import {
-  chooseComponent,
   openMenu,
+  placeComponentAt,
   placeResistors,
   readRecoveryRecords,
-  recoveryProjectTexts,
+  expectRecovered,
 } from "./editor-fixtures.js";
 
 async function restoreThroughDialog(
@@ -34,15 +34,11 @@ test("a hard renderer crash restores the latest committed Project, which never e
   await page.goto("/editor");
   await placeResistors(page, [360]);
   await expect(page.getByTestId("revision")).toHaveText("1");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
+  await expectRecovered(page, '"revision": 1');
   await placeResistors(page, [500]);
   await expect(page.getByTestId("revision")).toHaveText("2");
   // Both commits must be durably stored before the crash.
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 2');
+  await expectRecovered(page, '"revision": 2');
 
   // Browser recovery is the only store of Project data: none of it enters
   // the offline shell's Cache Storage.
@@ -82,11 +78,7 @@ test("simultaneous tabs keep separate working copies", async ({ context }) => {
   await expect(pageA.getByTestId("revision")).toHaveText("2");
 
   await pageB.goto("/editor");
-  await chooseComponent(pageB, "nmos");
-  await pageB
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 360, y: 230 } });
-  await pageB.keyboard.press("Escape");
+  await placeComponentAt(pageB, "nmos", { x: 360, y: 230 });
   await expect(pageB.getByTestId("revision")).toHaveText("1");
 
   const workingCopyA = await pageA.evaluate((key) => {

@@ -1,4 +1,4 @@
-import { copyNetlistText } from "./editor-fixtures.js";
+import { copyNetlistText, expectStatus } from "./editor-fixtures.js";
 import { expect, test } from "@playwright/test";
 
 test("imports SCS and local includes, copies SPICE, and retains the circuit after unsupported input", async ({
@@ -21,9 +21,7 @@ test("imports SCS and local includes, copies SPICE, and retains the circuit afte
       ),
     },
   ]);
-  await expect(page.getByTestId("status")).toContainText(
-    "Imported 2 Documents",
-  );
+  await expectStatus(page, "Imported 2 Documents");
   const text = await copyNetlistText(page);
   expect(text).toMatch(/\.subckt top z a/iu);
   expect(text).toMatch(/X1 z a leaf scale=2/iu);
@@ -34,9 +32,7 @@ test("imports SCS and local includes, copies SPICE, and retains the circuit afte
     mimeType: "text/plain",
     buffer: Buffer.from("// bad\nR1 (a 0) resistor r=1k tc1=1"),
   });
-  await expect(page.getByTestId("status")).toContainText(
-    "broken.scs:2: Unsupported parameters: tc1",
-  );
+  await expectStatus(page, "broken.scs:2: Unsupported parameters: tc1");
   expect(await copyNetlistText(page)).toBe(text);
 });
 

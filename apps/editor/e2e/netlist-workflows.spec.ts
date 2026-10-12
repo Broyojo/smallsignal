@@ -1,22 +1,26 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 import {
-  awaitEditorReady,
   clickCommand,
   downloadBytes,
   copyNetlistText,
   expectComponentCodeField,
+  expectStatus,
   openMenu,
-  openCellManager,
+  openCellManagerTab,
   openProjectFile,
+  showNetlistPanel,
+  openEditor,
+  openProject,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
+import { placedInstance } from "./canvas-fixtures.js";
 
 /**
  * Each shown run of text with its size and place. Text in an embedded face
@@ -103,6 +107,11 @@ interface PdfTextRun {
   y: number;
 }
 
+const checkReport = (page: Page) =>
+  page.getByRole("dialog", { name: "Check Report" });
+const netlistAlert = (page: Page) =>
+  page.getByRole("region", { name: "Live netlist" }).getByRole("alert");
+
 test("keeps rejected SPICE import diagnostics in a historical report", async ({
   page,
 }) => {
@@ -115,9 +124,7 @@ test("keeps rejected SPICE import diagnostics in a historical report", async ({
       resolve(process.cwd(), "netlists/mixed-device-acceptance/models.inc"),
     ]);
 
-  await expect(page.getByTestId("status")).toContainText(
-    "approved Razavi catalog has no symbol",
-  );
+  await expectStatus(page, "approved Razavi catalog has no symbol");
   const telemetry = page.getByTestId("editor-test-telemetry");
   await expect(telemetry.getByTestId("document-count")).toHaveText("1");
   await expect(telemetry.getByTestId("instance-count")).toHaveText("0");
@@ -154,27 +161,13 @@ X2 OUT IN EXT_MASTER l=1u nf=4
 `),
   });
 
-  await expect(page.getByTestId("status")).toContainText(
-    "Imported 2 Documents",
-  );
-  if (
-    (await page
-      .getByTestId("netlist-panel-toggle")
-      .getAttribute("aria-pressed")) !== "true"
-  )
-    await page.getByTestId("netlist-panel-toggle").click();
+  await expectStatus(page, "Imported 2 Documents");
+  await showNetlistPanel(page);
   await expect(page.getByTestId("netlist-issues")).toContainText(
     "Legacy declaration EXT_MASTER has no Project-owned implementation",
   );
   await expect(page.getByTestId("copy-netlist-panel")).toBeDisabled();
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  const manager = await openCellManagerTab(page, "External Circuits");
   await manager.getByRole("button", { name: /EXT_MASTER/ }).click();
   await manager
     .getByRole("button", { name: "Define implementation…", exact: true })
@@ -187,9 +180,7 @@ X2 OUT IN EXT_MASTER l=1u nf=4
     .click();
   await manager.getByLabel("Close Cell Manager").click();
   const spice = await copyNetlistText(page);
-  await expect(page.getByRole("dialog", { name: "Check Report" })).toHaveCount(
-    0,
-  );
+  await expect(checkReport(page)).toHaveCount(0);
   expect(spice).toContain(".subckt leaf A B params: scale=1");
   expect(spice).toContain("X1 IN OUT leaf scale=2");
   expect(spice).toContain("X2 OUT IN EXT_MASTER l=1u nf=4");
@@ -239,14 +230,11 @@ test("copies generated NoConnect nodes immediately and retains the optional Chec
     endpoint: { kind: "terminal", instanceId: "R1", pinName: "2" },
   });
 
-  await page.goto("/editor");
-  await openProjectFile(page, serializeProject(project));
+  await openProject(page, serializeProject(project));
   expect(await copyNetlistText(page)).toContain("R1 IN NC0001 10k");
-  await expect(page.getByRole("dialog", { name: "Check Report" })).toHaveCount(
-    0,
-  );
+  await expect(checkReport(page)).toHaveCount(0);
   await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  const dialog = page.getByRole("dialog", { name: "Check Report" });
+  const dialog = checkReport(page);
   await expect(dialog).toContainText("GENERATED_NO_CONNECT_NODE");
   await expect(dialog.getByTestId("netlist-preview")).toContainText(
     "R1 IN NC0001 10k",
@@ -278,9 +266,7 @@ test("copies generated NoConnect nodes immediately and retains the optional Chec
 
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await dialog.getByRole("button", { name: "Copy SPICE netlist" }).click();
-  await expect(page.getByTestId("status")).toContainText(
-    "SPICE netlist copied",
-  );
+  await expectStatus(page, "SPICE netlist copied");
   const spice = await page.evaluate(() => navigator.clipboard.readText());
   expect(spice).toContain("R1 IN NC0001 10k");
   expect(spice).not.toContain("GENERATED_NO_CONNECT_NODE");
@@ -292,8 +278,7 @@ test("copies generated NoConnect nodes immediately and retains the optional Chec
 test("exports the formal scene as a vector PDF with its scripts in place", async ({
   page,
 }) => {
-  await page.goto("/editor?example=common-source-amplifier");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?example=common-source-amplifier");
   const pdf = await downloadBytes(page, "File", "Export PDF");
   expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
   const pdfText = pdf.toString("latin1");
@@ -358,9 +343,7 @@ test("copies structural SPICE and Spectre netlists while exposing instance autho
       ),
     )
     .toBe(spectre);
-  await expect(page.getByRole("dialog", { name: "Check Report" })).toHaveCount(
-    0,
-  );
+  await expect(checkReport(page)).toHaveCount(0);
 
   await placeComponent(page, "nmos", { x: 360, y: 220 });
   await page.getByTestId("netlist-panel-toggle").click();
@@ -372,14 +355,10 @@ test("copies structural SPICE and Spectre netlists while exposing instance autho
   // placed. Which one comes first is diagnostic order, not a contract — a
   // lone MOS is missing a model target and its connections both — so this
   // asserts the Instance is named rather than pinning one message.
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("M1");
+  await expect(netlistAlert(page)).toContainText("M1");
   await page.evaluate(() => navigator.clipboard.writeText("unchanged"));
   await clickCommand(page, "Netlist", "Copy Netlist");
-  await expect(page.getByTestId("status")).toContainText(
-    "Resolve the Check Report",
-  );
+  await expectStatus(page, "Resolve the Check Report");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "unchanged",
   );
@@ -426,17 +405,13 @@ test("grows and shrinks the live netlist with content, scrolling only at the vie
     for (let index = 1; index <= count; index++) {
       const id = `R${index}`;
       document.instances.push({
-        id,
+        ...placedInstance(
+          id,
+          "resistor",
+          200 + ((index - 1) % 10) * 80,
+          200 + Math.floor((index - 1) / 10) * 80,
+        ),
         reference: id,
-        symbolId: "resistor",
-        placement: {
-          position: {
-            x: 200 + ((index - 1) % 10) * 80,
-            y: 200 + Math.floor((index - 1) / 10) * 80,
-          },
-          rotation: 0,
-          mirror: "none",
-        },
         netlist: { parameters: { value: `${index}k` } },
       });
       // Both pins on one Net: a pin alone on its Net would be an unfinished
@@ -607,9 +582,8 @@ test("edits output configuration without creating another electrical authority, 
   // restoration before switching to the output panel.
   await expect(panel).toBeVisible();
   await page.getByTestId("netlist-panel-toggle").click();
-  await expect(
-    page.getByRole("combobox", { name: "Netlist format" }),
-  ).toHaveValue("spectre");
+  const format = page.getByRole("combobox", { name: "Netlist format" });
+  await expect(format).toHaveValue("spectre");
   await clickCommand(page, "Netlist", "Netlist Settings…");
   await expect
     .poll(async () => JSON.parse(await code.inputValue()))
@@ -617,9 +591,7 @@ test("edits output configuration without creating another electrical authority, 
   await code.fill("{");
   await expect(panel.getByRole("alert")).toContainText("Copying is paused");
   await clickCommand(page, "Netlist", "Copy Netlist");
-  await expect(page.getByTestId("status")).toContainText(
-    "Fix Netlist configuration",
-  );
+  await expectStatus(page, "Fix Netlist configuration");
   await clickCommand(page, "Netlist", "Netlist Settings…");
   await code.fill(JSON.stringify(config, null, 2));
   const netlist = await copyNetlistText(page, "spectre");
@@ -654,17 +626,13 @@ test("edits output configuration without creating another electrical authority, 
   // The panel shows the draft, value unknown; output itself stays blocked.
   await expect(live).toContainText("* Draft:");
   await expect(live).toContainText(/R1 \S+ \S+ \?/u);
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("requires parameter value");
+  await expect(netlistAlert(page)).toContainText("requires parameter value");
   await clickCommand(page, "Netlist", "Review Netlist Issues…");
-  const report = page.getByRole("dialog", { name: "Check Report" });
+  const report = checkReport(page);
   await expect(report).toContainText("1 blocking issue");
   await expect(report.getByTestId("netlist-preview")).toHaveCount(0);
   await report.getByTestId("check-report-close").click();
-  await page
-    .getByRole("combobox", { name: "Netlist format" })
-    .selectOption("spectre");
+  await format.selectOption("spectre");
   await clickCommand(page, "Netlist", "Review Netlist Issues…");
   await expect(report).toContainText("1 blocking issue");
   await expect(report.getByTestId("netlist-preview")).toHaveCount(0);
@@ -673,7 +641,7 @@ test("edits output configuration without creating another electrical authority, 
     .getByRole("button", { name: /MISSING_REQUIRED_PARAMETER/u })
     .first()
     .click();
-  await expect(page.getByTestId("status")).toContainText("Preflight:");
+  await expectStatus(page, "Preflight:");
   await expect(page.getByTestId("active-document-name")).toHaveText("dut");
   await expect(report).toBeVisible();
   const reportBodyBox = await report
@@ -722,15 +690,14 @@ test("refreshes a legacy circuit with missing device defaults in one click", asy
         return { instanceId, pinName };
       }),
     });
-  await page.goto("/editor");
-  await openProjectFile(page, serializeProject(project));
-  await expect(page.getByTestId("status")).toContainText("Opened");
+  await openProject(page, serializeProject(project));
+  await expectStatus(page, "Opened");
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toContainText("* Draft:");
   await expect(code).toContainText("w=? l=?");
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("requires an explicit model target");
+  await expect(netlistAlert(page)).toContainText(
+    "requires an explicit model target",
+  );
   const fill = page.getByTestId("netlist-fill-defaults");
   await expect(fill).toHaveText("Fill 3 devices");
   await page.getByRole("button", { name: "Refresh netlist" }).click();
@@ -779,9 +746,7 @@ test("keeps the netlist live and selectable when clipboard access fails", async 
       return new Set(colors).size;
     }),
   ).toBeGreaterThan(1);
-  await expect(page.getByTestId("status")).toContainText(
-    "select the netlist in the sidebar",
-  );
+  await expectStatus(page, "select the netlist in the sidebar");
   await page.getByTestId("spice-files").setInputFiles({
     name: "live.spi",
     mimeType: "text/plain",

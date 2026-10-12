@@ -43,31 +43,18 @@ function evidence(rows: number, signals: number) {
       role: "result-json",
       text: JSON.stringify({ analyses: [{ kind: "tran", vectors: values }] }),
     },
-    {
-      name: "tran-0.csv",
-      role: "analysis-csv",
-      text: csv.join("\r\n") + "\r\n",
-    },
-    {
-      name: "op-1.csv",
-      role: "analysis-csv",
-      text: "\uFEFFnode,voltage\r\nvout,0.9\r\n",
-    },
-    {
-      name: "ac-2.csv",
-      role: "analysis-csv",
-      text: "frequency,V(out).real,V(out).imag\r\n1,2,-3\r\n1000,1,-2\r\n",
-    },
-    {
-      name: "dc-3.csv",
-      role: "analysis-csv",
-      text: "sweep,V(out)\r\n0,0\r\n1,0.95\r\n",
-    },
-    {
-      name: "noise-4.csv",
-      role: "analysis-csv",
-      text: "frequency,onoise\r\n1,1e-9\r\n1000,3e-10\r\n",
-    },
+    ...(
+      [
+        ["tran-0.csv", csv.join("\r\n") + "\r\n"],
+        ["op-1.csv", "\uFEFFnode,voltage\r\nvout,0.9\r\n"],
+        [
+          "ac-2.csv",
+          "frequency,V(out).real,V(out).imag\r\n1,2,-3\r\n1000,1,-2\r\n",
+        ],
+        ["dc-3.csv", "sweep,V(out)\r\n0,0\r\n1,0.95\r\n"],
+        ["noise-4.csv", "frequency,onoise\r\n1,1e-9\r\n1000,3e-10\r\n"],
+      ] as const
+    ).map(([name, text]) => ({ name, role: "analysis-csv", text })),
   ].map((file) => ({
     ...file,
     bytes: Buffer.byteLength(file.text),

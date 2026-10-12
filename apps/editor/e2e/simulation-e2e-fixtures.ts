@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
+import {
+  createSimulationFolder,
+  type ProjectSimulationFolder,
+} from "@icm/model";
 import {
   createSimulationEnvironmentMetadata,
   createSimulationInputMetadata,
   readSimulationData,
 } from "@icm/spice-run";
+import { downloaded, exampleProject, openProject } from "./editor-fixtures.js";
 
 export const profile = JSON.parse(
   readFileSync(
@@ -118,6 +123,92 @@ export async function completedNgspiceRun(body: {
   };
 }
 
+/** Open a Project in the editor, enter Analog simulation and return its panel. */
+export async function openSimulation(
+  page: Page,
+  project: object,
+  name?: string,
+): Promise<Locator> {
+  await openProject(page, project, name);
+  await page.getByTestId("open-analog-simulation").click();
+  return page.getByRole("region", { name: "Analog simulation" });
+}
+
+/** The simulation source editor within this page or region. */
+export function sourceEditor(scope: Page | Locator): Locator {
+  return scope.getByRole("textbox", { name: "Simulation source editor" });
+}
+
+/** Open the source Helper in this page or region and choose one entry. */
+export async function chooseHelperEntry(
+  scope: Page | Locator,
+  name: string,
+): Promise<void> {
+  await scope.getByRole("button", { name: "Helper", exact: true }).click();
+  await scope.getByRole("option", { name, exact: true }).click();
+}
+
+/** A folder's file at this path, its entry source by default. */
+export function folderFile(
+  folder: ProjectSimulationFolder,
+  path = folder.input.entry,
+) {
+  return folder.input.files.find((file) => file.path === path)!;
+}
+
+/** The bytes of the file that clicking this control downloads. */
+export function downloadClicked(target: Locator): Promise<Buffer> {
+  return downloaded(target.page(), () => target.click());
+}
+
+/**
+ * Answer capability requests with these capabilities and abort every other
+ * simulation request; returns the number of aborted runs so far.
+ */
+export async function abortRunsOffering(
+  page: Page,
+  capabilities: object,
+): Promise<() => number> {
+  let executions = 0;
+  await page.route("**/api/simulate", (route) => {
+    if (route.request().postDataJSON().operation !== "capabilities") {
+      executions++;
+      return route.abort();
+    }
+    return route.fulfill({ json: capabilities });
+  });
+  return () => executions;
+}
+
+/** The RC simulation example Project as the editor ships it. */
+export const rcExample = () => exampleProject("simulation-rc.icproj.json");
+
+/** The RC example with one native folder that runs the Agent's VACASK source. */
+export async function nativeRcProject(id: string, name: string) {
+  const { agentNativeProfile, agentNativeSource } =
+    await import("./native-simulation-executor.mjs");
+  const project = rcExample();
+  const folder = createSimulationFolder({
+    id,
+    name,
+    profileId: agentNativeProfile,
+  });
+  folder.input.entry = "run.sim";
+  folder.input.circuitBindings = [];
+  folder.input.files = [
+    {
+      path: "experiment.json",
+      text: JSON.stringify({
+        version: 2,
+        environment: { profileId: agentNativeProfile },
+      }),
+    },
+    { path: "run.sim", text: agentNativeSource },
+  ];
+  project.simulationFolders = [folder];
+  return project;
+}
+
 export async function editSimulationFile(
   page: Page,
   path: string,
@@ -141,9 +232,7 @@ export async function editSimulationFile(
       .and(panel.locator(`[data-folder-id="${folderId}"]`))
       .click();
   } else await panel.getByRole("tab", { name: path, exact: false }).click();
-  const editor = panel.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(panel);
   await expect(editor).toBeVisible();
   await editor.click();
   await editor.press("ControlOrMeta+A");

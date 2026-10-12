@@ -1,11 +1,11 @@
-import { test, expect, type Page, type WebSocketRoute } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { unzipSync } from "fflate";
 import {
-  createSimulationEnvironmentMetadata,
-  createSimulationInputMetadata,
-  readSimulationData,
-} from "@icm/spice-run";
+  test,
+  expect,
+  type Locator,
+  type Page,
+  type WebSocketRoute,
+} from "@playwright/test";
+import { unzipSync } from "fflate";
 import {
   createSimulationFolder,
   readSimulationExperimentConfig,
@@ -18,13 +18,65 @@ import {
   clickNetlistWorkflowCommand,
   downloadBytes,
   exportedProject,
+  expectStatus,
+  openProject,
   openProjectFile,
   readRecoveryRecords,
   openCellManager,
   openMenu,
   renameProject,
 } from "./editor-fixtures.js";
-import { ota, profile, editSimulationFile } from "./simulation-e2e-fixtures.js";
+import {
+  chooseHelperEntry,
+  completedNgspiceRun,
+  downloadClicked,
+  ngspiceCapabilities,
+  editSimulationFile,
+  folderFile,
+  openSimulation,
+  ota,
+  profile,
+  sourceEditor,
+} from "./simulation-e2e-fixtures.js";
+
+/** A starter folder on the Project's top Cell, in the hosted Profile. */
+function starterFolder(
+  project: { topDocumentId: string },
+  id: string,
+  name: string,
+  engine: "vacask" | "ngspice" = "vacask",
+) {
+  return createSimulationFolder({
+    id,
+    name,
+    engine,
+    documentId: project.topDocumentId,
+    profileId: profile.id,
+  });
+}
+
+/** A simulation folder's row in this page or region's file tree. */
+function folderRow(scope: Page | Locator, name: string) {
+  return scope.getByRole("treeitem", { name: `Folder ${name}`, exact: true });
+}
+
+/**
+ * Open the OTA Project with one starter folder while every simulation request
+ * is refused, as an offline service would; return the folder.
+ */
+async function openOfflineFolder(page: Page, id: string, name: string) {
+  const project = parseProject(JSON.stringify(ota));
+  const folder = starterFolder(project, id, name);
+  project.simulationFolders = [folder];
+  await page.route("**/api/simulate", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: "Offline authoring fixture" },
+    }),
+  );
+  await openSimulation(page, project);
+  return folder;
+}
 
 test("simulation Agent entry is passive and reuses the existing connection panel", async ({
   page,
@@ -60,9 +112,7 @@ test("simulation Agent entry is passive and reuses the existing connection panel
   });
   const project = parseProject(JSON.stringify(ota));
   project.simulationFolders = [];
-  await page.goto("/editor");
-  await openProjectFile(page, project);
-  await page.getByTestId("open-analog-simulation").click();
+  const simulation = await openSimulation(page, project);
   const bar = page.locator(".simulation-taskbar");
   const guide = page.getByRole("region", { name: "Agent simulation guide" });
   await expect(guide.getByRole("heading")).toHaveText(
@@ -73,9 +123,7 @@ test("simulation Agent entry is passive and reuses the existing connection panel
   await expect(
     guide.getByRole("button", { name: "Set up manually", exact: true }),
   ).toBeVisible();
-  const initialSurface = await page
-    .getByRole("region", { name: "Analog simulation" })
-    .boundingBox();
+  const initialSurface = await simulation.boundingBox();
   const connectBounds = await guide
     .getByRole("button", { name: "Connect Agent", exact: true })
     .boundingBox();
@@ -152,8 +200,7 @@ test("simulation examples confirm whole-Project replacement and protect existing
 }) => {
   const project = parseProject(JSON.stringify(ota));
   project.simulationFolders = [];
-  await page.goto("/editor");
-  await openProjectFile(page, project);
+  await openProject(page, project);
   await renameProject(page, "My unsaved circuit");
   await page.getByTestId("open-analog-simulation").click();
   const panel = page.getByRole("region", { name: "Analog simulation" });
@@ -162,9 +209,10 @@ test("simulation examples confirm whole-Project replacement and protect existing
   await panel.getByText("Explore examples", { exact: true }).click();
   await expect(cards.getByRole("button")).toHaveCount(4);
   await expect(panel).not.toContainText("No DUT instance");
-  await cards
-    .getByRole("button", { name: "RC Filters Low-pass & high-pass" })
-    .click();
+  const rcFilters = cards.getByRole("button", {
+    name: "RC Filters Low-pass & high-pass",
+  });
+  await rcFilters.click();
   const confirmation = page.getByRole("dialog", { name: "Open RC Filters?" });
   await expect(confirmation).toContainText("entire Project");
   await confirmation
@@ -178,9 +226,7 @@ test("simulation examples confirm whole-Project replacement and protect existing
       ),
     )
     .toBe(true);
-  await cards
-    .getByRole("button", { name: "RC Filters Low-pass & high-pass" })
-    .click();
+  await rcFilters.click();
   await confirmation
     .getByRole("button", { name: "Open example", exact: true })
     .click();
@@ -188,9 +234,7 @@ test("simulation examples confirm whole-Project replacement and protect existing
   await expect(guard).toBeVisible();
   await guard.getByRole("button", { name: "Stay", exact: true }).click();
   await expect(cards).toBeVisible();
-  await cards
-    .getByRole("button", { name: "RC Filters Low-pass & high-pass" })
-    .click();
+  await rcFilters.click();
   await confirmation
     .getByRole("button", { name: "Open example", exact: true })
     .click();
@@ -202,43 +246,21 @@ test("simulation examples confirm whole-Project replacement and protect existing
   await expect(panel.locator(".simulation-source-context")).toContainText(
     "Canvas source:",
   );
-  await expect(
-    panel.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toContainText("Click Run");
+  await expect(sourceEditor(panel)).toContainText("Click Run");
 });
 
 test("source save applies locally while signed out and leaves File Save cloud-owned", async ({
   page,
 }) => {
-  const project = parseProject(JSON.stringify(ota));
-  const folder = createSimulationFolder({
-    id: "local-save",
-    name: "Local save",
-    documentId: project.topDocumentId,
-    profileId: profile.id,
-  });
-  project.simulationFolders = [folder];
   let cloudWrites = 0;
   await page.route("**/api/projects**", (route) => {
     if (["POST", "PUT"].includes(route.request().method())) cloudWrites++;
     return route.fulfill({ status: 401, json: { error: "Sign in" } });
   });
-  await page.route("**/api/simulate", (route) =>
-    route.fulfill({
-      status: 503,
-      json: { error: "Offline authoring fixture" },
-    }),
-  );
-  await page.goto("/editor");
-  await openProjectFile(page, project);
-  await page.getByTestId("open-analog-simulation").click();
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const folder = await openOfflineFolder(page, "local-save", "Local save");
+  const editor = sourceEditor(page);
   const save = page.getByRole("button", { name: "Save source", exact: true });
-  const source = folder.input.files.find(
-    (file) => file.path === folder.input.entry,
-  )!.text;
+  const source = folderFile(folder).text;
   await editor.fill(`${source}\n* local keyboard save\n`);
   await expect(save).toHaveAttribute("data-save-state", "dirty");
   await editor.press("ControlOrMeta+s");
@@ -257,7 +279,7 @@ test("source save applies locally while signed out and leaves File Save cloud-ow
     .toBe(true);
   await openMenu(page, "File");
   await page.getByTestId("save-cloud-project").click();
-  await expect(page.getByTestId("status")).toContainText("Sign in to save");
+  await expectStatus(page, "Sign in to save");
   expect(cloudWrites).toBe(1);
   await expect(save).toHaveAttribute("data-save-state", "saved");
 });
@@ -265,27 +287,13 @@ test("source save applies locally while signed out and leaves File Save cloud-ow
 test("Helper keeps signal selection continuous and shares the file row without stealing focus", async ({
   page,
 }) => {
-  const project = parseProject(JSON.stringify(ota));
-  const folder = createSimulationFolder({
-    id: "continuous-signals",
-    name: "Continuous signals",
-    documentId: project.topDocumentId,
-    profileId: profile.id,
-  });
-  project.simulationFolders = [folder];
-  await page.route("**/api/simulate", (route) =>
-    route.fulfill({
-      status: 503,
-      json: { error: "Offline authoring fixture" },
-    }),
+  const folder = await openOfflineFolder(
+    page,
+    "continuous-signals",
+    "Continuous signals",
   );
-  await page.goto("/editor");
-  await openProjectFile(page, project);
-  await page.getByTestId("open-analog-simulation").click();
   await page.getByRole("button", { name: "Explorer", exact: true }).click();
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   const helper = page.getByRole("button", { name: "Helper", exact: true });
   const tab = page.getByRole("tab", { name: /run.cir/ });
   const helperBox = (await helper.boundingBox())!;
@@ -324,13 +332,8 @@ test("Helper keeps signal selection continuous and shares the file row without s
   await editor.click({ position: { x: 2, y: 8 } });
   await expect(helperPopup).toHaveCount(0);
   await expect(editor).toBeFocused();
-  await editor.fill(
-    folder.input.files.find((file) => file.path === folder.input.entry)!.text,
-  );
-  await helper.click();
-  await page
-    .getByRole("option", { name: "Pick Net on Canvas", exact: true })
-    .click();
+  await editor.fill(folderFile(folder).text);
+  await chooseHelperEntry(page, "Pick Net on Canvas");
   const canvas = page.getByTestId("schematic-canvas");
   await page.getByTestId("route-hit-tb-vinp-route").click({ force: true });
   await expect(canvas).toHaveClass(/simulation-net-pick-active/);
@@ -343,50 +346,29 @@ test("Helper keeps signal selection continuous and shares the file row without s
   await expect(canvas).not.toHaveClass(/simulation-net-pick-active/);
   // An incomplete source must remain repairable, not falsely acknowledge an
   // acquisition that the editor refused to insert.
-  const validSource = folder.input.files.find(
-    (file) => file.path === folder.input.entry,
-  )!.text;
+  const validSource = folderFile(folder).text;
   await editor.fill(`${validSource}\nsave v(`);
-  await helper.click();
-  await page
-    .getByRole("option", { name: "Save voltage…", exact: true })
-    .click();
+  await chooseHelperEntry(page, "Save voltage…");
   await output.click();
   await expect(output).not.toContainText("Added");
   await expect(output).toBeEnabled();
   await expect(editor).not.toContainText("v(vout)");
   await search.press("Escape");
   await editor.fill(validSource);
-  await helper.click();
-  await page
-    .getByRole("option", { name: "Save voltage…", exact: true })
-    .click();
+  await chooseHelperEntry(page, "Save voltage…");
   await output.click();
   await expect(output).toContainText("Added");
   await expect(editor).toContainText("v(vout)");
 });
 
 /** The hosted ngspice service's capabilities, offering the SKY130 Profile. */
+const hosted = ngspiceCapabilities();
 const capabilities = {
-  configured: true,
-  rawfileCollection: "declared-single-ascii",
-  maxOutputBytes: 1048576,
+  ...hosted,
   inputs: ["source", "raw"],
-  analyses: ["op"],
-  parsedAnalyses: ["op"],
   profiles: [
-    {
-      id: profile.id,
-      corners: ["tt"],
-      devices: profile.qualifiedScope.devices,
-      dependencies: [
-        { id: profile.models.id, sha256: profile.models.contentSha256 },
-      ],
-    },
+    { ...hosted.profiles[0]!, devices: profile.qualifiedScope.devices },
   ],
-  maxTimeoutMs: 120000,
-  maxInputBytes: 1048576,
-  cancel: true,
 };
 
 // Results, run files and downloads are owned by simulation-spec-results,
@@ -396,13 +378,7 @@ test("human simulation refuses a bad output, survives minimizing, cancels, and k
   page,
 }) => {
   const project = parseProject(JSON.stringify(ota));
-  let folder = createSimulationFolder({
-    id: "folder-e2e",
-    name: "E2E folder",
-    engine: "ngspice",
-    profileId: profile.id,
-    documentId: project.topDocumentId,
-  });
+  let folder = starterFolder(project, "folder-e2e", "E2E folder", "ngspice");
   const parsed = readSimulationExperimentConfig(folder);
   if (!parsed.ok) throw Error(parsed.message);
   const config = parsed.config;
@@ -427,15 +403,6 @@ test("human simulation refuses a bad output, survives minimizing, cancels, and k
   let pending = new Promise<void>((r) => {
     release = r;
   });
-  const rawfile = readFileSync(
-    new URL(
-      "../../../fixtures/ngspice-rawfile/divider-op.raw",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  const reading = readSimulationData(rawfile);
-  if (reading.status !== "read") throw Error("raw fixture");
   await page.route("**/api/simulate", async (route) => {
     const body = route.request().postDataJSON();
     if (body.operation === "capabilities")
@@ -449,56 +416,27 @@ test("human simulation refuses a bad output, survives minimizing, cancels, and k
     await pending;
     // The acquisition inserted for the Canvas vout output.
     expect(body.preparedDeck).toContain("v(vout)");
+    const run = await completedNgspiceRun(body);
     await route.fulfill({
       json: {
-        outcome: { status: "completed" },
-        diagnostics: [],
+        ...run,
         log: "ngspice OP\n",
-        durationMs: 1,
         data: {
-          ...reading.data,
+          ...run.data,
           analyses: [
             {
-              ...reading.data.analyses[0],
+              ...run.data.analyses[0],
               probes: [
                 { name: "v(vout)", quantity: "voltage", unit: "V", value: 0.5 },
               ],
             },
           ],
         },
-        rawfile,
-        executedDeck: body.preparedDeck,
         cancelled: cancellations > 0,
-        metadata: {
-          schemaVersion: 1,
-          input: await createSimulationInputMetadata({
-            inputRevision: body.inputRevision,
-            netlist: body.netlist,
-            testbench: body.testbench,
-            deck: body.preparedDeck,
-          }),
-          configuration: { modelLibrary: null },
-          environment: await createSimulationEnvironmentMetadata({
-            executor: "local-host",
-            reproducibility: "observed",
-            profileId: profile.id,
-            platform: "linux/x64",
-            simulator: {
-              name: "ngspice",
-              version: profile.simulator.version,
-              binarySha256: null,
-            },
-            models: null,
-            startupSha256: null,
-          }),
-        },
       },
     });
   });
-  await page.goto("/editor");
-  await openProjectFile(page, project);
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  const panel = page.getByRole("region", { name: "Analog simulation" });
+  const panel = await openSimulation(page, project);
   // An output naming no part is refused before anything runs.
   await panel.getByRole("button", { name: "Run", exact: true }).click();
   await panel.getByRole("tab", { name: "Console", exact: true }).click();
@@ -546,9 +484,9 @@ test("human simulation refuses a bad output, survives minimizing, cancels, and k
   // Explicit import is the persistence contract, not browser recovery heuristics.
   await openProjectFile(page, saved);
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  await expect(
-    panel.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toContainText("Source-owned E2E experiment");
+  await expect(sourceEditor(panel)).toContainText(
+    "Source-owned E2E experiment",
+  );
   // The folder's status outlives the reload: its newest run, the cancelled
   // one, read from the browser archive, which also keeps the completed run.
   await expect(panel.getByRole("status")).toHaveText("cancelled");
@@ -596,9 +534,7 @@ test("a new experiment's setup fits its card, creates only on Create, and asks f
       json: { ...capabilities, profiles: [...capabilities.profiles, vacask] },
     }),
   );
-  await page.goto("/editor");
-  await openProjectFile(page, project);
-  await page.getByTestId("open-analog-simulation").click();
+  await openSimulation(page, project);
   const setUp = page.getByRole("button", {
     name: "Set up manually",
     exact: true,
@@ -614,10 +550,7 @@ test("a new experiment's setup fits its card, creates only on Create, and asks f
   const card = page.locator(
     ".simulation-start-workspace > .workspace-inline-name",
   );
-  const folder = page.getByRole("treeitem", {
-    name: "Folder SIN check",
-    exact: true,
-  });
+  const folder = folderRow(page, "SIN check");
   await setUp.click();
   expect((await card.boundingBox())!.width).toBeLessThanOrEqual(360);
   await name.press("Escape");
@@ -660,8 +593,7 @@ test("Simulation defaults a new experiment to an ordinary authored Cell", async 
   page,
 }) => {
   await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  const manager = await openCellManager(page);
   await manager.getByRole("button", { name: "New Cell" }).click();
   const newCell = page.getByRole("dialog", { name: "New Cell" });
   await newCell.getByLabel("Cell name").fill("Testbench");
@@ -761,17 +693,13 @@ test("Simulation defaults a new experiment to an ordinary authored Cell", async 
   });
   await expect(exitConfirmation).toContainText("temporary run files");
   await exitConfirmation.getByRole("button", { name: "Cancel" }).click();
-  await expect(
-    page.getByRole("region", { name: "Analog simulation" }),
-  ).toBeVisible();
+  const simulation = page.getByRole("region", { name: "Analog simulation" });
+  await expect(simulation).toBeVisible();
   await page.getByRole("button", { name: "Exit simulation" }).click();
-  await page
-    .getByRole("dialog", { name: "Exit Simulation?" })
+  await exitConfirmation
     .getByRole("button", { name: "Exit Simulation" })
     .click();
-  await expect(
-    page.getByRole("region", { name: "Analog simulation" }),
-  ).toHaveCount(0);
+  await expect(simulation).toHaveCount(0);
   await expect(page.getByTestId("library-toggle")).toBeEnabled();
 });
 
@@ -781,17 +709,9 @@ async function openWorkspace(
 ) {
   const project = parseProject(JSON.stringify(ota));
   project.simulationFolders = ["Alpha", "Beta"].map((name) =>
-    createSimulationFolder({
-      id: name,
-      name,
-      engine,
-      documentId: project.topDocumentId,
-      profileId: profile.id,
-    }),
+    starterFolder(project, name, name, engine),
   );
-  await page.goto("/editor");
-  await openProjectFile(page, project);
-  await page.getByTestId("open-analog-simulation").click();
+  await openSimulation(page, project);
   return page.getByRole("region", { name: "Simulation Code workspace" });
 }
 
@@ -800,9 +720,7 @@ test("Simulation and Properties stay independent, and maximized simulation recla
 }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const workspace = await openWorkspace(page);
-  const editor = workspace.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(workspace);
   await editor.fill("* independent draft\n");
   await revealPropertiesShelf(page);
   const shelf = page.getByTestId("selection-shelf");
@@ -891,18 +809,10 @@ test("tab and tree menus, empty editors and resizing never discard source, and o
   const files = workspace.getByRole("complementary", {
     name: "Simulation files",
   });
-  const alpha = files.getByRole("treeitem", {
-    name: "Folder Alpha",
-    exact: true,
-  });
-  const beta = files.getByRole("treeitem", {
-    name: "Folder Beta",
-    exact: true,
-  });
+  const alpha = folderRow(files, "Alpha");
+  const beta = folderRow(files, "Beta");
   const run = page.getByRole("button", { name: "Run", exact: true });
-  const editor = workspace.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(workspace);
   const tabs = workspace
     .getByRole("tablist", { name: "Open simulation files" })
     .getByRole("tab");
@@ -1022,19 +932,15 @@ test("Explorer context downloads preserve multi-selection and directory contents
 }) => {
   const workspace = await openWorkspace(page);
   const tree = workspace.getByRole("tree", { name: "Simulation folders" });
-  const alpha = tree.getByRole("treeitem", {
-    name: "Folder Alpha",
-    exact: true,
-  });
-  const beta = tree.getByRole("treeitem", { name: "Folder Beta", exact: true });
+  const alpha = folderRow(tree, "Alpha");
+  const beta = folderRow(tree, "Beta");
   const alphaFiles = alpha.locator("../..");
-  const circuit = alphaFiles.getByRole("treeitem", {
-    name: "circuit.spice",
-    exact: true,
-  });
-  const run = alphaFiles.getByRole("treeitem", {
-    name: "run.cir",
-    exact: true,
+  const file = (name: string) =>
+    alphaFiles.getByRole("treeitem", { name, exact: true });
+  const circuit = file("circuit.spice");
+  const run = file("run.cir");
+  const downloadSelected = page.getByRole("menuitem", {
+    name: "Download selected (2)…",
   });
   await expect(
     workspace.getByRole("button", { name: "Explorer", exact: true }),
@@ -1042,31 +948,21 @@ test("Explorer context downloads preserve multi-selection and directory contents
   await expect(
     workspace.getByRole("button", { name: /Download selected/ }),
   ).toHaveCount(0);
-  await expect(
-    alphaFiles.getByRole("treeitem", { name: "Source", exact: true }),
-  ).toHaveCount(0);
+  await expect(file("Source")).toHaveCount(0);
   await expect(alpha).toHaveAttribute("aria-expanded", "true");
   await expect(beta).toHaveAttribute("aria-expanded", "false");
   await expect(run).toHaveAttribute("aria-level", "2");
   await expect(circuit).toHaveAttribute("aria-level", "2");
-  await expect(
-    alphaFiles.getByRole("treeitem", { name: "Run", exact: true }),
-  ).toHaveAttribute("aria-expanded", "false");
+  await expect(file("Run")).toHaveAttribute("aria-expanded", "false");
   await run.click();
   await circuit.click({ modifiers: ["ControlOrMeta"] });
   await expect(
     workspace.getByRole("tab", { name: "run.cir", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
   await run.click({ button: "right" });
-  const pending = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "Download selected (2)…" }).click();
-  const stream = await (await pending).createReadStream();
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
-  expect(Object.keys(unzipSync(Buffer.concat(chunks))).sort()).toEqual([
-    "Alpha/source/circuit.spice",
-    "Alpha/source/run.cir",
-  ]);
+  expect(
+    Object.keys(unzipSync(await downloadClicked(downloadSelected))).sort(),
+  ).toEqual(["Alpha/source/circuit.spice", "Alpha/source/run.cir"]);
   await circuit.click();
   await run.click({ modifiers: ["Shift"] });
   await expect(
@@ -1093,18 +989,11 @@ test("Explorer context downloads preserve multi-selection and directory contents
   await page.getByRole("menuitem", { name: "New file…", exact: true }).click();
   await name.fill("models/bias/local.cir");
   await name.press("Enter");
-  const models = alphaFiles.getByRole("treeitem", {
-    name: "models",
-    exact: true,
-  });
+  const models = file("models");
   await expect(models).toHaveAttribute("aria-expanded", "true");
-  await expect(
-    alphaFiles.getByRole("treeitem", { name: "local.cir", exact: true }),
-  ).toBeVisible();
+  await expect(file("local.cir")).toBeVisible();
   await models.click();
-  await expect(
-    alphaFiles.getByRole("treeitem", { name: "local.cir", exact: true }),
-  ).toHaveCount(0);
+  await expect(file("local.cir")).toHaveCount(0);
   await models.click({ button: "right" });
   const nestedDownload = page.waitForEvent("download");
   await page.getByRole("menuitem", { name: "Download…", exact: true }).click();
@@ -1112,13 +1001,7 @@ test("Explorer context downloads preserve multi-selection and directory contents
   // Selecting the parent and one descendant must not duplicate ZIP entries.
   await alpha.click({ modifiers: ["ControlOrMeta"] });
   await alpha.click({ button: "right" });
-  const folderDownload = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "Download selected (2)…" }).click();
-  const folderStream = await (await folderDownload).createReadStream();
-  const folderChunks: Buffer[] = [];
-  for await (const chunk of folderStream!)
-    folderChunks.push(Buffer.from(chunk));
-  const names = Object.keys(unzipSync(Buffer.concat(folderChunks)));
+  const names = Object.keys(unzipSync(await downloadClicked(downloadSelected)));
   expect(
     names.filter((path) => path.endsWith("models/bias/local.cir")),
   ).toHaveLength(1);
@@ -1130,9 +1013,7 @@ test("Explorer context downloads preserve multi-selection and directory contents
     0,
   );
   await models.press("ArrowRight");
-  await expect(
-    alphaFiles.getByRole("treeitem", { name: "local.cir", exact: true }),
-  ).toBeVisible();
+  await expect(file("local.cir")).toBeVisible();
 });
 
 test("inline naming commits once on blur, cancels on Escape, and deletion uses a local dialog", async ({
@@ -1144,47 +1025,30 @@ test("inline naming commits once on blur, cancels on Escape, and deletion uses a
     nativeDialogs.push(dialog.type());
     void dialog.dismiss();
   });
-  await workspace
-    .getByRole("button", { name: "+ New experiment", exact: true })
-    .click();
+  const newExperiment = workspace.getByRole("button", {
+    name: "+ New experiment",
+    exact: true,
+  });
+  await newExperiment.click();
   const input = workspace.getByRole("textbox", {
     name: "New simulation folder name",
   });
   await expect(input).toHaveAttribute("autocomplete", "off");
   await input.fill("Gamma");
   // Switching selection must not implicitly create an experiment.
-  await workspace
-    .getByRole("treeitem", { name: "Folder Beta", exact: true })
-    .click();
-  await expect(
-    workspace.getByRole("treeitem", { name: "Folder Gamma", exact: true }),
-  ).toHaveCount(0);
+  await folderRow(workspace, "Beta").click();
+  await expect(folderRow(workspace, "Gamma")).toHaveCount(0);
   await expect(input).toHaveCount(0);
-  await workspace
-    .getByRole("button", { name: "+ New experiment", exact: true })
-    .click();
+  await newExperiment.click();
   await input.fill("Gamma");
   await workspace.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(
-    workspace.getByRole("treeitem", { name: "Folder Gamma", exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    workspace.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toContainText("op");
-  await workspace
-    .getByRole("button", { name: "+ New experiment", exact: true })
-    .click();
-  await workspace
-    .getByRole("textbox", { name: "New simulation folder name" })
-    .fill("Cancelled");
+  await expect(folderRow(workspace, "Gamma")).toHaveCount(1);
+  await expect(sourceEditor(workspace)).toContainText("op");
+  await newExperiment.click();
+  await input.fill("Cancelled");
   await page.keyboard.press("Escape");
-  await expect(
-    workspace.getByRole("treeitem", { name: "Folder Cancelled", exact: true }),
-  ).toHaveCount(0);
-  const gamma = workspace.getByRole("treeitem", {
-    name: "Folder Gamma",
-    exact: true,
-  });
+  await expect(folderRow(workspace, "Cancelled")).toHaveCount(0);
+  const gamma = folderRow(workspace, "Gamma");
   await gamma.focus();
   await gamma.press("F2");
   const folderName = workspace.getByRole("textbox", {
@@ -1198,13 +1062,8 @@ test("inline naming commits once on blur, cancels on Escape, and deletion uses a
   await expect(workspace).toContainText("already exists");
   await folderName.fill("Renamed");
   // Renaming existing folders still commits on blur.
-  await workspace
-    .getByRole("treeitem", { name: "Folder Beta", exact: true })
-    .click();
-  const renamed = workspace.getByRole("treeitem", {
-    name: "Folder Renamed",
-    exact: true,
-  });
+  await folderRow(workspace, "Beta").click();
+  const renamed = folderRow(workspace, "Renamed");
   await renamed.click({ button: "right" });
   await page.getByRole("menuitem", { name: "New file…", exact: true }).click();
   const fileName = workspace.getByRole("textbox", {
@@ -1219,9 +1078,7 @@ test("inline naming commits once on blur, cancels on Escape, and deletion uses a
   await expect(
     workspace.getByRole("tab", { name: /stimulus\.cir/u }),
   ).toBeVisible();
-  const editor = workspace.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(workspace);
   await editor.click();
   await editor.press("Control+End");
   await editor.pressSequentially("* Editable new file");

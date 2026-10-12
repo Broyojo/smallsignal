@@ -9,10 +9,13 @@ import { serializeProject } from "@icm/project-protocol";
 import {
   clickCommand,
   downloadBytes,
+  expectStatus,
   openMenu,
+  openProjectFile,
   placeResistors,
   readRecoveryRecords,
   recoveryProjectTexts,
+  expectRecovered,
 } from "./editor-fixtures.js";
 
 const fixtureText = readFileSync(
@@ -56,9 +59,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   // One lone component remains below the banner's meaningful-content threshold.
   await placeResistors(page, [360]);
   await expect(page.getByTestId("revision")).toHaveText("1");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
+  await expectRecovered(page, '"revision": 1');
   await page.goto("/editor?recovery=small");
   const banner = page.getByTestId("startup-recovery-banner");
   await expect(page.getByTestId("schematic-canvas")).toBeVisible();
@@ -67,9 +68,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   // Three objects clear the threshold and the banner offers the restore.
   await placeResistors(page, [360, 470, 580], 330);
   await expect(page.getByTestId("revision")).toHaveText("3");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 3');
+  await expectRecovered(page, '"revision": 3');
 
   await page.goto("/editor?recovery=meaningful");
   await expect(banner).toBeVisible();
@@ -77,9 +76,7 @@ test("startup recovery without a saved workspace restores into a new working cop
   await banner.getByRole("button", { name: "Restore" }).click();
   await expect(banner).toBeHidden();
   await expect(page.getByTestId("revision")).toHaveText("3");
-  await expect(page.getByTestId("status")).toContainText(
-    "Restored recovery revision 3",
-  );
+  await expectStatus(page, "Restored recovery revision 3");
 });
 
 test("a damaged copy restores its previous generation; a newer-schema copy downloads but never restores", async ({
@@ -87,17 +84,13 @@ test("a damaged copy restores its previous generation; a newer-schema copy downl
 }) => {
   await page.goto("/editor");
   await placeResistors(page, [360]);
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
+  await expectRecovered(page, '"revision": 1');
 
   // Place one more edit so a valid previous generation exists, then corrupt
   // the latest record's Project text in place.
   await placeResistors(page, [500]);
   await expect(page.getByTestId("revision")).toHaveText("2");
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 2');
+  await expectRecovered(page, '"revision": 2');
   const latest = (await readRecoveryRecords(page)).find(
     (record) => record.generation === "latest",
   )!;
@@ -165,9 +158,7 @@ test("export keeps recovery; explicit discard removes it and hides a clean repla
   await page.goto("/editor");
   // Three authored objects: enough for the replacement guard to engage.
   await placeResistors(page, [300, 380, 460]);
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 3');
+  await expectRecovered(page, '"revision": 3');
   // Exporting downloads the formal Project but never clears the browser
   // recovery copies: the next write rotates revision 3 into the previous
   // generation of the same session. That edit also invalidates the export's
@@ -185,11 +176,11 @@ test("export keeps recovery; explicit discard removes it and hides a clean repla
     "Clean Replacement",
   );
   replacement.documents[0]!.name = "Clean Replacement Cell";
-  await page.getByTestId("project-file").setInputFiles({
-    name: "clean-replacement.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(replacement)),
-  });
+  await openProjectFile(
+    page,
+    serializeProject(replacement),
+    "clean-replacement.icproj.json",
+  );
   await page
     .getByRole("dialog", { name: "Unsaved changes" })
     .getByRole("button", { name: "Continue without saving" })
@@ -200,9 +191,7 @@ test("export keeps recovery; explicit discard removes it and hides a clean repla
   // Wait for the debounced seed write of the incoming clean working copy.
   // Explicit Discard removed the outgoing session, and a clean recovery seed
   // must not make the exceptional Recovery command permanently visible.
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"name": "Clean Replacement"');
+  await expectRecovered(page, '"name": "Clean Replacement"');
   await expect
     .poll(() => recoveryProjectTexts(page))
     .not.toContain('"name": "New Circuit"');
@@ -219,9 +208,7 @@ test("dialog closes with Escape, keeps focus labels and deletes a copy", async (
 }) => {
   await page.goto("/editor");
   await placeResistors(page, [360]);
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain('"revision": 1');
+  await expectRecovered(page, '"revision": 1');
   await page.reload();
 
   await clickCommand(page, "File", "Recover Unsaved Work…");

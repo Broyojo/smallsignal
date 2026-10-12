@@ -1,19 +1,26 @@
 // Finding and selecting what is drawn: Find, the Selection Filter, marquee
 // direction, Net highlight and ERC diagnostics.
 
-import { createRoutePath, createEmptyProject } from "@icm/model";
+import { createEmptyProject } from "@icm/model";
 import { expect, test } from "@playwright/test";
 import {
-  chooseComponent,
-  clickDrawTool,
   clickNetlistWorkflowCommand,
+  expectStatus,
   openProject,
+  placeComponentAt,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
-import { clickRoute } from "./canvas-fixtures.js";
+import {
+  addStraightWire,
+  clickRoute,
+  junctionRoute,
+  onScreen,
+  routeAnchor,
+  drawWire,
+} from "./canvas-fixtures.js";
 
 test("opens circuit Find with Ctrl+F and selects a matching component", async ({
   page,
@@ -25,9 +32,7 @@ test("opens circuit Find with Ctrl+F and selects a matching component", async ({
   await expect(input).toBeFocused();
   await input.fill("R1");
   await page.getByTestId("project-search-result-R1").click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Selected instance R1",
-  );
+  await expectStatus(page, "Selected instance R1");
   await expect(page.getByTestId("project-search-input")).toHaveCount(0);
 });
 
@@ -37,10 +42,7 @@ test("opens selectable-object choices with Ctrl+Shift+F, filters Select All, and
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 380, y: 260 });
   await placeComponent(page, "resistor", { x: 600, y: 260 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
+  await drawWire(page, "R1-2", "R2-1");
 
   await page.keyboard.press("Control+Shift+f");
   const filter = page.getByTestId("selection-filter-popover");
@@ -85,30 +87,11 @@ test("Selection Filter blocks direct wire, junction, and shape operations", asyn
 }) => {
   const project = createEmptyProject("selection-policy", "Selection policy");
   const document = project.documents[0]!;
-  document.nets.push({ id: "net-1", terminals: [] });
-  document.junctions.push(
-    {
-      id: "left",
-      netId: "net-1",
-      position: { x: 240, y: 220 },
-      role: "route-anchor",
-    },
-    {
-      id: "right",
-      netId: "net-1",
-      position: { x: 440, y: 220 },
-      role: "route-anchor",
-    },
-  );
-  document.routes.push(
-    createRoutePath({
-      id: "filtered-wire",
-      netId: "net-1",
-      start: { kind: "junction", junctionId: "left" },
-      end: { kind: "junction", junctionId: "right" },
-      bends: [],
-      modes: ["manual"],
-    }),
+  addStraightWire(
+    document,
+    "filtered-wire",
+    routeAnchor("left", "net-1", 240, 220),
+    routeAnchor("right", "net-1", 440, 220),
   );
   document.drafting = {
     objects: [
@@ -134,20 +117,14 @@ test("Selection Filter blocks direct wire, junction, and shape operations", asyn
   await filter.getByRole("button", { name: "Close" }).click();
 
   // The wire's middle, its left Junction and the rectangle's corner.
-  type Point = { x: number; y: number };
-  const [routeCenter, junctionPoint, shapeCorner] = (await page
-    .getByTestId("schematic-canvas")
-    .evaluate((element) => {
-      const matrix = (element as SVGSVGElement).getScreenCTM()!;
-      return [
-        { x: 340, y: 220 },
-        { x: 240, y: 220 },
-        { x: 260, y: 300 },
-      ].map((point) => {
-        const screen = new DOMPoint(point.x, point.y).matrixTransform(matrix);
-        return { x: screen.x, y: screen.y };
-      });
-    })) as [Point, Point, Point];
+  const [routeCenter, junctionPoint, shapeCorner] = await onScreen(
+    page.getByTestId("schematic-canvas"),
+    [
+      { x: 340, y: 220 },
+      { x: 240, y: 220 },
+      { x: 260, y: 300 },
+    ],
+  );
   const route = page.getByTestId("route-hit-filtered-wire");
   const shape = page.getByTestId("drafting-hit-filtered-shape");
   const junction = page.getByTestId("junction-left");
@@ -161,14 +138,12 @@ test("Selection Filter blocks direct wire, junction, and shape operations", asyn
 
   const routePointsBefore = await route.getAttribute("points");
   const shapeBoundsBefore = await shape.boundingBox();
-  await page.mouse.move(routeCenter.x, routeCenter.y);
-  await page.mouse.down();
-  await page.mouse.move(routeCenter.x + 80, routeCenter.y + 50, { steps: 4 });
-  await page.mouse.up();
-  await page.mouse.move(shapeCorner.x, shapeCorner.y);
-  await page.mouse.down();
-  await page.mouse.move(shapeCorner.x + 80, shapeCorner.y + 50, { steps: 4 });
-  await page.mouse.up();
+  for (const point of [routeCenter, shapeCorner]) {
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x + 80, point.y + 50, { steps: 4 });
+    await page.mouse.up();
+  }
   expect(await route.getAttribute("points")).toBe(routePointsBefore);
   expect(await shape.boundingBox()).toEqual(shapeBoundsBefore);
 
@@ -210,14 +185,12 @@ test("highlights a selected route's whole Net and recomputes it after a Net Labe
     position: { x, y: 260 },
   }));
   document.routes = (["left", "right"] as const).map((side) =>
-    createRoutePath({
-      id: `route-${side}-label`,
-      netId: "net-historically-merged",
-      start: { kind: "junction", junctionId: `${side}-a` },
-      end: { kind: "junction", junctionId: `${side}-b` },
-      bends: [],
-      modes: ["manual"],
-    }),
+    junctionRoute(
+      `route-${side}-label`,
+      "net-historically-merged",
+      `${side}-a`,
+      `${side}-b`,
+    ),
   );
   document.annotations = (
     [
@@ -280,7 +253,7 @@ test("surfaces, filters and locates current-document ERC and visual diagnostics"
     .getByRole("button", { name: /ERC_UNCONNECTED_PIN/ })
     .first()
     .click();
-  await expect(page.getByTestId("status")).toContainText("ERC_UNCONNECTED_PIN");
+  await expectStatus(page, "ERC_UNCONNECTED_PIN");
   await expect(
     page.getByRole("region", { name: "Endpoint actions" }),
   ).toBeVisible();
@@ -293,9 +266,7 @@ test("surfaces, filters and locates current-document ERC and visual diagnostics"
   await diagnostics
     .getByRole("button", { name: /VISUAL_SYMBOL_OVERLAP/ })
     .click();
-  await expect(page.getByTestId("status")).toContainText(
-    "VISUAL VISUAL_SYMBOL_OVERLAP",
-  );
+  await expectStatus(page, "VISUAL VISUAL_SYMBOL_OVERLAP");
 });
 
 test("rechecks resolved diagnostics and invalidates them through undo", async ({
@@ -305,6 +276,7 @@ test("rechecks resolved diagnostics and invalidates them through undo", async ({
   await placeComponent(page, "resistor", { x: 380, y: 260 });
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expect(page.getByTestId("check-and-save")).toBeEnabled();
+  const issues = page.getByTestId("statusbar-issues");
   const diagnostics = page.getByTestId("project-diagnostics");
   await expect(diagnostics).toContainText("ERC_UNCONNECTED_PIN");
 
@@ -312,9 +284,7 @@ test("rechecks resolved diagnostics and invalidates them through undo", async ({
     await page.getByTestId(`terminal-R1-${pinName}`).click({ button: "right" });
     await page.getByRole("button", { name: "Mark No Connect" }).click();
   }
-  await expect(page.getByTestId("statusbar-issues")).toHaveText(
-    "Check out of date",
-  );
+  await expect(issues).toHaveText("Check out of date");
   await expect(page.locator(".diagnostic-marker")).toHaveCount(0);
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expect(page.getByTestId("check-and-save")).toBeEnabled();
@@ -322,17 +292,13 @@ test("rechecks resolved diagnostics and invalidates them through undo", async ({
   await expect(page.getByTestId("no-current-diagnostics")).toBeVisible();
 
   await page.keyboard.press("Control+z");
-  await expect(page.getByTestId("statusbar-issues")).toHaveText(
-    "Check out of date",
-  );
+  await expect(issues).toHaveText("Check out of date");
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expect(page.getByTestId("check-and-save")).toBeEnabled();
   await expect(diagnostics).toContainText("ERC_UNCONNECTED_PIN");
 
   await page.keyboard.press("Control+y");
-  await expect(page.getByTestId("statusbar-issues")).toHaveText(
-    "Check out of date",
-  );
+  await expect(issues).toHaveText("Check out of date");
   await clickNetlistWorkflowCommand(page, "check-and-save");
   await expect(diagnostics).not.toContainText("ERC_UNCONNECTED_PIN");
 });
@@ -341,10 +307,7 @@ test("directional marquee: window needs full coverage, crossing selects on touch
   page,
 }) => {
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
-  const canvas = page.getByTestId("schematic-canvas");
-  await canvas.click({ position: { x: 420, y: 260 } });
-  await page.keyboard.press("Escape");
+  await placeComponentAt(page, "resistor", { x: 420, y: 260 });
   const hit = page.getByTestId("hit-R1");
   const bounds = await hit.boundingBox();
   if (!bounds) throw new Error("Placed resistor is not measurable");
@@ -363,7 +326,7 @@ test("directional marquee: window needs full coverage, crossing selects on touch
     "selection-box selection-box--window",
   );
   await page.mouse.up();
-  await expect(page.getByTestId("status")).toContainText("Selection cleared");
+  await expectStatus(page, "Selection cleared");
 
   // The same rectangle dragged right-to-left is a crossing and selects R1.
   await page.mouse.move(partial.right, partial.top);
@@ -373,7 +336,7 @@ test("directional marquee: window needs full coverage, crossing selects on touch
     "selection-box selection-box--crossing",
   );
   await page.mouse.up();
-  await expect(page.getByTestId("status")).toContainText(/Selected \d+ object/);
+  await expectStatus(page, /Selected \d+ object/);
 
   // A left-to-right window swallowing the whole symbol selects it too.
   await page.mouse.move(bounds.x - 30, bounds.y - 30);
@@ -384,7 +347,7 @@ test("directional marquee: window needs full coverage, crossing selects on touch
     { steps: 4 },
   );
   await page.mouse.up();
-  await expect(page.getByTestId("status")).toContainText(/Selected \d+ object/);
+  await expectStatus(page, /Selected \d+ object/);
 
   // Marquee sweeps are gestures: they must never start a native browser text
   // selection over the SVG labels (the old distant-label highlight bug).

@@ -4,6 +4,7 @@ import {
   awaitEditorReady,
   editDocumentStyleCode,
   readDocumentStyleCode,
+  openEditor,
 } from "./editor-fixtures";
 
 /** Dispatch one wheel event with a chosen device signature. */
@@ -38,8 +39,7 @@ const width = async (page: Page): Promise<number> =>
 test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans, the setting overrides both, and a framed narrow view keeps full-speed pan and zoom range", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const canvas = page.getByTestId("schematic-canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -55,16 +55,22 @@ test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans
       number,
       number,
     ];
+  // Screen pixels per document unit for a camera.
+  const visualScale = (view: number[]) =>
+    Math.min(bounds!.width / view[2]!, bounds!.height / view[3]!);
+  const scrollBehavior = async () =>
+    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior;
+  const setScrollBehavior = (behavior: "zoom" | "pan") =>
+    editDocumentStyleCode(page, (code) => {
+      code.canvas.scrollBehavior = behavior;
+    });
   const initial = await readViewBox();
   await page.keyboard.press("ArrowRight");
   await expect.poll(readViewBox).not.toEqual(initial);
   const right = await readViewBox();
   expect(right[2]).toBe(initial[2]);
   expect(right[3]).toBe(initial[3]);
-  const initialScale = Math.min(
-    bounds!.width / initial[2],
-    bounds!.height / initial[3],
-  );
+  const initialScale = visualScale(initial);
   expect((right[0] - initial[0]) * initialScale).toBeCloseTo(48, 1);
 
   await page.keyboard.press("ArrowLeft");
@@ -76,9 +82,7 @@ test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans
   await page.keyboard.press("ArrowUp");
   await expect.poll(readViewBox).toEqual(initial);
 
-  expect(
-    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior,
-  ).toBe("auto");
+  expect(await scrollBehavior()).toBe("auto");
 
   // A detent-quantized signature zooms even though its deltaY is tiny —
   // the case that made a slowly turned mouse wheel pan. Scrolling up
@@ -94,16 +98,12 @@ test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans
 
   // An explicit choice wins over any evidence: the same trackpad
   // signature now zooms.
-  await editDocumentStyleCode(page, (code) => {
-    code.canvas.scrollBehavior = "zoom";
-  });
+  await setScrollBehavior("zoom");
   await wheel(page, { deltaY: -40, wheelDeltaY: 120 });
   await expect.poll(() => width(page)).toBeLessThan(afterWheel);
 
   // And a mouse detent pans once the person says the device is a surface.
-  await editDocumentStyleCode(page, (code) => {
-    code.canvas.scrollBehavior = "pan";
-  });
+  await setScrollBehavior("pan");
   const beforePan = await width(page);
   await wheel(page, { deltaY: -4, wheelDeltaY: 120 });
   await expect.poll(() => width(page)).toBe(beforePan);
@@ -111,9 +111,7 @@ test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans
   // The choice survives a reload.
   await page.reload();
   await awaitEditorReady(page);
-  expect(
-    JSON.parse(await readDocumentStyleCode(page)).canvas.scrollBehavior,
-  ).toBe("pan");
+  expect(await scrollBehavior()).toBe("pan");
 
   // A framed narrow view keeps full-speed pan and the visual zoom range.
   const beforeFrame = await readViewBox();
@@ -133,15 +131,10 @@ test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans
   await page.mouse.up({ button: "middle" });
   await expect.poll(readViewBox).not.toEqual(framed);
   const panned = await readViewBox();
-  const framedScale = Math.min(
-    bounds!.width / framed[2],
-    bounds!.height / framed[3],
-  );
+  const framedScale = visualScale(framed);
   expect(Math.abs(panned[0] - framed[0]) * framedScale).toBeCloseTo(120, 0);
 
-  await editDocumentStyleCode(page, (code) => {
-    code.canvas.scrollBehavior = "zoom";
-  });
+  await setScrollBehavior("zoom");
   await canvas.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     for (let index = 0; index < 80; index += 1) {
@@ -158,9 +151,6 @@ test("arrow keys pan by one screen-space step, a wheel zooms and a trackpad pans
   });
   const maximumVisualScale = Math.min(bounds!.width / 120, bounds!.height / 80);
   await expect
-    .poll(async () => {
-      const zoomed = await readViewBox();
-      return Math.min(bounds!.width / zoomed[2], bounds!.height / zoomed[3]);
-    })
+    .poll(async () => visualScale(await readViewBox()))
     .toBeCloseTo(maximumVisualScale, 1);
 });

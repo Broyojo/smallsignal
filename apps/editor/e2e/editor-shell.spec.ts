@@ -6,11 +6,14 @@ import { expect, test } from "@playwright/test";
 import { createEmptyProject } from "@icm/model";
 import {
   revealPropertiesShelf,
-  awaitEditorReady,
   clickDrawTool,
   downloadBytes,
+  expectStatus,
   openMenu,
+  openProjectFile,
   renameProject,
+  openEditor,
+  openProject,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
@@ -65,13 +68,7 @@ test("formal SVG keeps wide rotated edge labels inside its figure, and the PNG i
       rotation,
     });
   }
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "export-ink.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "export-ink.icproj.json");
   await expect(
     page
       .locator('[data-layer="annotations"] [data-object-id="edge-0"]')
@@ -145,6 +142,7 @@ test("right-drag frames a region and fits the camera to it transiently", async (
   const box = await canvas.boundingBox();
   if (!box) throw new Error("Canvas is not measurable");
   const before = await canvas.getAttribute("viewBox");
+  const status = page.getByTestId("status");
 
   await page.mouse.move(box.x + 220, box.y + 160);
   await page.mouse.down({ button: "right" });
@@ -155,9 +153,7 @@ test("right-drag frames a region and fits the camera to it transiently", async (
   await expect(page.getByTestId("zoom-box")).toHaveCount(0);
   await expect(page.getByTestId("canvas-context-menu")).toHaveCount(0);
   await expect(canvas).not.toHaveAttribute("viewBox", before!);
-  await expect(page.getByTestId("status")).toHaveText(
-    "Zoomed to framed region",
-  );
+  await expect(status).toHaveText("Zoomed to framed region");
   // Framing is a camera gesture: the document revision must not move.
   await expect(page.getByTestId("revision")).toHaveText("1");
 
@@ -183,9 +179,7 @@ test("right-drag frames a region and fits the camera to it transiently", async (
 
   await expect(page.getByTestId("zoom-box")).toHaveCount(0);
   await expect(canvas).not.toHaveAttribute("viewBox", framed!);
-  await expect(page.getByTestId("status")).toHaveText(
-    "Zoomed to framed region",
-  );
+  await expect(status).toHaveText("Zoomed to framed region");
   await expect(page.getByTestId("revision")).toHaveText("1");
 });
 
@@ -196,11 +190,7 @@ test("shows the complete Project Code and protects an invalid or stale draft", a
 }) => {
   await page.goto("/editor");
   const original = createEmptyProject("project-code-e2e", "Project Code E2E");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "project-code-e2e.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(original)),
-  });
+  await openProjectFile(page, original, "project-code-e2e.icproj.json");
   await page.getByTestId("project-code-toggle").click();
   const projectCode = page.getByRole("textbox", { name: "Project code" });
   const apply = page.getByRole("button", { name: "Apply", exact: true });
@@ -245,8 +235,7 @@ test("shows the complete Project Code and protects an invalid or stale draft", a
 test("keeps panel tooltips visible and exposes panel keyboard shortcuts", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const gallery = page.getByTestId("examples-toggle");
   await expect(gallery).not.toHaveAttribute("title");
   await expect(gallery).toHaveAttribute("aria-keyshortcuts", "G");
@@ -509,9 +498,7 @@ test("docked Properties JSON is the only global configuration surface", async ({
     .getByRole("option", { name: /^1\.5×/u })
     .click();
   await expect(label).toHaveAttribute("font-size", "22.674");
-  await expect(page.getByTestId("status")).toContainText(
-    "Updated Properties code",
-  );
+  await expectStatus(page, "Updated Properties code");
   await settings.getByRole("button", { name: "Defaults", exact: true }).click();
   await expect(label).toHaveAttribute("font-size", "15.116");
 

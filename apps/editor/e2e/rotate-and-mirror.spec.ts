@@ -2,17 +2,18 @@
 // carries.
 
 import {
-  exportedProject,
+  expectStatus,
   placeText,
   setComponentCodeField,
 } from "./editor-fixtures";
 import type { SchematicDocument } from "@icm/model";
 import { expect, test } from "@playwright/test";
 import {
+  exportedDocument,
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
-import { closeSelectionShelf } from "./canvas-fixtures.js";
+import { closeSelectionShelf, awaitCanvasSettled } from "./canvas-fixtures.js";
 
 test("Ctrl+R mirrors a selected component instead of refreshing", async ({
   page,
@@ -21,8 +22,8 @@ test("Ctrl+R mirrors a selected component instead of refreshing", async ({
   await placeComponent(page, "nmos", { x: 340, y: 220 });
   await page.getByTestId("hit-M1").click();
   await page.keyboard.press("Control+r");
-  const saved = await exportedProject(page);
-  expect(saved.documents[0].instances[0].placement).toMatchObject({
+  const saved = await exportedDocument(page);
+  expect(saved.instances[0].placement).toMatchObject({
     rotation: 0,
     mirror: "vertical",
   });
@@ -77,22 +78,7 @@ test("turns and flips a marquee selection with its labels and a note as one body
 
   // A window around the parts and the note, measured once the panels have
   // stopped animating the canvas.
-  await canvas.evaluate(
-    (element) =>
-      new Promise<void>((resolve) => {
-        let previous = "";
-        let still = 0;
-        const step = () => {
-          const matrix = (element as SVGSVGElement).getScreenCTM();
-          const current = matrix ? `${matrix.a} ${matrix.e} ${matrix.f}` : "";
-          still = current === previous ? still + 1 : 0;
-          previous = current;
-          if (still >= 3) resolve();
-          else requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-      }),
-  );
+  await awaitCanvasSettled(canvas);
   const boxes = await page
     .locator(
       '[data-canvas-hit-kind="instance"], [data-canvas-hit-kind="drafting"]',
@@ -110,21 +96,20 @@ test("turns and flips a marquee selection with its labels and a note as one body
     { steps: 12 },
   );
   await page.mouse.up();
-  await expect(page.getByTestId("status")).toContainText("Selected");
+  await expectStatus(page, "Selected");
 
   // Flipping left to right reverses the row. Flipping each part about its own
   // centre would have left the order exactly as it was.
-  const initial: SchematicDocument = (await exportedProject(page)).documents[0];
+  const initial: SchematicDocument = await exportedDocument(page);
   await page.keyboard.press("Shift+R");
-  await expect(page.getByTestId("status")).toContainText("as one group");
+  await expectStatus(page, "as one group");
   expect((await centres()).map((item) => item.id)).toEqual(
     before.map((item) => item.id).reverse(),
   );
   // Parts, their labels and the note all reflect about one group axis: each
   // position and its mirror image sum to the same twice-the-axis. A label
   // mirrored twice, or about its own part, would break the sum.
-  const mirrored: SchematicDocument = (await exportedProject(page))
-    .documents[0];
+  const mirrored: SchematicDocument = await exportedDocument(page);
   const xs = (document: SchematicDocument) => [
     ...document.instances.map((instance) => instance.placement!.position.x),
     ...document.annotations.map((annotation) =>
@@ -143,8 +128,7 @@ test("turns and flips a marquee selection with its labels and a note as one body
   expect(note.kind === "text" && note.alignment).toBe("end");
   // A second flip puts everything back exactly.
   await page.keyboard.press("Shift+R");
-  const restored: SchematicDocument = (await exportedProject(page))
-    .documents[0];
+  const restored: SchematicDocument = await exportedDocument(page);
   expect(restored.instances).toEqual(initial.instances);
   expect(restored.annotations).toEqual(initial.annotations);
   expect(restored.drafting).toEqual(initial.drafting);
@@ -209,7 +193,7 @@ test("Properties mirror buttons carry the MOS name and value with the part, and 
 }) => {
   await page.goto("/editor");
   await placeComponent(page, "nmos", { x: 340, y: 220 });
-  const initial = (await exportedProject(page)).documents[0];
+  const initial = await exportedDocument(page);
   const labels = (document: SchematicDocument) =>
     document.annotations.filter(
       (annotation) =>
@@ -223,16 +207,16 @@ test("Properties mirror buttons carry the MOS name and value with the part, and 
   const editor = page.getByTestId("component-property-code-editor");
 
   await editor.getByRole("button", { name: "Mirror top to bottom" }).click();
-  const flipped = (await exportedProject(page)).documents[0];
+  const flipped = await exportedDocument(page);
   expect(flipped.instances[0].placement.mirror).toBe("vertical");
   expect(labels(flipped)).not.toEqual(labels(initial));
   await editor.getByRole("button", { name: "Mirror top to bottom" }).click();
-  expect((await exportedProject(page)).documents[0].annotations).toEqual(
+  expect((await exportedDocument(page)).annotations).toEqual(
     initial.annotations,
   );
 
   await editor.getByRole("button", { name: "Mirror left to right" }).click();
-  const mirrored = (await exportedProject(page)).documents[0];
+  const mirrored = await exportedDocument(page);
   expect(mirrored.instances[0].placement.mirror).toBe("horizontal");
   expect(labels(mirrored).map((label: { id: string }) => label.id)).toEqual(
     labels(initial).map((label) => label.id),
@@ -240,7 +224,7 @@ test("Properties mirror buttons carry the MOS name and value with the part, and 
   expect(labels(mirrored)).not.toEqual(labels(initial));
   await page.keyboard.press("Escape");
   await page.keyboard.press("ControlOrMeta+z");
-  expect((await exportedProject(page)).documents[0].annotations).toEqual(
+  expect((await exportedDocument(page)).annotations).toEqual(
     initial.annotations,
   );
 });

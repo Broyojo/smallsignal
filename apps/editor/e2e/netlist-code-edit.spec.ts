@@ -1,12 +1,15 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { createEmptyProject } from "@icm/model";
 import {
-  awaitEditorReady,
   clickCommand,
+  expectStatus,
   exportedProject,
   openProjectFile,
   renameProject,
+  openEditor,
+  openProject,
 } from "./editor-fixtures.js";
+import { placedInstance } from "./canvas-fixtures.js";
 
 function fixture() {
   const project = createEmptyProject("netlist-edit", "Editable netlist");
@@ -18,14 +21,8 @@ function fixture() {
   delete document.presentation.labelSubscriptItalic;
   for (const [index, id] of ["R1", "R2"].entries()) {
     document.instances.push({
-      id,
+      ...placedInstance(id, "resistor", 200 + index * 160, 200),
       reference: id,
-      symbolId: "resistor",
-      placement: {
-        position: { x: 200 + index * 160, y: 200 },
-        rotation: 0,
-        mirror: "none",
-      },
       netlist: {
         binding: { kind: "primitive", deviceClass: "resistor" },
         parameters: { value: "10k" },
@@ -53,8 +50,15 @@ function fixture() {
     });
   return project;
 }
-const label = (page: import("@playwright/test").Page) =>
+const label = (page: Page) =>
   page.locator('[data-layer="annotations"] [data-object-id="label-R1"]');
+const netlistAlert = (page: Page) =>
+  page.getByRole("region", { name: "Live netlist" }).getByRole("alert");
+
+/** Open the editor, wait until it is ready, then open this Project. */
+async function openEditorOn(page: Page, project: object) {
+  await openProject(page, project);
+}
 
 test("selects an export entry independently of saved Top and edits only that Cell", async ({
   page,
@@ -67,9 +71,7 @@ test("selects an export entry independently of saved Top and edits only that Cel
   for (const instance of child.instances)
     instance.netlist!.parameters.value = "20k";
   project.documents.push(child);
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, project);
+  await openEditorOn(page, project);
   const code = page.getByLabel("Netlist code", { exact: true });
   const entry = page.getByLabel("Netlist entry Cell", { exact: true });
   await expect(code).toContainText("10k");
@@ -95,8 +97,10 @@ test("selects an export entry independently of saved Top and edits only that Cel
 test("restores process and device choices, applies defaults and keeps edit/undo consistent", async ({
   page,
 }) => {
-  await page.goto("/editor?example=current-mirror-loaded-differential-pair");
-  await awaitEditorReady(page);
+  await openEditor(
+    page,
+    "/editor?example=current-mirror-loaded-differential-pair",
+  );
   const code = page.getByLabel("Netlist code", { exact: true });
   // The editor works in SKY130, so the example opens bound to that process.
   await expect(code).toContainText("sky130_fd_pr__nfet_01v8");
@@ -106,6 +110,7 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
   );
   await expect(mosLabel).toHaveText("M1");
   const process = page.getByLabel("Netlist process", { exact: true });
+  const format = page.getByLabel("Netlist format", { exact: true });
   await process.selectOption("abstract");
   await expect(code).toContainText("NMOS");
   await process.selectOption("sky130");
@@ -118,9 +123,7 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
   await page.getByTestId("draw-tool-redo").click();
   await expect(code).toContainText("XM1");
   await expect(mosLabel).toHaveText("M1");
-  await page
-    .getByLabel("Netlist format", { exact: true })
-    .selectOption("spectre");
+  await format.selectOption("spectre");
   await page
     .getByLabel("NMOS netlist target", { exact: true })
     .selectOption("sky130_fd_pr__nfet_01v8_lvt");
@@ -144,31 +147,21 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
   await configuration.fill(JSON.stringify(preferences));
   await page.getByTestId("netlist-panel-toggle").click();
   await expect(code).toContainText("sky130_fd_pr__nfet_01v8_lvt");
-  await page
-    .getByLabel("Netlist format", { exact: true })
-    .selectOption("spectre");
+  await format.selectOption("spectre");
   await process.selectOption("abstract");
   await expect(code).toContainText("NMOS");
   await code.fill((await code.innerText()).replace(/^M1 /mu, "M_load "));
   await code.press("Enter");
-  await expect(
-    page.locator(
-      '[data-layer="annotations"] [data-object-id="instance-label-M1"]',
-    ),
-  ).toContainText("Mload");
+  await expect(mosLabel).toContainText("Mload");
   await page.getByRole("button", { name: "Default", exact: true }).click();
-  await expect(page.getByLabel("Netlist format", { exact: true })).toHaveValue(
-    "spice",
-  );
+  await expect(format).toHaveValue("spice");
   await expect(code).toContainText("M_load");
 });
 
 test("explicit inspectors yield to Netlist for a replacement while ordinary edits preserve the panel choice", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, fixture());
+  await openEditorOn(page, fixture());
   await page.getByTestId("hit-R1").dblclick();
   await expect(
     page.getByRole("complementary", { name: "Properties", exact: true }),
@@ -207,18 +200,10 @@ test("lists every netlist issue and shows the one clicked on the canvas", async 
   const project = createEmptyProject("netlist-issues", "Netlist issues");
   for (const [index, id] of ["D1", "D2"].entries())
     project.documents[0]!.instances.push({
-      id,
+      ...placedInstance(id, "delay-cell", 200 + index * 200, 200),
       reference: id,
-      symbolId: "delay-cell",
-      placement: {
-        position: { x: 200 + index * 200, y: 200 },
-        rotation: 0,
-        mirror: "none",
-      },
     });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, project);
+  await openEditorOn(page, project);
   const list = page.getByTestId("netlist-issues");
   const issues = page.getByTestId("netlist-issue");
   await expect(list).toContainText("2 issues");
@@ -229,7 +214,8 @@ test("lists every netlist issue and shows the one clicked on the canvas", async 
   await expect(halo.locator('[data-object-id="D1"]')).toHaveCount(0);
   // The list stays in the dock, one click from the next finding.
   await expect(list).toBeVisible();
-  await expect(page.getByTestId("status")).toContainText(
+  await expectStatus(
+    page,
     "Netlist: Symbol delay-cell has no reviewed netlist definition",
   );
 });
@@ -239,8 +225,7 @@ test("opens editable netlist by default, links cards and parts both ways, and sy
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await expect(page.getByTestId("netlist-panel-toggle")).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -306,34 +291,26 @@ test("opens editable netlist by default, links cards and parts both ways, and sy
 test("rejects duplicate names atomically, retains a draft when the canvas changes, and Refresh drops cards the code adds or deletes", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, fixture());
+  await openEditorOn(page, fixture());
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toContainText("R1");
   await code.fill((await code.innerText()).replace("R1 ", "R2 "));
   await code.press("Enter");
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("Edit rejected");
+  await expect(netlistAlert(page)).toContainText("Edit rejected");
   await expect(label(page)).toContainText("R1");
   await page.getByTestId("annotation-hit-label-R1").dblclick();
   await page
     .getByRole("textbox", { name: "Canvas text editor" })
     .fill("R_canvas");
   await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("canvas or Agent changed");
+  await expect(netlistAlert(page)).toContainText("canvas or Agent changed");
   await expect(code).not.toContainText("R_canvas");
   await page.getByRole("button", { name: "Reload", exact: true }).click();
   await expect(code).toContainText("R_canvas");
 
   // Refresh regenerates the netlist from the circuit, dropping cards added
   // or deleted in the code.
-  const alert = page
-    .getByRole("region", { name: "Live netlist" })
-    .getByRole("alert");
+  const alert = netlistAlert(page);
   const refresh = page.getByRole("button", { name: "Refresh netlist" });
   await expect(code).toContainText("R2 ");
   const generated = await code.innerText();
@@ -364,16 +341,12 @@ test("an incomplete circuit shows a read-only draft linked to the canvas, and re
 }) => {
   const project = fixture();
   delete project.documents[0]!.instances[0]!.netlist!.parameters.value;
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, project);
+  await openEditorOn(page, project);
   const code = page.getByLabel("Netlist code", { exact: true });
   // A netlist that cannot print yet shows its draft, with ? for the value.
   await expect(code).toContainText("* Draft:");
   await expect(code).toContainText("R1 net0 net1 ?");
-  await expect(
-    page.getByRole("region", { name: "Live netlist" }).getByRole("alert"),
-  ).toContainText("requires parameter value");
+  await expect(netlistAlert(page)).toContainText("requires parameter value");
   const card = (reference: string) =>
     code
       .locator(".cm-line")
@@ -408,9 +381,7 @@ test("an incomplete circuit shows a read-only draft linked to the canvas, and re
 test("bound labels retain typography on rename and support manual scripts without an alias", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, fixture());
+  await openEditorOn(page, fixture());
   await page.getByTestId("annotation-hit-label-R1").dblclick();
   const editor = page.getByRole("textbox", { name: "Canvas text editor" });
   const alias = page.getByRole("checkbox", { name: "Use display alias" });

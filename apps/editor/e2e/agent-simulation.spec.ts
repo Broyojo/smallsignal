@@ -11,6 +11,7 @@ import {
   dividerOpRawfile as rawfile,
   ngspiceCapabilities,
 } from "./simulation-e2e-fixtures.js";
+import { placedInstance } from "./canvas-fixtures.js";
 
 // No MCP, Agent client, Project fixture import, or injected relay messages.
 // Only the simulator backend is a fixture: this proves HTTP authoring/handoff,
@@ -83,6 +84,9 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
     return result;
   };
   await send("circuit", { operation: "capabilities" });
+  /** A Project-folder simulation input or artifact request. */
+  const simulationInput = (input: Record<string, unknown>) =>
+    send("files", { operation: "simulation-input", input });
   const snapshot = () => send("circuit", { operation: "snapshot", documentId });
   const transact = async (operation: Record<string, unknown>) => {
     const current = await snapshot();
@@ -113,15 +117,9 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
             ),
           ).toBe(true);
           return {
-            id,
-            symbolId,
+            ...placedInstance(id, symbolId, 200 + index * 140, 200),
             ...(reference ? { reference } : {}),
             ...(parameters ? { netlist: { parameters } } : {}),
-            placement: {
-              position: { x: 200 + index * 140, y: 200 },
-              rotation: 0,
-              mirror: "none",
-            },
           };
         },
       ),
@@ -219,31 +217,25 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
   });
   const sourceOwner = { kind: "project-folder", folderId: "http-folder" };
   const sourceRead = (
-    await send("files", {
-      operation: "simulation-input",
-      input: {
-        action: "read",
-        owner: sourceOwner,
-        path: "run.cir",
-      },
+    await simulationInput({
+      action: "read",
+      owner: sourceOwner,
+      path: "run.cir",
     })
   ).result;
   const edited = (
-    await send("files", {
-      operation: "simulation-input",
-      input: {
-        action: "update",
-        owner: sourceOwner,
-        expectedRevision: sourceRead.revision,
-        replacements: [
-          {
-            path: "run.cir",
-            textDigest: sourceRead.textDigest,
-            oldText: "* HTTP divider",
-            newText: "* HTTP divider online edit",
-          },
-        ],
-      },
+    await simulationInput({
+      action: "update",
+      owner: sourceOwner,
+      expectedRevision: sourceRead.revision,
+      replacements: [
+        {
+          path: "run.cir",
+          textDigest: sourceRead.textDigest,
+          oldText: "* HTTP divider",
+          newText: "* HTTP divider online edit",
+        },
+      ],
     })
   ).result;
   expect(edited.update).toMatchObject({
@@ -270,24 +262,21 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
     })
   ).run;
   expect(run.state).toBe("finished");
+  const runState = async () =>
+    (await send("simulation", { operation: "read", runId: run.id })).run.state;
   // No Agent read is needed for the browser observer to finish the handoff.
   await panel.getByRole("button", { name: "Close Agent dialog" }).click();
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   await page.locator(".simulation-run-history > summary").click();
-  const records = page.getByRole("region", {
-    name: "Project runs",
-    exact: true,
-  });
-  await expect(
-    records.getByRole("button", { name: "Open result" }),
-  ).toBeEnabled();
-  await records.getByRole("button", { name: "Open result" }).click();
+  const openResult = page
+    .getByRole("region", { name: "Project runs", exact: true })
+    .getByRole("button", { name: "Open result" });
+  await expect(openResult).toBeEnabled();
+  await openResult.click();
   // The folder status follows the newest run, so it does not say when the
   // opened result is restored; the button, busy meanwhile, does. A menu
   // opened during the restore would keep its download disabled.
-  await expect(
-    records.getByRole("button", { name: "Open result" }),
-  ).toBeEnabled();
+  await expect(openResult).toBeEnabled();
   await expect(
     page.getByRole("region", { name: "Analog simulation" }).getByRole("status"),
   ).toHaveText("completed");
@@ -299,9 +288,7 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
   ).toBeEnabled();
   await page.keyboard.press("Escape");
   expect(executions).toBe(1);
-  expect(
-    (await send("simulation", { operation: "read", runId: run.id })).run.state,
-  ).toBe("finished");
+  expect(await runState()).toBe("finished");
   const resultCatalog = (
     await send("simulation", { operation: "catalog", runId: run.id })
   ).catalog;
@@ -313,10 +300,7 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
   await expect
     .poll(async () => {
       transfer = (
-        await send("files", {
-          operation: "simulation-input",
-          input: { action: "download", artifactId: raw.id },
-        })
+        await simulationInput({ action: "download", artifactId: raw.id })
       ).result;
       if (!transfer.ok)
         expect(transfer.error.code).toBe("ARTIFACT_TRANSFER_PENDING");
@@ -355,14 +339,12 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
       }
     })
     .toBe(true);
-  const retained = await send("files", {
-    operation: "simulation-input",
-    input: { action: "artifact", artifactId: raw.id },
+  const retained = await simulationInput({
+    action: "artifact",
+    artifactId: raw.id,
   });
   expect(retained.result.text).toBe(rawfile);
-  expect(
-    (await send("simulation", { operation: "read", runId: run.id })).run.state,
-  ).toBe("finished");
+  expect(await runState()).toBe("finished");
   await page.reload();
   await awaitEditorReady(page);
   await expect
@@ -384,16 +366,16 @@ test("HTTP Kit alone authors native objects and hands off a Project-folder run",
     runId: run.id,
   });
   expect(recovered.catalog).toEqual(resultCatalog);
-  const recoveredBody = await send("files", {
-    operation: "simulation-input",
-    input: { action: "artifact", artifactId: raw.id },
+  const recoveredBody = await simulationInput({
+    action: "artifact",
+    artifactId: raw.id,
   });
   expect(recoveredBody.result.text).toBe(rawfile);
   await expect
     .poll(async () => {
-      const response = await send("files", {
-        operation: "simulation-input",
-        input: { action: "download", artifactId: raw.id },
+      const response = await simulationInput({
+        action: "download",
+        artifactId: raw.id,
       });
       return response.result.ok;
     })

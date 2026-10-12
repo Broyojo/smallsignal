@@ -13,10 +13,9 @@ test("loopback examples do not depend on a Gallery server or its sign-in state",
     route.fulfill({ status: 401, json: { error: "sign in" } }),
   );
   await page.goto("/");
-  await expect(
-    page.getByTestId("gallery-bundled-two-stage-op-amp"),
-  ).toBeVisible();
-  await page.getByTestId("gallery-bundled-two-stage-op-amp").click();
+  const example = page.getByTestId("gallery-bundled-two-stage-op-amp");
+  await expect(example).toBeVisible();
+  await example.click();
   await awaitEditorReady(page);
   for (let i = 0; i < 3; i++) {
     await page.getByTestId("examples-toggle").click();

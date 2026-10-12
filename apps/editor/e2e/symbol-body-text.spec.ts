@@ -1,30 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import {
-  chooseComponent,
-  downloadBytes,
   expectComponentCodeField,
-  parseSavedProject,
-  revealPropertiesShelf,
+  exportedProject,
+  placeComponentAt,
   setComponentCodeField,
 } from "./editor-fixtures.js";
+import { openSelectionShelf } from "./manual-editor-fixtures.js";
 
 async function placeSymbol(page: Page, symbolId: string): Promise<void> {
   await page.goto("/editor");
-  await chooseComponent(page, symbolId);
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 360, y: 240 },
-  });
-  await page.keyboard.press("Escape");
+  await placeComponentAt(page, symbolId, { x: 360, y: 240 });
 }
 
 async function placeMarkedSymbol(page: Page, symbolId: string): Promise<void> {
   await placeSymbol(page, symbolId);
   await page.getByTestId("hit-X1").click();
-  await revealPropertiesShelf(page);
-  const shelf = page.getByTestId("selection-shelf");
-  if ((await shelf.getAttribute("aria-expanded")) !== "true")
-    await shelf.click();
+  await openSelectionShelf(page);
   await setComponentCodeField(page, "appearance.internalMark", "A");
 }
 
@@ -67,16 +59,9 @@ test("double-clicking a Symbol's body text edits it on the canvas and in Propert
 
   // Both surfaces write one field, so they cannot drift apart.
   await page.getByTestId("hit-X1").click();
-  await revealPropertiesShelf(page);
-  const shelf = page.getByTestId("selection-shelf");
-  if ((await shelf.getAttribute("aria-expanded")) !== "true")
-    await shelf.click();
+  await openSelectionShelf(page);
   await expectComponentCodeField(page, "signalFlow.formula", "8-bit DAC");
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ) as {
+  const saved = (await exportedProject(page)) as {
     documents: Array<{
       instances: Array<{ signalFlowParameters?: { formula?: string } }>;
     }>;

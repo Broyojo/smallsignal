@@ -8,13 +8,11 @@ import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 
 import {
-  clickNetlistWorkflowCommand,
-  openProjectFile,
-} from "./editor-fixtures.js";
-import {
   completedNgspiceRun,
   editSimulationFile,
+  folderFile,
   ngspiceCapabilities,
+  openSimulation,
   ota,
   profile,
 } from "./simulation-e2e-fixtures.js";
@@ -53,7 +51,7 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
     },
   ];
   plan = replaceSimulationExperimentConfig(plan, config);
-  plan.input.files.find((f) => f.path === plan.input.entry)!.text =
+  folderFile(plan).text =
     '* Run plan\n.param VIN=0.9\n.include "circuit.spice"\n.control\nset filetype=ascii\nop\nwrite out.raw\n.endc\n.end\n';
   const deck = readFileSync(
     new URL(
@@ -70,8 +68,7 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
         name,
         profileId: profile.id,
       });
-      folder.input.files.find((f) => f.path === folder.input.entry)!.text =
-        deck;
+      folderFile(folder).text = deck;
       return folder;
     }),
   ];
@@ -83,11 +80,9 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
     executedDecks.push(body.preparedDeck);
     return route.fulfill({ json: await completedNgspiceRun(body) });
   });
-  await page.goto("/editor");
-  await openProjectFile(page, project, "batch.icproj.json");
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  const panel = page.getByRole("region", { name: "Analog simulation" });
+  const panel = await openSimulation(page, project, "batch.icproj.json");
   const batch = panel.locator(".simulation-batch-menu-popover");
+  const run = panel.getByRole("button", { name: "Run", exact: true });
 
   config.runPlan = {
     mode: "sweep",
@@ -110,7 +105,7 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
   await expect(panel.getByLabel("Prepare temporary files")).toHaveCount(0);
   await expect(panel.getByRole("tab", { name: /prepared\.cir/ })).toBeVisible();
   expect(executedDecks).toHaveLength(0);
-  await panel.getByRole("button", { name: "Run", exact: true }).click();
+  await run.click();
   await expect(batch).toContainText("Batch · finished");
   expect(executedDecks).toHaveLength(6);
   await panel.locator(".simulation-run-history > summary").click();
@@ -142,9 +137,7 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
         `[role="treeitem"][data-folder-id="${folderId}"][data-file-path="run.cir"]`,
       )
       .click();
-    await expect(
-      panel.getByRole("button", { name: "Run", exact: true }),
-    ).toHaveAttribute("title", `Run ${name} / run.cir`);
+    await expect(run).toHaveAttribute("title", `Run ${name} / run.cir`);
   };
   for (const name of ["TT", "FF"]) {
     await openEntry(name, `folder-${name.toLowerCase()}`);
@@ -154,13 +147,10 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
       deck.replace("divider", `divider ${name} draft`),
     );
   }
+  const ff = panel.getByRole("treeitem", { name: "Folder FF", exact: true });
   await panel.getByRole("treeitem", { name: "Folder TT", exact: true }).click();
-  await panel
-    .getByRole("treeitem", { name: "Folder FF", exact: true })
-    .click({ modifiers: ["ControlOrMeta"] });
-  await panel
-    .getByRole("treeitem", { name: "Folder FF", exact: true })
-    .click({ button: "right" });
+  await ff.click({ modifiers: ["ControlOrMeta"] });
+  await ff.click({ button: "right" });
   await page
     .getByRole("menuitem", { name: "Run selected folders (2)" })
     .click();
@@ -169,16 +159,13 @@ test("a Run Plan prepares without executing, and saved folders run as one batch 
   await expect(
     batch.getByRole("button", { name: /TT finished/ }),
   ).toBeEnabled();
-  await expect(
-    batch.getByRole("button", { name: /FF finished/ }),
-  ).toBeEnabled();
+  const ffFinished = batch.getByRole("button", { name: /FF finished/ });
+  await expect(ffFinished).toBeEnabled();
   expect(executedDecks).toHaveLength(8);
   expect(executedDecks.some((text) => text.includes("TT draft"))).toBe(true);
   expect(executedDecks.some((text) => text.includes("FF draft"))).toBe(true);
-  await batch.getByRole("button", { name: /FF finished/ }).click();
-  await expect(
-    panel.getByRole("button", { name: "Run", exact: true }),
-  ).toHaveAttribute("title", "Run FF / run.cir");
+  await ffFinished.click();
+  await expect(run).toHaveAttribute("title", "Run FF / run.cir");
   await expect(panel.getByRole("status").first()).toContainText(
     "Batch finished",
   );

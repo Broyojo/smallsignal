@@ -8,7 +8,11 @@ import {
   parseProject,
   CURRENT_PROJECT_FILE_VERSION,
 } from "@icm/project-protocol";
-import { awaitEditorReady } from "./editor-fixtures.js";
+import {
+  awaitEditorReady,
+  expectStatus,
+  openEditor,
+} from "./editor-fixtures.js";
 import {
   ENTRY,
   fulfillPreview,
@@ -33,14 +37,9 @@ test("Gallery history opens centred, compares apart from the live editor, branch
     for (const terminal of net.terminals)
       if (terminal.instanceId === "R3") terminal.instanceId = "R4";
   document.routes = [];
-  await mockGallery(page, [ENTRY]);
+  await mockGallery(page, [ENTRY], after);
   await mockPreviews(page);
   await signIn(page, sessionUser({ displayName: "Reviewer", isAdmin: true }));
-  await page.route(`**/api/gallery/${ENTRY.id}`, (route) =>
-    route.fulfill({
-      json: { entry: ENTRY, projectText: serializeProject(after) },
-    }),
-  );
   await page.route(`**/api/gallery/${ENTRY.id}/versions`, (route) =>
     route.fulfill({
       json: {
@@ -71,11 +70,8 @@ test("Gallery history opens centred, compares apart from the live editor, branch
     )
       writes.push(request.url());
   });
-  await page.goto(`/g/${ENTRY.id}`);
-  await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText(
-    `Opened gallery circuit: ${ENTRY.name}`,
-  );
+  await openEditor(page, `/g/${ENTRY.id}`);
+  await expectStatus(page, `Opened gallery circuit: ${ENTRY.name}`);
   await page.getByTestId("hit-R1").click();
   await page.getByTestId("publish-gallery-button").click();
   await page.getByTestId("publish-history").click();
@@ -145,9 +141,7 @@ test("Gallery history opens centred, compares apart from the live editor, branch
   await page.getByTestId("publish-history").click();
   await page.getByTestId("version-restore-1").click();
   await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText(
-    `Opened gallery circuit: ${ENTRY.name}`,
-  );
+  await expectStatus(page, `Opened gallery circuit: ${ENTRY.name}`);
   expect(writes).toEqual([
     expect.stringContaining(`/api/gallery/${ENTRY.id}/versions/v1/restore`),
   ]);

@@ -1,7 +1,7 @@
 // Moving parts, Wires and groups: command move, drags and their live previews,
 // and the wiring a selected group carries.
 
-import { clickDrawTool } from "./editor-fixtures";
+import { clickDrawTool, expectStatus } from "./editor-fixtures";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { placeComponent } from "./manual-editor-fixtures.js";
@@ -10,7 +10,19 @@ import {
   routeInk,
   readRoutePoints,
   closeSelectionShelf,
+  routeIdOf,
+  segmentPoint,
+  polylinePoints,
+  drawWire,
 } from "./canvas-fixtures.js";
+
+/** R1 and R2 side by side, joined by a Wire from R1's pin 2 to R2's pin 1. */
+async function wiredResistors(page: Page): Promise<void> {
+  await page.goto("/editor");
+  await placeComponent(page, "resistor", { x: 320, y: 220 });
+  await placeComponent(page, "resistor", { x: 520, y: 220 });
+  await drawWire(page, "R1-2", "R2-1");
+}
 
 async function dragRouteSegment(
   page: Page,
@@ -20,30 +32,16 @@ async function dragRouteSegment(
   duringDrag: () => Promise<void>,
 ): Promise<void> {
   const route = page.getByTestId(`route-hit-${routeId}`);
-  const point = await route.evaluate(
-    (element, options) => {
-      const polyline = element as SVGPolylineElement;
-      // Grab the longest leg, clear of the pins at either end.
-      let index = 0;
-      let longest = -1;
-      for (let at = 0; at < polyline.points.numberOfItems - 1; at += 1) {
-        const from = polyline.points.getItem(at);
-        const to = polyline.points.getItem(at + 1);
-        const length = Math.hypot(to.x - from.x, to.y - from.y);
-        if (length > longest) [longest, index] = [length, at];
-      }
-      const from = polyline.points.getItem(index);
-      const to = polyline.points.getItem(index + 1);
-      const matrix = polyline.getScreenCTM();
-      if (!from || !to || !matrix) return null;
-      return new DOMPoint(
-        from.x + (to.x - from.x) * options.position,
-        from.y + (to.y - from.y) * options.position,
-      ).matrixTransform(matrix);
-    },
-    { position },
-  );
-  if (!point) throw new Error(`Route ${routeId} is not measurable`);
+  // Grab the longest leg, clear of the pins at either end.
+  const points = await polylinePoints(route);
+  let index = 0;
+  let longest = -1;
+  for (let at = 0; at < points.length - 1; at += 1) {
+    const [from, to] = [points[at]!, points[at + 1]!];
+    const length = Math.hypot(to.x - from.x, to.y - from.y);
+    if (length > longest) [longest, index] = [length, at];
+  }
+  const point = await segmentPoint(route, position, index);
   await page.mouse.move(point.x, point.y);
   await page.mouse.down();
   await page.mouse.move(point.x + delta.x, point.y + delta.y, { steps: 4 });
@@ -66,7 +64,7 @@ test("command move follows the pointer and commits a materially different click 
   if (!symbolNode) throw new Error("Placed symbol is not measurable");
 
   await page.keyboard.press("m");
-  await expect(page.getByTestId("status")).toContainText("Move:");
+  await expectStatus(page, "Move:");
   await page.mouse.move(before.x + 40, before.y + 20);
   // The preview moves the drawn symbol rather than rebuilding it.
   expect(
@@ -94,13 +92,7 @@ test("command move follows the pointer and commits a materially different click 
 test("command move turns a part while stretching its boundary wire, restores the exact preview on Escape and commits pose and translation together", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 320, y: 220 });
-  await placeComponent(page, "resistor", { x: 520, y: 220 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
+  await wiredResistors(page);
 
   const resistor = page.getByTestId("hit-R1");
   const body = page.locator('[data-layer="symbols"] [data-object-id="R1"] > g');
@@ -131,9 +123,7 @@ test("command move turns a part while stretching its boundary wire, restores the
   await page.keyboard.press("m");
   await page.mouse.move(hit.x + 100, hit.y + 100);
   await page.keyboard.press("r");
-  await expect(page.getByTestId("status")).toContainText(
-    "Move preview rotated",
-  );
+  await expectStatus(page, "Move preview rotated");
   await expect(body).toHaveAttribute("transform", /rotate\(90\)/u);
   // The name stays upright while its part turns.
   const reference = page.locator(
@@ -154,9 +144,7 @@ test("command move turns a part while stretching its boundary wire, restores the
 
   await page.mouse.click(hit.x + 100, hit.y + 100);
   await expect(page.getByTestId("revision")).toHaveText("4");
-  await expect(page.getByTestId("status")).toContainText(
-    "Moved and transformed selection",
-  );
+  await expectStatus(page, "Moved and transformed selection");
   await expect(body).toHaveAttribute("transform", /rotate\(90\)/u);
   expect(await readRoutePoints(page, "route-ui-1")).toEqual(preview);
   expect(await conductorInk.getAttribute("d")).toBe(bridgePreview);
@@ -165,13 +153,7 @@ test("command move turns a part while stretching its boundary wire, restores the
 test("dragging an unselected part past the threshold draws its wire stretching before the drop", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 320, y: 220 });
-  await placeComponent(page, "resistor", { x: 520, y: 220 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
+  await wiredResistors(page);
   // Clear the convenience selection so this is the same gesture a user makes
   // in a dense, established schematic.
   const canvas = page.getByTestId("schematic-canvas");
@@ -244,10 +226,7 @@ test("a selected group carries its internal wiring and Junction through the live
   const firstBefore = await page.getByTestId("hit-R1").boundingBox();
   await page.keyboard.press("Control+a");
   const routeHit = page.locator('[data-testid^="route-hit-"]').first();
-  const routeId = (await routeHit.getAttribute("data-testid"))!.replace(
-    /^route-hit-/u,
-    "",
-  );
+  const routeId = await routeIdOf(routeHit);
   const before = await readRoutePoints(page, routeId);
   const routeNode = await page
     .locator(`[data-layer="routes"] [data-object-id="${routeId}"]`)

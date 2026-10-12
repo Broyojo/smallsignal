@@ -7,14 +7,20 @@ import {
   clickNetlistWorkflowCommand,
   awaitEditorReady,
   exportedProject,
-  openProjectFile,
-  recoveryProjectTexts,
+  expectRecovered,
+  openProject,
 } from "./editor-fixtures.js";
 import {
+  abortRunsOffering,
+  chooseHelperEntry,
+  downloadClicked,
   editSimulationFile,
+  folderFile,
   ngspiceCapabilities,
+  openSimulation,
   ota,
   profile,
+  sourceEditor,
 } from "./simulation-e2e-fixtures.js";
 
 test("the qualified OTA folder opens unchanged, picks signals on the Canvas and previews root and hierarchical outputs", async ({
@@ -60,59 +66,38 @@ test("the qualified OTA folder opens unchanged, picks signals on the Canvas and 
         output.expression.occurrence.length > 0,
     ),
   ).toHaveLength(2);
-  let executions = 0;
-  await page.route("**/api/simulate", async (route) => {
-    if (route.request().postDataJSON().operation !== "capabilities") {
-      executions++;
-      return route.abort();
-    }
-    return route.fulfill({
-      json: {
-        ...ngspiceCapabilities(["op", "dc", "ac", "tran"]),
-        modelLibrary: {
-          path: profile.models.library.runtimePath,
-          section: "tt",
-        },
-      },
-    });
+  const executions = await abortRunsOffering(page, {
+    ...ngspiceCapabilities(["op", "dc", "ac", "tran"]),
+    modelLibrary: {
+      path: profile.models.library.runtimePath,
+      section: "tt",
+    },
   });
-  await page.goto("/editor");
-  await openProjectFile(page, project, "qualified-ota.icproj.json");
-  await clickNetlistWorkflowCommand(page, "open-analog-simulation");
-  const panel = page.getByRole("region", { name: "Analog simulation" });
+  const panel = await openSimulation(
+    page,
+    project,
+    "qualified-ota.icproj.json",
+  );
   // New Helper picks write native Code even in a retained legacy experiment.
-  const helper = async (name: string) => {
-    await panel.getByRole("button", { name: "Helper", exact: true }).click();
-    await panel.getByRole("option", { name, exact: true }).click();
-  };
-  await helper("Pick Net on Canvas");
+  await chooseHelperEntry(panel, "Pick Net on Canvas");
   await page.getByTestId("route-hit-tb-vinp-route").click({ force: true });
-  await expect(
-    panel.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toContainText("save ");
-  await helper("Pick current on Canvas");
+  await expect(sourceEditor(panel)).toContainText("save ");
+  await chooseHelperEntry(panel, "Pick current on Canvas");
   await page.getByTestId("terminal-VINP-+").click();
   await expect(
     page.getByTestId("terminal-VINP-+-current-pick-marker"),
   ).toHaveClass(/origin/u);
   await page.getByTestId("terminal-VINP--").click();
-  await expect(page.getByTestId("schematic-canvas")).toHaveClass(
-    /simulation-terminal-pick-active/,
-  );
-  await expect(
-    panel.getByRole("textbox", { name: "Simulation source editor" }),
-  ).not.toBeFocused();
+  const canvas = page.getByTestId("schematic-canvas");
+  await expect(canvas).toHaveClass(/simulation-terminal-pick-active/);
+  await expect(sourceEditor(panel)).not.toBeFocused();
   // Repeated current picks stay active without duplicating native acquisition.
   await page.getByTestId("terminal-VINP-+").click();
   await page.getByTestId("terminal-VINP--").click();
-  await expect(page.getByTestId("schematic-canvas")).toHaveClass(
-    /simulation-terminal-pick-active/,
-  );
+  await expect(canvas).toHaveClass(/simulation-terminal-pick-active/);
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("schematic-canvas")).not.toHaveClass(
-    /simulation-terminal-pick-active/,
-  );
-  await helper("Save voltage…");
+  await expect(canvas).not.toHaveClass(/simulation-terminal-pick-active/);
+  await chooseHelperEntry(panel, "Save voltage…");
   const observe = panel.getByRole("dialog", { name: "Save signal" });
   await observe.getByRole("textbox", { name: "Search signal" }).fill("v(out)");
   await observe
@@ -124,9 +109,10 @@ test("the qualified OTA folder opens unchanged, picks signals on the Canvas and 
     pickedProject.simulationFolders[0]!,
   );
   expect(pickedConfig.ok && pickedConfig.config).toEqual(originalSetupInput);
-  const pickedSource = pickedProject.simulationFolders[0]!.input.files.find(
-    (file) => file.path === savedSetup.input.entry,
-  )!.text;
+  const pickedSource = folderFile(
+    pickedProject.simulationFolders[0]!,
+    savedSetup.input.entry,
+  ).text;
   expect(pickedSource).toContain("i(vinp)");
   const circuit = {
     bindingId: savedSetup.input.circuitBindings[0]!.id,
@@ -174,17 +160,16 @@ test("the qualified OTA folder opens unchanged, picks signals on the Canvas and 
     savedSetup.input.configPath,
     JSON.stringify(config, null, 2),
   );
-  await panel
-    .getByRole("treeitem", { name: "Run", exact: true })
-    .click({ button: "right" });
+  const runFiles = panel.getByRole("treeitem", { name: "Run", exact: true });
+  await runFiles.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Preview input netlist…" }).click();
   await expect(panel.getByLabel("Prepare temporary files")).toHaveCount(0);
   const preview = panel.getByRole("region", { name: "File preview" });
-  const download = page.waitForEvent("download");
-  await preview.getByRole("button", { name: "Download", exact: true }).click();
-  const stream = await (await download).createReadStream();
-  let deck = "";
-  for await (const chunk of stream!) deck += chunk.toString();
+  const deck = (
+    await downloadClicked(
+      preview.getByRole("button", { name: "Download", exact: true }),
+    )
+  ).toString();
   for (const vector of [
     "v(vout)",
     "v(ibias)",
@@ -199,23 +184,17 @@ test("the qualified OTA folder opens unchanged, picks signals on the Canvas and 
   expect(deck).toContain("dc VINP 0.88 0.92 0.005");
   expect(deck).toContain('.lib "icm-models.lib" tt');
   expect(deck).toContain("tran 2e-8 0.000004");
-  expect(executions).toBe(0);
-  await panel
-    .getByRole("treeitem", { name: "Run", exact: true })
-    .click({ button: "right" });
+  expect(executions()).toBe(0);
+  await runFiles.click({ button: "right" });
   await expect(
     page.getByRole("menuitem", { name: "View executed netlist…" }),
   ).toBeDisabled();
-  const diagnosticDownload = page.waitForEvent("download");
-  await page
-    .getByRole("menuitem", { name: "Export diagnostic bundle…" })
-    .click();
-  const diagnosticStream = await (await diagnosticDownload).createReadStream();
-  const diagnosticChunks: Buffer[] = [];
-  for await (const chunk of diagnosticStream!)
-    diagnosticChunks.push(Buffer.from(chunk));
   const diagnosticPaths = Object.keys(
-    unzipSync(Buffer.concat(diagnosticChunks)),
+    unzipSync(
+      await downloadClicked(
+        page.getByRole("menuitem", { name: "Export diagnostic bundle…" }),
+      ),
+    ),
   );
   expect(diagnosticPaths).toContain("netlist/prepared.cir");
   expect(diagnosticPaths).toContain("evidence/source-map.json");
@@ -226,14 +205,11 @@ test("uncommitted source survives whole-workspace reload", async ({ page }) => {
   await page.route("**/api/simulate", (route) =>
     route.fulfill({ json: { configured: false } }),
   );
-  await page.goto("/editor");
-  await openProjectFile(page, ota, "source-recovery.icproj.json");
-  await expect.poll(() => recoveryProjectTexts(page)).toContain(ota.id);
+  await openProject(page, ota, "source-recovery.icproj.json");
+  await expectRecovered(page, ota.id);
   await clickNetlistWorkflowCommand(page, "open-analog-simulation");
   const panel = page.getByRole("region", { name: "Analog simulation" });
-  const editor = panel.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(panel);
   const marker = "* unsaved recovery 🧪";
   await editor.click();
   await editor.press("Control+End");

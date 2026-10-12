@@ -6,19 +6,23 @@
 
 import { expect, test } from "./gallery-test.js";
 import { test as localTest } from "@playwright/test";
-import type { Locator, Route } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { serializeProject, parseProject } from "@icm/project-protocol";
+import type { Locator, Page, Route } from "@playwright/test";
+import { serializeProject } from "@icm/project-protocol";
 import {
   awaitEditorReady,
-  chooseComponent,
+  expectStatus,
   openProjectInfo,
+  placeResistors,
+  openEditor,
+  exampleProject,
+  awaitTwoFrames,
 } from "./editor-fixtures.js";
 import {
   ENTRY,
   galleryListUrl,
   galleryResistorProject,
   mockGallery,
+  mockGalleryApi,
   mockPreviews,
   sessionUser,
   signIn,
@@ -35,13 +39,31 @@ const tile = (id: string, extra: object = {}) => ({
   ...extra,
 });
 
+/** Answer each list request with what `answer` makes of its address
+ * (nothing leaves it open), and every preview with a blank drawing. */
+async function serveWall(
+  page: Page,
+  answer: (url: URL) => object | undefined,
+): Promise<void> {
+  await page.route(galleryListUrl, (route) => {
+    const json = answer(new URL(route.request().url()));
+    if (json) return route.fulfill({ json });
+  });
+  await mockPreviews(page);
+}
+
+/** The address of ENTRY's wall preview at this revision. */
+const previewSrc = (revision: string) =>
+  `/api/gallery/${ENTRY.id}/preview.svg?v=${revision}&render=formula-label-v5`;
+
 test("the site lands on the full-screen gallery feed and states its size", async ({
   page,
 }) => {
-  await page.route(galleryListUrl, (route) =>
-    route.fulfill({ json: { entries: [ENTRY], nextCursor: null, total: 128 } }),
-  );
-  await mockPreviews(page);
+  await serveWall(page, () => ({
+    entries: [ENTRY],
+    nextCursor: null,
+    total: 128,
+  }));
   await page.route("**/api/gallery/tags", (route) =>
     route.fulfill({ json: { tags: [] } }),
   );
@@ -67,10 +89,7 @@ test("the site lands on the full-screen gallery feed and states its size", async
   // With community entries present the wall shows them alone: the bundled
   // starter tiles exist only while the gallery is empty.
   const image = page.getByTestId(`gallery-tile-${ENTRY.id}`).locator("img");
-  await expect(image).toHaveAttribute(
-    "src",
-    `/api/gallery/${ENTRY.id}/preview.svg?v=revision-0&render=formula-label-v5`,
-  );
+  await expect(image).toHaveAttribute("src", previewSrc("revision-0"));
   await expect(image).toHaveAttribute("width", "640");
   await expect(image).toHaveAttribute("height", "360");
   await expect(
@@ -102,20 +121,14 @@ test("an open Gallery switches to a newly published preview revision", async ({
 }) => {
   let previewRevision = "revision-0";
   let listRequests = 0;
-  await page.route(galleryListUrl, (route) => {
+  await serveWall(page, () => {
     listRequests += 1;
-    return route.fulfill({
-      json: { entries: [{ ...ENTRY, previewRevision }], nextCursor: null },
-    });
+    return { entries: [{ ...ENTRY, previewRevision }], nextCursor: null };
   });
-  await mockPreviews(page);
 
   await page.goto("/");
   const image = page.getByTestId(`gallery-tile-${ENTRY.id}`).locator("img");
-  await expect(image).toHaveAttribute(
-    "src",
-    `/api/gallery/${ENTRY.id}/preview.svg?v=revision-0&render=formula-label-v5`,
-  );
+  await expect(image).toHaveAttribute("src", previewSrc("revision-0"));
 
   previewRevision = "revision-1";
   await page.evaluate(() => {
@@ -129,10 +142,7 @@ test("an open Gallery switches to a newly published preview revision", async ({
     channel.close();
   });
 
-  await expect(image).toHaveAttribute(
-    "src",
-    `/api/gallery/${ENTRY.id}/preview.svg?v=revision-1&render=formula-label-v5`,
-  );
+  await expect(image).toHaveAttribute("src", previewSrc("revision-1"));
   expect(listRequests).toBeGreaterThanOrEqual(2);
 });
 
@@ -142,10 +152,7 @@ test("masonry places the top row left-to-right in distinct columns", async ({
   const entries = ["m-a", "m-b", "m-c"].map((id, index) =>
     tile(id, { description: index === 0 ? "taller card" : "" }),
   );
-  await page.route(galleryListUrl, (route) =>
-    route.fulfill({ json: { entries, nextCursor: null } }),
-  );
-  await mockPreviews(page);
+  await serveWall(page, () => ({ entries, nextCursor: null }));
 
   await page.goto("/");
   await expect(page.getByTestId("gallery-tile-m-c")).toBeVisible();
@@ -173,18 +180,14 @@ test("the feed pages through the cursor as the sentinel comes into view", async 
   page,
 }) => {
   const listRequests: string[] = [];
-  await mockPreviews(page);
-  await page.route(galleryListUrl, (route) => {
-    const url = new URL(route.request().url());
+  await serveWall(page, (url) => {
     listRequests.push(url.search);
     const second = url.searchParams.get("cursor") === "c1";
     const ids = second ? ["p2-a", "p2-b"] : ["p1-a", "p1-b", "p1-c"];
-    return route.fulfill({
-      json: {
-        entries: ids.map((id) => tile(id)),
-        nextCursor: second ? null : "c1",
-      },
-    });
+    return {
+      entries: ids.map((id) => tile(id)),
+      nextCursor: second ? null : "c1",
+    };
   });
 
   await page.goto("/");
@@ -213,10 +216,7 @@ test("the feed scrolls inside its shell despite the locked app root", async ({
 }) => {
   await page.setViewportSize({ width: 520, height: 420 });
   const entries = Array.from({ length: 8 }, (_, index) => tile(`s-${index}`));
-  await page.route(galleryListUrl, (route) =>
-    route.fulfill({ json: { entries, nextCursor: null } }),
-  );
-  await mockPreviews(page);
+  await serveWall(page, () => ({ entries, nextCursor: null }));
 
   await page.goto("/");
   await expect(page.getByTestId("gallery-tile-s-0")).toBeVisible();
@@ -269,14 +269,11 @@ test("a View in Gallery link shows its circuit at once, centres it and rings it"
   // after masonry has settled.
   await page.setViewportSize({ width: 520, height: 420 });
   const first = Array.from({ length: 10 }, (_, index) => `a-${index}`);
-  await page.route(galleryListUrl, (route) => {
+  await serveWall(page, (url) => {
     // Page two is never delivered: finding the circuit must not need it.
-    if (new URL(route.request().url()).searchParams.get("cursor")) return;
-    return route.fulfill({
-      json: { entries: first.map((id) => tile(id)), nextCursor: "c1" },
-    });
+    if (url.searchParams.get("cursor")) return;
+    return { entries: first.map((id) => tile(id)), nextCursor: "c1" };
   });
-  await mockPreviews(page);
   // A link asks for the tile alone (`?summary=1`), which costs no daily open.
   for (const id of ["b-7", "a-3"])
     await page.route(
@@ -336,11 +333,8 @@ test("a Gallery link opened again selects its own tab and keeps a changed copy",
   page.on("dialog", (dialog) => dialog.accept());
   const count = page.getByTestId("active-instance-count");
 
-  await page.goto(`/g/${id}`);
-  await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened gallery circuit: Return Visit",
-  );
+  await openEditor(page, `/g/${id}`);
+  await expectStatus(page, "Opened gallery circuit: Return Visit");
   await expect(count).toHaveText("2");
   // A copy the reader has changed stays theirs when the entry changes too.
   await page.getByTestId("hit-R1").click();
@@ -356,8 +350,7 @@ test("a Gallery link opened again selects its own tab and keeps a changed copy",
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(count).toHaveText("0");
   await page.goto("/");
-  await page.goto(`/g/${id}`);
-  await awaitEditorReady(page);
+  await openEditor(page, `/g/${id}`);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab", { name: /Resistors$/ })).toHaveAttribute(
     "aria-selected",
@@ -504,9 +497,7 @@ test("a gallery tile opens its circuit in the editor", async ({ page }) => {
   // reading the status line: an expect() poll gives up sooner than a cold,
   // busy runner needs to load it, which is a failure with no defect in it.
   await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText(
-    `Opened gallery circuit: ${ENTRY.name}`,
-  );
+  await expectStatus(page, `Opened gallery circuit: ${ENTRY.name}`);
   // Variable-length names and contributor notes are read in File →
   // Project Info.
   const galleryInformation = await openProjectInfo(page);
@@ -550,12 +541,10 @@ test("marks the circuits that extract or an AI made, and counts thumbs on every 
     likes: 0,
     likedByViewer: false,
   };
-  await page.route(galleryListUrl, (route) =>
-    route.fulfill({
-      json: { entries: [extractable, sketch], nextCursor: null },
-    }),
-  );
-  await mockPreviews(page);
+  await serveWall(page, () => ({
+    entries: [extractable, sketch],
+    nextCursor: null,
+  }));
   let toggles = 0;
   await page.route("**/api/gallery/*/like", (route) => {
     toggles += 1;
@@ -660,22 +649,19 @@ test("quick filter counts sit right-aligned, and a filter that empties the wall 
   page,
 }) => {
   await signIn(page, sessionUser({ displayName: "Reader", isAdmin: true }));
-  await mockPreviews(page);
-  await page.route(galleryListUrl, (route) => {
-    const liked = new URL(route.request().url()).searchParams.has("liked");
-    return route.fulfill({
-      json: {
-        entries: liked ? [] : [ENTRY],
-        nextCursor: null,
-        total: liked ? 0 : 1,
-        filterCounts: {
-          attention: 2,
-          netlistable: 12,
-          liked: 0,
-          componentRanges: { "0-5": 1, "6-10": 0, "11-15": 0, "16-25": 0 },
-        },
+  await serveWall(page, (url) => {
+    const liked = url.searchParams.has("liked");
+    return {
+      entries: liked ? [] : [ENTRY],
+      nextCursor: null,
+      total: liked ? 0 : 1,
+      filterCounts: {
+        attention: 2,
+        netlistable: 12,
+        liked: 0,
+        componentRanges: { "0-5": 1, "6-10": 0, "11-15": 0, "16-25": 0 },
       },
-    });
+    };
   });
   await page.goto("/");
   const quick = ["attention", "netlistable", "liked"].map((key) =>
@@ -795,12 +781,7 @@ test("netlist filter scopes the category and tag counts from a link on, and igno
   );
   await held.fulfill({ json: summary(false) });
   await lateResponse;
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  await awaitTwoFrames(page);
   await expect(categoryCount("Amplifiers")).toHaveText("1");
   await expect(amplifierCount).toHaveText("1");
 });
@@ -821,18 +802,15 @@ test("a remembered narrowing loads the wall with its one early request", async (
       await route.continue();
     },
   );
-  await page.route(galleryListUrl, (route) => {
+  await serveWall(page, (url) => {
     firstListAsked = Math.min(firstListAsked, Date.now());
     // The query without the wall's order (#1615), which every wall carries.
-    const query = new URL(route.request().url()).searchParams;
+    const query = url.searchParams;
     query.delete("order");
     query.delete("seed");
     lists.push(`?${query.toString()}`);
-    return route.fulfill({
-      json: { entries: [ENTRY], nextCursor: null, total: 1 },
-    });
+    return { entries: [ENTRY], nextCursor: null, total: 1 };
   });
-  await mockPreviews(page);
   await page.addInitScript(() =>
     localStorage.setItem(
       "icm.gallery-filters.v1",
@@ -853,22 +831,19 @@ test("a remembered narrowing loads the wall with its one early request", async (
 test("an unfinished feed says it is still searching, not that nothing matches", async ({
   page,
 }) => {
-  await page.route(galleryListUrl, (route) => {
+  await serveWall(page, (url) => {
     // Hold the tail of the feed open: the fetch never resolves, so the
     // feed stays legitimately incomplete for the whole assertion window.
-    if (new URL(route.request().url()).searchParams.get("cursor")) return;
-    return route.fulfill({
-      json: {
-        entries: [tile("s1", { name: "Ring Oscillator", author: "mei" })],
-        nextCursor: "2026-08-20T00:00:00.000Z|older",
-        total: 40,
-      },
-    });
+    if (url.searchParams.get("cursor")) return;
+    return {
+      entries: [tile("s1", { name: "Ring Oscillator", author: "mei" })],
+      nextCursor: "2026-08-20T00:00:00.000Z|older",
+      total: 40,
+    };
   });
   await page.route("**/api/gallery/tags", (route) =>
     route.fulfill({ json: { tags: [] } }),
   );
-  await mockPreviews(page);
   await page.goto("/");
   await expect(page.getByTestId("gallery-tile-s1")).toBeVisible();
 
@@ -906,11 +881,7 @@ test("a search keeps what it found when the window comes back into focus", async
   let searchedPages = 0;
   let holdOlder = false;
   await mockPreviews(page);
-  await page.route("**/api/gallery**", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/gallery/tags")
-      return route.fulfill({ json: { tags: [] } });
-    if (url.pathname !== "/api/gallery") return route.fallback();
+  await mockGalleryApi(page, { tags: [] }, async (url, route) => {
     if (url.searchParams.has("cursor")) {
       // After the refresh, the older page answers slowly: a wall that
       // dropped it would show one match for all that time.
@@ -956,19 +927,12 @@ test("tag categories select all children, retain other groups and expose mixed s
   page,
 }) => {
   const queries: string[][] = [];
-  await page.route("**/api/gallery**", (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/gallery/tags")
-      return route.fulfill({
-        json: {
-          tags: [
-            { tag: "amplifier", count: 3 },
-            { tag: "op", count: 1 },
-            { tag: "buffer", count: 2 },
-          ],
-        },
-      });
-    if (url.pathname !== "/api/gallery") return route.fallback();
+  const tags = [
+    { tag: "amplifier", count: 3 },
+    { tag: "op", count: 1 },
+    { tag: "buffer", count: 2 },
+  ];
+  await mockGalleryApi(page, { tags }, async (url, route) => {
     queries.push(
       (url.searchParams.get("tags") ?? "").split(",").filter(Boolean),
     );
@@ -1035,13 +999,14 @@ test("tag categories select all children, retain other groups and expose mixed s
 test("the tag sidebar resizes by dragging and keyboard, remembers width and adapts to narrow windows", async ({
   page,
 }) => {
-  await page.route(galleryListUrl, (route) =>
-    route.fulfill({ json: { entries: [ENTRY], nextCursor: null, total: 1 } }),
-  );
+  await serveWall(page, () => ({
+    entries: [ENTRY],
+    nextCursor: null,
+    total: 1,
+  }));
   await page.route("**/api/gallery/tags", (route) =>
     route.fulfill({ json: { tags: [{ tag: "amplifier", count: 1 }] } }),
   );
-  await mockPreviews(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   // Invalid saved settings must not break the layout or disable resizing.
@@ -1117,19 +1082,12 @@ test("the tag menu multi-selects and a tile's tag joins the selection", async ({
 }) => {
   const listQueries: string[] = [];
   await mockPreviews(page);
-  await page.route("**/api/gallery**", (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/gallery/tags")
-      return route.fulfill({
-        json: {
-          tags: [
-            { tag: "amplifier", count: 3 },
-            { tag: "adc", count: 2 },
-            { tag: "pll", count: 1 },
-          ],
-        },
-      });
-    if (url.pathname !== "/api/gallery") return route.fallback();
+  const tags = [
+    { tag: "amplifier", count: 3 },
+    { tag: "adc", count: 2 },
+    { tag: "pll", count: 1 },
+  ];
+  await mockGalleryApi(page, { tags }, async (url, route) => {
     listQueries.push(url.searchParams.get("tags") ?? "");
     return route.fulfill({
       json: { entries: [tile("t-pll", { tags: ["pll"] })], nextCursor: null },
@@ -1219,8 +1177,7 @@ test("the editor's Gallery search keeps focus through pending queries and ignore
       });
     },
   );
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.getByTestId("examples-toggle").click();
   const search = page.getByTestId("examples-panel-search");
   await search.fill("old");
@@ -1228,9 +1185,8 @@ test("the editor's Gallery search keeps focus through pending queries and ignore
   await expect(search).toBeFocused();
   await search.press("ControlOrMeta+A");
   await search.pressSequentially("new");
-  await expect(page.getByTestId(`gallery-example-${ENTRY.id}`)).toContainText(
-    "new result",
-  );
+  const card = page.getByTestId(`gallery-example-${ENTRY.id}`);
+  await expect(card).toContainText("new result");
   const oldResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return (
@@ -1242,9 +1198,7 @@ test("the editor's Gallery search keeps focus through pending queries and ignore
   await page.evaluate(() => new Promise(requestAnimationFrame));
   await expect(search).toBeFocused();
   await expect(search).toHaveValue("new");
-  await expect(page.getByTestId(`gallery-example-${ENTRY.id}`)).toContainText(
-    "new result",
-  );
+  await expect(card).toContainText("new result");
 });
 
 test("the editor's Gallery discards pending data from the previous account", async ({
@@ -1281,8 +1235,7 @@ test("the editor's Gallery discards pending data from the previous account", asy
       );
     },
   );
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.getByTestId("examples-toggle").click();
   await expect.poll(() => Boolean(releaseOld)).toBe(true);
   const accountChanged = () =>
@@ -1309,22 +1262,11 @@ test("the editor's Gallery discards pending data from the previous account", asy
 test("Gallery copies SKY130 dependencies with preview, repeat placement and atomic undo", async ({
   page,
 }) => {
-  const source = parseProject(
-    readFileSync(
-      "apps/editor/src/examples/simulation-common-source.icproj.json",
-      "utf8",
-    ),
-  );
+  const source = exampleProject("simulation-common-source.icproj.json");
   const count = source.documents.find((d) => d.id === source.topDocumentId)!
     .instances.length;
-  await mockGallery(page, [{ ...ENTRY, tags: ["clock"] }]);
-  await page.route(`**/api/gallery/${ENTRY.id}`, (route) =>
-    route.fulfill({
-      json: { entry: ENTRY, projectText: serializeProject(source) },
-    }),
-  );
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await mockGallery(page, [{ ...ENTRY, tags: ["clock"] }], source);
+  await openEditor(page);
   await page.getByTestId("examples-toggle").click();
   const panel = page.getByTestId("examples-panel");
   await expect(panel.getByTestId("examples-panel-tag-toggle")).toHaveCount(0);
@@ -1334,30 +1276,29 @@ test("Gallery copies SKY130 dependencies with preview, repeat placement and atom
   await expect(page.getByTestId(`gallery-example-${ENTRY.id}`)).toBeVisible();
   await search.fill("");
   await page.getByTestId(`gallery-example-${ENTRY.id}`).click();
+  const instances = page.getByTestId("instance-count");
   const canvas = page.getByTestId("schematic-canvas");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("Canvas is not measurable");
   await page.mouse.move(box.x + 260, box.y + 220);
   await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("instance-count")).toHaveText("0");
+  await expect(instances).toHaveText("0");
   await page.getByTestId(`gallery-example-${ENTRY.id}`).click();
   await page.mouse.move(box.x + 260, box.y + 220);
   await page.keyboard.press("r");
   await canvas.click({ position: { x: 260, y: 220 } });
-  await expect(page.getByTestId("instance-count")).toHaveText(String(count));
+  await expect(instances).toHaveText(String(count));
   await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
   await canvas.click({ position: { x: 600, y: 380 } });
-  await expect(page.getByTestId("instance-count")).toHaveText(
-    String(count * 2),
-  );
+  await expect(instances).toHaveText(String(count * 2));
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+z");
-  await expect(page.getByTestId("instance-count")).toHaveText(String(count));
+  await expect(instances).toHaveText(String(count));
   await page.keyboard.press("Control+z");
-  await expect(page.getByTestId("instance-count")).toHaveText("0");
+  await expect(instances).toHaveText("0");
   await page.keyboard.press("Control+Shift+z");
-  await expect(page.getByTestId("instance-count")).toHaveText(String(count));
+  await expect(instances).toHaveText(String(count));
 });
 
 test("Editor Gallery gives tags one column only after widening beyond three circuit columns", async ({
@@ -1372,19 +1313,14 @@ test("Editor Gallery gives tags one column only after widening beyond three circ
   }));
   let olderRequests = 0;
   await mockPreviews(page);
-  await page.route("**/api/gallery**", (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/gallery/tags")
-      return route.fulfill({
-        json: {
-          tags: [
-            { tag: "clock", count: 30 },
-            { tag: "bandgap", count: 1 },
-          ],
-          groups: [{ group: "Bias & references", count: 1 }],
-        },
-      });
-    if (url.pathname !== "/api/gallery") return route.fallback();
+  const summary = {
+    tags: [
+      { tag: "clock", count: 30 },
+      { tag: "bandgap", count: 1 },
+    ],
+    groups: [{ group: "Bias & references", count: 1 }],
+  };
+  await mockGalleryApi(page, summary, async (url, route) => {
     const older = url.searchParams.has("cursor");
     if (older) olderRequests++;
     return route.fulfill({
@@ -1405,8 +1341,7 @@ test("Editor Gallery gives tags one column only after widening beyond three circ
       },
     });
   });
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?new=1");
   await page.getByTestId("examples-toggle").click();
   const panel = page.getByTestId("examples-panel");
   const tags = panel.getByTestId("examples-panel-tags");
@@ -1443,9 +1378,11 @@ test("Editor Gallery gives tags one column only after widening beyond three circ
   await resize(720);
   await expect(tags).toBeVisible();
   await expect.poll(columns).toBe(3);
-  await expect(
-    tags.getByRole("checkbox", { name: "Bias & references", exact: true }),
-  ).toContainText("1");
+  const bias = tags.getByRole("checkbox", {
+    name: "Bias & references",
+    exact: true,
+  });
+  await expect(bias).toContainText("1");
   await tags
     .getByRole("button", { name: "Expand Bias & references", exact: true })
     .click();
@@ -1466,10 +1403,6 @@ test("Editor Gallery gives tags one column only after widening beyond three circ
   await resize(900);
   await expect(tags).toBeVisible();
   await expect.poll(columns).toBe(4);
-  const bias = tags.getByRole("checkbox", {
-    name: "Bias & references",
-    exact: true,
-  });
   await bias.click();
   await expect(cards).toHaveCount(1);
   await bias.click();
@@ -1481,13 +1414,7 @@ test("the Examples panel guards dirty work before opening an entry", async ({
 }) => {
   await mockGallery(page, [ENTRY]);
   await page.goto("/editor");
-  for (const x of [300, 380, 460]) {
-    await chooseComponent(page, "resistor");
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x, y: 230 } });
-    await page.keyboard.press("Escape");
-  }
+  await placeResistors(page, [300, 380, 460]);
   await expect(page.getByTestId("hit-R1")).toHaveCount(1);
   await page.getByTestId("examples-toggle").click();
   const panel = page.getByTestId("examples-panel");
@@ -1512,8 +1439,6 @@ test("the Examples panel guards dirty work before opening an entry", async ({
   await card.click();
   await dialog.getByRole("button", { name: "Continue without saving" }).click();
   await awaitEditorReady(page);
-  await expect(page.getByTestId("status")).toContainText(
-    `Opened gallery circuit: ${ENTRY.name}`,
-  );
+  await expectStatus(page, `Opened gallery circuit: ${ENTRY.name}`);
   await expect(page.getByTestId("hit-R1")).toHaveCount(0);
 });

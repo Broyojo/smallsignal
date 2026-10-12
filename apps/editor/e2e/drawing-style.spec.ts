@@ -4,18 +4,18 @@
 import {
   parseSavedProject,
   exportedProject,
-  clickDrawTool,
   downloadBytes,
   editComponentPropertyCode,
-  readComponentPropertyCode,
+  expectStatus,
+  openProjectFile,
 } from "./editor-fixtures";
 import { expect, test } from "@playwright/test";
-import {} from "@icm/model";
 import {
   placeComponent,
   openSelectionShelf,
+  readComponentCode,
 } from "./manual-editor-fixtures.js";
-import { clickRoute, routeInk } from "./canvas-fixtures.js";
+import { clickRoute, routeInk, drawWire } from "./canvas-fixtures.js";
 
 test("styles a wire's colour, line and arrow through property code, with undo, export, reload and Auto, and names it globally in one step", async ({
   page,
@@ -23,13 +23,12 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 340, y: 220 });
   await placeComponent(page, "resistor", { x: 660, y: 220 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
+  await drawWire(page, "R1-2", "R2-1");
   await clickRoute(page, "route-ui-1");
   await openSelectionShelf(page);
-  expect(JSON.parse(await readComponentPropertyCode(page)).appearance).toEqual({
+  const dash = () => routeInk(page, "route-ui-1", "stroke-dasharray");
+  const stroke = () => routeInk(page, "route-ui-1", "stroke");
+  expect((await readComponentCode(page)).appearance).toEqual({
     lineStyle: "solid",
     directionArrow: "none",
   });
@@ -40,12 +39,8 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
       directionArrow: "end",
     };
   });
-  await expect
-    .poll(() => routeInk(page, "route-ui-1", "stroke-dasharray"))
-    .toBe("6 4");
-  await expect
-    .poll(() => routeInk(page, "route-ui-1", "stroke"))
-    .toBe("#dc2626");
+  await expect.poll(dash).toBe("6 4");
+  await expect.poll(stroke).toBe("#dc2626");
   const arrow = page.locator(
     '[data-layer="routes"] [data-role="route-direction-arrow"]',
   );
@@ -54,20 +49,12 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
   await editComponentPropertyCode(page, (code) => {
     code.appearance.lineStyle = "dotted";
   });
-  await expect
-    .poll(() => routeInk(page, "route-ui-1", "stroke-dasharray"))
-    .toBe("2 3");
+  await expect.poll(dash).toBe("2 3");
   await page.getByTestId("draw-tool-undo").click();
-  expect(
-    JSON.parse(await readComponentPropertyCode(page)).appearance.lineStyle,
-  ).toBe("dashed");
-  await expect
-    .poll(() => routeInk(page, "route-ui-1", "stroke-dasharray"))
-    .toBe("6 4");
+  expect((await readComponentCode(page)).appearance.lineStyle).toBe("dashed");
+  await expect.poll(dash).toBe("6 4");
   await page.getByTestId("draw-tool-redo").click();
-  expect(
-    JSON.parse(await readComponentPropertyCode(page)).appearance.lineStyle,
-  ).toBe("dotted");
+  expect((await readComponentCode(page)).appearance.lineStyle).toBe("dotted");
   const saved = await downloadBytes(page, "File", "Export Project File…");
   expect(
     parseSavedProject(saved.toString("utf8")).documents[0].routes[0]
@@ -106,25 +93,15 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
   }, svg);
   expect(exported).toEqual({ points, ink, dash: "2 3" });
   expect(svg).toContain('data-role="route-direction-arrow"');
-  await page.getByTestId("project-file").setInputFiles({
-    name: "styled-wire.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
+  await openProjectFile(page, saved, "styled-wire.icproj.json");
   await clickRoute(page, "route-ui-1");
   await openSelectionShelf(page);
-  expect(
-    JSON.parse(await readComponentPropertyCode(page)).appearance.lineStyle,
-  ).toBe("dotted");
-  await expect
-    .poll(() => routeInk(page, "route-ui-1", "stroke"))
-    .toBe("#dc2626");
+  expect((await readComponentCode(page)).appearance.lineStyle).toBe("dotted");
+  await expect.poll(stroke).toBe("#dc2626");
   await editComponentPropertyCode(page, (code) => {
     code.appearance = { lineStyle: "solid", directionArrow: "middle" };
   });
-  await expect
-    .poll(() => routeInk(page, "route-ui-1", "stroke-dasharray"))
-    .toBeNull();
+  await expect.poll(dash).toBeNull();
   await expect(arrow).toHaveAttribute("data-arrow-position", "middle");
   await expect(arrow).toHaveAttribute("pointer-events", "none");
   // Auto restores the Razavi default ink, and no arrow clears the marker.
@@ -132,9 +109,9 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
     code.color = "auto";
     code.appearance.directionArrow = "none";
   });
-  await expect.poll(() => routeInk(page, "route-ui-1", "stroke")).toBe("#000");
+  await expect.poll(stroke).toBe("#000");
   await expect(arrow).toHaveCount(0);
-  expect(JSON.parse(await readComponentPropertyCode(page)).color).toBe("auto");
+  expect((await readComponentCode(page)).color).toBe("auto");
 
   // A new name and global scope in one JSON edit land as one global name
   // claim in one revision, and one Undo takes both back.
@@ -155,7 +132,7 @@ test("styles a wire's colour, line and arrow through property code, with undo, e
     }),
   );
   await page.getByTestId("draw-tool-undo").click();
-  expect(JSON.parse(await readComponentPropertyCode(page))).toMatchObject({
+  expect(await readComponentCode(page)).toMatchObject({
     name: "",
     net: { scope: "local" },
   });
@@ -168,15 +145,8 @@ test("Shift-click gathers wires, and one color change restyles all of them", asy
   await placeComponent(page, "resistor", { x: 280, y: 180 });
   await placeComponent(page, "resistor", { x: 480, y: 180 });
   await placeComponent(page, "resistor", { x: 680, y: 180 });
-  for (const [from, to] of [
-    ["R1-2", "R2-1"],
-    ["R2-2", "R3-1"],
-  ]) {
-    await clickDrawTool(page, "wire");
-    await page.getByTestId(`terminal-${from}`).click();
-    await page.getByTestId(`terminal-${to}`).click();
-    await page.keyboard.press("Escape");
-  }
+  await drawWire(page, "R1-2", "R2-1");
+  await drawWire(page, "R2-2", "R3-1");
   const first = page.getByTestId("route-hit-route-ui-1");
   const second = page.getByTestId("route-hit-route-ui-2");
 
@@ -184,9 +154,7 @@ test("Shift-click gathers wires, and one color change restyles all of them", asy
   await page.keyboard.down("Shift");
   await clickRoute(page, "route-ui-2");
   await page.keyboard.up("Shift");
-  await expect(page.getByTestId("status")).toContainText(
-    "Added wire route-ui-2 to the selection",
-  );
+  await expectStatus(page, "Added wire route-ui-2 to the selection");
   await expect(first).toHaveClass(/selected/);
   await expect(second).toHaveClass(/selected/);
 

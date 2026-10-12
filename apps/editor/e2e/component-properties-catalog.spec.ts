@@ -2,13 +2,15 @@ import { expect, test } from "@playwright/test";
 import { createEmptyProject, createRoutePath } from "@icm/model";
 
 import {
-  awaitEditorReady,
   revealPropertiesShelf,
-  chooseComponent,
   editComponentPropertyCode,
   expectComponentCodeField,
+  openProjectFile,
+  placeComponentAt,
+  openProject,
 } from "./editor-fixtures.js";
 import { openSelectionShelf } from "./manual-editor-fixtures.js";
+import { closeSelectionShelf, placedInstance } from "./canvas-fixtures.js";
 
 // Full catalog projection/parse coverage, every part's initial parameters
 // included, lives in component-property-catalog.test.ts. These open the
@@ -20,10 +22,7 @@ async function openPropertiesWithQ(
   instanceTestId: string,
 ) {
   await page.getByTestId(instanceTestId).click({ force: true });
-  await revealPropertiesShelf(page);
-  const shelf = page.getByTestId("selection-shelf");
-  if ((await shelf.getAttribute("aria-expanded")) === "true")
-    await shelf.click();
+  await closeSelectionShelf(page);
   const properties = page.getByRole("region", {
     name: "Component properties",
   });
@@ -44,31 +43,21 @@ test("placed parts, the VDD marker and a legacy clock use the text-first Propert
   // component and its editable Properties surface.
   const project = createEmptyProject("legacy-clock", "Legacy Clock");
   project.documents[0]!.instances.push({
-    id: "CLK",
-    symbolId: "pulse-voltage-source",
-    placement: { position: { x: 520, y: 350 }, rotation: 0, mirror: "none" },
+    ...placedInstance("CLK", "pulse-voltage-source", 520, 350),
     reference: "V1",
     netlist: { parameters: { period: "10ns", dutyCycle: "50", initial: "0" } },
   });
   await page.goto("/editor");
   await revealPropertiesShelf(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "legacy-clock.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "legacy-clock.icproj.json");
   await openPropertiesWithQ(page, "hit-CLK");
   await expectComponentCodeField(page, "parameters.period", "10ns");
 
-  const canvas = page.getByTestId("schematic-canvas");
   for (const [symbolId, x] of [
     ["opamp", 300],
     ["vdd-port", 700],
-  ] as const) {
-    await chooseComponent(page, symbolId);
-    await canvas.click({ position: { x, y: 200 } });
-    await page.keyboard.press("Escape");
-  }
+  ] as const)
+    await placeComponentAt(page, symbolId, { x, y: 200 });
   await openPropertiesWithQ(page, "hit-X1");
   await expectComponentCodeField(page, "parameters.gain", "1e6");
   await editComponentPropertyCode(page, (code) => {
@@ -93,11 +82,7 @@ test("cccs Visual Annotation edits without crashing or changing electrical ident
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/editor");
-  await chooseComponent(page, "cccs");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 520, y: 350 } });
-  await page.keyboard.press("Escape");
+  await placeComponentAt(page, "cccs", { x: 520, y: 350 });
   await openPropertiesWithQ(page, "hit-F1");
   await expectComponentCodeField(page, "name", "βi_{1}");
   await editComponentPropertyCode(page, (code) => {
@@ -117,15 +102,14 @@ async function openFixture(
   const project = createEmptyProject("control-pick", "Control pick");
   const document = project.documents[0]!;
   for (const suffix of ["a", "b"]) {
-    document.instances.push({
-      id: `ground-${suffix}`,
-      symbolId: "ground",
-      placement: {
-        position: { x: suffix === "a" ? 330 : 430, y: 460 },
-        rotation: 0,
-        mirror: "none",
-      },
-    });
+    document.instances.push(
+      placedInstance(
+        `ground-${suffix}`,
+        "ground",
+        suffix === "a" ? 330 : 430,
+        460,
+      ),
+    );
     document.nets.push({
       id: `ground-net-${suffix}`,
       terminals: [{ instanceId: `ground-${suffix}`, pinName: "0" }],
@@ -141,24 +125,12 @@ async function openFixture(
     });
   }
   document.instances.push(
+    { ...placedInstance("controlled", symbolId, 470, 360), reference: "X1" },
     {
-      id: "controlled",
-      symbolId,
-      reference: "X1",
-      placement: { position: { x: 470, y: 360 }, rotation: 0, mirror: "none" },
-    },
-    {
-      id: "sensor",
-      symbolId: "voltage-source",
+      ...placedInstance("sensor", "voltage-source", 670, 360),
       reference: "V1",
-      placement: { position: { x: 670, y: 360 }, rotation: 0, mirror: "none" },
     },
-    {
-      id: "invalid",
-      symbolId: "resistor",
-      reference: "R1",
-      placement: { position: { x: 780, y: 360 }, rotation: 0, mirror: "none" },
-    },
+    { ...placedInstance("invalid", "resistor", 780, 360), reference: "R1" },
   );
   for (const [name, y] of [
     ["plus", 210],
@@ -187,13 +159,7 @@ async function openFixture(
       }),
     );
   }
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "control-pick.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "control-pick.icproj.json");
   await openPropertiesWithQ(page, "hit-controlled");
   await expect(page.getByTestId("component-control-pick")).toBeVisible();
 }
@@ -206,10 +172,8 @@ test("hidden block supplies preview Nets and bind explicitly or Auto", async ({
   const project = createEmptyProject("block-supply", "Block supply");
   const document = project.documents[0]!;
   document.instances.push({
-    id: "block",
-    symbolId: "opamp",
+    ...placedInstance("block", "opamp", 480, 300),
     reference: "X1",
-    placement: { position: { x: 480, y: 300 }, rotation: 0, mirror: "none" },
   });
   for (const [name, x] of [
     ["AVDD", 230],
@@ -217,11 +181,7 @@ test("hidden block supplies preview Nets and bind explicitly or Auto", async ({
   ] as const) {
     const markerId = `marker-${name}`;
     const netId = `net-${name}`;
-    document.instances.push({
-      id: markerId,
-      symbolId: "vdd-port",
-      placement: { position: { x, y: 180 }, rotation: 0, mirror: "none" },
-    });
+    document.instances.push(placedInstance(markerId, "vdd-port", x, 180));
     document.nets.push({
       id: netId,
       terminals: [{ instanceId: markerId, pinName: "P" }],
@@ -236,22 +196,12 @@ test("hidden block supplies preview Nets and bind explicitly or Auto", async ({
       powerDomain: "vdd",
     });
   }
-  document.instances.push({
-    id: "ground",
-    symbolId: "ground",
-    placement: { position: { x: 230, y: 420 }, rotation: 0, mirror: "none" },
-  });
+  document.instances.push(placedInstance("ground", "ground", 230, 420));
   document.nets.push({
     id: "net-ground",
     terminals: [{ instanceId: "ground", pinName: "0" }],
   });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "block-supply.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "block-supply.icproj.json");
   await revealPropertiesShelf(page);
   await page.getByTestId("hit-block").click({ force: true });
   await openSelectionShelf(page);
@@ -268,14 +218,12 @@ test("hidden block supplies preview Nets and bind explicitly or Auto", async ({
   const option = page
     .getByRole("listbox", { name: "VDD Net previews" })
     .getByRole("option", { name: "AVDD" });
+  const overlay = page.getByTestId("net-highlight-overlay");
   await option.hover();
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveAttribute(
-    "data-net-id",
-    "net-AVDD",
-  );
+  await expect(overlay).toHaveAttribute("data-net-id", "net-AVDD");
   await option.click();
   await expectComponentCodeField(page, "supplies.VDD", "net-AVDD");
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
+  await expect(overlay).toHaveCount(0);
   await vdd.click();
   await page
     .getByRole("listbox", { name: "VDD Net previews" })
@@ -298,18 +246,16 @@ test("vccs highlights control Nets and commits each pick immediately", async ({
   const positive = page.getByLabel("Control + Net options", { exact: true });
   const negative = page.getByLabel("Control − Net options", { exact: true });
   const menu = page.getByRole("listbox");
+  const overlay = page.getByTestId("net-highlight-overlay");
   await positive.click();
   await expect(
     menu.getByRole("option", { name: "0", exact: true }),
   ).toHaveCount(1);
   const plusOption = menu.getByRole("option", { name: /plus/i });
   await plusOption.hover();
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveAttribute(
-    "data-net-id",
-    "net-plus",
-  );
+  await expect(overlay).toHaveAttribute("data-net-id", "net-plus");
   await plusOption.click();
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
+  await expect(overlay).toHaveCount(0);
   await negative.click();
   await menu.getByRole("option", { name: /minus/i }).click();
   await expectComponentCodeField(page, "control", {
@@ -319,32 +265,29 @@ test("vccs highlights control Nets and commits each pick immediately", async ({
   await positive.click();
   await menu.getByRole("option", { name: /plus/i }).hover();
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
+  await expect(overlay).toHaveCount(0);
   await positive.click();
   await menu.getByRole("option", { name: "Select Net", exact: true }).click();
   await negative.click();
   await menu.getByRole("option", { name: "Select Net", exact: true }).click();
   await picker.getByRole("button", { name: "Pick control on canvas" }).click();
   await page.getByTestId("route-hit-route-plus").hover({ force: true });
-  await expect(page.getByTestId("net-highlight-overlay")).toBeVisible();
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveAttribute(
-    "data-net-id",
-    "net-plus",
-  );
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toHaveAttribute("data-net-id", "net-plus");
   await page.getByTestId("route-hit-route-plus").click({ force: true });
   await expect(picker).toContainText("Click control − Net");
   await expectComponentCodeField(page, "control.positiveNetId", "net-plus");
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
+  await expect(overlay).toHaveCount(0);
   await expectComponentCodeField(page, "control", {
     positiveNetId: "net-plus",
     negativeNetId: "",
   });
   await positive.click();
   await menu.getByRole("option", { name: /plus/i }).hover();
-  await expect(page.getByTestId("net-highlight-overlay")).toBeVisible();
+  await expect(overlay).toBeVisible();
   await page.getByTestId("selection-shelf").click();
-  await expect(page.getByTestId("net-highlight-overlay")).toHaveCount(0);
+  await expect(overlay).toHaveCount(0);
   await expect(menu).toHaveCount(0);
 });
 
@@ -361,29 +304,23 @@ test("cccs picks ordered current terminals with snap and direction feedback, and
     page.getByLabel("Current direction options", { exact: true }),
   ).toHaveCount(0);
   await picker.getByRole("button", { name: "Pick control on canvas" }).click();
-  await page.getByTestId("hit-sensor").hover({ force: true });
-  await expect(page.getByTestId("hit-sensor")).toHaveAttribute(
-    "data-control-sensor",
-    "false",
-  );
-  await page.getByTestId("hit-invalid").hover({ force: true });
-  await expect(page.getByTestId("hit-invalid")).toHaveCSS(
-    "cursor",
-    "not-allowed",
-  );
-  await page.getByTestId("terminal-invalid-1").hover({ force: true });
-  await expect(page.getByTestId("terminal-invalid-1")).toHaveCSS(
-    "stroke-width",
-    "2px",
-  );
-  await page.getByTestId("hit-invalid").click({ force: true });
+  const sensor = page.getByTestId("hit-sensor");
+  const invalid = page.getByTestId("hit-invalid");
+  const invalidPin = page.getByTestId("terminal-invalid-1");
+  await sensor.hover({ force: true });
+  await expect(sensor).toHaveAttribute("data-control-sensor", "false");
+  await invalid.hover({ force: true });
+  await expect(invalid).toHaveCSS("cursor", "not-allowed");
+  await invalidPin.hover({ force: true });
+  await expect(invalidPin).toHaveCSS("stroke-width", "2px");
+  await invalid.click({ force: true });
   await expect(picker).toContainText("Pick control + terminal");
-  await page.getByTestId("terminal-invalid-1").hover({ force: true });
+  await invalidPin.hover({ force: true });
   await expect(
     page.getByTestId("control-current-direction-preview"),
   ).toHaveAttribute("data-direction", "into");
   // Deliberately click off the actual pin center, inside the snap radius.
-  const pin = await page.getByTestId("terminal-invalid-1").boundingBox();
+  const pin = await invalidPin.boundingBox();
   if (!pin) throw new Error("Missing terminal");
   await page.mouse.click(
     pin.x + pin.width / 2 + pin.width * 0.3,
@@ -400,7 +337,7 @@ test("cccs picks ordered current terminals with snap and direction feedback, and
   await page.keyboard.press("Escape");
   await expectComponentCodeField(page, "control.instanceId", "");
   await picker.getByRole("button", { name: "Pick control on canvas" }).click();
-  await page.getByTestId("terminal-invalid-1").click({ force: true });
+  await invalidPin.click({ force: true });
   await page.getByTestId("terminal-invalid-2").click({ force: true });
   await expectComponentCodeField(page, "control", {
     instanceId: "invalid",

@@ -4,48 +4,24 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { createRoutingDemoProject } from "../src/demos/routing-demo.js";
-import { clickDrawTool } from "./editor-fixtures.js";
+import {
+  clickDrawTool,
+  expectStatus,
+  openProjectFile,
+} from "./editor-fixtures.js";
 import { placeComponent } from "./manual-editor-fixtures.js";
-import { clickRoute, readRoutePoints } from "./canvas-fixtures.js";
+import {
+  centre,
+  clickRoute,
+  polylinePoints,
+  readRoutePoints,
+  routeIdOf,
+} from "./canvas-fixtures.js";
 
 async function onlyRouteId(page: Page): Promise<string> {
   const route = page.locator('[data-testid^="route-hit-"]');
   await expect(route).toHaveCount(1);
-  const testId = await route.getAttribute("data-testid");
-  if (!testId) throw new Error("Route has no test id");
-  return testId.replace(/^route-hit-/u, "");
-}
-
-async function clickRouteWithScreenOffset(
-  page: Page,
-  routeId: string,
-  offset: { x: number; y: number },
-  position = 0.5,
-): Promise<void> {
-  const route = page.getByTestId(`route-hit-${routeId}`);
-  const point = await route.evaluate(
-    (element, options) => {
-      const polyline = element as SVGPolylineElement;
-      const first = polyline.points.getItem(0);
-      const second = polyline.points.getItem(1);
-      const matrix = polyline.getScreenCTM();
-      if (!first || !second || !matrix) return null;
-      return new DOMPoint(
-        first.x + (second.x - first.x) * options.position,
-        first.y + (second.y - first.y) * options.position,
-      ).matrixTransform(matrix);
-    },
-    { position },
-  );
-  if (!point) throw new Error(`Route ${routeId} is not measurable`);
-  await page.mouse.click(point.x + offset.x, point.y + offset.y);
-}
-
-async function lastRouteId(page: Page): Promise<string> {
-  const routes = page.locator('[data-testid^="route-hit-"]');
-  const testId = await routes.last().getAttribute("data-testid");
-  if (!testId) throw new Error("Route has no test id");
-  return testId.replace(/^route-hit-/u, "");
+  return routeIdOf(route);
 }
 
 test("connects one MOS Gate to Drain without false contact ambiguity", async ({
@@ -56,7 +32,7 @@ test("connects one MOS Gate to Drain without false contact ambiguity", async ({
   await clickDrawTool(page, "wire");
   await page.getByTestId("terminal-M1-G").click();
   await page.getByTestId("terminal-M1-D").click();
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(1);
   await expect(
     page.locator('[data-layer="junctions"] [data-node-kind="contact"]'),
@@ -101,7 +77,7 @@ test("commits two endpoint clicks even before React publishes the first one, tur
     }
   });
 
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(1);
 
   // Bottom pin to top pin, side by side: both single corners would run up or
@@ -131,10 +107,7 @@ test("keeps Wire input above labels and resolves a screen-tolerant route tap", a
   const label = page.getByTestId("annotation-hit-instance-label-R1");
   const labelBox = await label.boundingBox();
   if (!labelBox) throw new Error("Default label is not measurable");
-  await page.mouse.click(
-    labelBox.x + labelBox.width / 2,
-    labelBox.y + labelBox.height / 2,
-  );
+  await page.mouse.click(centre(labelBox).x, centre(labelBox).y);
   await expect(page.getByTestId("status")).toHaveText(
     "Wire source: free grid point",
   );
@@ -145,7 +118,7 @@ test("keeps Wire input above labels and resolves a screen-tolerant route tap", a
   await page.getByTestId("terminal-R2-1").click();
   const routeId = await onlyRouteId(page);
   await expect(page.getByTestId("active-tool")).toHaveText("wire");
-  await clickRouteWithScreenOffset(page, routeId, { x: 0, y: 5 });
+  await clickRoute(page, routeId, 0.5, 0, { x: 0, y: 5 });
   await expect(page.getByTestId("status")).toHaveText(
     `Wire source: route ${routeId}`,
   );
@@ -187,14 +160,9 @@ test("finishes a free wire at an arbitrary grid point and reuses that end as a l
   });
   if (!continuation) throw new Error("Loose wire endpoint is not measurable");
   await page.mouse.move(continuation.target.x, continuation.target.y);
-  const continuationPreview = await page
-    .getByTestId("wire-preview")
-    .evaluate((element) =>
-      Array.from((element as SVGPolylineElement).points).map(({ x, y }) => ({
-        x,
-        y,
-      })),
-    );
+  const continuationPreview = await polylinePoints(
+    page.getByTestId("wire-preview"),
+  );
   expect(continuationPreview).toEqual([
     continuation.source,
     { x: continuation.source.x + 120, y: continuation.source.y },
@@ -222,11 +190,7 @@ test("derives crossings and creates junctions only when a wire ends on a route",
   project.documents[0]!.instances.find(
     (instance) => instance.id === "E",
   )!.placement!.position.y = 460;
-  await page.getByTestId("project-file").setInputFiles({
-    name: "routing-example.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProjectFile(page, project, "routing-example.icproj.json");
 
   await clickDrawTool(page, "wire");
   await page.getByTestId("terminal-A-P").click();
@@ -240,15 +204,13 @@ test("derives crossings and creates junctions only when a wire ends on a route",
   await clickDrawTool(page, "wire");
   await page.getByTestId("terminal-E-P").click();
   await clickRoute(page, "route-ui-1", 0.5);
-  await expect(page.getByTestId("status")).toContainText(
-    "Ambiguous connection",
-  );
+  await expectStatus(page, "Ambiguous connection");
   await expect(page.getByTestId("revision")).toHaveText("2");
   await page.keyboard.press("Escape");
 
   await clickDrawTool(page, "wire");
   await page.getByTestId("terminal-E-P").click();
-  await clickRouteWithScreenOffset(page, "route-ui-1", { x: 0, y: 5 }, 0.25);
+  await clickRoute(page, "route-ui-1", 0.25, 0, { x: 0, y: 5 });
   await expect(page.getByTestId("revision")).toHaveText("3");
   await expect(page.getByTestId("junction-junction-ui-3")).toBeVisible();
   // The new branch passes exactly through D.P. Pass-through pin capture makes
@@ -261,10 +223,7 @@ test("derives crossings and creates junctions only when a wire ends on a route",
   const handle = page.getByTestId("route-handle-route-ui-2");
   const handleBox = await handle.boundingBox();
   if (!handleBox) throw new Error("Route handle is not measurable");
-  await page.mouse.move(
-    handleBox.x + handleBox.width / 2,
-    handleBox.y + handleBox.height / 2,
-  );
+  await page.mouse.move(centre(handleBox).x, centre(handleBox).y);
   await page.mouse.down();
   await page.mouse.move(handleBox.x + 45, handleBox.y + handleBox.height / 2, {
     steps: 3,
@@ -282,17 +241,17 @@ test("double-click ends the wire even when it lands on another wire", async ({
 
   await canvas.click({ position: { x: 200, y: 160 } });
   await canvas.dblclick({ position: { x: 420, y: 160 } });
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
 
   // Finishing onto an existing wire commits on the first press; the second
   // press used to open a fresh wire at that spot, so drafting continued.
   await canvas.click({ position: { x: 260, y: 300 } });
   await canvas.dblclick({ position: { x: 320, y: 160 } });
-  await expect(page.getByTestId("status")).toContainText("Wire finished");
+  await expectStatus(page, "Wire finished");
 
   // Nothing is in progress, so a plain move draws no preview leg.
   await page.mouse.move(500, 500);
-  await expect(page.getByTestId("status")).toContainText("Wire finished");
+  await expectStatus(page, "Wire finished");
 });
 
 test("double-click preserves the previewed corner order from a transistor pin", async ({
@@ -309,15 +268,10 @@ test("double-click preserves the previewed corner order from a transistor pin", 
   // when the first click inside the double-click becomes a fixed waypoint.
   const target = { x: 360, y: 430 };
   await canvas.hover({ position: target });
-  const preview = await page.getByTestId("wire-preview").evaluate((element) =>
-    Array.from((element as SVGPolylineElement).points).map(({ x, y }) => ({
-      x,
-      y,
-    })),
-  );
+  const preview = await polylinePoints(page.getByTestId("wire-preview"));
 
   await canvas.dblclick({ position: target });
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   const committed = await readRoutePoints(page, await onlyRouteId(page));
   expect(committed).toEqual(preview);
 });
@@ -332,7 +286,7 @@ test("keeps the chosen corner shape when the wire tool is picked again", async (
   for (let step = 0; step < 3; step += 1) {
     await canvas.click({ button: "middle", position: { x: 260, y: 240 } });
   }
-  await expect(page.getByTestId("status")).toContainText("any angle");
+  await expectStatus(page, "any angle");
   await canvas.dblclick({ position: { x: 430, y: 260 } });
 
   // Leaving the tool and coming back used to silently drop the choice, so a
@@ -344,7 +298,10 @@ test("keeps the chosen corner shape when the wire tool is picked again", async (
 
   const ids = await page.locator('[data-testid^="route-hit-"]').count();
   expect(ids).toBe(2);
-  const points = await readRoutePoints(page, await lastRouteId(page));
+  const points = await readRoutePoints(
+    page,
+    await routeIdOf(page.locator('[data-testid^="route-hit-"]').last()),
+  );
   expect(points).toHaveLength(2);
   const dx = Math.abs(points[1]!.x - points[0]!.x);
   const dy = Math.abs(points[1]!.y - points[0]!.y);

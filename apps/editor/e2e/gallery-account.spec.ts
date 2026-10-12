@@ -3,17 +3,32 @@
 // deleting an account are the account.test.tsx module contracts.
 
 import { expect, test } from "./gallery-test.js";
-import { awaitEditorReady } from "./editor-fixtures.js";
+import type { Locator, Page } from "@playwright/test";
+import { awaitEditorReady, openEditor } from "./editor-fixtures.js";
 import {
   ENTRY,
   fulfillPreview,
   galleryResistorProject,
   mockGallery,
+  mockGalleryApi,
   mockPreviews,
+  mockProviders,
   sessionUser,
   signIn,
 } from "./gallery-fixtures.js";
 import { serializeProject } from "@icm/project-protocol";
+
+const ALL_PROVIDERS = { github: true, google: true, email: true };
+
+/** Open the wall signed out, at the prompt to sign in. */
+async function openSignedOut(page: Page): Promise<Locator> {
+  await mockProviders(page, ALL_PROVIDERS);
+  await signIn(page, null);
+  await page.goto("/");
+  const prompt = page.getByTestId("gallery-sign-in");
+  await expect(prompt).toContainText("The Gallery is for signed-in members");
+  return prompt;
+}
 
 test("signed out, the wall and the editor's Gallery panel are grey with a way to sign in, and no circuit", async ({
   page,
@@ -24,13 +39,7 @@ test("signed out, the wall and the editor's Gallery panel are grey with a way to
     reads.push(new URL(route.request().url()).pathname);
     return route.fulfill({ status: 401, json: { error: "sign-in-required" } });
   });
-  await page.route("**/api/auth/providers", (route) =>
-    route.fulfill({ json: { github: true, google: true, email: true } }),
-  );
-  await signIn(page, null);
-  await page.goto("/");
-  const prompt = page.getByTestId("gallery-sign-in");
-  await expect(prompt).toContainText("The Gallery is for signed-in members");
+  const prompt = await openSignedOut(page);
   // Grey stand-ins keep the wall's shape; none of them is a circuit.
   await expect(prompt.locator(".gallery-sign-in-tile")).toHaveCount(12);
   await expect(prompt.locator(".gallery-sign-in-veil")).toHaveAttribute(
@@ -67,8 +76,7 @@ test("signed out, the wall and the editor's Gallery panel are grey with a way to
   expect(Math.round(address!.width)).toBe(Math.round(send!.width));
   expect(send!.y).toBeGreaterThan(address!.y + address!.height - 1);
 
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.getByTestId("examples-toggle").click();
   const panel = page.getByTestId("examples-panel");
   const locked = panel.getByTestId("examples-panel-sign-in");
@@ -135,13 +143,7 @@ test("a signed-out visitor sees the wall's first twelve circuits, dimmed and clo
       json: { error: "sign-in-required" },
     });
   });
-  await page.route("**/api/auth/providers", (route) =>
-    route.fulfill({ json: { github: true, google: true, email: true } }),
-  );
-  await signIn(page, null);
-  await page.goto("/");
-  const prompt = page.getByTestId("gallery-sign-in");
-  await expect(prompt).toContainText("The Gallery is for signed-in members");
+  const prompt = await openSignedOut(page);
   const circuits = prompt.getByTestId("gallery-sign-in-circuit");
   await expect(circuits).toHaveCount(12);
   await expect(circuits.first()).toContainText("Circuit 1");
@@ -181,20 +183,14 @@ test("a signed-out visitor sees the wall's first twelve circuits, dimmed and clo
 test("the account chip sits on the header line, ellipsizes a long name, and the credit never runs under it", async ({
   page,
 }) => {
-  await page.route("**/api/auth/providers", (route) =>
-    route.fulfill({ json: { github: true, google: false, email: false } }),
-  );
+  await mockProviders(page, { github: true, google: false, email: false });
   let user = sessionUser({ displayName: "Zhishuai Zhang" });
   await page.route("**/api/auth/me", (route) =>
     route.fulfill({ json: { user } }),
   );
-  await page.route("**/api/gallery**", (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/gallery/tags")
-      return route.fulfill({ json: { tags: [] } });
-    if (url.pathname !== "/api/gallery") return route.fallback();
-    return route.fulfill({ json: { entries: [], nextCursor: null } });
-  });
+  await mockGalleryApi(page, { tags: [] }, (_url, route) =>
+    route.fulfill({ json: { entries: [], nextCursor: null } }),
+  );
 
   await page.setViewportSize({ width: 760, height: 720 });
   await page.goto("/");
@@ -311,9 +307,7 @@ test("the Owner switches to an AI account, renames, is asked the name before del
   await page.route("**/api/gallery/mine", (route) =>
     route.fulfill({ json: { entries: [] } }),
   );
-  await page.route("**/api/auth/providers", (route) =>
-    route.fulfill({ json: { github: true, google: true, email: true } }),
-  );
+  await mockProviders(page, ALL_PROVIDERS);
   await page.route("**/api/auth/ai-accounts", (route) =>
     route.fulfill({
       json: {
@@ -547,9 +541,7 @@ test("a window back from its account and Privacy at plain /editor keeps its tabs
   };
   let deleted = false;
   let reads = 0;
-  await context.route("**/api/auth/providers", (route) =>
-    route.fulfill({ json: { github: true, google: false, email: false } }),
-  );
+  await mockProviders(context, { github: true, google: false, email: false });
   await signIn(
     context,
     sessionUser({ id: "account-owner", displayName: "Owner", email: null }),
@@ -571,8 +563,7 @@ test("a window back from its account and Privacy at plain /editor keeps its tabs
     route.fulfill({ json: { entries: [] } }),
   );
   // The account page's Cloud Projects tile opens the editor at ?project=.
-  await page.goto("/editor?project=account-cloud");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?project=account-cloud");
   const cloudTab = page.getByRole("tab", { name: /Cloud circuit$/ });
   await expect(cloudTab).toHaveAttribute("aria-selected", "true");
   await page.getByTestId("tab-project-file").setInputFiles({
