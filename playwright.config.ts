@@ -31,7 +31,7 @@ export default defineConfig({
   // shard based on the three large spec files.
   fullyParallel: true,
   // A local run shares the machine it runs on, so it takes one worker unless
-  // `--workers` asks for more. CI keeps Playwright's default for its runners.
+  // `--workers` asks for more. CI passes its own count per shard.
   workers: process.env.CI ? undefined : 1,
   // The per-test budget catches a hung test, not a slow machine. The longest
   // editor flows take 10-14 s alone and two to three times that while other
