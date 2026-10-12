@@ -3,10 +3,11 @@ import {
   parseSharedComponentMetadata,
 } from "./component-library-entry";
 import type { ComponentDefinition } from "@icm/model";
+// The subpath holds only the library schemas, not the Agent adapter (#1673).
 import {
   ComponentLibrarySummarySchema,
   type ComponentLibrarySummary,
-} from "@icm/agent-adapter";
+} from "@icm/agent-adapter/component-resource";
 import { SymbolDefinitionSchema } from "@icm/symbols";
 import {
   type SharedDefinitionPayload,

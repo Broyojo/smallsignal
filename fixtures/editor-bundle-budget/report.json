@@ -4,30 +4,30 @@
   "routes": {
     "editor": {
       "budget": {
-        "files": 53,
-        "rawKib": 3886,
-        "gzipKib": 1051,
-        "brotliKib": 882
+        "files": 84,
+        "rawKib": 4526,
+        "gzipKib": 1251,
+        "brotliKib": 1051
       },
       "measured": {
-        "files": 35,
-        "rawKib": 2590.1,
-        "gzipKib": 700.1,
-        "brotliKib": 587.4
+        "files": 56,
+        "rawKib": 3017,
+        "gzipKib": 833.8,
+        "brotliKib": 700.6
       }
     },
     "gallery": {
       "budget": {
-        "files": 20,
-        "rawKib": 477,
-        "gzipKib": 155,
-        "brotliKib": 136
+        "files": 30,
+        "rawKib": 549,
+        "gzipKib": 176,
+        "brotliKib": 154
       },
       "measured": {
-        "files": 13,
-        "rawKib": 317.5,
-        "gzipKib": 103.1,
-        "brotliKib": 90.3
+        "files": 20,
+        "rawKib": 365.4,
+        "gzipKib": 116.8,
+        "brotliKib": 102.4
       }
     }
   }
