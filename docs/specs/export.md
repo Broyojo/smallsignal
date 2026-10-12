@@ -4,16 +4,10 @@ Status: `accepted`
 
 Primary owners: `packages/render-svg`, `packages/exporters`
 
-Related ADR: [`routing.md`](../adr/routing.md).
-Formal export consumes the resolved route geometry (centerline + endpoint joins)
-and, as today, excludes editor overlays, flightlines, selection, and
-diagnostics.
-
-## Contract
-
 Every export starts from one validated `SchematicDocument`, one symbol
-resolver, and the formal SVG scene. Editor overlays, hit targets, selections,
-flightlines, and diagnostics are never part of a formal artifact.
+resolver and the formal SVG scene ([visual language](visual-language.md)),
+using resolved route geometry. Overlays, hit targets, selection, flightlines
+and diagnostics never enter a formal artifact.
 
 | Format | Derivation                                  | Media type        |
 | ------ | ------------------------------------------- | ----------------- |
@@ -21,79 +15,39 @@ flightlines, and diagnostics are never part of a formal artifact.
 | PNG    | white-background raster of that SVG at 3x   | `image/png`       |
 | PDF    | browser: formal SVG converted to vector PDF | `application/pdf` |
 
-The SVG viewBox is the authoritative page bound. Browser PDF export converts
-that same curated, renderer-generated SVG through `svg2pdf.js` into PDF paths
-and text; it never embeds the page-cover PNG used by the PNG artifact. The
-original SVG is unchanged. Export filenames are normalized and all three
-formats use the same base name.
+## Rules
 
-The editor serves pinned Metropolis faces, an open-source approximation of the
-Proxima Nova lettering in the accepted textbook references. DejaVu Sans supplies
-Greek and mathematical glyphs absent from Metropolis. Both families are subset
-for browser delivery as WOFF2 (`packages/exporters/fonts/`, generated together
-with their advance and ink tables by `scripts/generate-schematic-fonts.mjs`);
-the editor preloads the Metropolis faces with its route. The authored
-round-period face remains first for full stops. Font size, weight, slant and
-subscript intent are unchanged; existing drawings need no migration.
-
-Canvas text, browser PNG and Node raster output use these same glyphs. Node uses
-generated ICM Schematic composite faces so its renderer preserves each weight
-and slant when Latin, Greek, mathematical symbols and periods share a text run.
-Its temporary raster input also accounts for relative formula spacing when
-aligning text runs, keeping operators clear of fraction bars and scripts centered.
-Browser PNG inlines the faces because an SVG drawn as an image loads no external font;
-when the files cannot be read it falls back to system faces. The downloaded SVG
-names the stack and carries only the authored period face, so an external viewer
-needs Metropolis and DejaVu installed for the same appearance.
-
-Canonical SVG resolves script typography before serialization: subscript and
-superscript runs use numeric font sizes and explicit baseline displacement,
-and the next visible run restores the parent baseline. Formal SVG must not
-delegate script placement to `baseline-shift` or percentage `font-size`, whose
-support is inconsistent in Office-class SVG importers. This keeps searchable,
-editable SVG text while making its geometry portable beyond browser engines.
-
-The browser PDF converter still operates on a temporary SVG clone. It
-materializes text decorations as vector strokes and defensively expands any
-legacy relative text constructs before conversion. This compatibility pass
-must not rewrite the downloaded canonical SVG or flatten PDF text into a page
-image.
-
-PDF text explicitly selects Metropolis, the DejaVu symbol fallback, or the
-round-period face per glyph. Each used weight/slant is embedded as a subset;
-PDF has no CSS font fallback and its built-in Latin-1 faces cannot preserve
-Greek or math symbols. The converter loads the matching faces into the page
-for its run measurements and removes them afterwards. Failure to load a required
-face fails the export visibly. Glyphs absent from both bundled families, including
-CJK text, are outside the PDF font coverage; browser CJK rendering still uses the
-system's fallback fonts.
-
-Node/headless export retains a high-resolution raster-PDF fallback for release
-tooling because the browser vector converter requires a live DOM. It is not the
-interactive editor's user-facing PDF path.
-
-If vector conversion fails, browser export fails visibly; it must not silently
-downgrade the requested PDF to a bitmap. SVG remains the portable vector
-fallback.
+- The SVG viewBox is the page bound. All formats share one normalized base
+  filename.
+- Browser PDF converts the same SVG with `svg2pdf.js` into paths and text,
+  working on a temporary clone (text decorations become strokes; legacy
+  relative text constructs are expanded); it never embeds the PNG page cover
+  or rewrites the downloaded SVG. Conversion failure fails visibly; no silent
+  bitmap downgrade (SVG is the vector fallback). Node/headless keeps a
+  raster-PDF fallback for release tooling only.
+- Fonts: pinned Metropolis (approximating the references' Proxima Nova) plus
+  DejaVu Sans for Greek/math, subset to WOFF2 in `packages/exporters/fonts/`
+  with advance/ink tables from `scripts/generate-schematic-fonts.mjs`; the
+  round-period face stays first for full stops. Canvas, browser PNG and Node
+  raster use these glyphs (Node via composite faces that keep weight and
+  slant across mixed runs). Browser PNG inlines the faces (an SVG image loads
+  no external font), falling back to system faces if unreadable. Downloaded
+  SVG names the stack and carries only the period face.
+- PDF selects Metropolis, DejaVu or the period face per glyph and embeds each
+  used weight/slant as a subset (PDF has no CSS fallback); faces are loaded
+  for measurement and removed after. A missing required face fails the
+  export. Glyphs in neither family (e.g. CJK) are outside PDF coverage.
+- Canonical SVG resolves scripts to numeric font sizes and explicit baseline
+  displacement, and the next visible run restores the parent baseline; never
+  `baseline-shift` or percentage `font-size` (Office-class importers mishandle
+  them).
 
 ## Validation
 
-- parse the SVG viewBox and reject invalid bounds;
-- check PNG signature and dimensions against viewBox times scale;
-- reopen browser PDF, check one page and page bounds, assert it contains no
-  page-cover image XObject, assert representative rich-text runs retain their
-  nonzero scaled fonts and displaced baselines, and visually compare a rendered
-  PDF page with the SVG fixture;
-- assert canonical formal SVG contains no `baseline-shift` or percentage
-  `font-size`, and that a visible run following a script restores its parent
-  baseline;
-- assert formal SVG has no editor-only layers.
-
-## Agent File Resource
-
-An authorized API-3.0 Agent downloads canonical Project JSON or formal
-SVG/PNG/PDF only through the separate File Resource advertised by
-capabilities. Project download uses `serializeProject()` byte-for-byte; visual
-formats derive from the same formal SVG. Selection, diagnostics, flightlines,
-and editor overlays never enter a formal artifact. Responses are bounded,
-hashed, Project/Document-revision bound, and never persisted by the relay.
+- SVG viewBox parses to valid bounds; formal SVG has no editor-only layers,
+  no `baseline-shift` or percentage `font-size`, and restores baselines after
+  scripts.
+- PNG signature and dimensions equal viewBox × scale.
+- Browser PDF reopens with one page of the right bounds, no page-cover image
+  XObject, rich-text runs with nonzero scaled fonts and displaced baselines,
+  and a rendered page visually matching the SVG fixture.

@@ -5,221 +5,74 @@ Status: `accepted`
 Primary owner: Worker Cloud Project storage, `packages/project-protocol`, and
 the editor document lifecycle
 
-Project content uses canonical schema-70 JSON. In the Web host a private Cloud
-Project is the formal saved resource; `.icproj.json` is portable import/export
-and backup. In the desktop host an explicitly opened/saved `.icproj.json` file
-is the formal saved resource. Both hosts use the same Project protocol.
-The current-only model in `packages/model` validates the normalized shape;
-`packages/project-protocol` owns parsing, compatibility diagnostics,
-and canonical serialization. Persistence validates the complete current schema
-before import or Cloud Save. Compatibility and migration failure rules belong to the
-[file-format contract](project-file-format.md). The protocol reader upgrades
-supported historical content before current-schema validation; all writers emit
-the current schema. Persistence does not maintain a separate migration policy.
+Web: a private Cloud Project is the saved resource; `.icproj.json` is
+import/export and backup. Desktop: an opened/saved `.icproj.json` file is.
+Both use the one Project protocol; compatibility and migration belong to the
+[file format](project-file-format.md). Persistence validates the complete
+current schema before import or Cloud Save.
 
-Portable component interfaces are validated together with the Project. Missing,
-duplicate or unknown pin mappings, duplicate formal port names and conflicting
-primitive/subcircuit contracts reject the candidate without replacing the live
-Project. Diagnostics identify the definition and offending field; recoverable
-source text remains available under the existing failed-import/recovery rules.
+## Protocol-level rules
 
-The protocol also applies polarity snapshot repair v1, independent of Project
-schema version. It recognizes sixteen complete differential-amplifier Symbol
-snapshots from converter v8 by historical content signatures and reflects only
-their incorrect input marks. Pins, electrical contracts, bindings, Nets, Routes,
-models and parameters remain unchanged. Repaired loads report migration, and
-canonical serialization retains the corrected snapshot; repeated loads are
-idempotent. File, Project Code, Cloud and Gallery consumers use this same protocol.
-The website catalog does not overwrite project-owned component definitions.
-
-Unknown customizations and generated Cell symbols are preserved. Such artwork
-requires inspection through Project Code/component definitions and an explicit
-artwork correction; resemblance to a built-in ID alone never authorizes repair.
-This bounded repair does not bulk-edit published Gallery source content.
-
-Recovery state is a non-authoritative browser safety copy. It may restore a
-complete schema-70 Project or a supported historical record that validates
-after the chained upgrade, associated with a recorded working-copy session.
-Corrupt, incompatible, or partial recovery data is discarded or retained as raw
-data without changing the live Project. Credentials, Agent bearer tokens,
-selection, viewport, overlays, and pending external approvals are never
-embedded in Project JSON or recovery records.
-
-## Desktop file ownership
-
-The main process owns the project library and native file grants. The default
-library is `%USERPROFILE%\Analog Canvas\Projects`; each managed project has an
-independent directory containing canonical `project.icproj.json`. First Save
-allocates there without a path dialog. Changing the default library retains
-previous roots and never moves existing files. Project files remain the source
-of content; directory scanning rebuilds the list, with favorites stored separately.
-
-Renderer sessions hold opaque binding identifiers and acknowledged revisions;
-displayed paths do not authorize writes. Save updates that target. Save As creates
-an independent Project identity using the same complete-copy rule as Web Duplicate,
-and rebinds only after success. It defaults to the library or can use a chosen
-external destination. Export retains content identity and never rebinds or marks
-edits saved. Overwriting another saved project first archives its content and
-history in the recycle area; overwriting the source or another open tab is refused.
-
-Local projects offers search, favorites, modification ordering, copy, rename,
-export, history and reveal. File shows a compact location; hovering shows its full
-path. Window titles show the project name. The last twenty external/recent files
-can be reopened, located, viewed in history, copied independently into the library or removed from
-the list. Removing a shortcut never deletes its file. Repeated opening of one
-path selects its tab; equal content identities at different paths stay separate.
-Library deletion moves the whole project directory into a recoverable recycle
-area; permanent removal requires native confirmation. Close its tab before
-changing or removing its saved copy. Rename preserves identity and filename.
-
-Writes capture an owned Project snapshot and use a temporary sibling file,
-flush, then atomic replacement. Compare the target bytes against the acknowledged
-version before writing and again before replacement; a detected change or deletion
-rejects Save. This is optimistic detection, not an exclusive filesystem lock
-against concurrent external writers. Cancellation/failure preserves the binding,
-unsaved edits and existing destination. Newer edits during a successful save
-remain dirty. A stale/expired grant cannot overwrite a file; Save As to a new
-destination remains available.
-
-First Save and independent-copy operations retain a durable creation identity
-and chosen destination before committing. A retry after an interrupted response
-reuses that destination only when the recorded content matches; an externally
-changed destination or changed retry payload is rejected rather than duplicated
-or overwritten. Incomplete managed allocations remain visible for recovery.
-An uncommitted attempt offers Cancel, retry of the original content/destination,
-or a new destination; choosing anew preserves the earlier files and decision.
-The retry carries its verified bytes through the final conflict check, including
-across that prompt. A confirmed committed attempt is reopened/replayed rather
-than silently treated as a new creation.
-
-Window close summarizes every tab, permits explicit discard, or saves each dirty
-Project and rechecks for newer edits. A cancelled/failed save keeps the window.
-An unavailable renderer requires an explicit discard decision. Unfinished editor
-dialogs/buffers or an active operation must be finished or cancelled first.
-Changed saves retain the latest three previous versions; unchanged retries do
-not rotate history. A durable pending journal reconciles interrupted replacement
-against the before/after bytes. The history UI compares, restores with a conflict
-check, or branches an independent project. External-file history lives in user
-data; a portable file export does not include history. Back up the complete
-library and user data while the application is closed.
-
-The desktop restores a stable main-window workspace. It reacquires a native grant
-only for a previously authorized target whose exact byte digest matches the
-acknowledged receipt. Authorizations are separate from the twenty recent shortcuts;
-forgetting or evicting a shortcut does not detach an open workspace. Older receipts
-without a byte digest require explicit Open to reacquire the target.
-Changed/unavailable targets reopen as unsaved detached copies with a notice;
-recovery alone never grants authority over a displayed path. Web Cloud Save and
-the browser-window behavior below are unchanged.
+- Portable component interfaces validate with the Project: missing,
+  duplicate or unknown pin mappings, duplicate formal port names and
+  conflicting contracts reject the candidate (located diagnostics, live
+  Project untouched).
+- Polarity snapshot repair v1 fixes only the input marks of the sixteen
+  converter-v8 differential-amplifier snapshots, by content signature
+  (idempotent, reported as migration). Resemblance to a built-in never
+  authorizes repair of other artwork; the catalog never overwrites
+  project-owned definitions; Gallery sources are not bulk-edited.
 
 ## Browser recovery records
 
-These bounded crash-recovery copies are distinct from the window workspace
-below. They do not limit the number of open project tabs.
+Complete canonical Project text in an app-specific IndexedDB store, keyed by
+random `workingCopyId` plus `latest`/`previous` (never `projectId` alone).
+Retention and size limits (20 closed sessions, one closed copy per Project
+with unsaved copies yielding only to newer unsaved ones, 4 MB per record,
+12 MB total) live in `apps/editor/src/document/browser-recovery-contract.ts`.
 
-Recovery copies are complete canonical Project texts stored in IndexedDB under
-an application-specific database, keyed by a random `workingCopyId` plus a
-`latest`/`previous` generation, never by `projectId` alone. The executable
-limits live in `apps/editor/src/document/browser-recovery-contract.ts`:
-
-- every working copy an editor tab has open keeps its `latest` copy; at most
-  20 sessions no tab has open are kept besides them, the oldest pruned first;
-- one closed copy per Project: a closed session is pruned once a more recent
-  session holds the same Project, except that a copy with unsaved work
-  (`unsavedAtSnapshot: true`) gives way only to a more recent copy with
-  unsaved work, never to a saved one such as the same Cloud Project opened
-  again;
-- at most `latest` and `previous` per session; identical Project text does not
-  consume a new generation. Save-state and formal-file metadata may update the
-  latest envelope in place without rotating its Project text into `previous`;
-- one record's Project text is at most 4 MB (UTF-8, recomputed on read);
-- all owned records total at most 12 MB.
-
-Records use a versioned envelope (`analog-canvas-browser-recovery-v2`) that is
-separate from the Project schema and never enters `.icproj.json`. Stored input
-is decoded structurally before its Project text is parsed, and a record whose
-Project text carries an unsupported schema version classifies as
-`unsupported-schema`, keeps its raw bytes downloadable, and is never deleted as
-corrupt. Envelope identity fields must agree with the parsed Project. The
-optional `unsavedAtSnapshot` envelope field records whether the snapshot was
-ahead of the formal save baseline. Records written before this additive field
-remain valid but have unknown save state and therefore do not trigger an
-automatic startup offer. This metadata is browser lifecycle state, never part
-of Project JSON. The optional `cloudBinding` (`id` plus acknowledged revision)
-lets a reload continue updating the same Cloud Project; records that predate it
-restore unbound rather than guessing an identity.
-
-A rejected write (oversized, quota exceeded, storage unavailable, or failed)
-must leave every previous record readable. Storage or quota failure is visible
-to the user and never destructive: the previous record is kept and the user is
-told to download the Project. Only this application's own object store is ever
-pruned; the editor never clears all IndexedDB databases or origin storage.
-
-The legacy `icm.recovery.v1` localStorage slot migrates into IndexedDB on first
-upgraded launch; the old key is removed only after the IndexedDB transaction
-commits. Unmigratable legacy data stays in localStorage for raw
-download/discard.
+Envelope `analog-canvas-browser-recovery-v2` is separate from the Project
+schema. Input is decoded structurally first; an unsupported schema classifies
+as `unsupported-schema`, keeps its raw bytes downloadable and is never deleted
+as corrupt; envelope identity must match the Project. Optional
+`unsavedAtSnapshot` (older records: unknown, no startup offer) and
+`cloudBinding` (`id` + acknowledged revision; older records restore unbound)
+are lifecycle state, never Project data. A rejected write (oversize, quota,
+unavailable) keeps every previous record readable and tells the user to
+download. Only this app's store is pruned. Legacy `icm.recovery.v1`
+localStorage migrates on first launch, removed only after the IndexedDB
+commit; unmigratable data stays for raw download/discard.
 
 ## Browser-window workspace
 
-The editor persists its open project tabs, unsaved Project content, active tab,
-Cloud bindings and Cell views separately from bounded crash recovery. Refresh
-restores that window's workspace for the same route. The window identity is
-kept in sessionStorage, with snapshots in IndexedDB and a synchronous journal
-for immediate refresh. This state never changes a Cloud Project or enters
-portable Project JSON. Account navigation stays in that browser window; its
-Editor return link `/editor?resume=1` restores the window's complete workspace
-across routes, including its active tab and unsaved content. Explicit project,
-Gallery and New Circuit targets retain their existing opening semantics. See
-[workspace storage](../../apps/editor/src/document/project-workspace.ts).
-
-The route a workspace is kept under is the editor address without the open
-requests the editor consumes (`resume`, `project`, `new`), a Gallery entry
-link `/g/<id>` counting as `/editor`. Coming back to plain `/editor` in the
-same window, from the account, the Privacy page or the Gallery, therefore
-restores that window's tabs whichever link opened them. An address that still
-differs (a built-in example, a Gallery history branch) starts the window
-afresh, and the tabs it saves take the place of the window's. Before anything
-replaces them, every saved tab with unsaved work is stored in browser recovery
-as a closed session of its own, listed by File → Recover Unsaved Work; the
-copies the window's tabs and the page's resumed working copy already have are
-kept beside them. If one cannot be stored, the window's tabs are left in place,
-the new page saves no tabs, and `/editor?resume=1` brings them back.
-
-A Cloud Project deleted from the account page or the Gallery's shelf, in the
-same browser tab, no longer counts as saved when the editor's tabs come back:
-its tab becomes an unbound draft with unsaved work, as the editor Shelf's
-Delete leaves an open tab, so closing it asks first and its next Save creates
-a new Cloud Project.
-
-Inactive tabs retain live controllers and Undo histories during a session;
-refresh reconstructs controllers without Undo stacks or unfinished text-field
-edits. Workspace restoration does not make unsaved content formally saved.
-A closed project tab stays closed after refresh. Read/write failures leave
-earlier snapshots intact and report the need to export; clearing browser data
-can remove this origin-local state. Cloud Save and portable backups remain
-separate durability choices.
-
-A window whose browser tab closed leaves its workspace stored. A fresh window
-with no workspace of its own and no explicit open request (a Gallery or Cloud
-link, an example, a New Circuit link `/editor?new=1`) offers the newest workspace a closed window
-left, non-modally: "Reopen tabs" or "Not now". Each open window holds a Web
-Lock named after its identity for its page's lifetime, so an open window's
-tabs are never offered; without Web Locks nothing is offered. A workspace is
-offered only when a tab holds unsaved work or stands for a Cloud Project,
-Gallery entry or file, never for an untouched New Circuit. Reopened tabs join
-the window's tabs, and an untouched blank placeholder gives way to them. A
-tab of a Cloud Project already open here is not doubled when it holds nothing
-unsaved; one with unsaved edits reopens beside the open tab as
-`<name> (unsaved copy)`, an independent Project bound to no Cloud Project, so
-neither tab can save over the other and its next Save creates a new Cloud
-Project. Every tab with unsaved work is thus reopened, and the closed window's
-record is removed only after this window's own saved workspace holds every
-reopened tab. "Not now" keeps the record; another fresh window offers it again.
+- Open tabs, unsaved content, active tab, Cloud bindings and Cell views
+  persist per window ([workspace storage](../../apps/editor/src/document/project-workspace.ts)):
+  identity in sessionStorage, snapshots in IndexedDB, a synchronous journal
+  for immediate refresh. Never changes a Cloud Project or enters Project JSON.
+- The workspace key is the editor address minus consumed open requests
+  (`resume`, `project`, `new`), with `/g/<id>` counting as `/editor`; plain
+  `/editor` in the same window restores its tabs. `/editor?resume=1` (the
+  account's Editor link) restores the complete workspace across routes.
+  Explicit project, Gallery and New Circuit targets keep their semantics.
+- A differing address (an example, a Gallery history branch) starts afresh;
+  first every saved tab with unsaved work is stored as its own closed
+  recovery session (File → Recover Unsaved Work). If that fails, the window's
+  tabs stay, the new page saves none, and `?resume=1` brings them back.
+- A Cloud Project deleted in the same tab (account page, Gallery shelf)
+  restores as an unbound unsaved draft, like the editor Shelf's Delete.
+- Refresh rebuilds without Undo or unfinished text edits, never marks
+  content saved and keeps closed tabs closed; failures keep earlier snapshots.
+- A fresh window with no workspace and no explicit open request (Gallery or
+  Cloud link, example, `/editor?new=1`) non-modally offers ("Reopen tabs" /
+  "Not now") the newest workspace a closed window left, if it holds unsaved
+  work or a Cloud Project, Gallery entry or file. Open windows hold a Web
+  Lock named after their identity and are never offered (no Web Locks, no
+  offer). Reopened tabs join the window; an already open Cloud Project is not
+  doubled unless unsaved, then it reopens unbound as `<name> (unsaved copy)`.
+  The record is removed only once this window's saved workspace holds every
+  reopened tab.
 
 ## Cloud Project and Save semantics
-
-The private Cloud Project API owns one current revision per stable resource:
 
 ```text
 POST /api/projects                 create and bind revision 1
@@ -231,231 +84,108 @@ GET  /api/projects/:id             open one Project
 DELETE /api/projects/:id           explicitly delete one Project
 ```
 
-Cloud summary/open responses also return nullable `galleryEntryId`. This is
-private publication metadata, separate from the portable Project document and
-from its content revision. The additive column leaves pre-existing rows unlinked
-and does not rewrite their drawings. Full schema backup/restore preserves the
-link; older backups without it restore as unlinked. The browser reloads current
-source metadata before presenting Publish, so recovery pointers are not authority.
-
-Save never republishes a drawing or takes over an existing publication's source.
-`POST /api/projects` may include an authorized `galleryEntryId` for a just-published
-unbound draft; an existing source remains in place. Changing a saved draft's
-publication source is an explicit Gallery Publish/Update transaction, not a
-side effect of `PUT /api/projects/:id`.
-
-Create and Save acknowledge with a Project summary; only Open returns the full
-`projectText`. Identical Save retries return the existing revision without
-rendering another thumbnail or adding history. Changed writes check revision
-again at the atomic commit after preview preparation. Browser recovery writes
-capture their working-copy identity before enqueueing; Cloud acknowledgement
-and internal tab activation need not wait for IndexedDB completion. Recovery
-failures remain visible and never mark a Cloud Save as failed.
-
-Repeated Save updates the same id and does not consume another account slot.
-The first Save of an unbound New/imported/recovered Project creates a Cloud
-Project. The editor exposes no second Save command that silently creates a
-duplicate Project. Changed saves retain bounded history as described below;
-the server never evicts another Project to make room. A revision mismatch or
-capacity limit blocks only that explicit Save; editing and local recovery continue.
-
-The editor's compact Shelf stays at the right of the project tabs. Rename and
-Delete appear on row hover or keyboard focus, with inline editing and a delete
-confirmation. Opening an already open Cloud id selects its current tab without
-fetching or overwriting its unsaved drawing. Rename uses revision-checked Save;
-matching open sessions acknowledge the saved name while retaining other local
-edits. Delete removes the Cloud resource but keeps its open local drawing as an
-unbound unsaved tab, whose next Save creates a new Cloud Project.
-
-Account dashboard sections load on their first visit and remain mounted while
-switching sections within that account. Concurrent lists share one request;
-subsequent reads, mutations and account changes do not reuse a settled response.
-Immutable editor snapshots reuse netlist default plans, connectivity and crossing
-geometry across tab activations, with symbol-context and export-profile changes
-invalidating their results. Public mutable-input algorithms remain uncached.
-Workspace change detection compares immutable identities plus complete session
-metadata, and retains one portable text per open tab; computation cache budgets
-never cause a whole workspace to be serialized repeatedly.
-
-Publication metadata is loaded when Publish opens, without listing on every
-internal project-tab activation.
-
-Shelf cards expose Duplicate, Rename, Export, Favorite and Version history
-through the visible actions button, plus Open in new tab. Right-click and
-long-press retain normal browser behavior. Duplicate creates an independent
-private Project with all serialized circuit/source data
-and a new Project identity; it never inherits a Gallery link. Rename loads the
-current document and uses revision-checked Save, preserving its other content
-and publication association. Export downloads the complete stored Project file.
-
-Favorite is account-scoped metadata (`favorite`, default false), included in
-summary/open and full backup/restore. Toggling it changes neither Project bytes
-nor the drawing revision or publication; starred cards sort first. Older backups
-without the field restore false. Card actions report capacity, permission and
-revision failures without deleting existing Projects or overwriting newer edits.
+- One current revision per stable resource. Create/Save answer a summary;
+  only Open returns `projectText`. Identical retries return the existing
+  revision with no thumbnail or history; changed writes recheck revision at
+  the atomic commit. Repeated Save updates the same id (no extra account
+  slot). The first Save of an unbound Project creates one; there is no second
+  command that silently duplicates. A revision mismatch or capacity limit
+  blocks only that Save; the server never evicts another Project.
+- Summary/open include nullable `galleryEntryId` (private publication
+  metadata, preserved by full backups; older backups restore unlinked).
+  Save never republishes or takes over a publication; `POST` may carry an
+  authorized `galleryEntryId` for a just-published unbound draft; changing a
+  draft's source is an explicit Gallery Publish/Update. Publish reloads source
+  metadata when it opens.
+- `favorite` (default false) is account metadata in summary, open and backup;
+  it changes no bytes, revision or publication.
+- Duplicate is an independent Project (new identity, no Gallery link). Rename
+  is a revision-checked Save. Opening an already open Cloud id selects its
+  tab without fetching. Delete keeps an open drawing as an unbound unsaved
+  tab.
 
 ### Private save history
 
-Each changed Save atomically snapshots the displaced revision and advances the
-current Cloud Project. The newest three earlier revisions are retained; the
-current revision is separate. Identical retries create neither another revision
-nor a history entry. Pruning does not recover previously discarded history.
-The account boundary and optimistic revision guard remain the same as Save.
-
-Shelf **Version history** lists saved revisions and offers component comparison,
-Restore and Branch. Restore goes through revision-checked Save, preserving the
-displaced current version within the same retention bound. It retains the
-Project's publication/favorite binding but never republishes to Gallery.
-Branch opens an independent Project without that binding; saving it creates a
-new private draft. Component comparison uses the same
-[snapshot comparison](community-gallery.md#version-history) as Gallery history.
-This is bounded save history, not named milestones or a merge graph.
-
-The owned routes are `GET /api/projects/:id/versions`, version-specific
-`project`/`preview.svg` reads, and `POST .../versions/:versionId/restore`.
-Responses are private and not cached. Full-store backup/restore includes these
-snapshots; [Gallery-only backups](../gallery-backup.md) intentionally do not.
-The executable storage/retention boundary is
-[Cloud Project storage](../../worker/gallery-store-cloud-projects.ts); authorization and restore
-reuse live in [the HTTP handler](../../worker/gallery-cloud-projects.ts).
+Each changed Save atomically snapshots the displaced revision; the newest
+three earlier revisions are kept (pruning is final); identical retries add
+nothing. Version history offers component comparison
+([snapshot comparison](community-gallery.md#version-history)), Restore
+(revision-checked Save keeping publication/favorite, never republishing) and
+Branch (independent Project without that binding). Routes:
+`GET /api/projects/:id/versions`, version `project`/`preview.svg` reads,
+`POST .../versions/:versionId/restore`; private, not cached. Full-store
+backups include snapshots; [Gallery-only backups](../gallery-backup.md) do
+not. Storage: [Cloud Project storage](../../worker/gallery-store-cloud-projects.ts);
+authorization: [HTTP handler](../../worker/gallery-cloud-projects.ts).
 
 ### Working-copy transitions
 
-The editor session owns only the transient Cloud binding (`id` and acknowledged
-revision), the saved content baseline, and its recovery working-copy id. No
-server Session record is created. A successful Cloud acknowledgement advances
-the binding and saved baseline. If edits occurred while the request was in
-flight, the submitted snapshot is saved but the newer live content remains
-dirty. Undo back to the acknowledged content becomes clean.
+- The editor session owns only the Cloud binding (`id`, acknowledged
+  revision), saved baseline and recovery id; no server session. An
+  acknowledgement advances the binding; edits made in flight stay dirty; Undo
+  back to the acknowledged content is clean.
+- Dirty comes only from persistent edits; clean only from an acknowledged
+  Cloud Save of the current content (selection, view, export and panels
+  change nothing). File-menu/tab marks and the close question also treat a
+  Gallery publication of exactly the current content as saved. While dirty,
+  and only then, the browser-native `beforeunload` guard is registered; no
+  synthetic history, custom warning or unload-time async reliance.
+- Import/Export Project File never claim Save or clear dirty state; export
+  never removes recovery records (only retention and explicit deletion do).
+  Recovery writes capture identity before enqueueing; Cloud acknowledgement
+  does not wait for them, and recovery failure never fails a Save.
+- Opening/replacing stages and validates the whole candidate (bytes, JSON,
+  schema, approved symbols, preparation) first; invalid input changes
+  nothing. Before replacing dirty work the editor flushes a recovery write,
+  then offers **Save to Cloud and continue**, **Continue without saving** or
+  **Stay** (default Cancel). Cloud failure keeps everything in place; recovery
+  failure is shown as elevated risk, never as permission to discard.
+  **Continue without saving** deletes the outgoing recovery records; when it
+  leaves the editor (Gallery, Analytics), the saved tabs drop the edits too
+  (saved Projects revert, others close, the last yields to a blank circuit)
+  before the page leaves. Other replacements keep the outgoing Project in
+  recovery; the incoming Project gets its own working-copy id.
+- Startup offers the tab's latest valid record non-modally (Restore,
+  Download backup, Ignore) only when it says `unsavedAtSnapshot: true`, the
+  foreground is clean and this is not a refresh-restore. Pending writes stay
+  silent; failures surface while dirty.
+- Only an explicit human **Replace Project** installs an Agent-staged
+  candidate, ending the old Agent session.
 
-**Import Project File** and **Export Project File** are interchange operations.
-They never claim to be Save and never clear Cloud dirty state. A contextual
-backup download is offered only when recovery needs attention. Export/download
-does not remove recovery records; bounded retention and explicit user deletion
-remain their only removal paths.
+## Desktop
 
-The editor persistence lifecycle is the single source of unsaved truth. A
-successful persistent edit marks it dirty; only an acknowledged Cloud Save of
-the current content marks it clean. Selection, view, export, download, and
-panel changes do not. The unsaved marks on the File menu and a Project tab,
-and a tab's close question, also treat a Gallery publication of exactly the
-current content as saved: the Gallery keeps that content and its history. The
-next edit brings them back; an exported file never clears them. While dirty, and only while dirty, the editor registers
-the browser-native `beforeunload` guard for Back, Refresh, and tab/window close.
-The application does not synthesize history entries, customize the
-browser-owned warning, or depend on unload-time asynchronous storage as its
-only protection.
+The Windows preview (unsigned ZIP) serves the same editor on
+`app://analog-canvas`, offline: online modules are excluded (checked
+inventory) and native restrictions reject external requests; About opens only
+fixed product URLs, sending no content, paths or credentials. App data is
+`%APPDATA%\Analog Canvas`.
 
-Opening or replacing a Project stages and validates the complete candidate —
-read bytes, JSON/schema validation, approved-symbol validation, Project
-preparation — before the live Project changes. Invalid input leaves the
-Project, selection, history, recovery, and file state untouched. Before
-replacing dirty work the editor first attempts and flushes a recovery write,
-then offers **Save to Cloud and continue**, **Continue without saving**, or
-**Stay**,
-defaulting to Cancel. Cloud Save failure leaves the foreground
-Project and dialog in place. Recovery failure is shown in the same dialog as
-elevated risk but never grants permission to discard.
-A successful replacement seeds the incoming Project's own working-copy
-identity. **Continue without saving** is an explicit discard: it deletes the
-outgoing working copy's recovery records before the replacement proceeds.
-When the decision leaves the editor page (the Gallery or Analytics link), the
-window's saved tabs drop the edits too, so returning never brings them back:
-a Project with a saved version returns to it, any other tab closes (the last
-one gives way to a blank circuit), and the saved tabs are written before the
-page leaves.
-Every other successful replacement retains the outgoing Project in recent
-recovery.
+### Desktop file ownership
 
-On startup, the current tab's latest valid recovery record is offered
-non-modally only when it explicitly says `unsavedAtSnapshot: true`, the
-foreground Project is still clean, and the load is not the editor's explicit
-refresh-restore path. The offer provides Restore, Download backup, and Ignore.
-Normal pending/stored recovery writes stay silent; only failures are promoted
-while the foreground work is dirty.
-
-Agent File Resource staging stores a bounded candidate separately from the
-browser Project. Inspecting or requesting approval does not mutate the live
-Project. Only an explicit human **Replace Project** action may install a valid
-candidate, and replacement terminates the old Agent session.
-
-Required validation covers stable Cloud identity, optimistic revision
-conflict, capacity without eviction, canonical import/export stability, exact
-schema-version rejection, corrupt recovery,
-unsupported-schema retention, envelope/Project identity mismatch, retention
-ordering, quota and storage failure mapping, staged-candidate isolation, and
-human-approved replacement.
-
-## Internal desktop preview
-
-The Windows preview serves the same editor over a stable private
-`app://analog-canvas` origin. Online identity, Cloud, community, Agent,
-simulation and analytics are unavailable; service workers are not registered.
-The Web profile retains its existing formal Cloud Save contract.
-
-File / Save and Ctrl+S update a bound file or allocate a first library save.
-Save As creates an independent project; Export creates a portable exchange copy.
-Native Open, startup file requests and recent files use the current reader and
-normalization rules. See [Desktop file ownership](#desktop-file-ownership).
-
-Stable application data lives in `%APPDATA%\Analog Canvas`, outside the ZIP.
-On first upgrade, the old `Analog Canvas Preview` profile is offered for import
-before the renderer starts. Only durable settings, recent records and recovery
-stores are copied, with a checked, retryable snapshot; caches and logs are excluded.
-The previous application must be closed, original data remains untouched, and
-conflicting destination data is never overwritten. Unsupported Project versions
-retain the shared reader's rejection and recovery rules.
-
-The desktop build excludes online implementation modules and emits a checked
-module inventory. Native network/navigation restrictions independently reject
-external requests. The bundled fonts and graphics/netlist exporters work offline.
-Before destroying a responding desktop window after a clean close or confirmed
-Save/discard, the host captures the latest tab workspace through its existing
-persistence authority and awaits the serialized storage commit. Native window
-input is disabled during that final commit. Failure keeps the window open and
-reports the storage problem; retry captures the current workspace again.
-This protects active-tab and file-binding recovery across immediate close,
-restart and preview-profile import. The explicit discard fallback for an
-unavailable renderer remains available. Web persistence timing is unchanged.
-
-About displays version, source commit, file format and data locations.
-Its header entry is on the right. Explicit TokenZhang/repository/source actions
-open fixed product URLs in the system browser through a same-origin private
-command. They send no Project content, file paths or credentials. The renderer
-keeps its network/navigation restrictions; arbitrary external destinations are
-not accepted by the host command.
+- The main process owns the library (`%USERPROFILE%\Analog Canvas\Projects`,
+  one directory per Project with `project.icproj.json`; files are the source)
+  and native grants. Renderers hold opaque binding IDs and acknowledged
+  revisions; displayed paths authorize nothing.
+- Save As is an independent identity, rebinding only on success; Export never
+  rebinds or marks saved. Overwriting another saved Project archives it to the
+  recoverable recycle area; overwriting the source or another open tab is
+  refused; removing a recent never deletes a file.
+- Writes go to a temp sibling and atomically replace, comparing target bytes
+  with the acknowledged version before and again before replacement
+  (optimistic, not a lock); failure keeps binding, edits and destination.
+  First Save and copies record a durable creation identity first; retries
+  reuse it only for matching content.
+- Close saves or explicitly discards every dirty tab, keeping the window on
+  cancel or failure, and awaits the workspace storage commit before closing.
+  Changed saves keep three previous versions (retries do not rotate).
+- Restore reacquires a grant only when the target's byte digest matches its
+  receipt; otherwise a detached unsaved copy opens with a notice.
+- The `.icproj` association is explicit from About; `.json` is never
+  registered.
 
 ### Desktop User Components
 
-User Components authoring and validation share the existing component/native
-source model. Local library records live in stable application data as
-`components.json`, separately from Project files and recovery. Apply changes a
-Project or an isolated authoring draft; Save to local library makes a reusable
-record without login, Cloud synchronization or public publication. Import
-creates an independent record; export includes the self-contained definition
-and any complete native source package. A selected revision is checked before
-placement, then the Project captures its own definition/resources. Library
-updates/removal never rewrite existing Project captures.
-
-The private main-process store serializes operations, validates complete
-definitions, checks revisions and atomically replaces its bounded library file.
-An identical completed-save retry returns the same revision; reusing its
-operation identity with different content is rejected. Stale writes/placement,
-invalid packages, oversized requests and malformed retained data are refused
-without replacing valid data. Removal is recoverable and restoration advances
-the revision. Limits are 500 records / 16 MiB including removed records, and the
-shared 128 KiB per-definition limit. Back up application data while closed.
-The single desktop process owns coordination; externally replacing its data file
-while the app is running is outside this coordination contract.
-
-Local projects displays primary Open/favorite actions in compact rows. Other
-operations remain under More; external files and folder settings use separate
-disclosures. History is a secondary view. These layout changes retain native
-file authority, confirmations, conflict detection and recovery semantics.
-
-The preview is distributed as an unsigned Windows ZIP. Window close offers to
-save all changed tabs and stays open if any save is canceled or fails. External
-file changes are detected before overwriting. About offers explicit enable/remove
-of a per-user `.icproj` association, including cold and running-instance opening.
-This is a filename alias for canonical Project JSON; `.json` is never registered.
-Continuous watching, installers, signing and automatic updates remain deferred.
+Local records in app-data `components.json` (no login, sync or publication;
+captures never rewritten) are serialized, validated and atomically replaced;
+identical retries return the same revision; stale or invalid writes refuse;
+removal is recoverable. Limits: 500 records / 16 MiB, 128 KiB per definition.

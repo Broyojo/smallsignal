@@ -7,268 +7,158 @@ Version: `3.0`
 Primary owner: `packages/agent-adapter`
 
 The generated OpenAPI at `/api/agent/openapi.json` is the normative wire
-contract. The runtime exposes exactly one Circuit endpoint and four operations:
+contract; transport, pairing and scopes are in
+[web sessions](web-agent-session.md).
 
-```text
-POST /api/agent/sessions/{sessionId}/circuit
-  capabilities | snapshot | transact | render
-```
+## Circuit operations
 
-Every request uses `apiVersion: "3.0"`, a stable `requestId`, and the
-`sessionId` returned by claim redemption. The bearer token is sent only in the
-Authorization header. There are no versioned URL aliases, query operations,
-dynamic catalog snapshots or compatibility readers. Project-structural writes
-remain a form of `transact`; they are not a fifth operation.
-The separate public Agent Kit may carry a static projection of reviewed built-in
-product assets; it is not Document state or a Circuit operation.
+`POST /api/agent/sessions/{sessionId}/circuit` with exactly four operations:
+`capabilities`, `snapshot`, `transact`, `render`. Every request carries
+`apiVersion: "3.0"`, a stable `requestId` and the `sessionId` from claim
+redemption; the bearer goes only in `Authorization`. No versioned URL aliases,
+query operations, dynamic catalog snapshots or compatibility readers. Project
+structural writes are a form of `transact`, never a fifth operation; so are
+`snapshot.traceNet` (read-only trace from the GUI's Project Connectivity
+Index) and the session status read. The public Agent Kit's static catalog is
+not Document state or an operation.
 
-Session pairing and bearer refresh are transport concerns, not Circuit
-operations. The local MCP Helper redeems a claim once, persists only the
-revocable connector, and uses `/api/agent/connectors/resume` to obtain fresh
-process-local bearers.
+- `capabilities` reports operations, permissions, edit kinds,
+  `commandKinds`, `transactionForms`, resource capabilities and server limits.
+- `snapshot` returns one complete read-only Document plus the bounded Project
+  index (with `structureRevision`).
+- `render` returns a bounded formal or diagnostics SVG.
 
-## Operation contract
+An incompatible client gets the version diagnostic, never an incompatible
+Snapshot. Saved simulation containers use Folder identity (no parallel Setup
+writer). GUI and Agent writes cross the same Edit Engine and permission
+checks. Project file loading stays independently backward-compatible.
+Additive Snapshot fields (Instance `styleOverride`, `signalFlowParameters`,
+Cell interfaces, bulk defaults, inductor couplings, external definitions)
+appear only when present. Local and production codecs share one schema.
 
-| Operation      | Purpose                                                                                               |
-| -------------- | ----------------------------------------------------------------------------------------------------- |
-| `capabilities` | Report the exact operations, permissions, edit kinds, resource capabilities, and server-owned limits. |
-| `snapshot`     | Return one complete, read-only selected Document plus the bounded Project index.                      |
-| `transact`     | Dry-run or atomically commit typed Document edits, or a bounded Project structural transaction.       |
-| `render`       | Return a bounded formal or diagnostics SVG artifact.                                                  |
+## Snapshot semantics
 
-Snapshot connectivity is bidirectional: every resolved Instance pin reports
-its `netId`, and every Net reports its complete terminal membership. Canvas
-`port` and `port-filled` are ordinary single-pin Instances. Formal cell
-terminal mappings report stable ID, direction, Net, and their ordinary Port
-Instance; they never materialize a separate canvas object class. The Project
-index reports `structureRevision` for structural optimistic concurrency.
+- Connectivity is bidirectional: each resolved pin reports `netId`; each Net
+  its complete terminal membership. `port`/`port-filled` are ordinary
+  single-pin Instances; formal terminal mappings report ID, direction, Net and
+  their Port Instance, never a separate object class.
+- Each placed pin reports read-only `connection`: `contactPoint`, persistable
+  `gridLanding`, derived `escapePath`, `outward`. Route polylines and contact
+  points may hold decimals; authoring uses endpoint identity and
+  `gridLanding`, never copies `contactPoint` into a Junction or waypoint.
+- Nets are resolved Logical Nets (same names, scopes, power roles and
+  conflicts as GUI, ERC and export). `net.id`/`netId` is a deterministic
+  representative for that Document revision, not persistent: discard all of
+  them after any commit, stale-revision result or uncertain outcome. Naming
+  is marker-owned; raw Base-Net name/scope/role writes, typed Evidence and
+  terminal-Net edits (kept for GUI parity) are not a naming API.
+- `textBounds` (geometry Snapshot) adds each annotation's `text.position` and
+  `text.bounds` as label placement measures them. `instanceLabels` (full or
+  `pins`) adds per-instance `annotations` (`id`, `kind`, `parameter`,
+  `visible`, `resolvedText`, `position` = the anchor `move-annotation` sets).
+  Both are opt-in so released strict clients keep their fields.
+- RichText uses the Project's one union: styled runs or one
+  `{kind:"math", latex, display}` run. Generated SVG, glyph paths and formula
+  metrics are never accepted as mutation data.
+- VDD is a named Net with rail geometry and a bound annotation, never a
+  symbol; MOS bulk is a terminal/Net fact ([schematic model](schematic-model.md)).
 
-RichText payloads use the Project's one canonical union. An editable text
-content is either ordinary styled runs or one `{kind:"math", latex, display}`
-run. Agents submit only bounded formula source and display intent through the
-existing typed edit; generated SVG, glyph paths, and formula metrics are never
-accepted as mutation data and do not add an operation or endpoint.
+## Transactions
 
-Snapshot format `3.0` reports each placed pin's read-only `connection` with
-`contactPoint`, persistable `gridLanding`, derived `escapePath`, and `outward`.
-Route polylines and contact points may contain derived decimals. Agent
-authoring submits endpoint identity and uses `gridLanding` for any explicit
-page geometry; it never copies `contactPoint` into a Junction or waypoint.
-
-VDD is a named Net with Route/Junction rail geometry and a net-name-bound
-annotation. It is never a symbol, and local versus global scope is explicit in
-the Net/edit payload. MOS Instances use canonical `nmos`/`pmos`
-assets, whose deterministic default visual variant is
-`textbook-3terminal`; explicit bulk connectivity remains a terminal/Net fact.
-
-## Mutation safety
-
-The MCP compatibility exchange targets API and Snapshot 3.0: saved simulation
-containers and their operations use Folder identity, with no parallel Setup writer.
-An incompatible client receives the existing version diagnostic rather than
-accepting an incompatible Snapshot. Project file loading
-remains independently backward-compatible. Additive Snapshot fields
-include Instance `styleOverride` and `signalFlowParameters`, Cell interfaces,
-bulk defaults and inductor couplings (each only when the Cell has them), and
-Project external definitions. Local and production
-codecs now reference one schema rather than independently maintained copies.
-
-`transact.command` is a mutually exclusive alternative for Model switching,
-Cell lifecycle, copy, alignment and selection transforms. The browser reuses
-GUI/shared planners; resulting edits still pass through the same revision,
-permission and controller boundary. `capabilities` advertises supported
-`commandKinds` and `transactionForms`. Structural commands require
-`expectedStructureRevision`.
-
-`transact.actions` is a further exclusive form: up to 256 of the high-level
-authoring actions MCP `apply_actions` takes ([authoring](../agent/shared/authoring.md)).
-Where `transactionForms` lists `actions`, the browser plans the list and
-commits it as the one edit batch, wire batch, command or focus operation it
-is. The MCP Helper sends every `apply_actions` list this way and plans none
-itself: an editor page that does not list `actions` gets `EDITOR_OUTDATED`,
-asking for a reload, and nothing is sent. A list that needs
-several transactions is refused with `ACTION_BATCH_NOT_ATOMIC` and
-`error.calls`, the consecutive calls to send instead. A malformed list, or one
-naming what the Document does not hold, is refused with
-`ACTION_COMPILE_FAILED`. A refusal names the action it concerns in
-`error.actionIndex` and `error.actionKind`, and its message begins
-`actions[i] (kind):`. A list sent on unchanged (wires, one command, a batch of
-commands, focus, undo or redo) is checked against `expectedRevision` as its
-form is. A list resolved against the Document, by Reference or target, needs
-Snapshot permission; it is planned on the Document as it stands and committed
-in the same step, so no edit lands between the two. A list that changes nothing answers
-`applied: false` and adds no history entry. A `focus` beside other actions
-never adds a transaction: it is shown once the rest commits (not on a dry
-run), its result in `semantic`, and it needs `editor.semantic-control` like a
-focus alone; a view that cannot show it leaves the commit standing with a
-warning diagnostic. A host with no live view skips the accompanying focus
-with `VIEW_STEP_SKIPPED`; it still validates permissions and commits the
-drawing atomically. A standalone view-control request requires a live view.
-
-Undo/redo uses the shared browser Document/Project history and requires all
-edit permissions. Dry-run does not advance history; there is no private Agent
-stack or last-Agent-only undo guarantee. Transaction receipts retain the
-server's diff, diagnostic delta, and diagnostic locators.
-
-Optional `snapshot.traceNet` requests cross-Cell/global-Net tracing from the
-same Project Connectivity Index used by the GUI; the result is read-only
-`trace` evidence. It is not a fifth Circuit operation or a client-side Net
-inference algorithm.
-
-- Ordinary edits target one Document and one `expectedRevision`. Add/remove
-  Cell and formal-interface work uses `structureEdits` plus one
-  `expectedStructureRevision`; nested Document changes still carry their exact
-  revisions and reuse the same typed edit union.
-- Dry-run is optional and shares commit validation; it is not a normal-path
-  prerequisite. Raw edits and structure edits retain their revision boundaries;
-  target-resolving high-level actions use the current-Document planning described above.
-- All edits commit or none commit, and a successful commit advances revision
-  once.
-- Reuse a `requestId` only for an exact-payload retry. A different payload with
-  the same ID is rejected.
-- A Snapshot or whole Project is never accepted as a mutation payload;
-  structural transactions contain only the Edit Engine's typed Project
-  structure edits: `add_document` / `remove_document` / `rename_document`,
-  `rename_project`, `add_source_file`,
-  `upsert_external_subcircuit_definition` /
-  `remove_external_subcircuit_definition`, `upsert_simulation_folder` /
-  `remove_simulation_folder`, and nested `transact_document`.
-- GUI and Agent writes cross the same Edit Engine and permission checks.
-
-After commit, use receipt/delta and targeted reads when sufficient. Render or
-request a full Snapshot only when needed for the task. On a stale revision or
-uncertain transport result, refresh affected state and reconcile;
-do not replay a changed or obsolete transaction.
-
-Agent Snapshots expose resolved Logical Nets, so lookup and inspection use the
-same names, scopes, power roles, and conflicts as the GUI, ERC, and export
-paths. Naming remains marker-owned: raw Base-Net name/scope/power-role writes
-are not a naming API. Existing typed Evidence and non-graphical terminal-Net
-edits are available for GUI copy/property parity; they retain Edit Engine
-validation and do not create an alternate naming authority.
-
-Every Snapshot `net.id` and every `netId` reference to it is a deterministic
-Logical-Net representative scoped to that Snapshot Document revision. It is
-not a persistent identity: split, merge, pruning, or Evidence edits may change
-the representative even when some circuit intent remains recognizable. After
-any commit, stale-revision result, or uncertain transport outcome, discard all
-previous Snapshot Net IDs; resolve current connectivity before using Net IDs
-again. A full Snapshot is unnecessary for unrelated geometry-only verification.
-A geometry Snapshot asked with `textBounds` also measures each annotation the
-canvas draws, as label placement measures it: `text.position`, where its
-alignment end stands, and `text.bounds`, the box its glyphs fill. Without the
-option the answer keeps the fields released clients parse strictly.
-A full or `pins` Snapshot asked with `instanceLabels` gives each instance
-record `annotations`: the labels that name or value that part (Reference,
-Value and parameter labels, a Cell Pin marker's name label, an older drawing's
-literal part label), each with `id`, `kind`, `parameter`, `visible`,
-`resolvedText` and `position`, the resolved anchor a `move-annotation` sets.
-It is opt-in for the same reason.
-Persisted Base-Net IDs
-remain valid only while their objects survive the edit lifecycle and are not
-exposed as an alternate Agent naming protocol.
-
-`wireIntent` has the same Route planner as interactive Wire. Its optional
-`routingMode` is `orthogonal` (default), `octilinear`, or `free` ([Routing rationale](../adr/routing.md)).
-Left out, it refuses waypoints with a 45-degree step between them or from an
-end's landing, which orthogonal routing would bend into a corner. A tap on a
-Route (`wire-at` or `route-segment`) lands exactly at its point, which must
-align to the pin grid as a waypoint does; it is refused off it. An optional
-`cornerOrder` selects the deterministic diagonal/orthogonal pair used when an
-exact 45-degree leg cannot reach the target. It never creates a diagonal-only
-edit or a second Route model.
-
-## Optional Agent-local planning
+- Edits follow the [Edit Engine](edit-engine.md): one Document per
+  `expectedRevision`; Cell and interface work in `structureEdits` with
+  `expectedStructureRevision`; all or nothing; optional dry run. A Snapshot or
+  whole Project is never a mutation payload. Reuse a `requestId` only for an
+  exact-payload retry.
+- `transact.command` (exclusive form): Model switching, Cell lifecycle, copy,
+  alignment, selection transforms via the GUI planners; structural commands
+  require `expectedStructureRevision`.
+- `transact.actions` (exclusive form): up to 256 MCP `apply_actions` actions
+  ([authoring](../agent/shared/authoring.md)). The browser plans and commits
+  them as one edit batch, wire batch, command or focus operation. The MCP
+  Helper never plans them itself: an editor not listing `actions` in
+  `transactionForms` gets `EDITOR_OUTDATED` and nothing is sent. Refusals:
+  `ACTION_BATCH_NOT_ATOMIC` (with `error.calls`, the consecutive calls to send
+  instead), `ACTION_COMPILE_FAILED` (malformed or naming absent objects); each
+  names `error.actionIndex`/`error.actionKind` and its message starts
+  `actions[i] (kind):`. Pass-through forms keep their `expectedRevision`
+  check; target-resolving lists need Snapshot permission and are planned and
+  committed in one step on the current Document. A no-change list answers
+  `applied: false` with no history entry.
+- `focus` beside other actions adds no transaction: shown after commit (not on
+  dry run), result in `semantic`, needs `editor.semantic-control`; a view that
+  cannot show it leaves the commit with a warning; a host without a live view
+  skips it with `VIEW_STEP_SKIPPED`. A standalone view request needs a live
+  view.
+- Undo/redo use the shared browser history and require all edit permissions;
+  no private Agent stack. Receipts keep the server diff, diagnostic delta and
+  locators.
+- `wireIntent` uses the interactive Wire planner. `routingMode` is
+  `orthogonal` (default), `octilinear` or `free`
+  ([routing rationale](../adr/routing.md)); left out, waypoints with a 45°
+  step are refused. A tap on a Route (`wire-at`, `route-segment`) lands
+  exactly there and must be on the pin grid. `cornerOrder` picks the
+  diagonal/orthogonal pair when an exact 45° leg cannot reach.
+- After a stale revision or uncertain result, refresh and reconcile; never
+  replay a changed or obsolete transaction.
 
 `@icm/agent-routing` expands a complete Agent-authored RouteGraph into typed
-edits. Its graph is transient helper input, never Project data or an API
-operation. It does not choose topology, supply omitted branches, or reroute
-conflicts; a conflict yields no edits. Its octilinear input limit does not
-restrict ordinary free-angle Route edits. Exact helper types and behavior
-belong to [the package](../../packages/agent-routing/src/types.ts).
+edits; it chooses no topology and yields no edits on conflict
+([types](../../packages/agent-routing/src/types.ts)).
 
-## File Resource boundary
+## Sibling resources
 
-`POST /api/agent/sessions/{sessionId}/files` is separate from Circuit
-operations. It provides authorized bounded Project/formal-artifact download,
-Project/structural-SPICE candidate staging, and the advertised simulation input
-workspaces and execution artifacts. Staging never changes the browser Project;
-replacement requires explicit human approval.
+- `/files` (File Resource): bounded Project/formal-artifact download,
+  Project/structural-SPICE candidate staging, simulation workspaces and
+  artifacts. Staging never changes the browser Project; replacement needs
+  explicit human approval.
+- `/simulation`: prepare/run through the shared SimulationService
+  ([execution](simulation-execution.md)); saved setup changes are Project
+  structure edits.
+- `/projects` (`resources.project`):
+  - `list-gallery`, `read-gallery-entry`, `read-gallery-entries` (size
+    bounded): cursor-paged public entries with Project Code, optional netlist
+    and `aiGenerated`; simulation folders only per
+    [testbench privacy](community-gallery.md#testbench-privacy). Adapters
+    parse strictly and report unknown fields with where to update
+    (`/api/agent/mcp-manifest.json`); the MCP release reading a new field
+    ships before the Editor sends it.
+  - `publish-gallery-entry` / `update-gallery-entry` publish the tab's working
+    copy via the Editor's Publish client (`name`, `description`, `tags`),
+    always AI-marked (only the author unmarks, in the Editor); update defaults
+    to the copy's source entry and keeps unnamed fields; both answer
+    `galleryEntryId`, `url`, `previewRevision`. An AI account's
+    `takeOver: true` republishes another AI account's entry under its name
+    ([take-over](community-gallery.md)), never a person's.
+  - `list-gallery` `scope: "ai-seats"` lists every AI entry (incl. rejected,
+    withdrawn) with `status` and `rejectReason`, `status` filtering; a person
+    gets `AI_ACCOUNT_REQUIRED`; `status` alone is `GALLERY_STATUS_NEEDS_SCOPE`.
+  - `read-project-code`/`replace-project-code`, `read-netlist`/
+    `replace-netlist` use the Editor's planners with structure-revision guards.
+    Netlist replacement is limited to device names, model targets and
+    parameter values; topology goes through Project Code or transactions.
+  - `list-projects`, `list-cells`, `import-cell`
+    (`importMode: "project-local-copy"`, needs `expectedStructureRevision`;
+    repeats report `already-imported`). Failures carry `recovery`: `sign-in`,
+    `refresh`, `fix-input` or `retry`.
+  - Scopes: Cloud Cell ops `project.import`; code reads `project.download`;
+    writes their Circuit edit scopes; Gallery reads `circuit.snapshot`;
+    publication `gallery.publish` (no edit scope implies it). No second Cloud
+    store or write path.
+- No arbitrary host files or code execution; authored SPICE runs only in the
+  isolated executor.
 
-`POST /api/agent/sessions/{sessionId}/simulation` provides preparation and run
-operations through the shared SimulationService. Saved setup changes use normal
-Project structure edits; artifacts use File Resource, not Circuit render.
-See [execution and resources](simulation-execution.md).
+## Model sources
 
-`POST /api/agent/sessions/{sessionId}/projects` is the Project Resource
-sibling, advertised in `capabilities` as `resources.project`. `list-gallery`,
-`read-gallery-entry`, and the response-size-bounded `read-gallery-entries`
-provide cursor-paged access to every public Gallery entry, complete canonical
-Project Code, and an optional generated SPICE or Spectre netlist. The Project
-Code carries an entry's simulation folders (its testbench) only for the
-signed-in account's own entries, an AI account's for an AI account, and every
-entry for the Owner's own accounts
-([testbench privacy](community-gallery.md#testbench-privacy)); a read, open or
-insert of anyone else's gets none. Each entry
-states its saved AI mark as `aiGenerated`. Adapters parse these answers
-strictly; from the release that reads `aiGenerated` on, an adapter that meets
-a field it does not know reports the schema failure with where to update
-itself (`/api/agent/mcp-manifest.json`). The MCP release that reads a new
-field ships before the Editor sends it.
-`publish-gallery-entry` and `update-gallery-entry` put the working copy its tab
-shows on the Gallery through the Editor's own Publish client, under the
-signed-in Editor session, with the Publish dialog's fields (`name`,
-`description`, `tags`). What an Agent publishes or updates carries the AI
-mark; only its author changes that, in the Editor. An update defaults to the
-entry the working copy was published as or opened from in the Editor and
-keeps every field it does not name. Both answer `galleryEntryId`, `url` and
-`previewRevision`. Signed in as an AI account, `update-gallery-entry` with
-`takeOver: true` publishes a redrawn version of another AI account's entry
-under the signed-in account's name ([take-over](community-gallery.md));
-a person's entry is never taken over. Signed in as an AI account,
-`list-gallery` with `scope: "ai-seats"` lists every AI account's entries from
-`GET /api/gallery/mine?scope=ai-seats`, rejected and withdrawn ones included,
-each with `status` and, when the Owner gave one, `rejectReason`; `status`
-narrows them, and the cursor pages through that one list. Only that scope
-carries the two fields, so an adapter that predates them never meets them. A
-person's session gets `AI_ACCOUNT_REQUIRED`; `status` without the scope is
-`GALLERY_STATUS_NEEDS_SCOPE`.
-`read-project-code` / `replace-project-code` and
-`read-netlist` / `replace-netlist` expose the live Editor's existing code
-planners with Project structure-revision guards. Project Code replacement can
-add, update or remove complete authored structure. Netlist replacement is
-deliberately limited to the device names, model targets and parameter values
-accepted by the Editor's Netlist panel; topology and connectivity use Project
-Code or Circuit transactions, not a second text-import implementation.
+`apply_model_source` accepts native `spice`/`spectre` owners with optional
+`transform.language`/`transform.process`; GUI and Agent share one converter,
+dependency validation and atomic Apply; saved drafts may keep a distinct
+language. File Resource spans with
+`derived:true` and `sourceLength` navigate to the native owner and never
+authorize byte-reverse edits.
 
-The same resource retains `list-projects`, `list-cells`, and `import-cell` with
-`importMode: "project-local-copy"`. The live browser lists the signed-in
-account's Cloud Projects and their Cells. `import-cell` requires
-`expectedStructureRevision` and commits the shared cross-Project import plan
-through the ordinary Project transaction controller as an independent
-project-local copy; a repeated import reports `already-imported`. Failures
-carry a `recovery` hint (`sign-in`, `refresh`, `fix-input`, or `retry`). The
-Cloud Cell operations require `project.import`; active code reads require
-`project.download`; writes require their corresponding Circuit edit scopes;
-Gallery reads require `circuit.snapshot`; Gallery publication requires
-`gallery.publish`, which no edit scope implies. The resource owns no second Cloud
-store, imported-Cell format, or write path; see [Edit Engine](edit-engine.md).
+## Acceptance
 
-These resources do not expose arbitrary host files or a general-purpose
-code-execution API. Authored raw SPICE is simulator input within the configured
-isolated executor; its capability does not grant host-shell access.
-
-## Validation
-
-`apply_model_source` accepts native `spice` and `spectre` owners and optional
-`transform.language` / `transform.process`. GUI shortcuts and Agent transactions
-share one converter, dependency validation and atomic Apply authority.
-Saved model drafts can retain a distinct language. File Resource model-source
-spans may carry `derived:true` and `sourceLength`; these navigate to the native
-owner and explicitly do not authorize byte-reverse edits.
-
-Generated JSON Schema and OpenAPI artifacts are checked against the runtime
-schemas. Contract tests cover authentication, exact version rejection,
-capabilities closure, complete Snapshot topology, typed-edit parity,
-request-ID binding, revision conflict, bounded render, and File Resource
-approval boundaries.
+Generated JSON Schema/OpenAPI match the runtime schemas; contract tests cover
+auth, version rejection, capabilities, topology, edit parity, request-ID
+binding, revision conflict, render bounds and File Resource approval.
