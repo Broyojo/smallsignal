@@ -4,9 +4,8 @@ Status: `accepted`
 
 Primary owner: `packages/spice`
 
-Dialect-neutral structural boundary between the [SPICE frontend](spice-frontend.md#compatibility-profile)
-(which owns the supported subset) and the Schematic importer. Exact shapes:
-[`ir.ts`](../../packages/spice/src/ir.ts).
+Dialect-neutral boundary between the [SPICE frontend](spice-frontend.md#compatibility-profile)
+and the Schematic importer; shapes in [`ir.ts`](../../packages/spice/src/ir.ts).
 
 ```text
 SourceBundle → lossless syntax + typed projections → elaboration

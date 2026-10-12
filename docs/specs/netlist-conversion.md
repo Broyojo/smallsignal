@@ -28,33 +28,30 @@ Request `{ text, source, target, fragment }`; `source`/`target` are `spice`,
 
 ## Preserved subset
 
-- Ideal R/C/L; conventional M/D/Q models; declared or external X subcircuits;
-  linear four-node E/G.
-- Ordered subcircuit interfaces, globals, scalar parameters, common arithmetic.
-  Spectre port parentheses removed for SPICE. Suffixes converted explicitly
-  (Spectre `M` = mega, SPICE `M` = milli). Meaning-changing node case aliases
-  are rejected; SPICE→Spectre also rejects case-mismatched subcircuit calls,
-  closing names, parameter references and known formal overrides (scoped
-  local/global; overrides use the caller's scope). Owned model conversion
-  checks the helper closure and each file, returning a located refusal
-  without replacing the source. No resolution into opaque libraries or
-  model-card bodies.
-- DC/AC sources, complete PULSE/PWL, SIN with damping and phase; missing or
-  extra values are diagnostics, never invented or dropped.
-- Simple OP, single-source DC, AC and TRAN. Nested sweeps, measurements,
-  options and behavioral expressions are outside the subset.
-- Quoted local include paths kept unopened. SPICE model/library declarations
-  go in a `simulator lang=spice` section for SCS (no equation translation or
-  qualification); existing SPICE sections in SCS stay SPICE.
-- Spectre instance names gain the SPICE prefix if needed; collisions block.
-  Declared subcircuits and reviewed SKY130 wrappers use X even when named
-  M…; undeclared M/D/Q follow model designators; other external masters need
-  an explicit X or declaration (no silent subcircuit rewrite).
+- Ideal R/C/L; conventional M/D/Q; declared or external X; linear four-node
+  E/G; DC/AC sources, complete PULSE/PWL, SIN with damping and phase; simple
+  OP, single-source DC, AC, TRAN. Missing or extra values are diagnostics,
+  never invented or dropped. Nested sweeps, measurements, options and
+  behavioral expressions are outside the subset.
+- Ordered subcircuit interfaces, globals, scalar parameters, common
+  arithmetic; Spectre port parentheses are dropped for SPICE. Suffixes are
+  explicit (Spectre `M` = mega, SPICE `M` = milli).
+  Meaning-changing node case aliases are rejected; SPICE→Spectre also rejects
+  case-mismatched calls, closing names, parameter references and known formal
+  overrides (local/global scope; overrides in the caller's scope). Owned model
+  conversion checks the helper closure, returning a located refusal without
+  replacing the source.
+- Quoted local includes are kept unopened. SPICE model/library declarations go
+  in a `simulator lang=spice` section for SCS (no translation or
+  qualification); existing SPICE sections stay SPICE.
+- Spectre instance names gain the SPICE prefix if needed (collisions block);
+  declared subcircuits and reviewed SKY130 wrappers use X even when named M…;
+  undeclared M/D/Q follow model designators; other masters need an explicit X
+  or declaration.
 - Never invents model cards, maps PDK aliases, infers geometry or searches the
-  server filesystem.
-- Blocked: `.control`, unsupported device parameters, Spectre model
-  equations, UIC semantics, arbitrary simulator functions. SCS output is not
-  qualified with licensed Spectre.
+  server. Blocked: `.control`, unsupported device parameters, Spectre model
+  equations, UIC, arbitrary simulator functions. SCS output is not qualified
+  with licensed Spectre.
 
 ## Import boundary
 
