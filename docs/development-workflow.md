@@ -2,11 +2,9 @@
 
 ### 规则与入口
 
-这是仓库开发流程的唯一导航。原版 Skill 决定所调用方法的步骤；工程文档决定
-仓库的契约、验证和发布义务。用户明确限定的工作范围持续有效。发现方法与规则
-冲突时说明具体冲突和影响，形成显式决策后更新对应规则。
-
-阶段入口：
+仓库开发流程的唯一导航。原版 Skill 决定方法步骤；工程文档决定契约、验证和
+发布义务。用户明确限定的范围持续有效。方法与规则冲突时说明冲突和影响，形成
+显式决策后更新对应规则。
 
 | 阶段     | Skill           | 进入前需要                     | 完成后得到                      |
 | -------- | --------------- | ------------------------------ | ------------------------------- |
@@ -19,103 +17,60 @@
 | 交付     | pr              | 经审查的候选与证据             | PR，再由交付设施验证并发布      |
 | 回顾     | retro           | 指定会话来源                   | 待人工选择的改进候选            |
 
-显式调用：Codex 输入 `$grill-with-docs`、`$to-spec` 等 Skill 名称，CLI / IDE 也可
-用 `/skills` 选择；Claude Code 输入 `/grill-with-docs`、`/to-spec` 等。会话所在的
-checkout 必须包含 `.agents/skills/`；其他 worktree 不会继承尚未合入的文件。
-Claude Code 在每个新 checkout 或 worktree 中先运行 `pnpm setup:skills`，再开始
-会话。注册检查与冲突处理见 references/README.md。新增后未显示时，重新启动
-会话或客户端；不复制一套全局版本。
+调用与注册见 references/README.md；会话所在 checkout 必须包含 `.agents/skills/`。
 
-需求明确的小任务使用已有来源直接实施。拆票用于多人、多会话或真实阻塞；每票
-交付一条可验证的纵向行为，不按文件夹切成纯 schema/API/UI 三份工作。宽机械
-重构按原版 expand–contract 例外处理。
+需求明确的小任务直接实施。拆票只用于多人、多会话或真实阻塞；每票交付一条可
+验证的纵向行为。宽机械重构按原版 expand–contract 例外。用户可一次授权多个
+阶段；已确认决策在阶段间继承，新事实使其失效时重新讨论。不额外重复 implement
+已包含的 tdd 和 code-review。
 
-按原版保留显式调用入口与确认。用户可一次授权多个阶段；阶段之间继承已确认
-决策，不重复询问同一决定。新事实导致原决策失效时重新讨论。阶段内部的依赖
-由父 Skill 调用；不额外重复运行 implement 已包含的 tdd 和 code-review。
+并发任务用独立 branch/worktree，分支 `codex/issue-<n>-<topic>`（用户指定优先）。
 
-需求、Spec、拆票尽量保持连续上下文。交接完成后，每个 ticket 可以在新上下文
-实施；任务描述要独立可读。每个实施目标由一个明确负责人负责，记录 owned paths，
-协调共享契约；并发任务使用独立 branch/worktree。普通目标分支使用
-`codex/issue-<n>-<topic>`，用户已有分支或指定命名优先。集成或批量分支按实际
-关系选择，局部进度笔记按需放在忽略的 plan/。
+implement-spec 沿用 frontier 调度和每票一个 worktree 的子代理，并替换如下：
 
-implement-spec 原版与本仓库有两处冲突：其 draft PR 标记为关闭 Spec 与全部
-ticket，合并即关闭，早于 Production 验收；其实施子代理只运行 tdd，单个 ticket
-没有本仓库要求的验证、双轴审查与 Test-Impact commit。因此本仓库沿用它的
-frontier 调度和每票一个 worktree 的并行实施子代理，并作如下替换：
-
-- 用户显式调用 implement-spec，即授权实施子代理按
-  `.agents/skills/implement/SKILL.md` 原文处理各自的 ticket；子代理不经 Skill
-  工具调用 implement，其中的 tdd 与 code-review 照常调用。
-- 每个 ticket 按 pr 与 docs/deployment.md 单独交付，Production 验收后关闭。
-  这是 implement-spec 的例外：不建集成分支，也不做最终合并审查；整个 Spec
-  由父 Issue 的全部范围验收覆盖。
-- 阻塞 ticket 合入 main 后，其下游即可在新的 worktree 中从 main 开始。阻塞
-  ticket 的 Production 验收失败时，先按 docs/deployment.md 修复或回滚，再继续
-  其下游。
-- 跨 worktree 共享的探索笔记按原版放在仓库外的目录；单个 checkout 的进度
-  笔记仍放 plan/。
+- 子代理按 `.agents/skills/implement/SKILL.md` 原文处理 ticket，不经 Skill 工具
+  调用 implement；其中 tdd 与 code-review 照常调用。
+- 每个 ticket 按 pr 与 docs/deployment.md 单独交付，Production 验收后关闭；
+  不建集成分支，不做最终合并审查，由父 Issue 的全部范围验收覆盖整个 Spec。
+- 阻塞 ticket 合入 main 后，下游从 main 开新 worktree；其 Production 验收失败
+  时先按 docs/deployment.md 修复或回滚。
 
 ### 实现与审查
 
-实施前读取关联 Issue 的正文、有效澄清及相关产品契约，确定当前目标的固定
-比较基线。若变更会改变已接受契约，在相同目标中更新它并核对调用者。
+实施前读取关联 Issue 正文、有效澄清和相关产品契约，确定固定比较基线。契约
+改变时在同一目标中更新它并核对调用者；文档规则见 AGENTS.md「Documentation」。
 
-在已经确认的公共 seam 执行原版 TDD。优先较高且能真实观察行为的边界，选择
-能执行它的合适环境；公共边界不等于一律使用浏览器。测试的期望来源独立于
-实现，内部协作者使用真实实现，外部服务按接口隔离。
+在已确认的公共 seam 执行原版 TDD（测试原则见 docs/testing/README.md），完成
+其中的检查后执行原版 code-review。
 
-按 docs/testing/README.md 完成聚焦检查、最终完整测试和额外风险义务，然后
-执行原版 code-review。
+审查输入：已提交候选用 `git diff <base>...HEAD`；未提交时只暂存目标文件（含
+新增），两路都读 `git diff --cached <target-base> -- <owned-paths>`。不覆盖他人
+暂存内容；修复后重新暂存并复核；提交只含审查过的目标内容。
 
-审查输入按候选状态绑定：已提交候选使用原版 `git diff <base>...HEAD`；本次目标
-尚未提交时，先仅暂存其目标文件（包括新增文件），两路都读取
-`git diff --cached <target-base> -- <owned-paths>`。这是提交前场景的仓库执行绑定，
-替代只比较 HEAD 的命令，保留先审查后提交的顺序与原版双轴过程。不得覆盖其他
-人的暂存内容。修复后重新暂存并复核修改；提交须包含审查过的目标内容，不能
-混入其他暂存文件或审查后的额外修改。
+两路各用独立上下文，输出各不超过 400 words，分开呈现：
 
-每路审查使用独立上下文：
+- Standards：固定 diff、CODING_STANDARDS、原版气味基线；项目标准优先，跳过
+  工具已查事项。
+- Spec：同一 diff、完整验收需求及相关澄清。没有 Spec 时报告该轴无法完成，
+  不计为通过。
 
-- Standards：固定 diff/commit、CODING_STANDARDS、相关工程标准、原版完整
-  气味基线和定义。遵守原版项目标准优先、启发式需判断、跳过工具已检查事项。
-- Spec：同一固定 diff/commit、完整验收需求及影响验收的澄清。
-
-输出各不超过原版规定的 400 words，分开呈现。确定性问题在完成前修复；
-判断性建议逐项决定是否接受并解释。修复后的实际修改与原发现重新核对；
-需求变化先同步需求来源，不能靠修改描述把错误实现变成“符合”。没有 Spec
-时明确报告无法完成该轴，不能将未审查计为通过。
-
-提交前检查 diff 与工作区，只提交目标文件。commit 解释改变、原因、验证、
-限制和 Test-Impact。可转移的判断由用户请求或 retro 提出候选，不自动发布经验。
+确定性问题完成前修复；判断性建议逐项决定并说明。修复与原发现重新核对；需求
+变化先同步需求来源。commit 只含目标文件，说明改变、原因、验证、限制和
+Test-Impact。
 
 ### 交付与完成
 
-正常产品开发请求包含交付；明确的 local-only 或分支试行请求到其指定边界。
-原版 implement 的 commit 是本地阶段完成，生产交付按 docs/deployment.md 继续。
-pr 使用原版 Summary / Evidence / Merge Danger 格式，模板与 Skill 保持一致。
-
-PR 前完成所需本地检查，推送明确候选并按该 SHA 入队。查看队列和对应合并
-SHA 的部署结果；失败时修复、重新验证、重新入队。合并后的 Production 通过
-运行验收才视为交付完成。文档变更没有产品部署时，完成相应文档验收。
-
-可验收 ticket 完成后关闭；父功能的全部范围验收后才关闭父 Issue。拆票发布
-阶段不修改或关闭父 Issue。PR 的自动关闭语法不能替代生产验收。
+正常产品请求包含交付；local-only 或分支试行到指定边界为止。pr 用原版
+Summary / Evidence / Merge Danger。交付步骤见 docs/deployment.md；合并后
+Production 通过运行验收才算完成，无部署的文档变更完成文档验收即可。ticket
+验收后关闭；父 Issue 全部范围验收后才关闭，拆票发布阶段不改动父 Issue；PR
+自动关闭语法不能替代生产验收。
 
 ### 特殊入口
 
-疑难缺陷按需读取 manifest 固定版本的 diagnosing-bugs 原文，保留其整个诊断
-过程和特殊分支。普通明确缺陷直接修复并保护行为。
-
-反复改动困难或缺少正确测试 seam 时，显式使用 improve-codebase-architecture，
-指定痛点或近期热点。选中的候选作为新的有边界目标进入需求流程。
-
-prototype 用一次性代码回答一个设计问题（状态逻辑或界面方向），只把验证过的
-决定带回正式实现，原型留在独立分支。wizard 为只有人能完成的步骤（第三方后台、
-密钥、一次性迁移）生成交互脚本；Agent 不经手密钥。handoff 把会话压缩为交接
-文档，供新上下文继续同一目标；交接文档按原版放在仓库外的系统临时目录。
-
-retro 读取实际会话，提出环境改进候选；用户选择后再执行改进。已有机械检查
-优先修复或接线，判断性标准由 reviewer 读取。show-me 用于需要解释的关系，
-pr 已有的视觉说明无需再强制启动一次 show-me。
+- 疑难缺陷：读取 manifest 固定版本的 diagnosing-bugs 原文，走完整诊断过程；
+  普通缺陷直接修复并保护行为。
+- improve-codebase-architecture：反复改动困难或缺少测试 seam 时显式使用，选中
+  候选作为新目标进入需求流程。
+- prototype 只带回验证过的决定，原型留独立分支；wizard 中 Agent 不经手密钥。
+- handoff 文档放仓库外系统临时目录；retro 的改进候选由用户选择后执行。
