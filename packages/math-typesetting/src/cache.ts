@@ -146,7 +146,7 @@ export async function prepareFormula(
   if (existing) return existing;
 
   const task = import("./index.js")
-    .then(({ typesetFormulaSync }) => typesetFormulaSync(request))
+    .then(({ typesetFormula }) => typesetFormula(request))
     .then((result) => {
       artifacts.set(key, result);
       return result;
