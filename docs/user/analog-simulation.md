@@ -66,7 +66,9 @@ covered by the Project's browser recovery, not a cloud backup. **File → Save**
 the signed-in cloud account.
 
 Available environments come from the configured executor. Production offers
-ngspice and VACASK Profiles; each uses its own native source language.
+ngspice and VACASK Profiles, each listed by its name and simulator release;
+each uses its own native source language. Projects and the Agent select a
+Profile by its id.
 Their internal `experiment.json` is hidden from Source and file tabs, but
 retained in Project backups. Legacy or damaged configurations and pending
 configuration drafts stay visible for compatibility and repair; they are not a
@@ -137,8 +139,8 @@ Project-local copies, not live remote references.
 
 The bundled five-transistor SKY130 example contains ordinary DUT/Testbench
 Cells and saved OP/DC/AC/TRAN/Noise, bias-detail, corner and waveform experiments.
-They are authored native VACASK source for the `vacask-sky130-candidate`
-environment offered by the hosted service. A local editor without that Profile
+They are authored native VACASK source for the "SKY130 · VACASK (preview)"
+environment (`vacask-sky130-candidate`) offered by the hosted service. A local editor without that Profile
 can still open/edit the example but cannot execute it there.
 
 Open the repository's
