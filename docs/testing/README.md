@@ -123,8 +123,7 @@ pass `--workers` to ask for more. CI keeps its own worker count.
 
 For this trial, these commands define the original's final full suite as all
 Vitest and Playwright tests. The original does not specify runner scope; this
-is a deliberate conservative repository choice. It supersedes the previous
-policy against routine final local browser sweeps and costs more. Required
+is a deliberate conservative repository choice and costs more. Required
 merge checks still protect the merged candidate. Record extra findings and
 time so the human can later decide whether to change this interpretation.
 
