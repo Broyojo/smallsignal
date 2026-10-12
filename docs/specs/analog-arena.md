@@ -52,8 +52,9 @@ when its host and path call for it:
     present and is not `document` stays and is forwarded: the editor's Arena
     gate (cascode-ai/analog-canvas#1681) shows the battle page in a frame on
     Analog Canvas's own origin, signed in as Analog Canvas is, and the frame
-    loads its files and pages there. A visit in the browser's window, or a
-    request without the header, still goes through the handoff.
+    loads its files and pages there, query kept. A visit in the browser's
+    window, or a request without the header, still goes through the
+    handoff.
 - Elsewhere (local development), `/arena` and `/arena/…` go to the same path
   under `/schematic` on the same origin (`301`).
 
@@ -120,6 +121,15 @@ answers with a 5xx status, Analog Canvas answers `503` with
 Every other answer of Arena, its own `404` among them, passes through. A
 visitor never meets a crash, and Arena keeps 5xx for failures, not for answers
 it designed.
+
+### Vote source
+
+The editor's Arena gate frames the battle page at
+`/schematic?from=canvas-gate`. Arena records every Vote cast on a page
+opened with `from=canvas-gate` with the source `canvas-gate`, its queued
+retries included, and every other Vote with the source `arena`
+(Arcadia-1/chip-arena#234). Analog Canvas adds nothing to the vote requests
+themselves; the Worker forwards the page's query unchanged.
 
 ## Drawing delivery
 
@@ -243,10 +253,13 @@ that asked for it and takes no return.
   binding: the vouched account and its facts, a forged header dropped, the
   credentials kept from Arena, other paths left alone (the account
   deletion's path among them), the failure answers, the hosts' redirects,
-  the sign-in handoff, the Arena gate's frame on Analog Canvas's host,
+  the sign-in handoff, the Arena gate's frame on Analog Canvas's host
+  (its `from=canvas-gate` query kept),
   the sign-in return, and
   account deletion's call to Arena with its failures, retry and absent
   binding.
+- [`apps/editor/src/components/arena-gate.test.ts`](../../apps/editor/src/components/arena-gate.test.ts)
+  checks that the gate frames `/schematic?from=canvas-gate`.
 - [`apps/editor/src/components/privacy-page.test.tsx`](../../apps/editor/src/components/privacy-page.test.tsx)
   checks that the privacy notice describes AnalogArena.
 - [`worker/index.test.ts`](../../worker/index.test.ts) pins the binding and the

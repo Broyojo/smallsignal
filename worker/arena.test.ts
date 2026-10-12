@@ -594,7 +594,8 @@ describe("AnalogArena's host", () => {
     const { accounts, at, forwarded, visit } = canvas();
     const cookie = await makerOf(accounts);
     for (const [path, destination] of [
-      ["/schematic", "iframe"],
+      // The gate's page, marked for Arena's vote source, query and all.
+      ["/schematic?from=canvas-gate", "iframe"],
       ["/schematic/assets/index-1.js", "script"],
       ["/schematic/history", "iframe"],
     ] as const)
@@ -606,7 +607,7 @@ describe("AnalogArena's host", () => {
         ).status,
       ).toBe(200);
     expect(forwarded.map((request) => request.url)).toEqual([
-      `${CANVAS_ORIGIN}/schematic`,
+      `${CANVAS_ORIGIN}/schematic?from=canvas-gate`,
       `${CANVAS_ORIGIN}/schematic/assets/index-1.js`,
       `${CANVAS_ORIGIN}/schematic/history`,
     ]);

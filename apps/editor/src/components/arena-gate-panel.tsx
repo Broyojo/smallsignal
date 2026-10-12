@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import {
+  ARENA_GATE_PAGE,
   createArenaGate,
   gateClosable,
   VOTES_REQUIRED,
@@ -12,9 +13,6 @@ import "./arena-gate.css";
 
 /** How often an open gate reads the count again between Arena's answers. */
 const RECOUNT_MS = 4000;
-
-/** The Schematic Arena's battle page, served on this site's own origin. */
-const ARENA_PAGE = "/schematic";
 
 /**
  * Shows the gate over the page in a root of its own, so every page that
@@ -192,7 +190,7 @@ function ArenaGatePanel({
             ref={watchFrame}
             className="arena-gate-frame"
             title="Schematic Arena battle"
-            src={ARENA_PAGE}
+            src={ARENA_GATE_PAGE}
             // Each page the frame loads is watched afresh and recounted.
             onLoad={(event) => {
               watchFrame(event.currentTarget);

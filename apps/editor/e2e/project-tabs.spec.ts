@@ -613,9 +613,11 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
     voted.unshift(route.request().url().split("/").at(-2)!);
     return route.fulfill({ json: { voted: true } });
   });
-  await page.route(/\/schematic$/u, (route) =>
-    route.fulfill({ contentType: "text/html", body: ARENA_PAGE }),
-  );
+  const framed: string[] = [];
+  await page.route(/\/schematic(?:\?|$)/u, (route) => {
+    framed.push(new URL(route.request().url()).search);
+    return route.fulfill({ contentType: "text/html", body: ARENA_PAGE });
+  });
 
   await page.goto("/editor?new=1");
   await awaitEditorReady(page);
@@ -647,6 +649,8 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
 
   const arena = page.frameLocator('iframe[title="Schematic Arena battle"]');
   await expect(arena.getByText("Battle", { exact: true })).toBeVisible();
+  // Arena records the Votes cast here with the source "canvas-gate".
+  expect(framed).toEqual(["?from=canvas-gate"]);
   for (let vote = 1; vote <= 5; vote++) {
     await arena.getByRole("button", { name: "Vote" }).click();
     await expect(count).toHaveText(`Voted ${vote} / 5`);

@@ -10,6 +10,13 @@
 // (signed out, or an AI account, which may not vote) never sees it, and
 // neither does anyone on a server with no Arena behind it.
 
+/**
+ * The Schematic Arena's battle page as the gate frames it, on this site's
+ * own origin. `from=canvas-gate` makes Arena record each Vote cast there
+ * with the source `canvas-gate` (docs/specs/analog-arena.md#vote-source).
+ */
+export const ARENA_GATE_PAGE = "/schematic?from=canvas-gate";
+
 /** The Votes a gate asks for. */
 export const VOTES_REQUIRED = 5;
 

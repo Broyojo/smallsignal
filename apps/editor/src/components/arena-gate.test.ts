@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ARENA_GATE_PAGE,
   createArenaGate,
   gateClosable,
   VOTES_REQUIRED,
@@ -182,5 +183,16 @@ describe("watching the framed Arena page", () => {
     await page.fetch("/api/arena/battles/b-2/vote", { method: "POST" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(heard).toEqual(["voted"]);
+  });
+});
+
+describe("the framed Arena page", () => {
+  it("is the battle page on this origin, marked so Arena records its Votes as the gate's", () => {
+    const address = new URL(ARENA_GATE_PAGE, "https://canvas.test");
+    expect(address.origin).toBe("https://canvas.test");
+    expect(address.pathname).toBe("/schematic");
+    // Arena's contract (Arcadia-1/chip-arena#234): a Vote cast on a page
+    // opened with from=canvas-gate keeps the source "canvas-gate".
+    expect(address.searchParams.get("from")).toBe("canvas-gate");
   });
 });
