@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -39,6 +41,7 @@ function render(
     links: [...markup.matchAll(/<a[^>]*>/gu)].map((link) =>
       attribute(link[0], "href"),
     ),
+    markup,
     text: markup.replace(/<[^>]*>/gu, " ").replaceAll("&#x27;", "'"),
   };
 }
@@ -55,7 +58,10 @@ describe("the Arena gate's dialog (#1683)", () => {
     expect(attribute(frame, "src")).toBe(
       "https://chip-arena.com/schematic/preview",
     );
-    expect(attribute(frame, "style")).toMatch(/pointer-events:\s*none/u);
+    // It takes no pointer: its styles say so.
+    expect(
+      readFileSync(new URL("./arena-gate.css", import.meta.url), "utf8"),
+    ).toMatch(/\.arena-gate-preview iframe \{[^}]*pointer-events: none;/u);
     expect(attribute(frame, "tabindex")).toBe("-1");
     expect(attribute(frame, "aria-hidden")).toBe("true");
     expect(attribute(frame, "title")).toBe("A Battle in the Schematic Arena");
@@ -100,5 +106,37 @@ describe("the Arena gate's dialog (#1683)", () => {
     expect(dialog.text).toContain("Arena can't be reached right now.");
     expect(dialog.dots).toBeNull();
     expect(dialog.controls).toEqual([["Close", "false"]]);
+  });
+
+  it("keeps its title, dots and buttons out of the frame, so a frame that fails changes nothing", () => {
+    // A frame that cannot load fires no error the dialog could miss: the
+    // browser shows its own page in the frame's space. Nothing the person
+    // needs is in there.
+    const { markup } = render({ status: "voting", voted: 1, required: 5 });
+    const preview = /<div class="arena-gate-preview"[^>]*>(.*?)<\/div>/u.exec(
+      markup,
+    )![1]!;
+    expect(preview).toMatch(/^<iframe[^>]*><\/iframe>$/u);
+    const outside = markup.replace(preview, "");
+    for (const part of [
+      "Vote on 5 Battles to continue",
+      'data-testid="arena-gate-count"',
+      "Start voting →",
+      ">Close<",
+    ])
+      expect(outside).toContain(part);
+  });
+
+  it("announces the reason in the region that was there all along", () => {
+    const voting = render({ status: "voting", voted: 1, required: 5 });
+    const free = render({ status: "free", reason: "no-battle" });
+    const note = (markup: string) =>
+      /<p class="arena-gate-note" aria-live="polite">([^<]*)<\/p>/u.exec(
+        markup,
+      )?.[1];
+    expect(note(voting.markup)).toBe("Your work is saved.");
+    expect(note(free.markup)).toBe(
+      "Arena has no more Battles for you right now.",
+    );
   });
 });

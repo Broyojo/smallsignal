@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { Ref } from "react";
 import { createRoot } from "react-dom/client";
 
 import {
@@ -96,8 +96,10 @@ const FREE_REASONS: Record<
 
 /**
  * Arena's animated Battle, laid out at its own size and scaled to the
- * panel's width. It only shows: it takes no pointer and no focus, and a
- * frame that cannot load leaves only its reserved space.
+ * panel's width. It only shows: it takes no pointer (arena-gate.css) and no
+ * focus. Nothing in the dialog depends on it: a frame that cannot load shows
+ * the browser's own error page in its reserved space, and the title, dots
+ * and buttons work as ever.
  */
 function ArenaPreview() {
   const box = useRef<HTMLDivElement | null>(null);
@@ -130,7 +132,6 @@ function ArenaPreview() {
         // Its own scripts on its own origin, chip-arena.com; nothing else.
         sandbox="allow-scripts allow-same-origin"
         referrerPolicy="no-referrer"
-        style={{ pointerEvents: "none" } as CSSProperties}
       />
     </div>
   );
@@ -143,6 +144,7 @@ export function ArenaGateView({
   saved,
   nudged,
   onClose,
+  dialogRef,
 }: {
   state: ArenaGateState;
   /** The Votes this gate asks for: five, or the Battles left if fewer. */
@@ -151,11 +153,14 @@ export function ArenaGateView({
   /** A locked Close or Escape was just pressed. */
   nudged: boolean;
   onClose(): void;
+  /** The dialog, which takes focus as it shows. */
+  dialogRef?: Ref<HTMLElement>;
 }) {
   const closable = gateClosable(state);
   const voted = state.status === "voting" ? Math.min(state.voted, required) : 0;
   return (
     <section
+      ref={dialogRef}
       className="arena-gate"
       role="dialog"
       aria-modal="true"
@@ -185,13 +190,15 @@ export function ArenaGateView({
           </span>
         </div>
       ) : null}
-      {state.status === "free" ? (
-        <p className="arena-gate-note" aria-live="polite">
-          {FREE_REASONS[state.reason]}
-        </p>
-      ) : saved ? (
-        <p className="arena-gate-note">Your work is saved.</p>
-      ) : null}
+      {/* Always there, so a reason that appears as the gate lets the
+          person go is announced. */}
+      <p className="arena-gate-note" aria-live="polite">
+        {state.status === "free"
+          ? FREE_REASONS[state.reason]
+          : saved
+            ? "Your work is saved."
+            : ""}
+      </p>
       <div className="arena-gate-actions">
         {state.status === "voting" && !closable ? (
           // A link opened by the person's own click: a new tab or window
@@ -236,11 +243,8 @@ function ArenaGatePanel({
 }) {
   const [state, setState] = useState(first);
   const [nudged, setNudged] = useState(false);
-  const backdropRef = useRef<HTMLDivElement | null>(null);
-  useEffect(
-    () => backdropRef.current?.querySelector<HTMLElement>("section")?.focus(),
-    [],
-  );
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useEffect(() => dialogRef.current?.focus(), []);
 
   const closable = gateClosable(state);
   const required = first.status === "voting" ? first.required : VOTES_REQUIRED;
@@ -282,7 +286,6 @@ function ArenaGatePanel({
 
   return (
     <div
-      ref={backdropRef}
       className="arena-gate-backdrop"
       // Focus stays in the panel: a press outside it moves nothing.
       onMouseDown={(event) => {
@@ -297,6 +300,7 @@ function ArenaGatePanel({
         required={required}
         saved={saved}
         nudged={nudged}
+        dialogRef={dialogRef}
         onClose={() => {
           if (closable) onClose();
           else setNudged(true);

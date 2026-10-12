@@ -130,12 +130,13 @@ The panel shows Chip Arena's animated Battle by framing
 `https://chip-arena.com/schematic/preview` (cascode-ai/analog-canvas#1683),
 the page Chip Arena's front page frames: a fixed Battle that reads and
 records nothing. It is framed from AnalogArena's own host, sandboxed to its
-own scripts and origin, with no referrer, and takes no pointer or focus; the
-panel works without it.
+own scripts and origin, with no referrer, and takes no pointer or focus.
+Nothing the person needs is in it: if it cannot load, the browser shows its
+own error page in its space and the panel works as ever.
 
 ### Vote source
 
-The panel's "Open the battle page" link opens `/schematic?from=canvas-gate`
+The panel's "Start voting →" link opens `/schematic?from=canvas-gate`
 on Analog Canvas's host in a new window, which the
 [sign-in handoff](#sign-in-handoff) brings to
 `https://chip-arena.com/schematic?from=canvas-gate`, signed in, query kept.
@@ -162,16 +163,22 @@ vouched account:
   and `battlesLeft`, the active Season's pairings the account has no Vote on
   (new, or shown and left), 0 with no Season open and for an AI seat. It is
   never cached and creates no Battle (Arcadia-1/chip-arena#238). The gate
-  asks for `min(5, battlesLeft)` Votes as it opens and shows
-  "Voted x / N"; with `battlesLeft` 0 it shows no panel; when `battlesLeft`
-  reaches 0 before the Votes are in, the panel may close at once. The gate
-  never asks `POST /api/arena/battles/next`, which assigns Battles.
+  asks for N = `min(5, battlesLeft)` Votes as it opens and shows N dots,
+  one filled per new Vote, while readers hear "Voted x of N"; with
+  `battlesLeft` 0 it shows no panel; when `battlesLeft` reaches 0 before the
+  Votes are in, the panel may close at once. `battlesLeft` is taken only as
+  a whole number of at least 0; any other session answer is a failed read.
+  The gate never asks `POST /api/arena/battles/next`, which assigns
+  Battles.
 - `signedIn: false`, `aiAccount: true`, a `401` or `403 ai-account` from
-  the list, or an answer that is not JSON (no Arena behind the server)
-  shows no panel.
-- A failure of either read as the gate opens (unreachable, `5xx`, the
-  Worker's `arena-unavailable`), or three failed reads in a row while
-  counting, lets the panel close at once.
+  the list, or an answer to either read that is not a JSON object, whatever
+  its status, shows no panel: Arena and this Worker answer JSON on every
+  `/api/arena` path, failures included, so such an answer means no Arena
+  behind the server.
+- A failure of either read as the gate opens (unreachable, a JSON `5xx` such
+  as the Worker's `503 arena-unavailable`, or an answer that is not what the
+  read expects), or three failed reads in a row while counting, lets the
+  panel close at once.
 
 The gate keeps nothing across a reload, and no page opens one as it loads,
 so anyone can end a gate by reloading. That bypass is accepted.
@@ -303,7 +310,13 @@ that asked for it and takes no return.
 - [`apps/editor/src/components/arena-gate.test.ts`](../../apps/editor/src/components/arena-gate.test.ts)
   checks the gate's count, the Votes it asks for from `battlesLeft`, its
   unlocking signals, that no panel is made for someone who sees none, and the
-  page it opens; `worker/arena.test.ts` brings that page to AnalogArena with
+  page it opens;
+  [`arena-gate-panel.test.tsx`](../../apps/editor/src/components/arena-gate-panel.test.tsx)
+  checks the dialog: the framed preview, the dots and what readers hear, its
+  buttons and its few words;
+  [`arena-gate-request.test.ts`](../../apps/editor/src/components/arena-gate-request.test.ts)
+  checks when it opens, after a save or as the shelf opens;
+  `worker/arena.test.ts` brings that page to AnalogArena with
   its query and forwards the gate's reads (`battles/past`, `session`) on
   Analog Canvas's host with the account.
 - [`apps/editor/src/components/privacy-page.test.tsx`](../../apps/editor/src/components/privacy-page.test.tsx)
