@@ -61,34 +61,58 @@ const READ_OPTIONS = {
   cache: "no-store",
 } as const;
 
-async function readPast(fetchLike: typeof fetch): Promise<PastRead> {
+type ArenaAnswer =
+  | { kind: "answered"; response: Response; body: Record<string, unknown> }
+  | { kind: "unavailable" }
+  | { kind: "absent" };
+
+/**
+ * One of Arena's answers through this site's Worker: unavailable when the
+ * request fails, absent when the answer is not a JSON object. Arena and the
+ * Worker answer JSON on every /api/arena path, failures included, so
+ * anything else is a server with no Arena behind it.
+ */
+async function askArena(
+  fetchLike: typeof fetch,
+  path: string,
+): Promise<ArenaAnswer> {
   let response: Response;
   try {
-    response = await fetchLike(PAST_PATH, READ_OPTIONS);
+    response = await fetchLike(path, READ_OPTIONS);
   } catch {
     return { kind: "unavailable" };
   }
-  let body: { battles?: unknown; error?: unknown } | null;
   try {
-    body = await response.json();
+    const body: unknown = await response.json();
+    if (typeof body === "object" && body !== null && !Array.isArray(body))
+      return {
+        kind: "answered",
+        response,
+        body: body as Record<string, unknown>,
+      };
   } catch {
-    // Arena and this site's Worker answer JSON on every /api/arena path,
-    // failures included. Anything else is a server with no Arena behind it.
-    return { kind: "absent" };
+    // Not JSON: below.
   }
+  return { kind: "absent" };
+}
+
+async function readPast(fetchLike: typeof fetch): Promise<PastRead> {
+  const answer = await askArena(fetchLike, PAST_PATH);
+  if (answer.kind !== "answered") return answer;
+  const { response, body } = answer;
   const date = Date.parse(response.headers.get("date") ?? "");
   const at = Number.isNaN(date) ? null : date;
   if (response.status === 401) return { kind: "signed-out" };
   if (response.status === 403)
-    return body?.error === "consent-required"
+    return body.error === "consent-required"
       ? { kind: "consent", at }
       : { kind: "ai-account" };
-  if (!response.ok || !Array.isArray(body?.battles))
-    return { kind: "unavailable" };
+  const battles = body.battles;
+  if (!response.ok || !Array.isArray(battles)) return { kind: "unavailable" };
   return {
     kind: "listed",
     at,
-    battles: body.battles.map((battle) => {
+    battles: battles.map((battle) => {
       const { id, castAt } = battle as { id?: unknown; castAt?: unknown };
       return { id: String(id), castAt: Date.parse(String(castAt)) };
     }),
@@ -105,36 +129,26 @@ type SessionRead =
 
 /**
  * Arena's session: who is visiting and, for a Voter, `battlesLeft`, the
- * active Season's pairings they have no Vote on (0 with no Season open).
- * A read, never an assignment (docs/specs/analog-arena.md#counting).
+ * active Season's pairings they have no Vote on (0 with no Season open), a
+ * whole number of at least 0; any other answer is a failed read. A read,
+ * never an assignment (docs/specs/analog-arena.md#counting).
  */
 async function readSession(fetchLike: typeof fetch): Promise<SessionRead> {
-  let response: Response;
-  try {
-    response = await fetchLike(SESSION_PATH, READ_OPTIONS);
-  } catch {
-    return { kind: "unavailable" };
-  }
-  let body: {
-    signedIn?: unknown;
-    aiAccount?: unknown;
-    battlesLeft?: unknown;
-  } | null;
-  try {
-    body = await response.json();
-  } catch {
-    return { kind: "absent" };
-  }
-  if (!response.ok || typeof body?.signedIn !== "boolean")
+  const answer = await askArena(fetchLike, SESSION_PATH);
+  if (answer.kind !== "answered") return answer;
+  const { response, body } = answer;
+  if (!response.ok || typeof body.signedIn !== "boolean")
     return { kind: "unavailable" };
   if (!body.signedIn) return { kind: "signed-out" };
   if (body.aiAccount === true) return { kind: "ai-account" };
-  return {
-    kind: "voter",
-    // An Arena that does not say yet asks for the full count.
-    battlesLeft:
-      typeof body.battlesLeft === "number" ? body.battlesLeft : VOTES_REQUIRED,
-  };
+  const { battlesLeft } = body;
+  if (
+    typeof battlesLeft !== "number" ||
+    !Number.isInteger(battlesLeft) ||
+    battlesLeft < 0
+  )
+    return { kind: "unavailable" };
+  return { kind: "voter", battlesLeft };
 }
 
 /** Whether the panel may close now. */
@@ -204,7 +218,7 @@ export function createArenaGate(fetchLike: typeof fetch = fetch) {
       voted: counted(read),
       required,
     });
-    if (session.battlesLeft === 0 && !gateClosable(next))
+    if (session.battlesLeft <= 0 && !gateClosable(next))
       return settle({ status: "free", reason: "no-battle" });
     return next;
   }
@@ -217,7 +231,7 @@ export function createArenaGate(fetchLike: typeof fetch = fetch) {
         readSession(fetchLike),
       ]);
       // Nobody Arena counts, or no Arena here: no panel.
-      const uncounted = (kind: string) =>
+      const uncounted = (kind: PastRead["kind"] | SessionRead["kind"]) =>
         kind === "absent" || kind === "signed-out" || kind === "ai-account";
       if (uncounted(read.kind) || uncounted(session.kind))
         return settle({ status: "closed" });

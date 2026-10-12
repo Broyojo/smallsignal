@@ -314,6 +314,33 @@ describe("the Arena gate never traps anyone", () => {
     });
   });
 
+  it("takes battlesLeft only as a whole number of at least 0, as a failed read otherwise", async () => {
+    for (const battlesLeft of [-1, 2.5, "3", null, undefined]) {
+      const opening = createArenaGate(
+        arena({
+          past: [past([])],
+          session: [{ ...voter(0), battlesLeft }],
+        }).fetchLike,
+      );
+      expect(await opening.start()).toEqual({
+        status: "free",
+        reason: "unavailable",
+      });
+    }
+    const { fetchLike } = arena({
+      past: [past([])],
+      session: [voter(9), { ...voter(9), battlesLeft: -2 }],
+    });
+    const gate = createArenaGate(fetchLike);
+    await gate.start();
+    // Not "none left": one failed read of the 3 allowed.
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+  });
+
   it("counts a failed session read like a failed count", async () => {
     const down = new TypeError("Failed to fetch");
     for (const answer of [down, refusal(503, "arena-unavailable")]) {

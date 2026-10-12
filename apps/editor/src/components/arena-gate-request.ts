@@ -3,16 +3,23 @@
 // first load grows. One gate at a time; a request while one is open, or
 // still deciding whether to show, changes nothing.
 
+import type { mountArenaGate } from "./arena-gate-panel";
+
+/** Loads the panel's code; tests hand in their own. */
+type PanelLoader = () => Promise<{ mountArenaGate: typeof mountArenaGate }>;
+
+const loadPanel: PanelLoader = () => import("./arena-gate-panel");
+
 let gate: "idle" | "deciding" | "shown" = "idle";
 
 /**
  * Opens the Arena gate over whatever page is showing, after a Cloud Save or
  * as the Cloud shelf opens.
  */
-function requestArenaGate(after: "save" | "shelf"): void {
+function requestArenaGate(after: "save" | "shelf", load: PanelLoader): void {
   if (gate !== "idle" || typeof document === "undefined") return;
   gate = "deciding";
-  void import("./arena-gate-panel")
+  void load()
     .then((panel) =>
       panel.mountArenaGate({
         saved: after === "save",
@@ -44,9 +51,9 @@ export function arenaGateShown(): boolean {
  */
 export function gateAfterManualCloudSave<Outcome extends { status: string }>(
   outcome: Outcome,
-  openGate: () => void = () => requestArenaGate("save"),
+  load: PanelLoader = loadPanel,
 ): Outcome {
-  if (outcome.status === "saved") openGate();
+  if (outcome.status === "saved") requestArenaGate("save", load);
   return outcome;
 }
 
@@ -56,6 +63,6 @@ export function gateAfterManualCloudSave<Outcome extends { status: string }>(
  * opens the gate. A page that loads on the shelf, as on a reload, does not
  * call this, so a reload always ends a gate.
  */
-export function cloudShelfOpened(): void {
-  requestArenaGate("shelf");
+export function cloudShelfOpened(load: PanelLoader = loadPanel): void {
+  requestArenaGate("shelf", load);
 }

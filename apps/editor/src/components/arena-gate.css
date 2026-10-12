@@ -52,6 +52,8 @@
   border: 0;
   transform: scale(var(--fit, 0.6));
   transform-origin: 0 0;
+  /* It only shows: Start voting is the way to vote. */
+  pointer-events: none;
 }
 
 .arena-gate-dots {
@@ -106,6 +108,12 @@
   color: var(--icm-text-muted);
   font-size: var(--icm-font-md);
   text-align: center;
+}
+
+/* Kept in place while empty, so its first words are announced, but taking
+   no room. */
+.arena-gate-note:empty {
+  margin-top: -0.75rem;
 }
 
 .arena-gate-actions {
