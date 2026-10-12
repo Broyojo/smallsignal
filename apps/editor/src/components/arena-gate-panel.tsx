@@ -65,17 +65,22 @@ function statusLine(state: ArenaGateState): string {
   if (state.status === "free")
     return {
       "no-battle":
-        "Arena has no battle to offer right now, so you can close this.",
+        "Arena has no more battles for you right now, so you can close this.",
       "signed-out":
         "You're no longer signed in to Arena, so you can close this.",
       "ai-account": "AI accounts can't vote in Arena, so you can close this.",
       unavailable: "Arena can't be reached right now, so you can close this.",
     }[state.reason];
   if (state.status !== "voting") return "";
-  const left = VOTES_REQUIRED - state.voted;
+  const left = state.required - state.voted;
   return left > 0
-    ? `Your work is safe. Vote on the battle page; Close unlocks after ${VOTES_REQUIRED} new votes: ${left} to go.`
+    ? `Your work is safe. Vote on the battle page; Close unlocks after ${votes(state.required)}: ${left} to go.`
     : "Thank you! Your votes are in, so you can close this.";
+}
+
+/** "1 new vote", "5 new votes". */
+function votes(count: number): string {
+  return `${count} new vote${count === 1 ? "" : "s"}`;
 }
 
 function ArenaGatePanel({
@@ -93,23 +98,21 @@ function ArenaGatePanel({
   useEffect(() => dialogRef.current?.focus(), []);
 
   const closable = gateClosable(state);
+  /** The Votes this gate asks for: five, or the Battles left if fewer. */
+  const required = first.status === "voting" ? first.required : VOTES_REQUIRED;
   const counting = state.status === "voting" && !closable;
-  const recount = useCallback(
-    (season = false) => {
-      void gate.recount({ season }).then(setState);
-    },
-    [gate],
-  );
-  // Read again every few seconds while the page is seen, and at once, with
-  // whether a Season still serves Battles, when the person comes back from
-  // Arena's window.
+  const recount = useCallback(() => {
+    void gate.recount().then(setState);
+  }, [gate]);
+  // Read again every few seconds while the page is seen, and at once when
+  // the person comes back from Arena's window.
   useEffect(() => {
     if (!counting) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") recount();
     }, RECOUNT_MS);
     const returned = () => {
-      if (document.visibilityState === "visible") recount(true);
+      if (document.visibilityState === "visible") recount();
     };
     window.addEventListener("focus", returned);
     document.addEventListener("visibilitychange", returned);
@@ -159,11 +162,11 @@ function ArenaGatePanel({
         data-testid="arena-gate"
       >
         <h2 id="arena-gate-title">
-          Vote in {VOTES_REQUIRED} Schematic Arena battles to continue
+          {`Vote in ${required} Schematic Arena battle${required === 1 ? "" : "s"} to continue`}
         </h2>
         {state.status === "voting" ? (
           <p className="arena-gate-count" data-testid="arena-gate-count">
-            Voted {state.voted} / {VOTES_REQUIRED}
+            Voted {state.voted} / {state.required}
           </p>
         ) : null}
         <p
@@ -192,9 +195,7 @@ function ArenaGatePanel({
             className="arena-gate-close"
             aria-disabled={!closable}
             title={
-              closable
-                ? "Close"
-                : `Close unlocks after ${VOTES_REQUIRED} new votes`
+              closable ? "Close" : `Close unlocks after ${votes(required)}`
             }
             onClick={tryClose}
           >

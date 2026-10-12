@@ -569,7 +569,8 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   let arenaUp = true;
   let aiAccount = false;
   let pastReads = 0;
-  let season: string | null = "s1";
+  let battlesLeft = 40;
+  let sessionReads = 0;
   await page.route("**/api/arena/battles/past", (route) =>
     ++pastReads && aiAccount
       ? route.fulfill({ status: 403, json: { error: "ai-account" } })
@@ -580,10 +581,19 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
           })
         : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
   );
-  // Arena's example Battle is null exactly when no Season serves Battles.
-  await page.route("**/api/arena/example", (route) =>
-    route.fulfill({ json: { example: season && { task: { id: "T001" } } } }),
-  );
+  // Arena's session: the Battles left to this Voter (0 for an AI seat).
+  await page.route("**/api/arena/session", (route) => {
+    sessionReads++;
+    return route.fulfill({
+      json: {
+        signedIn: true,
+        aiAccount,
+        consented: true,
+        votes: 1,
+        battlesLeft: aiAccount ? 0 : battlesLeft,
+      },
+    });
+  });
   // Arena's own window, wherever it opens.
   await context.route(/\/schematic\?/u, (route) =>
     route.fulfill({ contentType: "text/html", body: "<title>Arena</title>" }),
@@ -642,18 +652,32 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
 
-  // Every Shelf opening opens it again; with no Season serving Battles, it
-  // closes at once.
-  season = null;
-  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  // Every Shelf opening opens it again. With 3 Battles left it asks for 3,
+  // and when they run out it lets the person go.
+  battlesLeft = 3;
+  const shelf = page.getByLabel("Open Shelf project in tab", { exact: true });
+  await shelf.click();
   await expect(gate).toContainText(
-    "Arena has no battle to offer right now, so you can close this.",
+    "Vote in 3 Schematic Arena battles to continue",
+  );
+  await expect(count).toHaveText("Voted 0 / 3");
+  battlesLeft = 0;
+  await expect(gate).toContainText(
+    "Arena has no more battles for you right now, so you can close this.",
+    { timeout: 10_000 },
   );
   await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
+  // With none left, opening the Shelf (shut, then open) shows no panel.
+  await shelf.click();
+  const sessionReadsBefore = sessionReads;
+  await shelf.click();
+  await expect.poll(() => sessionReads).toBe(sessionReadsBefore + 1);
+  await awaitTwoFrames(page);
+  await expect(gate).toHaveCount(0);
 
   // An unreachable Arena never traps anyone either.
-  season = "s1";
+  battlesLeft = 40;
   await placeComponentAt(page, "resistor", { x: 400, y: 240 });
   arenaUp = false;
   await page.keyboard.press("ControlOrMeta+s");
@@ -697,8 +721,10 @@ test("only the person's own opening of the Cloud shelf opens the Arena gate, so 
       json: { battles: [], more: false, total: 0 },
     });
   });
-  await page.route("**/api/arena/example", (route) =>
-    route.fulfill({ json: { example: { task: { id: "T001" } } } }),
+  await page.route("**/api/arena/session", (route) =>
+    route.fulfill({
+      json: { signedIn: true, aiAccount: false, battlesLeft: 12 },
+    }),
   );
   const gate = page.getByTestId("arena-gate");
   const shelfTab = page.getByTestId("gallery-view-shelf");

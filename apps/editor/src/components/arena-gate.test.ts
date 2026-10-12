@@ -15,19 +15,31 @@ const after = (second: number) =>
   `2026-10-12T10:00:${String(second).padStart(2, "0")}.250Z`;
 
 type Answer = Response | Error;
-type Example = { task: unknown } | null;
-const EXAMPLE: Example = { task: { id: "T001" } };
+type Session = Record<string, unknown>;
+
+/** Arena's session for a signed-in Voter with `battlesLeft` pairings left. */
+const voter = (battlesLeft: number): Session => ({
+  signedIn: true,
+  displayName: "Author",
+  isOwner: false,
+  aiAccount: false,
+  consented: true,
+  votes: 3,
+  profileGiven: false,
+  voterId: "v-1",
+  battlesLeft,
+});
 
 /**
- * Arena behind the Canvas Worker: the Voter's voted Battles and the example
- * Battle, each answered from its own queue (the last answer repeats).
+ * Arena behind the Canvas Worker: the Voter's voted Battles and the session,
+ * each answered from its own queue (the last answer repeats).
  */
 function arena({
   past,
-  example = [EXAMPLE],
+  session = [voter(40)],
 }: {
   past: Answer[];
-  example?: (Example | Error)[];
+  session?: (Session | Answer)[];
 }) {
   const asked: string[] = [];
   const take = <T>(queue: T[]) =>
@@ -40,10 +52,12 @@ function arena({
       if (answer instanceof Error) throw answer;
       return answer.clone();
     }
-    if (path === "/api/arena/example") {
-      const answer = take(example);
+    if (path === "/api/arena/session") {
+      const answer = take(session);
       if (answer instanceof Error) throw answer;
-      return Response.json({ example: answer });
+      return answer instanceof Response
+        ? answer.clone()
+        : Response.json(answer);
     }
     throw new Error(`unexpected ${path}`);
   }) as typeof fetch;
@@ -84,8 +98,16 @@ describe("the Arena gate's count", () => {
       ],
     });
     const gate = createArenaGate(fetchLike);
-    expect(await gate.start()).toEqual({ status: "voting", voted: 0 });
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 2 });
+    expect(await gate.start()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 2,
+      required: 5,
+    });
     expect(gateClosable(gate.state())).toBe(false);
   });
 
@@ -104,7 +126,11 @@ describe("the Arena gate's count", () => {
     });
     const gate = createArenaGate(fetchLike);
     await gate.start();
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 1 });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 1,
+      required: 5,
+    });
   });
 
   it("unlocks at five new Votes and stays unlocked", async () => {
@@ -124,11 +150,13 @@ describe("the Arena gate's count", () => {
     expect(await gate.recount()).toEqual({
       status: "voting",
       voted: VOTES_REQUIRED,
+      required: VOTES_REQUIRED,
     });
     expect(gateClosable(gate.state())).toBe(true);
     expect(await gate.recount()).toEqual({
       status: "voting",
       voted: VOTES_REQUIRED,
+      required: VOTES_REQUIRED,
     });
   });
 
@@ -149,9 +177,21 @@ describe("the Arena gate's count", () => {
       ],
     });
     const gate = createArenaGate(fetchLike);
-    expect(await gate.start()).toEqual({ status: "voting", voted: 0 });
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 0 });
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 1 });
+    expect(await gate.start()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 1,
+      required: 5,
+    });
   });
 
   it("never counts down when answers arrive out of order", async () => {
@@ -168,7 +208,11 @@ describe("the Arena gate's count", () => {
     const gate = createArenaGate(fetchLike);
     await gate.start();
     await gate.recount();
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 2 });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 2,
+      required: 5,
+    });
   });
 
   it("reads once for recounts asked while one is reading", async () => {
@@ -176,8 +220,8 @@ describe("the Arena gate's count", () => {
     const gate = createArenaGate(fetchLike);
     await gate.start();
     asked.length = 0;
-    await Promise.all([gate.recount({ season: true }), gate.recount()]);
-    expect(asked).toEqual(["/api/arena/battles/past", "/api/arena/example"]);
+    await Promise.all([gate.recount(), gate.recount()]);
+    expect(asked).toEqual(["/api/arena/battles/past", "/api/arena/session"]);
   });
 });
 
@@ -201,51 +245,126 @@ describe("the Arena gate never traps anyone", () => {
     });
     const gate = createArenaGate(fetchLike);
     await gate.start();
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 0 });
-    expect(await gate.recount()).toEqual({ status: "voting", voted: 1 });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 1,
+      required: 5,
+    });
     for (let failure = 1; failure < FAILURES_ALLOWED; failure++)
-      expect(await gate.recount()).toEqual({ status: "voting", voted: 1 });
+      expect(await gate.recount()).toEqual({
+        status: "voting",
+        voted: 1,
+        required: 5,
+      });
     expect(await gate.recount()).toEqual({
       status: "free",
       reason: "unavailable",
     });
   });
 
-  it("is closable when no Season serves Battles (no example Battle), as it opens or later", async () => {
-    const closed = createArenaGate(
-      arena({ past: [past([])], example: [null] }).fetchLike,
+  it("shows no panel when Arena has no battle left for the Voter, no Season open included", async () => {
+    const shown: unknown[] = [];
+    const gate = createArenaGate(
+      arena({ past: [past([])], session: [voter(0)] }).fetchLike,
     );
-    expect(await closed.start()).toEqual({
-      status: "free",
-      reason: "no-battle",
-    });
+    expect(await startArenaGate(gate, (state) => shown.push(state))).toBe(
+      false,
+    );
+    expect(shown).toEqual([]);
+  });
 
-    const { fetchLike, asked } = arena({
-      past: [past([])],
-      example: [EXAMPLE, null],
+  it("asks only for the battles left when fewer than five are", async () => {
+    const { fetchLike } = arena({
+      past: [
+        past([]),
+        past([
+          ["n3", after(3)],
+          ["n2", after(2)],
+          ["n1", after(1)],
+        ]),
+      ],
+      session: [voter(3), voter(0)],
     });
-    const later = createArenaGate(fetchLike);
-    await later.start();
-    // An ordinary recount reads the count alone; a return to the page also
-    // asks whether a Season still serves Battles.
-    expect(await later.recount()).toEqual({ status: "voting", voted: 0 });
-    expect(asked.filter((path) => path.endsWith("example"))).toHaveLength(1);
-    expect(await later.recount({ season: true })).toEqual({
+    const gate = createArenaGate(fetchLike);
+    expect(await gate.start()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 3,
+    });
+    const state = await gate.recount();
+    expect(state).toEqual({ status: "voting", voted: 3, required: 3 });
+    expect(gateClosable(state)).toBe(true);
+  });
+
+  it("lets the person go when the battles left run out before the votes are in", async () => {
+    const { fetchLike } = arena({
+      past: [past([]), past([["n1", after(1)]])],
+      session: [voter(7), voter(0)],
+    });
+    const gate = createArenaGate(fetchLike);
+    await gate.start();
+    expect(await gate.recount()).toEqual({
       status: "free",
       reason: "no-battle",
     });
   });
 
+  it("counts a failed session read like a failed count", async () => {
+    const down = new TypeError("Failed to fetch");
+    for (const answer of [down, refusal(503, "arena-unavailable")]) {
+      const opening = createArenaGate(
+        arena({ past: [past([])], session: [answer] }).fetchLike,
+      );
+      expect(await opening.start()).toEqual({
+        status: "free",
+        reason: "unavailable",
+      });
+    }
+    const { fetchLike } = arena({
+      past: [past([])],
+      session: [voter(9), down, voter(9), down],
+    });
+    const gate = createArenaGate(fetchLike);
+    await gate.start();
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+    expect(await gate.recount()).toEqual({
+      status: "voting",
+      voted: 0,
+      required: 5,
+    });
+    for (let failure = 1; failure < FAILURES_ALLOWED; failure++)
+      await gate.recount();
+    expect(await gate.recount()).toEqual({
+      status: "free",
+      reason: "unavailable",
+    });
+  });
+
   it("shows no panel to an AI account, a signed-out visitor or where no Arena answers", async () => {
-    for (const answer of [
-      refusal(403, "ai-account"),
-      refusal(401, "signed-out"),
+    const html = () =>
       new Response("<!doctype html>", {
         headers: { "content-type": "text/html" },
-      }),
-    ]) {
+      });
+    for (const [answer, session] of [
+      [refusal(403, "ai-account"), { ...voter(0), aiAccount: true }],
+      [refusal(401, "signed-out"), { signedIn: false }],
+      [past([]), { ...voter(4), aiAccount: true }],
+      [past([]), { signedIn: false }],
+      [html(), html()],
+    ] as const) {
       const shown: unknown[] = [];
-      const gate = createArenaGate(arena({ past: [answer] }).fetchLike);
+      const gate = createArenaGate(
+        arena({ past: [answer], session: [session] }).fetchLike,
+      );
       expect(await startArenaGate(gate, (state) => shown.push(state))).toBe(
         false,
       );
@@ -259,16 +378,22 @@ describe("the Arena gate never traps anyone", () => {
     const shown: unknown[] = [];
     const gate = createArenaGate(arena({ past: [past([])] }).fetchLike);
     expect(await startArenaGate(gate, (state) => shown.push(state))).toBe(true);
-    expect(shown).toEqual([{ status: "voting", voted: 0 }]);
+    expect(shown).toEqual([{ status: "voting", voted: 0, required: 5 }]);
   });
 
   it("frees a person signed out, or switched to an AI account, while counting, saying which", async () => {
-    for (const [answer, reason] of [
-      [refusal(401, "signed-out"), "signed-out"],
-      [refusal(403, "ai-account"), "ai-account"],
+    for (const [answer, session, reason] of [
+      [refusal(401, "signed-out"), { signedIn: false }, "signed-out"],
+      [
+        refusal(403, "ai-account"),
+        { ...voter(0), aiAccount: true },
+        "ai-account",
+      ],
+      [past([]), { signedIn: false }, "signed-out"],
     ] as const) {
       const gate = createArenaGate(
-        arena({ past: [past([]), answer] }).fetchLike,
+        arena({ past: [past([]), answer], session: [voter(9), session] })
+          .fetchLike,
       );
       await gate.start();
       expect(await gate.recount()).toEqual({ status: "free", reason });
