@@ -596,27 +596,27 @@ export function ExternalModelSourceEditor({
         },
       });
     }
-    // A draft never rewrites an owner the Project already has: its name,
-    // terminals and formal parameters stay, and callers keep their wiring.
-    // An applied owner (from any source) keeps its binding and the draft is
-    // stored beside it; another owner is only linked to this draft's source
-    // so reopening it finds the draft. Only a new id gets a placeholder owner.
-    const owner = project.externalSubcircuitDefinitions.find(
+    // A draft never rewrites an owner definition the Project already has: its
+    // name, terminals and formal parameters stay, and callers keep their
+    // wiring. An applied owner (from any source) keeps its binding and the
+    // draft is stored beside it; any other owner is linked to this draft's
+    // source (moved here if it pointed at another one) so reopening it finds
+    // the draft. Only a new id gets a placeholder owner.
+    const ownerDefinition = project.externalSubcircuitDefinitions.find(
       (d) => d.id === selectedDefinitionId,
     );
-    if (owner) {
-      if (
-        owner.implementation?.kind !== "source" &&
-        owner.implementation?.sourceId !== sourceId
-      )
-        edits.push({
-          kind: "upsert_external_subcircuit_definition",
-          definition: {
-            ...owner,
-            implementation: { kind: "placeholder", sourceId },
-          },
-        });
-    } else {
+    const ownerKeepsItsLink =
+      ownerDefinition?.implementation?.kind === "source" ||
+      ownerDefinition?.implementation?.sourceId === sourceId;
+    if (ownerDefinition && !ownerKeepsItsLink) {
+      edits.push({
+        kind: "upsert_external_subcircuit_definition",
+        definition: {
+          ...ownerDefinition,
+          implementation: { kind: "placeholder", sourceId },
+        },
+      });
+    } else if (!ownerDefinition) {
       edits.push({
         kind: "upsert_external_subcircuit_definition",
         definition: {
