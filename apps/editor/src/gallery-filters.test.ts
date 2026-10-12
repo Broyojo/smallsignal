@@ -207,6 +207,12 @@ describe("gallery filter preferences", () => {
     ).toEqual({ ...createDefaultGalleryFilters(), tags: ["bias"] });
   });
 
+  it("bounds the search a link carries", () => {
+    expect(
+      parseGalleryFilterQuery(`?q=${"s".repeat(400)}`).filters.search,
+    ).toBe("s".repeat(200));
+  });
+
   it("opens a fresh link's search as it was shared (#1675)", () => {
     const stored = JSON.stringify({ tags: ["bias"] });
     expect(resolveGalleryFilters("?q=mirror", stored)).toEqual({

@@ -286,7 +286,10 @@ interface NavigationTimingSource {
 
 /**
  * Whether this page load is the reader reloading it, as Navigation Timing
- * tells; a browser that cannot say is taken as a fresh visit.
+ * tells; a browser that cannot say is taken as a fresh visit. It stays true
+ * for the document's life, which is safe because the wall (GalleryFeed)
+ * mounts once per document: the path picks the page once, with no client
+ * routing back to the wall.
  */
 export function isPageReload(
   timing: NavigationTimingSource | undefined = globalThis.performance as
