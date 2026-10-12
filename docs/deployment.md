@@ -80,10 +80,8 @@ The retirement is reversible at the storage boundary:
 Reactivating Preview is a deliberate future migration, not part of ordinary
 delivery. It requires restoring a public route and assets, queue bindings,
 credentials, current application compatibility, and hosted verification before
-the old data is exposed again. The Worker code no longer has a Preview mode
-(the channel endpoint, the read-only Gallery read-through and the private
-acceptance identity were removed on 2026-10-06), so a reactivation also
-restores whatever isolation from Production it needs.
+the old data is exposed again. The Worker code has no Preview mode, so a
+reactivation also restores whatever isolation from Production it needs.
 
 Production builds a deployment candidate from the selected `main` commit using
 `.github/actions/build-deployment-candidate`, verifies its source declaration
@@ -98,8 +96,7 @@ a Production deploy carries the binding; rolling Analog Canvas back does not
 touch it.
 
 The release build enables the Simulation and Agent workflows and sets
-`VITE_ICM_SIMULATION_TRANSPORT=managed`. Digital Timing is retired from the
-Editor runtime in every environment; this does not affect saved clock symbols.
+`VITE_ICM_SIMULATION_TRANSPORT=managed`.
 Bundled example Projects load only on loopback hosts; hosted Gallery entries
 continue to come from the Gallery service.
 Local and portable builds retain direct execution unless
@@ -164,7 +161,7 @@ Recovery limitations:
 
 ### Where the credentials live
 
-Since 2026-10-07 the deployment credentials are environment secrets, which only
+The deployment credentials are environment secrets, which only
 `main` (and, for Production, `v*` tags) can reach; a pushed branch cannot read
 them.
 
@@ -271,7 +268,7 @@ to the other.
 Production uses `/api/simulation/runs`. Its durable control object owns
 owner-bound admission, idempotency, leases, cancellation, and bounded run records. Queue
 dispatch sends work to the operator host's declared single slot; R2 holds
-immutable input/result artifacts. Since 2026-10-08 every run belongs to a
+immutable input/result artifacts. Every run belongs to a
 signed-in account: a signed-out request to either route is answered `401`
 `simulation-authentication-required` ("Sign in to run simulations."), and no
 anonymous session is issued. Discovering the Profiles

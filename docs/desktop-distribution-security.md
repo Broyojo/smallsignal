@@ -5,27 +5,6 @@ production credential may be embedded in either. Minification, an executable
 wrapper, deleting a UI button, or removing source from a ZIP is not a credential
 protection mechanism.
 
-## Audit of the first published preview
-
-On 2026-09-26, the review downloaded the actual
-[first Windows preview](https://github.com/cascode-ai/analog-canvas/releases/tag/desktop-preview-655ee760bb22-1),
-whose source is `655ee760bb228e6451acd201368be04557024532`. It inspected the 207
-distributed files and the nested archive containing 2,330 source files, and
-scanned 302 commits reachable from that mainline revision with Gitleaks 8.30.1.
-
-No production credential was identified. The only scanner finding was a fixed
-32-character test value in `packages/agent-adapter/src/http.test.ts`, explicitly
-passed to an isolated loopback test server. It is not a deployed credential.
-The reviewed exception in `.gitleaks.toml` requires both that exact value and
-that exact source path; it does not exempt other tests or other values.
-
-Neither the runnable tree nor its source archive contained `.env`, `.dev.vars`,
-private-key files, Git authentication state, a browser profile, cookies or a
-user database. Production credential variable names were absent from the
-runnable JS/JSON/HTML/CSS/text files. The source archive does include public
-Worker authentication implementation, tests, workflow definitions and secret
-variable **names**, as does the public repository; these are not secret values.
-
 ## Where production authority lives
 
 | Material                                                              | Storage and use                                                                                                                                   | Desktop distribution                                                 |
@@ -40,17 +19,10 @@ variable **names**, as does the public repository; these are not secret values.
 GitHub and Google sign-in only use provider-verified email addresses for the
 administrator check. The account IDs/display-name migrations in
 `worker/auth-do.ts` rename stored profiles; they do not grant administrator
-authority. `GALLERY_ADMIN_TOKEN` is retired from the runtime authorization
-path, and its repository secret was removed on 2026-10-07. Removing an
-unused stored secret is operational housekeeping, not a substitute for server
-authorization or a response to an identified leak.
+authority.
 
-The audit could enumerate GitHub secret names but could not read their values;
-therefore it does not claim byte-for-byte comparison with every production
-secret. Anonymous and deliberately invalid-credential live probes received
-403 before an application JSON response, so they are not counted as proof of
-application authorization. The server code review and focused authentication
-tests provide that evidence. Pattern scanning cannot prove the absence of all
+Server code review and focused authentication tests are the evidence for
+application authorization. Pattern scanning cannot prove the absence of all
 possible secrets or replace a complete penetration test.
 
 ## Enforced distribution checks
@@ -70,7 +42,7 @@ possible secrets or replace a complete penetration test.
    and inventory. Archiving checks that this and `ACCEPTANCE.json` match the
    package source. Unpublished Actions artifacts and published prereleases
    from the manual release workflow use the same gate; the Web merge queue
-   does not package the desktop preview. Raw browser profiles are no longer uploaded as failure artifacts;
+   does not package the desktop preview. Raw browser profiles are not uploaded as failure artifacts;
    scanner diagnostics retain only rule, path and line.
 
 The corresponding source and original notices remain distributed. If an actual

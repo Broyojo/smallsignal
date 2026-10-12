@@ -427,7 +427,7 @@ means discard: that working copy is removed before the action
 continues. If a newer
 unsaved recovery copy is found on a later start, a small banner offers
 **Restore**, **Download backup**, or **Ignore**. The same copies remain
-available through **File / Recover Local Work…**; recovery never silently
+available through **File / Recover Unsaved Work…**; recovery never silently
 replaces the current Project.
 
 **Privacy** (beside the visitor count, in the status bar, and in the account
@@ -595,7 +595,7 @@ when you need to import them again.
 
 ## Export
 
-**File / Export drawing** exports the entire current drawing as SVG, PNG, or PDF containing only formal schematic
+**File / Export** exports the entire current drawing as SVG, PNG, or PDF containing only formal schematic
 layers. PNG uses 3x raster scale. Browser PDF converts the same formal SVG to
 vector paths and text on a page matching the SVG viewBox, so circuit geometry
 stays sharp when enlarged.

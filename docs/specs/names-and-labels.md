@@ -202,7 +202,7 @@ redraws a drawing its author has already seen.
 
 ## Evidence
 
-### Refactor boundary (tracking issue #1213)
+### Presentation authority
 
 Default construction and edit policy are separate responsibilities. Preserve
 the role exceptions above; two entry points applying the same exception must
@@ -225,8 +225,7 @@ The current editing policy is intentionally retained: opening, applying and
 renaming can identify an unchanged standard by styled-content equality and
 regenerate it; an override equal to the fallback may be omitted. This is not
 proof of user intent. Moving to defaults-once with authoritative user edits is
-a deferred UX decision, not part of the structural refactor. Do not introduce
-a new persistent default/custom flag to support this refactor.
+a deferred UX decision.
 
 Batch operations are explicit and distinct:
 
@@ -300,7 +299,6 @@ Batch operations are explicit and distinct:
 
 Creation, editing, rename, reset and arrangement may share construction
 primitives without sharing their authorization or target-selection policy.
-No historical Gallery rewrite is authorized by this refactor.
 
 - `packages/model/src/label-typography.test.ts`: standard looks, role
   recognition, rename following and restored hidden characters.

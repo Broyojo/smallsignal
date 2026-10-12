@@ -28,7 +28,7 @@ The offline desktop's project management is delivered (see the
 [desktop README](../../apps/desktop/README.md)). Still deferred: Visio export,
 the MATLAB palette, the seven-cell coarse grid, jumpers/line width, the Q
 property form, new power devices, AGND/DGND, signing, an installer, automatic
-updates and macOS, and Web local-file formal Save (#1121). Their fork sources
+updates and macOS, and Web local-file formal Save. Their fork sources
 and adaptation rules are in the
 [last migration plan](https://github.com/cascode-ai/analog-canvas/blob/378eff4707ab0ea56cda4f3558eff9b0c4610b15/docs/roadmap/desktop-fork/05-local-merge-plan.md).
 

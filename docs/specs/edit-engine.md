@@ -161,7 +161,7 @@ whose definition contains a terminal, mirroring `add_instance` Symbol
 validation. Locked drafting objects reject user replacement or removal,
 matching the existing lock discipline.
 
-The old unscoped `clear_document` edit is retired. Cell removal now uses three
+Cell removal uses three
 atomic, browser-editor lifecycle edits planned by `cell-reset-planner.ts`:
 `clear_cell_drawing` removes only Route/drafting geometry,
 `reset_cell_placement` returns Instances to the tray and removes placement
@@ -280,8 +280,7 @@ Topology operations have these preconditions:
   `unplace_instance` returns a placed Instance to the Placement
   Tray. It preserves Net membership, NoConnects, bindings, parameters, and
   annotations, but rejects while a Route still terminates at the Instance.
-  It stays an Agent-side redraw step: `planUndrawnInstancePlacements` /
-  `planUndrawnInstanceDrawing` draw every off-sheet Instance on a deterministic
+  It stays an Agent-side redraw step: `planUndrawnInstancePlacements` draws every off-sheet Instance on a deterministic
   shelf below the existing drawing, and the editor runs that repair whenever a
   Project is opened, so no Document keeps a device its sheet does not show.
 - `connect_endpoints` creates a caller-named local Net when both endpoints are

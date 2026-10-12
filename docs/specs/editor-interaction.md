@@ -193,9 +193,6 @@ Instance identity stays in the dock
 header rather than being repeated around the code. Switching components cannot carry
 an old draft or its local history into a new selection.
 
-The old component placement, display, and appearance button grids are not
-mounted in the composed Properties dock. Parameters, Netlist Overrides,
-Actions, and Netlist Target no longer have duplicate forms below the JSON.
 Specialized electrical terminal and Cell interface/layout controls retain
 their distinct connectivity/definition ownership. The left edge of
 Properties is draggable and keyboard-adjustable in both docked and compact

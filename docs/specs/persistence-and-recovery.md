@@ -41,8 +41,7 @@ Recovery state is a non-authoritative browser safety copy. It may restore a
 complete schema-70 Project or a supported historical record that validates
 after the chained upgrade, associated with a recorded working-copy session.
 Corrupt, incompatible, or partial recovery data is discarded or retained as raw
-data without changing the live Project. User-saved Library examples and their
-browser store are retired. Credentials, Agent bearer tokens,
+data without changing the live Project. Credentials, Agent bearer tokens,
 selection, viewport, overlays, and pending external approvals are never
 embedded in Project JSON or recovery records.
 

@@ -1,8 +1,7 @@
 # Analog simulation — Code workspace
 
 Use the top **Simulation** button to open Code beside the ordinary Canvas.
-Opening the Editor alone does not load the code editor or start ngspice. This
-workspace is separate from the development-only Digital tool.
+Opening the Editor alone does not load the code editor or start ngspice.
 
 Before setup, Simulation shows a three-step Agent guide: connect your Agent,
 describe your goal, and review the results. A prominent status card shows the

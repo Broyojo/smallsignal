@@ -133,9 +133,8 @@ Connections close on versionchange. A blocked upgrade fails with
 `ARTIFACT_STORAGE_UPGRADE_BLOCKED`; old bytes are preserved. Update or close the
 older window before retrying. No ordinary cleanup requires refreshing the Editor.
 
-Publish the dual reader and dual transfer protocol first. Gzip writing defaults
-off and is enabled separately through `VITE_SIMULATION_GZIP=1` after that reader
-release is accepted. Roll back only to a dual-reader version and disable new
+The Production build writes gzip (`VITE_SIMULATION_GZIP=1`); other builds
+default it off. Roll back only to a dual-reader version and disable new
 gzip writes; an older binary that cannot read gzip is not a safe data rollback.
 The version-pinned MCP package, OpenAPI and public help travel with the protocol.
 
