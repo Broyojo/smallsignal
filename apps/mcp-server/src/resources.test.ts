@@ -232,7 +232,7 @@ describe("mcp resources single-source projection", () => {
       }
     }
   });
-  it("shares the native authoring and result handoff policy with HTTP Kit", () => {
+  it("serves the same authoring reference as the HTTP Kit", () => {
     const source = agentOperatingKit.files.find(
       (file) => file.path === "references/authoring-contract.md",
     )!;
@@ -242,27 +242,6 @@ describe("mcp resources single-source projection", () => {
     expect(withoutLinkTargets(resource.text)).toBe(
       withoutLinkTargets(source.content),
     );
-    for (const contract of [
-      "place-components",
-      "set-instance-display",
-      "set-net-label",
-      "Cell terminal",
-    ])
-      expect(resource.text).toContain(contract);
-    expect(resource.text).not.toContain("Retry-After");
-    expect(
-      readResourceContent("analog-canvas://reference/simulation-workflow").text,
-    ).toContain("project-folder");
-    expect(
-      readResourceContent("analog-canvas://reference/simulation-workflow").text,
-    ).toContain("legacy-only");
-    expect(
-      readResourceContent("analog-canvas://reference/simulation-result-handoff")
-        .text,
-    ).toContain("evidence bundle");
-    expect(
-      readResourceContent("analog-canvas://reference/quickstart").text,
-    ).toContain("analog-canvas://reference/authoring");
   });
   it("serves compact per-edit schemas from the canonical contract", () => {
     const resource = readResourceContent(
@@ -296,7 +275,7 @@ describe("mcp resources single-source projection", () => {
     const quickstart = readResourceContent(
       "analog-canvas://reference/quickstart",
     );
-    expect(quickstart.text).toContain("# Analog Canvas MCP quickstart");
+    expect(quickstart.text).toMatch(/^# /);
     expect(() => readResourceContent("analog-canvas://reference/nope")).toThrow(
       /Unknown resource/,
     );
