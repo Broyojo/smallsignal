@@ -371,6 +371,8 @@
   color: var(--icm-text);
   font: 12px/1.6 var(--font-mono);
   tab-size: 2;
+  /* Above the first line and below the last, in the code and its gutter. */
+  --code-block-padding: 10px;
 }
 .project-code-panel > textarea,
 .netlist-profile-code > textarea {
@@ -427,7 +429,7 @@
 }
 .project-source-editor .cm-content,
 .static-code-content {
-  padding: 10px 0;
+  padding: var(--code-block-padding) 0;
   caret-color: var(--icm-text);
 }
 .project-source-editor .cm-line,
@@ -452,7 +454,7 @@
   flex-shrink: 0;
   box-sizing: border-box;
   min-height: 100%;
-  padding-top: 10px;
+  padding-top: var(--code-block-padding);
   text-align: right;
 }
 .static-code-gutter > div {

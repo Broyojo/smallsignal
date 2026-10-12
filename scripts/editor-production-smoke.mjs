@@ -203,6 +203,7 @@ async function main() {
   let editorNetlistLayoutChangedOnLoad = true;
   let editorSimulationServiceLoaded = true;
   let editorSchematicFonts = [];
+  let editorJsonParserLoaded = true;
   try {
     server = await preview({
       root: editorRoot,
@@ -278,8 +279,7 @@ async function main() {
       page,
       "browser-pdf-",
     );
-    // The schematic faces the canvas asked for, by name: each must be WOFF2
-    // and come from the route preload, not be found once the editor draws
+    // The schematic faces the canvas asked for, by name and initiator
     // (#1673).
     editorSchematicFonts = await page.evaluate(() =>
       performance
@@ -301,6 +301,10 @@ async function main() {
     await page.waitForSelector(
       '[aria-label="Netlist code"][contenteditable="true"]',
     );
+    // That editor's SPICE mode needs no JSON grammar: a JSON view loads it
+    // when one opens (#1673).
+    await page.waitForLoadState("networkidle");
+    editorJsonParserLoaded = await loadedJavaScriptContains(page, "JsonText");
     await page.getByTestId("examples-toggle").click();
     await page.getByTestId("examples-panel").waitFor();
     await page.waitForLoadState("networkidle");
@@ -414,6 +418,7 @@ async function main() {
     editorSimulationServiceLoaded,
     routePreloadBeforeStylesheets,
     editorFirstLoadJsonParser,
+    editorJsonParserLoaded,
     editorSchematicFonts,
     artifactCodecWorkerBundlesModel,
   };
@@ -465,12 +470,22 @@ async function main() {
   if (report.editorFirstLoadJsonParser) {
     throw new Error("Editor first load includes the JSON property-code parser");
   }
-  const lateFonts = report.editorSchematicFonts.filter(
-    (font) => !/\.woff2 link$/u.test(font),
+  if (report.editorJsonParserLoaded) {
+    throw new Error("Opening the editor loaded the JSON parser");
+  }
+  // Every face is WOFF2. Metropolis, which every label uses, comes from the
+  // route preload; DejaVu Sans loads on demand when a symbol needs it.
+  const metropolis = report.editorSchematicFonts.filter((font) =>
+    font.startsWith("Metropolis-"),
   );
-  if (report.editorSchematicFonts.length === 0 || lateFonts.length > 0) {
+  const misfetched = report.editorSchematicFonts.filter(
+    (font) =>
+      !/\.woff2 /u.test(font) ||
+      (font.startsWith("Metropolis-") && !font.endsWith(" link")),
+  );
+  if (metropolis.length === 0 || misfetched.length > 0) {
     throw new Error(
-      `Schematic fonts must be preloaded WOFF2: ${lateFonts.join(", ") || "none loaded"}`,
+      `Metropolis must be preloaded WOFF2, other faces WOFF2: ${misfetched.join(", ") || "no Metropolis loaded"}`,
     );
   }
   if (report.artifactCodecWorkerBundlesModel) {

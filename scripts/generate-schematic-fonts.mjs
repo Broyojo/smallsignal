@@ -10,7 +10,8 @@
  * published.
  *
  * Needs Python's fontTools (python3 -m fontTools.subset) with brotli, which
- * WOFF2 is compressed with (pip install fonttools brotli). --check rebuilds
+ * WOFF2 is compressed with (pip install fonttools brotli; the committed faces
+ * were written with fontTools 4.60.2 and brotli 1.2.0). --check rebuilds
  * into a temporary directory and fails when a committed face differs. A
  * local check: the faces change only with this script or the font package.
  */
