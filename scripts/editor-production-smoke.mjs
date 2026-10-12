@@ -127,6 +127,7 @@ async function main() {
   let editorPdfRuntimeLoaded = true;
   let editorLoadingScreens = [];
   let editorSimulationServiceLoaded = true;
+  let editorAgentRuntimeLoaded = true;
   try {
     server = await preview({
       root: editorRoot,
@@ -190,6 +191,17 @@ async function main() {
       page,
       "This deployment does not advertise simulation capabilities",
     );
+    // The Agent adapter and the editor's Agent runtime load when Connect
+    // Agent, a saved session or automation pairing asks for them (#1673).
+    editorAgentRuntimeLoaded =
+      (await loadedJavaScriptContains(
+        page,
+        "Snapshot permission is not granted",
+      )) ||
+      (await loadedJavaScriptContains(
+        page,
+        "The Agent session is bound to a Project that has been replaced",
+      ));
     editorCodeLoaded = await loadedJavaScriptContains(page, "schematic-canvas");
     editorStylesLoaded = await loadedStylesheetContains(
       page,
@@ -283,6 +295,12 @@ async function main() {
   const routePreloadBeforeStylesheets =
     routePreload !== -1 &&
     (firstStylesheet === -1 || routePreload < firstStylesheet);
+  // Nor does the /editor route preload list name the runtime's chunk.
+  const editorRoutePreload =
+    /const editorResources = (\[\[.*?\]\]);/su.exec(builtHtml)?.[1] ?? "";
+  const editorAgentRuntimePreloaded =
+    editorRoutePreload === "" ||
+    /\/assets\/agent-runtime-[\w-]{8}\.js/u.test(editorRoutePreload);
   const report = {
     mounted,
     consoleErrors,
@@ -296,6 +314,8 @@ async function main() {
     editorPdfRuntimeLoaded,
     editorLoadingScreens,
     editorSimulationServiceLoaded,
+    editorAgentRuntimeLoaded,
+    editorAgentRuntimePreloaded,
     routePreloadBeforeStylesheets,
   };
 
@@ -334,6 +354,9 @@ async function main() {
   }
   if (report.editorSimulationServiceLoaded) {
     throw new Error("Editor loaded the simulation service on startup");
+  }
+  if (report.editorAgentRuntimeLoaded || report.editorAgentRuntimePreloaded) {
+    throw new Error("Editor loaded the Agent runtime on startup");
   }
   if (!report.routePreloadBeforeStylesheets) {
     throw new Error("Route preload script waits for a stylesheet");

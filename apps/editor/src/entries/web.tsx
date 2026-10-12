@@ -26,8 +26,21 @@ import { configureWebServiceWorker } from "./web-service-worker";
 import { localhostExamplesEnabled } from "../gallery-source";
 
 export function mountWebEditor() {
+  // The Agent runtime is not part of the editor (#1673). A page that must
+  // resume a saved session or pair automation loads it beside the route's
+  // chunks, so the session is there as the page first renders. Its small
+  // loader is itself loaded here, so the shell stays as it was.
+  const agentRuntimeOnLoad = () =>
+    import("../agent/agent-runtime-loader").then((loader) =>
+      loader.loadAgentRuntimeNeededOnLoad(),
+    );
   const WorkspaceAgentProvider = lazy(() =>
-    guardedRouteChunk(() => import("../app/App"))().then((module) => ({
+    guardedRouteChunk(() =>
+      Promise.all([
+        import("../agent/workspace-agent"),
+        agentRuntimeOnLoad(),
+      ]).then(([module]) => module),
+    )().then((module) => ({
       default: module.WorkspaceAgentProvider,
     })),
   );
@@ -111,19 +124,21 @@ export function mountWebEditor() {
   // already preloaded (#1645).
   const EditorWorkspace = lazy(
     guardedRouteChunk(() =>
-      Promise.all([import("../app/App"), import("./web-editor")]).then(
-        ([app, editor]) => ({
-          default: function EditorRoute(
-            props: ComponentProps<typeof WebEditorApp>,
-          ) {
-            return (
-              <app.WorkspaceAgentProvider>
-                <editor.WebEditorApp {...props} />
-              </app.WorkspaceAgentProvider>
-            );
-          },
-        }),
-      ),
+      Promise.all([
+        import("../app/App"),
+        import("./web-editor"),
+        agentRuntimeOnLoad(),
+      ]).then(([app, editor]) => ({
+        default: function EditorRoute(
+          props: ComponentProps<typeof WebEditorApp>,
+        ) {
+          return (
+            <app.WorkspaceAgentProvider>
+              <editor.WebEditorApp {...props} />
+            </app.WorkspaceAgentProvider>
+          );
+        },
+      })),
     ),
   );
 

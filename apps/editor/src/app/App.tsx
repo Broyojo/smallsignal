@@ -269,11 +269,11 @@ import {
   useEditorAgentConnection,
 } from "./use-agent-hosts";
 import { recoveryStateLabel } from "../components/recovery-banners";
-import { BrowserAgentProjectHost } from "../agent/browser-agent-project-host";
-import { createAgentGalleryPublisher } from "../agent/agent-gallery-publish";
-import { createAgentSemanticIntentHandler } from "../agent/agent-semantic-intent-handler";
 import { PUBLIC_AGENT_UI_ENABLED } from "../agent/public-agent-ui";
-import { WorkspaceAgentProvider } from "../agent/workspace-agent";
+import {
+  useWorkspaceAgentRuntime,
+  WorkspaceAgentProvider,
+} from "../agent/workspace-agent";
 const HostAgentProvider = !import.meta.env?.ICM_DESKTOP
   ? WorkspaceAgentProvider
   : ({ children }: Parameters<typeof WorkspaceAgentProvider>[0]) => children;
@@ -741,6 +741,8 @@ function WorkspaceEditor({
     openWorkingCopyIds: () => openWorkingCopyIdsRef.current(),
   });
   const openWorkingCopyIdsRef = useRef<() => readonly string[]>(() => []);
+  // The Agent's hosts are built from its runtime, which loads on demand.
+  const agentRuntime = useWorkspaceAgentRuntime();
   const agentStartupRecovery = useAgentStartupRecovery({
     capabilities,
     restoredWorkspace,
@@ -787,6 +789,7 @@ function WorkspaceEditor({
     agentPlanning,
     browserAgentHost,
   } = useBrowserAgentHost({
+    runtime: agentRuntime,
     editorDocumentController,
     projectSessionId,
     synchronizeExternalCommit,
@@ -1014,6 +1017,7 @@ function WorkspaceEditor({
     agentGalleryPublicationRef,
     recordGalleryPublicationRef,
   } = useAgentProjectResources({
+    runtime: agentRuntime,
     editorDocumentController,
     projectSessionId,
     browserAgentHost,
@@ -1025,8 +1029,8 @@ function WorkspaceEditor({
   agentProjectTabsRef.current = () => projectTabs;
   const browserAgentProjectHost = useMemo(
     () =>
-      !import.meta.env?.ICM_DESKTOP && browserAgentHost
-        ? new BrowserAgentProjectHost({
+      !import.meta.env?.ICM_DESKTOP && agentRuntime && browserAgentHost
+        ? new agentRuntime.BrowserAgentProjectHost({
             projectTransactionOptions: EDITOR_PROJECT_TRANSACTION_OPTIONS,
             isProjectAvailable: () =>
               agentProjectTabsRef
@@ -1036,7 +1040,7 @@ function WorkspaceEditor({
                   (entry) =>
                     entry.session.controller === editorDocumentController,
                 ),
-            publishToGallery: createAgentGalleryPublisher({
+            publishToGallery: agentRuntime.createAgentGalleryPublisher({
               // Only while this working copy is the one its tab shows.
               current: () => {
                 const state = agentGalleryPublicationRef.current();
@@ -1067,6 +1071,7 @@ function WorkspaceEditor({
         : null,
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- preserve the host's existing per-session lifetime when a controller is reused
     [
+      agentRuntime,
       browserAgentHost,
       editorDocumentController,
       projectSessionId,
@@ -3644,21 +3649,22 @@ function WorkspaceEditor({
     selectedInstance,
     setStatus,
   });
-  if (!import.meta.env?.ICM_DESKTOP)
-    agentSemanticIntentRef.current = createAgentSemanticIntentHandler({
-      project,
-      resolver,
-      connectivityIndex: projectConnectivityIndex,
-      navigateToLocator,
-      fitDocument,
-      clearFocus: () => {
-        resetInteractionState();
-        setHighlightedNetOrigin(null);
-        setSelectionOpen(false);
-        setStatus("Agent cleared semantic focus");
-      },
-      highlightNet,
-    });
+  if (!import.meta.env?.ICM_DESKTOP && agentRuntime)
+    agentSemanticIntentRef.current =
+      agentRuntime.createAgentSemanticIntentHandler({
+        project,
+        resolver,
+        connectivityIndex: projectConnectivityIndex,
+        navigateToLocator,
+        fitDocument,
+        clearFocus: () => {
+          resetInteractionState();
+          setHighlightedNetOrigin(null);
+          setSelectionOpen(false);
+          setStatus("Agent cleared semantic focus");
+        },
+        highlightNet,
+      });
 
   useEffect(() => {
     if (!selectedRouteId) setSelectedRouteSegmentIndex(null);
@@ -4852,12 +4858,14 @@ function WorkspaceEditor({
     });
   if (
     !import.meta.env?.ICM_DESKTOP &&
+    agentRuntime &&
     browserAgentHost &&
     browserAgentFileHost &&
     browserAgentSimulationHost &&
     browserAgentProjectHost
   )
     agentTargetRef.current = createAgentWorkspaceTargets({
+      runtime: agentRuntime,
       flushRecovery,
       synchronizeExternalCommit,
       agentPlanning,

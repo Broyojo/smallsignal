@@ -19,11 +19,12 @@ import type {
 } from "@icm/agent-adapter";
 import type { CircuitProject, GridRect } from "@icm/model";
 import type { AgentGalleryPublication } from "../agent/agent-gallery-publish";
+import type { AgentRuntime } from "../agent/agent-runtime-loader";
 import type { BrowserAgentPlanningContext } from "../agent/browser-agent-command";
-import { BrowserAgentFileHost } from "../agent/browser-agent-file-host";
-import { BrowserAgentHost } from "../agent/browser-agent-host";
+import type { BrowserAgentFileHost } from "../agent/browser-agent-file-host";
+import type { BrowserAgentHost } from "../agent/browser-agent-host";
 import type { BrowserAgentProjectHost } from "../agent/browser-agent-project-host";
-import { BrowserAgentSimulationHost } from "../agent/browser-agent-simulation-host";
+import type { BrowserAgentSimulationHost } from "../agent/browser-agent-simulation-host";
 import { peekAgentSessionRecovery } from "../agent/session-recovery";
 import { claimNow } from "../agent/claim-clock";
 import type { UseAgentSessionOptions } from "../agent/use-agent-session";
@@ -56,14 +57,12 @@ type ProjectFileLifecycle = ReturnType<typeof useProjectFileLifecycle>;
 type EditorPanels = ReturnType<typeof useEditorPanels>;
 
 type SessionOptions = Parameters<typeof useEditorAgentSession>[0];
-function useWebAgentSession(options: SessionOptions | null) {
-  if (!options) throw new Error("Web Agent hosts were not assembled");
-  return useEditorAgentSession(options);
-}
-// The host is fixed for the entire build, so every render calls the same hook.
+// The host is fixed for the entire build, so every render calls the same
+// hook. Web hosts exist once the Agent runtime has loaded (#1673); until
+// then the session is the workspace's, not connected.
 const useHostAgentSession = import.meta.env?.ICM_DESKTOP
-  ? (_options: SessionOptions | null) => null
-  : useWebAgentSession;
+  ? (_options: SessionOptions) => null
+  : useEditorAgentSession;
 
 /** The Agent session a refreshed tab resumes, read once at startup. */
 export function useAgentStartupRecovery({
@@ -102,11 +101,14 @@ export function useAgentStartupRecovery({
 
 /** The Agent's host on the active document, with its planning context. */
 export function useBrowserAgentHost({
+  runtime,
   editorDocumentController,
   projectSessionId,
   synchronizeExternalCommit,
   flushRecovery,
 }: {
+  /** Null until the Agent runtime loads; there is no host before then. */
+  runtime: AgentRuntime | null;
   editorDocumentController: EditorDocumentController;
   projectSessionId: string;
   synchronizeExternalCommit: DocumentControllerState["synchronizeExternalCommit"];
@@ -157,8 +159,8 @@ export function useBrowserAgentHost({
   commitCallbacks.current = { synchronizeExternalCommit, flushRecovery };
   const browserAgentHost = useMemo(
     () =>
-      !import.meta.env?.ICM_DESKTOP
-        ? new BrowserAgentHost(
+      !import.meta.env?.ICM_DESKTOP && runtime
+        ? new runtime.BrowserAgentHost(
             editorDocumentController,
             () => {
               commitCallbacks.current.synchronizeExternalCommit();
@@ -173,7 +175,7 @@ export function useBrowserAgentHost({
           )
         : null,
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- a replacement session must receive a new host even if its controller is reused
-    [editorDocumentController, projectSessionId, agentPlanning],
+    [editorDocumentController, projectSessionId, agentPlanning, runtime],
   );
   return {
     agentSemanticIntentRef,
@@ -185,6 +187,7 @@ export function useBrowserAgentHost({
 
 /** The Agent's file, run-history and simulation services for each Project. */
 export function useAgentProjectResources({
+  runtime,
   editorDocumentController,
   projectSessionId,
   browserAgentHost,
@@ -192,6 +195,7 @@ export function useAgentProjectResources({
   projectSwitchBlockerRef,
   openProjectInTabRef,
 }: {
+  runtime: AgentRuntime | null;
   editorDocumentController: EditorDocumentController;
   projectSessionId: string;
   browserAgentHost: BrowserAgentHost | null;
@@ -216,9 +220,11 @@ export function useAgentProjectResources({
       Map<
         string,
         {
-          files: BrowserAgentFileHost;
           history: ProjectRunHistory;
-          simulation: BrowserAgentSimulationHost;
+          // Absent until the Agent runtime loads; the run history is the
+          // person's too, so it is kept from the start.
+          files?: BrowserAgentFileHost;
+          simulation?: BrowserAgentSimulationHost;
         }
       >
     >(),
@@ -231,9 +237,9 @@ export function useAgentProjectResources({
   const resourceKey = `${projectSessionId}:${simulationTransport}`;
   const browserAgentFileHost = useMemo(
     () =>
-      !import.meta.env?.ICM_DESKTOP && browserAgentHost
+      !import.meta.env?.ICM_DESKTOP && runtime && browserAgentHost
         ? (resources.get(resourceKey)?.files ??
-          new BrowserAgentFileHost({
+          new runtime.BrowserAgentFileHost({
             transport: simulationTransport,
             getProjectSessionId: () =>
               editorDocumentController.projectSessionId,
@@ -267,6 +273,7 @@ export function useAgentProjectResources({
       resourceKey,
       simulationTransport,
       resources,
+      runtime,
       browserAgentHost,
       openProjectInTabRef,
       projectSwitchBlockerRef,
@@ -285,9 +292,12 @@ export function useAgentProjectResources({
   }, [projectRunHistory]);
   const browserAgentSimulationHost = useMemo(
     () =>
-      !import.meta.env?.ICM_DESKTOP && browserAgentFileHost && projectRunHistory
+      !import.meta.env?.ICM_DESKTOP &&
+      runtime &&
+      browserAgentFileHost &&
+      projectRunHistory
         ? (resources.get(resourceKey)?.simulation ??
-          new BrowserAgentSimulationHost({
+          new runtime.BrowserAgentSimulationHost({
             runHistory: projectRunHistory,
             owner: "agent",
             files: browserAgentFileHost.simulationFiles,
@@ -298,6 +308,7 @@ export function useAgentProjectResources({
           }))
         : null,
     [
+      runtime,
       browserAgentFileHost,
       resources,
       projectRunHistory,
@@ -306,11 +317,15 @@ export function useAgentProjectResources({
       simulationTransport,
     ],
   );
-  if (browserAgentFileHost && projectRunHistory && browserAgentSimulationHost)
+  if (projectRunHistory)
     resources.set(resourceKey, {
-      files: browserAgentFileHost,
       history: projectRunHistory,
-      simulation: browserAgentSimulationHost,
+      ...(browserAgentFileHost && browserAgentSimulationHost
+        ? {
+            files: browserAgentFileHost,
+            simulation: browserAgentSimulationHost,
+          }
+        : {}),
     });
   useEffect(
     () => () => {

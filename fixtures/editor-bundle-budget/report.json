@@ -4,7 +4,7 @@
   "routes": {
     "editor": {
       "budget": {
-        "files": 53,
+        "files": 84,
         "rawKib": 3886,
         "gzipKib": 1051,
         "brotliKib": 882
