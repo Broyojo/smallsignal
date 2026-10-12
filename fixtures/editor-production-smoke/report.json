@@ -12,6 +12,7 @@
   "editorLoadingScreens": [
     "Loading editor…"
   ],
+  "editorNetlistLayoutChangedOnLoad": false,
   "editorSimulationServiceLoaded": false,
   "routePreloadBeforeStylesheets": true,
   "editorFirstLoadJsonParser": false

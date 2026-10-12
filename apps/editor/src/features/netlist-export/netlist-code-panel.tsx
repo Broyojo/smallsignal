@@ -48,6 +48,7 @@ import {
   type NetlistFormat,
   type NetlistNamingProfile,
 } from "@icm/netlist";
+import { StaticCodeView } from "../project-code/static-code-view";
 
 const ProjectTextEditor = lazy(
   () => import("../project-code/project-text-editor"),
@@ -417,6 +418,8 @@ export function NetlistCodePanel({
     ? "The canvas or Agent changed the netlist. Reload before applying your draft."
     : applyError;
   const shown = draftPreview ? draftPreview.text : draft;
+  const invalid =
+    !draftPreview && (!!error || issues.length > 0 || !!editError);
   const lineCount = shown.split(/\r\n?|\n/u).length;
   return (
     <section
@@ -550,10 +553,10 @@ export function NetlistCodePanel({
       >
         <Suspense
           fallback={
-            <textarea
-              aria-label="Loading Netlist code editor"
+            <StaticCodeView
+              ariaLabel="Loading Netlist code editor"
               value={shown}
-              readOnly
+              invalid={invalid}
             />
           }
         >
@@ -562,9 +565,7 @@ export function NetlistCodePanel({
             language="netlist"
             value={shown}
             readOnly={!!draftPreview}
-            invalid={
-              !draftPreview && (!!error || issues.length > 0 || !!editError)
-            }
+            invalid={invalid}
             onChange={(text) => {
               draftRef.current = text;
               setDraft(text);
