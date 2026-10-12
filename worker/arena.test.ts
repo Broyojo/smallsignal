@@ -588,49 +588,6 @@ describe("AnalogArena's host", () => {
     expect(served).toEqual([]);
   });
 
-  it("serves the Schematic Arena to a frame on Analog Canvas's host, signed in there", async () => {
-    // The Arena gate (#1681) frames the battle page on Analog Canvas's own
-    // origin: the frame, its files and its calls all stay here.
-    const { accounts, at, forwarded, visit } = canvas();
-    const cookie = await makerOf(accounts);
-    for (const [path, destination] of [
-      // The gate's page, marked for Arena's vote source, query and all.
-      ["/schematic?from=canvas-gate", "iframe"],
-      ["/schematic/assets/index-1.js", "script"],
-      ["/schematic/history", "iframe"],
-    ] as const)
-      expect(
-        (
-          await at(`${CANVAS_ORIGIN}${path}`, {
-            headers: { Cookie: cookie, "sec-fetch-dest": destination },
-          })
-        ).status,
-      ).toBe(200);
-    expect(forwarded.map((request) => request.url)).toEqual([
-      `${CANVAS_ORIGIN}/schematic?from=canvas-gate`,
-      `${CANVAS_ORIGIN}/schematic/assets/index-1.js`,
-      `${CANVAS_ORIGIN}/schematic/history`,
-    ]);
-    const id = await accountId(visit, cookie);
-    for (const request of forwarded)
-      expect(forwardedAccount(request)).toMatchObject({ id });
-  });
-
-  it.each([["document"], [null]] as const)(
-    "still hands a visit to the Schematic Arena on Analog Canvas's host on to AnalogArena (Sec-Fetch-Dest %s)",
-    async (destination) => {
-      const { at, forwarded } = canvas();
-      const response = await at(`${CANVAS_ORIGIN}/schematic?x=1`, {
-        headers: destination ? { "sec-fetch-dest": destination } : {},
-      });
-      expect(response.status).toBe(302);
-      expect(response.headers.get("location")).toBe(
-        handoffBegin("/schematic?x=1"),
-      );
-      expect(forwarded).toEqual([]);
-    },
-  );
-
   it("keeps Analog Canvas's own front page and statistics on its host", async () => {
     const { at, forwarded } = canvas();
     for (const path of ["/", "/analytics"])

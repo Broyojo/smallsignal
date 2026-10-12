@@ -55,20 +55,6 @@ function isStaticAsset(request) {
   );
 }
 
-/**
- * The Schematic Arena's pages and files, which the Arena gate frames on this
- * origin (#1681). They are Arena's, not this build's: never the offline
- * shell, never kept with the editor's assets.
- */
-function isArenaPage(request) {
-  const requestUrl = new URL(request.url);
-  return (
-    requestUrl.origin === scopeUrl().origin &&
-    (requestUrl.pathname === "/schematic" ||
-      requestUrl.pathname.startsWith("/schematic/"))
-  );
-}
-
 function isSameOriginApi(request) {
   const requestUrl = new URL(request.url);
   const scope = scopeUrl();
@@ -122,7 +108,7 @@ self.addEventListener("fetch", (event) => {
   // APIs own their own HTTP caching policy. In particular, Gallery previews
   // use revisioned URLs; putting them in the build-scoped shell cache would
   // ignore that policy and keep an old or access-controlled image alive.
-  if (isSameOriginApi(event.request) || isArenaPage(event.request)) return;
+  if (isSameOriginApi(event.request)) return;
 
   // Navigation is network-first so a deployed build can replace index.html and
   // point at its fresh, content-hashed Vite assets. Offline falls back only to

@@ -107,16 +107,6 @@ function handoffTo(arenaPage: string): Response {
 }
 
 /**
- * A visit to a page in the browser's window, or a request that does not say.
- * The Arena gate's frame on Analog Canvas's host (#1681), and the files and
- * pages it loads there, say they are not (`Sec-Fetch-Dest`), and stay.
- */
-function isPageVisit(request: Request): boolean {
-  const destination = request.headers.get("sec-fetch-dest");
-  return destination === null || destination === "document";
-}
-
-/**
  * Where each host sends a request before any route answers it
  * (docs/specs/analog-arena.md#hosts). Null when the request stays.
  *
@@ -124,11 +114,10 @@ function isPageVisit(request: Request): boolean {
  *   statistics (/analytics), the Schematic Arena's pages, /api/arena/… and the
  *   sign-in API; every other path goes to Analog Canvas. A GitHub or Google sign-in starts on Analog Canvas, the
  *   only host those providers send people back to, and is handed back here.
- * - On Analog Canvas's host, the former /arena… pages and a visit to
- *   /schematic… go to the same Schematic Arena page on AnalogArena's host,
- *   through the sign-in handoff; /schematic… in a frame there stays, and is
- *   forwarded. Elsewhere (local development) /arena… goes to /schematic… on
- *   the same origin.
+ * - On Analog Canvas's host, the former /arena… pages and /schematic… go to
+ *   the same Schematic Arena page on AnalogArena's host, through the sign-in
+ *   handoff. Elsewhere (local development) /arena… goes to /schematic… on the
+ *   same origin.
  */
 export function routeArenaHosts(request: Request): Response | null {
   const url = new URL(request.url);
@@ -156,7 +145,7 @@ export function routeArenaHosts(request: Request): Response | null {
   if (url.hostname === CANVAS_HOST) {
     if (legacy)
       return handoffTo(schematicArenaPathOf(url.pathname) + url.search);
-    if (isArenaPagePath(url.pathname) && isPageVisit(request))
+    if (isArenaPagePath(url.pathname))
       return handoffTo(url.pathname + url.search);
     return null;
   }
