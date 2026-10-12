@@ -2,59 +2,49 @@
 
 ## Import says the entry is ambiguous
 
-Choose exactly one `.cir`, `.sp`, `.spi`, or `.scs` entry. If the selected
-files include one `circuit.spi` or `circuit.scs`, it is preferred. Include every
-local `.inc` or `.lib` file used by the entry.
+Choose exactly one `.cir`, `.sp`, `.spi` or `.scs` entry (`circuit.spi` or
+`circuit.scs` is preferred) and include every local `.inc` or `.lib` it uses.
 
 ## A crossing is not connected
 
-This is intentional. Add a Junction dot at the connection. Never infer an
-electrical join from geometry.
+Intentional: crossing wires never connect. End a wire on the other wire to
+add a Junction.
 
 ## A SPICE statement is reported as opaque
 
-Opaque text is preserved exactly but is not editable circuit semantics yet.
-Consult the compatibility matrix and keep the diagnostic when reporting a
-missing vendor construct.
+Opaque text is kept exactly but is not editable yet. Check the
+[compatibility matrix](spice-compatibility.md) and include the diagnostic when
+reporting a missing construct.
 
 ## Recovery copies
 
-Safety copies live in this browser's IndexedDB and are never authoritative.
-Use **File / Recover Unsaved Work…** to browse them. A damaged latest copy
-offers the previous generation; a copy from a newer Project schema cannot be
-restored here but can still be downloaded. Deleting one copy never deletes
-another Project's copy. If a warning says recovery cannot be saved (storage
-full or unavailable), download the Project with the button in the warning. A
-reload immediately after an edit may miss that very last edit — the copy
-lands within a fraction of a second; reloading after that restores the
-latest committed state.
+**File → Recover Unsaved Work…** lists this browser's safety copies. A damaged
+latest copy offers the previous one; a copy from a newer schema can be
+downloaded but not restored. If a warning says recovery cannot be saved, use
+its download button. A reload within a fraction of a second of an edit may
+miss that edit.
 
 ## PNG or PDF export fails
 
-Confirm that Blob downloads are permitted by the browser; PNG also needs Canvas
-2D. SVG is the canonical fallback and contains the same formal scene.
+Allow downloads in the browser (PNG also needs Canvas 2D). SVG contains the
+same drawing.
 
 ## The portable host does not start
 
-Use Node 24 or newer and ensure port 4173 is free. The portable host intentionally
-does not accept a LAN address. Use `pnpm dev` for a different development port.
+Use Node 24 or newer and free port 4173. The portable host accepts only
+loopback addresses; use `pnpm dev` for another port. It starts no optional
+services and discovers no simulator.
 
-## Agent API requests fail
+## Agent requests fail
 
-Use the editor's Agent connection controls and the
-[MCP connection guide](../agent/mcp-install.md). Check session expiry, scopes,
-the currently authorized Project, and the client credential. Replacing a Project
-or revoking a session requires new authorization. A missing simulation environment
-is a recoverable configuration error, not proof that the Agent session is invalid.
-
-The portable static host does not automatically start optional services or
-discover a simulator. Use only the explicitly configured adapter for that host.
+Use the editor's **Agent** connection panel and the
+[MCP connection guide](../agent/mcp-install.md). Check session expiry, scopes
+and the authorized Project; replacing the Project or revoking the session needs
+a new authorization. A missing simulation environment is a configuration
+error, not an invalid session.
 
 ## Accessibility limits
 
-Precise component placement, route-segment and endpoint selection, and Junction
-insertion still require pointer input. The schematic does not expose a complete
-object-by-object accessibility tree, focus follows DOM order, and shortcuts
-cannot be customized. Keyboard-focusable controls and status announcements do
-not remove those limitations. Future semantic canvas navigation must use typed
-Edit Engine operations rather than simulated pointer events.
+Precise placement, wire and endpoint selection and Junction insertion still
+need a pointer. The schematic has no object-by-object accessibility tree,
+focus follows page order, and shortcuts cannot be customized.

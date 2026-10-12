@@ -1,89 +1,47 @@
 # Hierarchy and repeated Cells
 
-Use when editing a child Cell, reused definition or a circuit whose boundaries
-matter more than a single page view. There is no instance-count threshold.
+For editing a child Cell, a reused definition, or a circuit whose boundaries
+matter more than one page view.
 
 Read the Snapshot Project index and each relevant child's ordered formal
-terminals. Match them to the parent instance pins. A terminal's owned Port
-Instance and its Net are separate facts to verify, not inferred from its name.
-Navigate without changing `topDocumentId`.
+terminals and match them to the parent instance pins; a terminal's owned Port
+Instance and its Net are separate facts, not inferred from its name. Navigate
+without changing `topDocumentId`. The index keeps authored Cell order. A
+reference's `targetKind` distinguishes internal, external and unresolved calls;
+only an explicit internal binding identifies `targetDocumentId` (missing
+classification from an older server means unknown). Calls exist without Ports
+or wires; external IDs refer to `externalSubcircuitDefinitions`. Never repair
+bindings by guessing from names.
 
-The Project index preserves authored Cell order. A reference's `targetKind`
-distinguishes internal, external and unresolved calls; only an explicit internal
-binding identifies `targetDocumentId`. Matching names do not establish a call.
-Calls exist even with no Ports or wires. Missing optional classification on an
-older server means unknown, not internal. External IDs refer to the Project's
-`externalSubcircuitDefinitions`. Never repair bindings by guessing from names.
+`reorder_documents` and `set_top_document` are `structureEdits`. Reordering
+does not choose the Top; changing Top does not rewrite a simulation folder's
+entry; explicit export/simulation roots stay separate.
 
-`reorder_documents` and `set_top_document` are existing `structureEdits`.
-Reordering does not choose the default Top; changing Top does not rewrite a
-saved simulation folder's entry. Explicit export/simulation roots remain separate.
+`transact.command` (MCP `advanced_transact`) carries `bind-cell-parameter`,
+`rename-cell-parameter`, `set-cell-parameter-default`, `remove-cell-parameter`,
+`rename-cell-terminal`, `remove-cell-terminal` and `set-cell-symbol-pins`
+([authoring](../shared/authoring.md#cell-pins-and-supplies)). Read the schema and
+`commandKinds`; address the child `documentId` at the current
+`expectedStructureRevision`. They reuse GUI planners, commit affected callers
+atomically and add no confirmation. Parameter rename updates local references
+and caller override keys, not caller expressions. Defaults are Cell-owned,
+overrides instance-owned; clearing an override restores inheritance; removal
+rejects a used parameter. A Port rename with `mergeExistingPort: true` merges
+with an existing Port and its caller Nets (otherwise no merge); an unstyled
+renamed Port label takes the new name's placed look (`rfp` → `vrfp` drawn
+V_rfp). Removal keeps disconnected parent wire stubs as Junctions. Reviewed PDK
+interfaces keep their constraints: edit instance parameters instead.
 
-Use existing `transact.command` (MCP `advanced_transact`) for
-`bind-cell-parameter`, `rename-cell-parameter`, `set-cell-parameter-default`,
-`remove-cell-parameter`, `rename-cell-terminal`, `remove-cell-terminal` and
-`set-cell-symbol-pins`.
-Read the current schema and `commandKinds`; address the child `documentId` and
-current `expectedStructureRevision`. These commands reuse GUI planners and
-commit affected callers atomically. Parameter rename updates local references
-and caller override keys, not the caller expressions themselves. Defaults are
-Cell-owned, overrides instance-owned; clearing an override restores inheritance.
-Removal rejects still-used parameters. Native expression syntax is unchanged.
+A reused child is one definition in several parents: inspect affected
+references before changing its interface or meaning, never clone it to
+simplify reasoning, and flatten only as a deliberate user-scoped change.
 
-For a Port rename, `mergeExistingPort: true` explicitly requests electrical
-merging with an existing Port, including affected caller nets. Omitted/false
-retains the planner's non-merging behavior. A renamed Port's label with no
-look of its own takes the look a Port placed with the new name gets (`rfp`
-renamed `vrfp` is drawn V_rfp); an author's look keeps its styling. Removal
-retains disconnected parent wire stubs as Junctions. These commands add no GUI
-confirmation and do not replace or restrict raw typed edits. Reviewed PDK
-External interfaces retain their existing constraints; edit supported instance
-parameters instead.
+Source-defined external circuits are in Snapshot `modelSources` and
+`externalSubcircuitDefinitions[].implementation`; read the owner revision,
+entry and files, then follow [external model sources](../shared/authoring.md#external-model-sources).
+Overrides and symbol metadata stay ordinary typed edits; mapped File Resource
+edits write the shared owner.
 
-To arrange the Pins on a Cell's block, send `set-cell-symbol-pins` (also an
-action: MCP `circuit_transform`) to the child `documentId`, by Pin name, for
-example to put `bl` west and `blb` east as the Cell's schematic draws them:
-`{kind:"set-cell-symbol-pins",pins:[{name:"bl",side:"west"},{name:"blb",side:"east"}]}`.
-Every Pin not named keeps the place its callers were drawn with (or, before
-the first placement, the place that placement would give it). A named Pin
-without `offset` (multiples of 10 along the side) stays put on its own side
-and takes the first free slot of a new one. Unknown names and shared slots
-are refused with the Cell's Pin names or the free slots. Callers keep their
-Nets and netlist calls, and the wiring the move stretches is redrawn around
-the block; the receipt names those callers and their Cells. This replaces
-rebuilding the low-level `set_cell_symbol_presentation` edit's whole
-`pinPlacements` by terminal ID.
-
-A placed Cell shows its Cell name, not its instance name (`X1`). Probing a
-node inside one of several identical blocks, such as `v(xdut.x1.net0)`, needs
-that name: `set-instance-display` with `showReference:true` shows `X1` above
-the Cell name on the parent, as the Properties Visual annotation switch does.
-
-A reused child is one definition in several parent contexts. Before changing
-its interface or internal meaning, inspect affected references; do not clone it
-merely to simplify reasoning. Use the current `structureRevision` and the typed
-structure-edit contract for interface changes.
-
-Source-defined external circuits use Snapshot Project `modelSources` and
-`externalSubcircuitDefinitions[].implementation`. Read the owner revision,
-selected entry and exact files. Send `apply_model_source` with the resource and
-`definitions:[{definitionId,entry,portMap?}]` as a structure edit. The native
-header derives target, port order and defaults; all bound definitions update
-atomically. Map connected removed/renamed old names to new names or `null` to
-disconnect while preserving wires. Reorder preserves identity automatically.
-
-`save_model_source_draft` stores unapplied files/dependencies against the applied
-revision. Raw upsert may add an imported owner but cannot replace an applied
-one. To fork, apply a new owner and definition ID with explicitly authored
-nonconflicting public/helper names. Overrides and symbol metadata remain normal
-typed edits. Never duplicate a Project model inside an experiment. Mapped File
-Resource body/default edits write the shared owner; unsupported edits identify
-Manager. Apply neither executes SPICE nor certifies electrical behavior.
-
-Keep stable reusable Cells hierarchical when their terminals explain their
-function. Enter the child for device-level work; flatten only as a deliberate
-user-scoped change. Parent placement does not determine child semantics.
-
-Review the changed child and affected parent contexts. In the parent render,
-shared supply/bias/control relationships need a clear rail, boundary convention
-or attached labels, not unexplained stubs or labels at every pin.
+Review the changed child and affected parents. In a parent render, shared
+supply/bias/control relationships need a clear rail, boundary convention or
+attached labels, not unexplained stubs or labels at every pin.

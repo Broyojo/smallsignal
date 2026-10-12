@@ -1,77 +1,56 @@
 # SPICE Compatibility
 
-Analog Canvas imports circuit structure; importing does not simulate the
-netlist. Every source byte, continuation, include relation, typed statement,
-and unresolved statement remains available to the compiler pipeline. Spectre
-`.scs` entries are converted to SPICE in the browser before this import.
+Importing reads circuit structure; it does not simulate. Every source line,
+include and unrecognised statement is kept. Spectre `.scs` entries are
+converted to SPICE in the browser first.
 
-The editor exports deterministic structural SPICE (`.spi`) and Spectre
-(`.scs`) netlists from the typed schematic Project. Exported files deliberately
-omit model cards, library includes, simulator decks and analyses. Libraries,
-sections and corners belong to authored simulation source. Unknown
-imported `X` calls remain external subcircuit calls; a display mapping never
-turns them into a primitive model call.
+Exports are deterministic structural SPICE (`.spi`) or Spectre (`.scs`)
+netlists without model cards, library includes, analyses or testbenches.
+Unknown imported `X` calls stay external subcircuit calls.
 
-For the exact reviewed SKY130 targets, the editor uses the existing NMOS,
-PMOS, resistor, capacitor, and inductor artwork while retaining an external
-definition. A user may place the ordinary NMOS/PMOS with the unchanged Insert
-flow, then choose `sky130_fd_pr__nfet_01v8`, `sky130_fd_pr__pfet_01v8`, their
-exact `01v8_lvt` variants, or another reviewed MOS master in the component's
-`netlistTarget` (**Target netlist**) property. The edit creates or reuses the
-project-local external definition, preserves connectivity, and exposes `w`,
-`l`, `nf`, and `m`. The same undoable edit changes the Reference `M1` to `XM1`;
-clearing the target restores `M1`. It does not convert `m` into `nf`.
+## SKY130 targets
 
-The same `netlistTarget` property on ordinary resistors and capacitors offers
-`sky130_fd_pr__res_high_po` and `sky130_fd_pr__cap_mim_m3_1`. Their existing
-icons and visible pins do not change. The resistor's real B substrate terminal
-is selected from existing Nets through `Substrate Net` in Properties and
-has no canvas pin or wire. Physical R/C geometry is `w/l/mult` or `w/l/mf`;
-the editor never derives it from an ideal scalar value.
+Ordinary symbols can carry exact reviewed SKY130 targets through their
+**Target netlist** (`netlistTarget`) property:
 
-The ordinary PNP symbol similarly offers the exact fixed
-`sky130_fd_pr__pnp_05v5_W0p68L0p68` wrapper. It keeps the visible C/B/E pins,
-prints a three-node external X call, and relies on that wrapper's internal
-substrate-to-collector connection. Its collector is therefore the substrate
-and belongs on ground, as in a bandgap; drawn elsewhere, as a mirror load, the
-export warns `PDK_SUBSTRATE_TERMINAL`. The exact
-`sky130_fd_pr__npn_05v5_W1p00L1p00` interface instead exposes its real fourth S
-terminal as a `Substrate Net` property and is structural only in the hosted
-Profile. Its substrate, like the resistor's B, is the node the NMOS bodies sit
-on, the lowest supply: the Cell's drawn negative supply (a supply named like
-`VEE`, `VSS` or `VNEG`) while the Cell's NMOS body default is unset or ground,
-else that default when it is another Net (labelled NMOS body / substrate in
-Cell Properties), else ground. Changing that default moves the substrates that
-followed the old one with the NMOS bodies; one whose `Substrate Net` was set
-to another Net stays. A substrate on ground in a Cell that draws a negative
-supply, bound before the rail was drawn, exports with the warning
-`PDK_SUBSTRATE_ABOVE_NEGATIVE_SUPPLY`, which names how to move it. Clearing its `netlistTarget`, or choosing an ordinary model name,
-restores the ordinary three-node Q card and removes the model-only substrate
-membership. The generic Diode keeps its generic `DIODE` model, which a SPICE
-export defines with a default card until another model is bound; this
-hosted environment does not claim a qualified SKY130 diode or NPN target.
+- NMOS/PMOS: `sky130_fd_pr__nfet_01v8`, `sky130_fd_pr__pfet_01v8`, their
+  `01v8_lvt` variants and other reviewed MOS, with `w`, `l`, `nf`, `m`. The
+  same undoable edit renames `M1` to `XM1`; clearing the target restores it.
+- Resistor and capacitor: `sky130_fd_pr__res_high_po` and
+  `sky130_fd_pr__cap_mim_m3_1`, sized by `w`/`l` with `mult` or `mf`, never
+  derived from an ideal value. The resistor's substrate is a `Substrate Net`
+  property, not a canvas pin.
+- PNP `sky130_fd_pr__pnp_05v5_W0p68L0p68`: three nodes; its wrapper ties the
+  substrate to the collector, so the collector belongs on ground (elsewhere
+  the export warns `PDK_SUBSTRATE_TERMINAL`).
+- NPN `sky130_fd_pr__npn_05v5_W1p00L1p00`: its fourth terminal S is a
+  `Substrate Net` property (structural only on the hosted Profile).
 
-This convenience is structural only. It does not install SKY130, resolve a
-local `.include`, supply foundry models or corners, or make the exported
-netlist simulatable by itself. Unreviewed masters, incompatible terminal order,
-and external definitions with explicit block presentation continue to render
-as generic blocks.
+A substrate sits on the lowest supply: the Cell's drawn negative supply
+(named like `VEE`, `VSS`, `VNEG`) while the Cell's NMOS body default is unset
+or ground, else that default, else ground. Changing the default moves the
+substrates that followed it. One bound to ground before the rail was drawn
+exports with `PDK_SUBSTRATE_ABOVE_NEGATIVE_SUPPLY`, which says how to fix it.
 
-Imported `.subckt` parameter defaults become editable Cell formal parameters
-and are emitted again. Required-only Cell parameters remain an authoring
-concept but cannot be exported by the released portable dialects until they
-have explicit defaults. Independent `V`/`I` sources can be edited and exported
-with DC, AC, PULSE, SIN, or PWL values, but structural import maps only their
-DC form back to editable source parameters.
+These mappings are structural: they do not install SKY130, resolve includes or
+supply models and corners. Unreviewed masters and incompatible terminal orders
+stay generic blocks. The generic diode keeps its `DIODE` model.
 
-| Profile               | Structural status       | Detection                                                   | Important limit                                                |
-| --------------------- | ----------------------- | ----------------------------------------------------------- | -------------------------------------------------------------- |
-| ngspice 46 core       | baseline                | ngspice directives                                          | simulator commands are preserved, not executed                 |
-| SPICE3f5 core         | baseline                | compatibility fallback                                      | no simulator execution                                         |
-| LTspice 24 structural | selected vendor profile | `.backanno` family or explicit override                     | schematic directives and proprietary devices may remain opaque |
-| Xyce 7 structural     | selected vendor profile | analysis-qualified `.print`/`.measure` or explicit override | Xyce expression/runtime semantics are not evaluated            |
-| HSPICE                | preservation only       | no dedicated profile                                        | no released conformance corpus                                 |
-| PSpice                | preservation only       | no dedicated profile                                        | no released conformance corpus                                 |
+## Parameters and sources
 
-“Opaque” is not discarded. It means the exact source and source span are kept,
-but the statement is not yet safe to turn into editable circuit semantics.
+Imported `.subckt` defaults become editable Cell parameters and are exported
+again; parameters without defaults cannot be exported. Independent `V`/`I`
+sources export DC, AC, PULSE, SIN and PWL, but import maps only their DC form
+back to editable parameters.
+
+| Profile | Status | Detection | Limit |
+| --- | --- | --- | --- |
+| ngspice 46 core | baseline | ngspice directives | simulator commands kept, not executed |
+| SPICE3f5 core | baseline | fallback | no simulator execution |
+| LTspice 24 structural | vendor profile | `.backanno` family or override | schematic directives and proprietary devices may stay opaque |
+| Xyce 7 structural | vendor profile | analysis-qualified `.print`/`.measure` or override | expressions not evaluated |
+| HSPICE | preservation only | none | no conformance corpus |
+| PSpice | preservation only | none | no conformance corpus |
+
+"Opaque" means kept exactly, with its source location, but not yet turned
+into editable circuit semantics.

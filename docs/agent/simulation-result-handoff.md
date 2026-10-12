@@ -1,117 +1,53 @@
 # Agent simulation result handoff
 
-## Evidence and execution lifetime
+## Lifetime
 
-An unused prepared input has a short start-validity window. That is not an
-artifact retention deadline or an authorization lease. Once a batch starts,
-its queued prepared inputs remain valid for that batch even if wall time passes
-the original preparation expiry. Completed runs and batches remain readable for
-the owning host lifetime; repeating the original start request ID returns the
-same run rather than executing again. A completed batch reports `expiresAt: null`.
+A prepared input has a short start-validity window (not a retention deadline
+or lease); queued inputs of a started batch stay valid. Completed runs and
+batches (`expiresAt: null`) stay readable for the host's lifetime, and
+repeating the original start request ID returns the same run. Session-workspace
+drafts (`expiresAt: null`) last until discard or host teardown.
 
-Session-workspace drafts report `expiresAt: null` and remain until explicit
-discard or host teardown. Saved Project source files have their own ownership.
-Browser artifact bodies are stored separately as Project-scoped IndexedDB
-evidence, with a bounded memory cache. Disconnect clears authorization and
-memory handles, not these bodies. A new authorized host for the same Project
-can read a known artifact ID; another Project cannot. History discovery and
-whole-run restoration do not require running the simulation again. Local Agent
-downloads remain independent of browser lifetime and storage.
+Artifact bodies are Project-scoped browser (IndexedDB) evidence. Disconnect
+clears authorization and memory handles, not bodies: a new authorized host for
+the same Project can read a known artifact ID; another Project cannot. Local
+Agent downloads are independent of the browser.
 
-After reconnecting to the same Project, `simulation` operation `history` lists
-retained terminal runs, newest stored first. `limit` defaults to 10 (maximum 100);
-pass `nextCursor` as `cursor` to continue. This list contains no file bodies or
-waveform arrays. `storage: persistent` means the directory was saved in browser
-storage; `memory` means it is only retained by the current host. Browser storage
-is origin-local, not Cloud Save or a server execution queue.
+After reconnecting, `simulation` `history` lists retained terminal runs newest
+first (`limit` default 10, max 100; pass `nextCursor` as `cursor`), without
+bodies. `storage: persistent` is in browser storage (origin-local, not Cloud
+Save); `memory` only in the current host. Use a `runId` with `catalog`, then
+download its files. A historical `read` is a shortened receipt with saved
+status and any retained error; it cannot tell whether current inputs match and
+grants no execution or cancellation authority. Large finished receipts omit
+arrays only after publication (`resultPreview`); download complete files.
 
-Use a returned `runId` with `catalog`, then download/sync its registered files.
-A historical `read` returns a shortened receipt with the saved execution and
-collection status, including a retained execution error when available. It
-cannot establish whether current source inputs match, and does not restore
-execution/cancellation authority. `cancel` never dispatches to an executor for
-a historical-only run. Existing GUI archives remain a separate presentation of
-the same evidence; the Agent directory also covers session-workspace runs.
+File `simulation-input` `action:"downloads"` with 1–32 `artifactIds` returns
+`downloads` in order, each ready, pending or failed independently. Download
+ready ones; retry pending ones with fresh request IDs, never a new simulation.
 
-Large finished run receipts omit numeric arrays only after artifact publication
-succeeds. `resultPreview` describes that receipt, not lost evidence. Download
-the complete registered files to analyze them; keeping a page open does not
-extend access credentials automatically beyond the session's existing rules.
+## GUI handoff
 
-## Download preparation
+Project-folder runs share a read-only history with the GUI without opening the
+panel, changing its folder or replacing a human run. **Project runs** shows
+owner and state; **Open result** restores a completed result without
+rerunning. The originating session owns execution and cancellation; a project
+observer stores completed artifacts as Project evidence even if the Agent never
+reads. Revocation cannot erase a completed handoff or cancel a human run;
+revocation before handoff is reported unavailable. Session-workspace runs stay
+private.
 
-For transfer metadata, File `simulation-input` accepts `action:"downloads"`
-with 1–32 `artifactIds`. Its `downloads` array preserves request order and gives
-each file's ready descriptor or pending/error result independently. A successful
-batch envelope does not mean every file is ready. Download ready entries now;
-retry pending descriptors with fresh request IDs, not a new simulation. The
-existing single `download`, bearer authorization and byte-range transport remain.
+Archives are browser-local. The newest 30 automatic (cache) runs per Project
+are kept within byte/file capacity and the latest durably published run is
+protected; manual Saves keep a separate 30 (the 31st evicts the oldest);
+unmarked older records stay until deleted. Limits: 512 MiB per archive, 1 GiB
+Project evidence, 256 MiB per file. A storage failure leaves the result in
+memory with a session-only warning. Old results are input snapshots, not a
+check of current source. Cleanup follows
+[evidence storage](simulation-evidence-storage.md) and never deletes
+downloaded files.
 
-## GUI handoff and archives
-
-Project-folder simulations share a read-only run history with the GUI, whether
-an Agent submits them with `run` or with `prepare` and `start`. Starting
-an Agent run does not open the simulation panel, change its active folder, or
-replace a human run. In the selected folder's results area, **Project runs**
-shows the owner and state; **Open result** restores a completed result into the
-GUI without executing it again. The folder's status follows its newest run of
-any owner without replacing the result a person is viewing; after a reload,
-that is the folder's newest result archived in this browser. Run history
-defaults to all Project folders; the folder filter remains available.
-
-The originating session still owns execution and cancellation. A project-scoped
-observer polls individual and batch runs even if the Agent does not call read.
-Completed artifacts are verified and stored as Project evidence; archives
-reference those bodies instead of copying them again. Agent revocation cannot erase a completed handoff or cancel a
-human run. Revocation before handoff is reported as unavailable, not success.
-Session-workspace inputs remain private to that session because they have no
-Project folder to attach to.
-
-Archives are local to this browser/origin, not Cloud Save. New automatically
-captured results are explicitly marked as cache; the newest 30 cache runs
-are retained per Project across archived and catalog-only results, subject to
-byte/file capacity: eligible older caches may be removed sooner. The latest
-durably published run remains protected. Manual
-Save has a separate 30-result rolling limit: saving the 31st evicts the
-oldest explicitly saved run in that Project. Older records without a retention
-marker remain protected until explicitly deleted, and do not count toward
-either rolling limit. Rolling removal affects browser history, not downloaded
-Agent files. The limit is 512 MiB per archive, subject to browser quota
-and the shared 1 GiB Project evidence budget (256 MiB per file). A storage failure leaves
-the in-memory result available with an explicit session-only warning. Refresh
-can recover successful archives under **Saved results**; deleting one removes
-that browser history entry. Old results are saved input snapshots, not a fresh validation
-of the current source files.
-
-Deleting an archive records pending cleanup durably. Admission, startup and
-reader release trigger cleanup. It reconciles remaining archives and catalogs, then
-reclaims unreferenced evidence. Shared files stay until their last reference is
-gone. Active producers and readers hold scoped locks in each tab, so unrelated
-idle evidence can be reclaimed while an Editor stays open. Older clients with
-a whole-Project lock still defer cleanup. Logical removal
-can precede physical reclamation; Agent deletion reports which happened.
-Hosts without Web
-Locks also defer physical cleanup. Failed cleanup retries on later admission/startup;
-it does not block ordinary simulation access. Storage quota failures remain
-explicit. Downloaded local files are never deleted by browser cleanup.
-
-File transfer is on demand. v2 descriptors carry independent consumer leases;
-MCP acknowledges them only after local byte/hash verification and atomic
-publication. Worker replicas have a separate 1 GiB/1,024-file budget and idle
-LRU reclamation; deletion failures remain charged. Legacy descriptors retain
-session-lifetime protection. `Simulation.resource-usage` distinguishes browser
-evidence, transfer replicas and session memory; missing measurements are unknown.
-Private gzip changes stored bytes, never public ArtifactRef length/hash or
-exported RAW/JSON/CSV. [Evidence storage](simulation-evidence-storage.md)
-defines accounting, migration, retry and release behavior.
-
-Normal `.icproj.json` exports remain source-only. A restored run with a captured
-Project offers **Download project + results…**, a ZIP containing
-`project.icproj.json` from prepare time and the run artifacts under `results/`.
-Extract the Project for normal import; the ZIP is an evidence bundle, not a new
-Project file format.
-For unusually large Projects the snapshot is omitted rather than exceeding the
-archive limit; result-only export remains available.
-If the Project changes while preparation is awaiting compilation or executor
-capabilities, its snapshot is also omitted with a warning. The verified executed
-input artifacts and simulation results remain available.
+`.icproj.json` exports are source-only. A restored run with a captured Project
+offers **Download project + results…**, a ZIP evidence bundle of the
+prepare-time `project.icproj.json` (omitted when too large or changed during
+preparation) plus `results/`.

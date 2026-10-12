@@ -1,18 +1,18 @@
 # Raw HTTP task navigator
 
-Use this path when the user selected HTTP. MCP host loading failure alone
-does not authorize a transport switch.
+For a user who chose HTTP; MCP loading failure alone does not authorize the
+switch.
 
-1. Read [API usage](../../../api-usage.md) for claim/resume, endpoints,
-   revision guards and exact retries. Read the exact origin's
-   `/api/agent/openapi.json` for schemas.
-2. For circuit work, follow [task workflow](../../../workflow.md) and
-   [native authoring](../../../shared/authoring.md). A new instance needs a
-   fresh Snapshot before wiring; visual text is not a native Net label.
-3. For simulation, use the HTTP calls in API usage and the
+1. [API usage](../../../api-usage.md) covers claim/resume, endpoints, revision
+   guards and exact retries; the origin's `/api/agent/openapi.json` gives
+   schemas.
+2. Circuit work: [task workflow](../../../workflow.md) and
+   [native authoring](../../../shared/authoring.md). Read fresh pins before
+   wiring a new instance; visual text is not a Net label.
+3. Simulation: API usage and the
    [shared simulation lifecycle](../../../shared/simulation.md).
-4. Use the Kit README's generated task map for relevant knowledge and recovery.
-   Do not read every card as a prerequisite to a bounded task.
+4. The Kit README's task map lists knowledge and recovery cards; read only
+   what the task needs.
 
 The caller owns secure credential storage, bounded retries and verified
-artifact downloads. MCP action names and wrappers are not raw HTTP schemas.
+downloads. MCP action names and wrappers are not raw HTTP schemas.
