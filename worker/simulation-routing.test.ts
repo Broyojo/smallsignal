@@ -6,7 +6,7 @@ import {
 } from "./simulation";
 import ngspiceProfile from "../containers/ngspice/hosted-sky130-profile.json";
 import { CAPABILITIES_ACCEPT_CELL_LIBRARIES } from "@icm/simulation-service";
-import vacaskEnvironment from "../config/vacask-preview-environment.json";
+import { createSimulationEnvironmentMetadata } from "@icm/spice-run";
 import {
   nativeCapabilities,
   nativeEnvironment,
@@ -161,21 +161,31 @@ describe("dual-engine Profile routing", () => {
 });
 
 describe("environment names (#1679)", () => {
-  // The accepted VACASK Profile, as Production registers it.
-  const accepted = {
+  const id = "vacask-sky130-candidate";
+  // The accepted VACASK Profile's host, measured running `version`.
+  const host = async (version: string, label?: string) => ({
     ...nativeHealth,
-    environment: vacaskEnvironment,
+    environment: await createSimulationEnvironmentMetadata({
+      executor: "hosted-container",
+      reproducibility: "pinned",
+      profileId: id,
+      platform: "linux/x64",
+      simulator: { name: "vacask", version, binarySha256: "a".repeat(64) },
+      models: { id: "test-modules", contentSha256: "b".repeat(64) },
+      startupSha256: "c".repeat(64),
+    }),
     capabilities: {
       ...nativeCapabilities,
       profiles: [
-        { ...nativeCapabilities.profiles[0]!, id: vacaskEnvironment.profileId },
+        {
+          ...nativeCapabilities.profiles[0]!,
+          id,
+          ...(label ? { label } : {}),
+        },
       ],
     },
-  };
-  const production: SimulationEnv = {
-    ...env,
-    VACASK_PROFILE_ID: vacaskEnvironment.profileId,
-  };
+  });
+  const production: SimulationEnv = { ...env, VACASK_PROFILE_ID: id };
   const labels = async (
     body: unknown,
     health: unknown,
@@ -191,30 +201,42 @@ describe("environment names (#1679)", () => {
     ))!.json()) as { profiles: { id: string; label?: string }[] };
     return caps.profiles.map(({ id, label }) => ({ id, label }));
   };
+  const named = async (health: unknown) =>
+    (
+      await labels(
+        { operation: "capabilities", environment: { profileId: id } },
+        health,
+      )
+    )[0]?.label;
 
-  it("names the accepted VACASK Profile from its pinned release, and keeps its id", async () => {
-    expect(vacaskEnvironment.simulator.version).toBe("0.3.4-icm-hard-switch2");
-    expect(await labels({ operation: "capabilities" }, accepted)).toEqual([
-      { id: ngspiceProfile.id, label: "SKY130 qualified devices · ngspice 46" },
-      {
-        id: "vacask-sky130-candidate",
-        label: "SKY130 · VACASK 0.3.4 (preview)",
-      },
-    ]);
+  it("names the accepted VACASK Profile by the release its host runs, and keeps its id", async () => {
     expect(
       await labels(
-        {
-          operation: "capabilities",
-          environment: { profileId: "vacask-sky130-candidate" },
-        },
-        accepted,
+        { operation: "capabilities" },
+        await host("0.3.4-icm-hard-switch2"),
       ),
     ).toEqual([
-      {
-        id: "vacask-sky130-candidate",
-        label: "SKY130 · VACASK 0.3.4 (preview)",
-      },
+      { id: ngspiceProfile.id, label: "SKY130 qualified devices · ngspice 46" },
+      { id, label: "SKY130 · VACASK 0.3.4 (preview)" },
     ]);
+    expect(await named(await host("0.3.4-icm-hard-switch2"))).toBe(
+      "SKY130 · VACASK 0.3.4 (preview)",
+    );
+    // A host that moved to another build under the same id says so.
+    expect(await named(await host("0.4.0"))).toBe(
+      "SKY130 · VACASK 0.4.0 (preview)",
+    );
+  });
+
+  it("leaves the id when the host's release cannot be read", async () => {
+    expect(await named(await host("nightly"))).toBeUndefined();
+    expect(await named(await host("0.3"))).toBeUndefined();
+  });
+
+  it("keeps a name the host declares", async () => {
+    expect(await named(await host("0.3.4", "Host-declared name"))).toBe(
+      "Host-declared name",
+    );
   });
 
   it("gives no other VACASK Profile that name", async () => {

@@ -81,8 +81,9 @@ Worker requires a verified pinned VACASK identity and matching Profile, with
 `inputs: ["source"]` and `rawfileCollection: "native-multi-ascii"`. It maintains
 no independent model-library path, corner list or analysis interpretation.
 Capabilities name the accepted Profile `SKY130 · VACASK <release> (preview)`,
-the release taken from the pinned `config/vacask-preview-environment.json`
-simulator version, unless the executor declares its own label (#1679).
+the release read strictly from the verified environment's simulator version
+(`0.3.4-icm-hard-switch2` reads as `0.3.4`). A label the executor declares wins;
+an unreadable release leaves the Profile unnamed, shown by its id (#1679).
 
 The native operator-host target uses its own explicit HTTPS origin and private
 gateway credentials (`VACASK_UPSTREAM_URL` and `VACASK_UPSTREAM_TOKEN` when

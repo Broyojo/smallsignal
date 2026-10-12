@@ -16,7 +16,6 @@ import {
   createSimulationInputMetadata,
   verifySimulationEnvironmentMetadata,
 } from "@icm/spice-run";
-import acceptedEnvironment from "../config/vacask-preview-environment.json";
 
 export interface SimulationRunner {
   fetch(input: string, init?: RequestInit): Promise<Response>;
@@ -67,16 +66,14 @@ const unavailable = {
   cancel: false,
 };
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
-/** The accepted VACASK Profile's human-facing name (#1679), as the ngspice
- * Profile's comes from its `displayName`. Its release is the pinned
- * environment's simulator version without the local build suffix. */
-const ACCEPTED_PROFILE = {
-  id: acceptedEnvironment.profileId,
-  label: `SKY130 · VACASK ${
-    /^\d+(?:\.\d+)*/u.exec(acceptedEnvironment.simulator.version)?.[0] ??
-    acceptedEnvironment.simulator.version
-  } (preview)`,
-};
+/** The accepted VACASK Profile is named by the release its host measured
+ * running (#1679): `0.3.4-icm-hard-switch2` reads as `0.3.4`. An unreadable
+ * release leaves the Profile unnamed, so it shows its id, never a wrong release. */
+const ACCEPTED_PROFILE_ID = "vacask-sky130-candidate";
+function acceptedProfileLabel(version: string): string | undefined {
+  const release = /^(\d+\.\d+\.\d+)(?:-.*)?$/u.exec(version)?.[1];
+  return release && `SKY130 · VACASK ${release} (preview)`;
+}
 type RuntimeFacts = { expiresAt: number; health: Record<string, unknown> };
 const boundFacts = new WeakMap<object, Map<string, RuntimeFacts>>();
 const remoteFacts = new Map<string, RuntimeFacts>();
@@ -386,15 +383,18 @@ export async function routeVacaskSimulationRequest(
       facts.entries.delete(facts.entries.keys().next().value!);
     facts.entries.set(facts.key, { expiresAt: Date.now() + 30_000, health });
   }
-  if (body.operation === "capabilities")
+  if (body.operation === "capabilities") {
+    const label =
+      profileId === ACCEPTED_PROFILE_ID
+        ? acceptedProfileLabel(environment.simulator.version)
+        : undefined;
     return json({
       ...caps,
       profiles: caps.profiles.map((profile) =>
-        profile.id === ACCEPTED_PROFILE.id
-          ? { label: ACCEPTED_PROFILE.label, ...profile }
-          : profile,
+        label ? { label, ...profile } : profile,
       ),
     });
+  }
   const profile = caps.profiles[0]!;
   if (
     body.environment?.corner !== undefined &&
