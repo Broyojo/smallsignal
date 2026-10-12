@@ -40,7 +40,14 @@ const bundle = {
     facadeModuleId: "E:\\repo\\src\\app\\App.tsx",
     imports: ["assets/shared-12345678.js"],
     dynamicImports: ["assets/math-12345678.js"],
-    viteMetadata: { importedCss: new Set(["assets/App-12345678.css"]) },
+    viteMetadata: {
+      importedCss: new Set(["assets/App-12345678.css"]),
+      importedAssets: new Set([
+        "assets/Metropolis-Regular.schematic-12345678.woff2",
+        "assets/DejaVuSans.schematic-12345678.woff2",
+        "assets/icon-12345678.svg",
+      ]),
+    },
   },
   "assets/shared-12345678.js": { type: "chunk", imports: [] },
   "assets/math-12345678.js": { type: "chunk", imports: [] },
@@ -51,6 +58,7 @@ const bundle = {
     imports: ["assets/gallery-shared-12345678.js"],
     viteMetadata: {
       importedCss: new Set(["assets/gallery-feed-12345678.css"]),
+      importedAssets: new Set(),
     },
   },
   "assets/gallery-shared-12345678.js": { type: "chunk", imports: [] },
@@ -143,8 +151,16 @@ describe("route resource preload", () => {
         "//assets/shared-12345678.js".slice(1),
         "/assets/web-services-12345678.js",
         "/assets/App-12345678.css",
+        "/assets/Metropolis-Regular.schematic-12345678.woff2",
       ]);
-      expect(links.at(-1)).toMatchObject({ rel: "preload", as: "style" });
+      expect(links.at(-2)).toMatchObject({ rel: "preload", as: "style" });
+      // The label face every schematic draws; DejaVu loads when a symbol
+      // needs it.
+      expect(links.at(-1)).toMatchObject({
+        rel: "preload",
+        as: "font",
+        crossOrigin: "anonymous",
+      });
     },
   );
 });

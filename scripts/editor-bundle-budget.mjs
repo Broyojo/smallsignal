@@ -86,6 +86,13 @@ for (const [route, { rows, totals }] of Object.entries(measuredRoutes)) {
     `\n/${route} eager payload: ${totals.files} files, ` +
       `${totals.rawKib} KiB raw, ${totals.gzipKib} KiB gzip, ${totals.brotliKib} KiB brotli\n`,
   );
+  // Preloaded fonts count: every first visit downloads them. Split out, as
+  // they are already compressed and no script waits for them.
+  const fonts = rows.filter((row) => row.file.endsWith(".woff2"));
+  if (fonts.length > 0)
+    process.stdout.write(
+      `  of which ${fonts.length} fonts: ${kib(fonts.reduce((sum, row) => sum + row.gzip, 0))} KiB gzip\n`,
+    );
   process.stdout.write("  largest (gzip):\n");
   for (const row of rows.slice(0, 8)) {
     process.stdout.write(

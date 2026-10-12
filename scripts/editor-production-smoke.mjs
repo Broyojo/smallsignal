@@ -202,6 +202,7 @@ async function main() {
   let editorLoadingScreens = [];
   let editorNetlistLayoutChangedOnLoad = true;
   let editorSimulationServiceLoaded = true;
+  let editorSchematicFonts = [];
   try {
     server = await preview({
       root: editorRoot,
@@ -276,6 +277,24 @@ async function main() {
     editorPdfRuntimeLoaded = await loadedJavaScriptPathContains(
       page,
       "browser-pdf-",
+    );
+    // The schematic faces the canvas asked for, by name: each must be WOFF2
+    // and come from the route preload, not be found once the editor draws
+    // (#1673).
+    editorSchematicFonts = await page.evaluate(() =>
+      performance
+        .getEntriesByType("resource")
+        .filter((entry) => /\.schematic-[^/]*$/u.test(entry.name))
+        .map(
+          (entry) =>
+            `${new URL(entry.name).pathname
+              .replace(/^.*\//u, "")
+              .replace(
+                /\.schematic-.*(\.\w+)$/u,
+                ".schematic$1",
+              )} ${entry.initiatorType}`,
+        )
+        .sort(),
     );
     // Netlist is requested by the default editor workspace. Its CodeMirror
     // runtime must load here; only the Gallery keeps editor code deferred.
@@ -384,6 +403,7 @@ async function main() {
     editorSimulationServiceLoaded,
     routePreloadBeforeStylesheets,
     editorFirstLoadJsonParser,
+    editorSchematicFonts,
   };
 
   if (check) {
@@ -432,6 +452,14 @@ async function main() {
   }
   if (report.editorFirstLoadJsonParser) {
     throw new Error("Editor first load includes the JSON property-code parser");
+  }
+  const lateFonts = report.editorSchematicFonts.filter(
+    (font) => !/\.woff2 link$/u.test(font),
+  );
+  if (report.editorSchematicFonts.length === 0 || lateFonts.length > 0) {
+    throw new Error(
+      `Schematic fonts must be preloaded WOFF2: ${lateFonts.join(", ") || "none loaded"}`,
+    );
   }
   if (report.consoleErrors.length > 0) {
     throw new Error(

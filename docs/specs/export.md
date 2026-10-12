@@ -30,8 +30,9 @@ formats use the same base name.
 The editor serves pinned Metropolis faces, an open-source approximation of the
 Proxima Nova lettering in the accepted textbook references. DejaVu Sans supplies
 Greek and mathematical glyphs absent from Metropolis. Both families are subset
-for browser delivery (`packages/exporters/fonts/`, generated together with their
-advance and ink tables by `scripts/generate-schematic-fonts.mjs`). The authored
+for browser delivery as WOFF2 (`packages/exporters/fonts/`, generated together
+with their advance and ink tables by `scripts/generate-schematic-fonts.mjs`);
+the editor preloads the Metropolis faces with its route. The authored
 round-period face remains first for full stops. Font size, weight, slant and
 subscript intent are unchanged; existing drawings need no migration.
 
