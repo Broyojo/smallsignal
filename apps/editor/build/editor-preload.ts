@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { AGENT_SESSION_RECOVERY_STORAGE_KEY } from "../src/agent/session-recovery-presence";
 import { EXAMPLE_HOSTS, LOCAL_GALLERY_REPLICA } from "../src/gallery-source";
 
 /**
@@ -6,6 +7,10 @@ import { EXAMPLE_HOSTS, LOCAL_GALLERY_REPLICA } from "../src/gallery-source";
  * The script goes before the first stylesheet or entry script: an inline
  * script waits for every stylesheet above it, which held the route's preloads
  * back a round trip on a first visit (#1645).
+ *
+ * The Agent runtime is no route's resource (#1673). A tab that holds a saved
+ * Agent session, or a page asked to pair automation (`?agent=pair`), needs
+ * it at once on any route, so those preload it too.
  */
 export function editorPreload(): Plugin {
   return {
@@ -37,6 +42,15 @@ export function editorPreload(): Plugin {
         if (!galleryEntry || galleryEntry.type !== "chunk") {
           throw new Error("Gallery preload could not locate the feed entry");
         }
+        const agentRuntime = Object.values(bundle).find(
+          (item) =>
+            item.type === "chunk" &&
+            item.facadeModuleId
+              ?.replaceAll("\\", "/")
+              .endsWith("/agent/agent-runtime.tsx"),
+        );
+        if (!agentRuntime || agentRuntime.type !== "chunk")
+          throw new Error("Agent preload could not locate the Agent runtime");
         function resourcesFor(entryName: string): string[][] {
           const scripts = new Set<string>();
           const styles = new Set<string>();
@@ -73,7 +87,8 @@ export function editorPreload(): Plugin {
         }
         const editorResources = resourcesFor(editorEntry.fileName);
         const galleryResources = resourcesFor(galleryEntry.fileName);
-        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const resources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? editorResources : []; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = href.endsWith(".css") ? "style" : "font"; document.head.appendChild(link); }</script>`;
+        const agentResources = resourcesFor(agentRuntime.fileName);
+        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const agentResources = ${JSON.stringify(agentResources).replaceAll("<", "\\u003c")}; const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const routeResources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? editorResources : []; let agentNeeded = false; try { agentNeeded = new URLSearchParams(location.search).get("agent") === "pair" || sessionStorage.getItem(${JSON.stringify(AGENT_SESSION_RECOVERY_STORAGE_KEY)}) !== null; } catch {} const resources = agentNeeded ? routeResources.concat(agentResources.filter(([, href]) => !routeResources.some((resource) => resource[1] === href))) : routeResources; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = href.endsWith(".css") ? "style" : "font"; document.head.appendChild(link); }</script>`;
         const first = html.search(
           /<(?:link\b[^>]*\brel="stylesheet"|script\b[^>]*\btype="module")/u,
         );

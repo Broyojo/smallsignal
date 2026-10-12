@@ -2,11 +2,11 @@
 // renaming and copying between them, and the hosts that serve a background tab.
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { createEmptyProject, createId } from "@icm/model";
-import { createAgentGalleryPublisher } from "../agent/agent-gallery-publish";
-import { BrowserAgentFileHost } from "../agent/browser-agent-file-host";
-import { BrowserAgentHost } from "../agent/browser-agent-host";
-import { BrowserAgentProjectHost } from "../agent/browser-agent-project-host";
-import { BrowserAgentSimulationHost } from "../agent/browser-agent-simulation-host";
+import type { AgentRuntime } from "../agent/agent-runtime-loader";
+import type { BrowserAgentFileHost } from "../agent/browser-agent-file-host";
+import type { BrowserAgentHost } from "../agent/browser-agent-host";
+import type { BrowserAgentProjectHost } from "../agent/browser-agent-project-host";
+import type { BrowserAgentSimulationHost } from "../agent/browser-agent-simulation-host";
 import {
   EDITOR_PROJECT_TRANSACTION_OPTIONS,
   type EditorDocumentController,
@@ -358,6 +358,7 @@ export function createAgentWorkspaceHandler({
 
 /** The hosts an Agent request addressed to one project tab is served by. */
 export function createAgentWorkspaceTargets({
+  runtime,
   flushRecovery,
   synchronizeExternalCommit,
   agentPlanning,
@@ -374,6 +375,8 @@ export function createAgentWorkspaceTargets({
   backgroundAgentHosts,
   projectTabs,
 }: {
+  /** The loaded Agent runtime a background tab's hosts are built from. */
+  runtime: AgentRuntime;
   flushRecovery: UseRecoveryCoordinatorResult["flushNow"];
   synchronizeExternalCommit: DocumentControllerState["synchronizeExternalCommit"];
   agentPlanning: BrowserAgentHostState["agentPlanning"];
@@ -428,7 +431,7 @@ export function createAgentWorkspaceTargets({
       }
       projectTabs.changed();
     };
-    const host = new BrowserAgentHost(
+    const host = new runtime.BrowserAgentHost(
       controller,
       committed,
       undefined,
@@ -440,7 +443,7 @@ export function createAgentWorkspaceTargets({
       ?.get(`${controller.projectSessionId}:${simulationTransport}`);
     const fileHost =
       existing?.files ??
-      new BrowserAgentFileHost({
+      new runtime.BrowserAgentFileHost({
         transport: simulationTransport,
         getProjectSessionId: () =>
           available() ? controller.projectSessionId : "closed",
@@ -471,7 +474,7 @@ export function createAgentWorkspaceTargets({
     history.activate();
     const simulationHost =
       existing?.simulation ??
-      new BrowserAgentSimulationHost({
+      new runtime.BrowserAgentSimulationHost({
         runHistory: history,
         owner: "agent",
         files: fileHost.simulationFiles,
@@ -480,11 +483,11 @@ export function createAgentWorkspaceTargets({
         getProject: () => controller.project,
         transport: simulationTransport,
       });
-    const projectHost = new BrowserAgentProjectHost({
+    const projectHost = new runtime.BrowserAgentProjectHost({
       projectTransactionOptions: EDITOR_PROJECT_TRANSACTION_OPTIONS,
       workspace: (request) => agentWorkspaceRef.current(request, workspaceId),
       // A tab in the background has nothing on show to publish.
-      publishToGallery: createAgentGalleryPublisher({
+      publishToGallery: runtime.createAgentGalleryPublisher({
         current: () => null,
         published: () => {},
       }),
@@ -505,7 +508,7 @@ export function createAgentWorkspaceTargets({
       projectHost,
     };
     backgroundAgentHosts.current.set(controller, target);
-    if (!existing) {
+    if (!existing?.files || !existing.simulation) {
       let group = agentProjectResources.current.get(controller);
       if (!group) {
         group = new Map();

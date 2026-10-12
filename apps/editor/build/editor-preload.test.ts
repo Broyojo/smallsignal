@@ -1,5 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
+import { AGENT_SESSION_RECOVERY_STORAGE_KEY } from "../src/agent/session-recovery-presence";
 import { editorPreload } from "./editor-preload";
 
 const builtHead = `<head>
@@ -62,16 +63,29 @@ const bundle = {
     },
   },
   "assets/gallery-shared-12345678.js": { type: "chunk", imports: [] },
+  "assets/agent-runtime-12345678.js": {
+    type: "chunk",
+    fileName: "assets/agent-runtime-12345678.js",
+    facadeModuleId: "E:\\repo\\src\\agent\\agent-runtime.tsx",
+    imports: ["assets/shared-12345678.js", "assets/agent-adapter-12345678.js"],
+  },
+  "assets/agent-adapter-12345678.js": { type: "chunk", imports: [] },
 };
 
 function preload(
   path: string,
   hostname = "analog-canvas.test",
   replica = false,
+  {
+    search = "",
+    saved = {},
+  }: { search?: string; saved?: Record<string, string> } = {},
 ) {
   const links: { rel: string; href: string; as?: string }[] = [];
   runInNewContext(preloadScript(transform(builtHead)), {
-    location: { pathname: path, hostname },
+    location: { pathname: path, hostname, search },
+    URLSearchParams,
+    sessionStorage: { getItem: (key: string) => saved[key] ?? null },
     window: { __icmLocalGalleryReplica: replica },
     document: {
       createElement: () => ({}),
@@ -163,4 +177,35 @@ describe("route resource preload", () => {
       });
     },
   );
+
+  it("leaves the Agent runtime to the page that asks for it (#1673)", () => {
+    for (const path of ["/", "/editor", "/g/circuit-123", "/privacy"])
+      expect(preload(path).some((link) => link.href.includes("agent-"))).toBe(
+        false,
+      );
+  });
+
+  it.each([
+    [
+      "a saved Agent session",
+      { saved: { [AGENT_SESSION_RECOVERY_STORAGE_KEY]: "{}" } },
+    ],
+    ["automation pairing", { search: "?agent=pair" }],
+  ])("preloads the Agent runtime once for %s (#1673)", (_case, page) => {
+    expect(
+      preload("/editor", undefined, false, page).map((link) => link.href),
+    ).toEqual([
+      ...preload("/editor").map((link) => link.href),
+      "/assets/agent-runtime-12345678.js",
+      "/assets/agent-adapter-12345678.js",
+    ]);
+    // Where the route preloads nothing, as on /privacy, the runtime still is.
+    expect(
+      preload("/privacy", undefined, false, page).map((link) => link.href),
+    ).toEqual([
+      "/assets/agent-runtime-12345678.js",
+      "/assets/shared-12345678.js",
+      "/assets/agent-adapter-12345678.js",
+    ]);
+  });
 });
