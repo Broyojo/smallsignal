@@ -1148,6 +1148,8 @@ function WorkspaceEditor({
     noteProjectPublished,
     replaceActiveProject,
     saveProjectToCloud,
+    saveProjectToCloudByHand,
+    saveByHand,
     saveProjectToNative,
     isSaveInFlight,
     saveBusy,
@@ -1925,7 +1927,7 @@ function WorkspaceEditor({
     sessionId: projectSessionId,
     resolver,
     index: projectConnectivityIndex,
-    save: saveProjectToCloud,
+    save: saveProjectToCloudByHand,
     beforeCheck: captureAuthoredProject,
     isSaving: isSaveInFlight,
     openIssues: openIssuesPanel,
@@ -4442,7 +4444,6 @@ function WorkspaceEditor({
     commitTextEditing,
     document,
     readShortcutDependencies: () => ({
-      projectStore,
       nativeProjectStore,
       setStatus,
       componentEditor,
@@ -4467,9 +4468,7 @@ function WorkspaceEditor({
       recoveryDialogOpen,
       setRecoveryDialogOpen,
       hasUnsafeWork,
-      saveProjectToCloud,
-      saveProjectToNative,
-      exportProjectFile,
+      saveByHand,
       setWireOptionsOpen,
       getCurrentInteractionState,
       tool,
@@ -5008,7 +5007,7 @@ function WorkspaceEditor({
         savedProjectBaseline={savedProjectBaseline}
         isDirtyWork={isDirtyWork}
         hasUnsavedChanges={hasUnsavedChanges}
-        saveProjectToCloud={saveProjectToCloud}
+        saveByHand={saveByHand}
         saveProjectToNative={saveProjectToNative}
         isSaveInFlight={isSaveInFlight}
         saveBusy={saveBusy}

@@ -24,7 +24,7 @@ export function ProjectTabs({
   onNew,
   onOpenFile,
   cloudProjects,
-  onRefreshShelf,
+  onShelfOpened,
   onOpenShelf,
   onRenameShelf,
   onDeleteShelf,
@@ -43,7 +43,7 @@ export function ProjectTabs({
   onNew(): void;
   onOpenFile(): void;
   cloudProjects: readonly CloudProjectSummary[];
-  onRefreshShelf(): void;
+  onShelfOpened(): void;
   onOpenShelf(id: string): void;
   onRenameShelf(id: string, name: string): Promise<void>;
   onDeleteShelf(id: string): Promise<void>;
@@ -299,7 +299,7 @@ export function ProjectTabs({
           <details
             className="project-tabs-shelf"
             onToggle={(event) => {
-              if (event.currentTarget.open) onRefreshShelf();
+              if (event.currentTarget.open) onShelfOpened();
             }}
           >
             <summary

@@ -1,6 +1,13 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Route,
+} from "@playwright/test";
 import {
   awaitEditorReady,
+  awaitTwoFrames,
   exportedProject,
   openMenu,
   openProjectFile,
@@ -524,6 +531,207 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
   await expect(
     page.getByRole("tab", { name: /Beta renamed$/ }).getByLabel("Unsaved"),
   ).toHaveCount(0);
+});
+
+test("the Arena gate opens after a manual Cloud Save and on every Shelf opening, sends the person to Arena's window, and closes after five new votes or when Arena has nothing to offer (#1681)", async ({
+  context,
+  page,
+}) => {
+  await signIn(page, author);
+  let revision = 0;
+  const saveAnswer = (route: Route) => {
+    const body = route.request().postDataJSON();
+    return route.fulfill({
+      status: route.request().method() === "POST" ? 201 : 200,
+      json: {
+        project: {
+          id: "cloud-gate",
+          name: body.name,
+          revision: ++revision,
+          schemaVersion: parseSavedProject(body.projectText).schemaVersion,
+          updatedAt: "2026-10-12T00:00:00Z",
+          projectText: body.projectText,
+        },
+      },
+    });
+  };
+  await page.route("**/api/projects", (route) =>
+    route.request().method() === "POST"
+      ? saveAnswer(route)
+      : route.fulfill({ json: { projects: [] } }),
+  );
+  await page.route("**/api/projects/cloud-gate", saveAnswer);
+  // Arena behind Analog Canvas's Worker: the Voter's voted Battles, newest
+  // first with when each was cast, answered with Arena's clock.
+  const votes = [
+    { id: "old", castAt: new Date(Date.now() - 3_600_000).toISOString() },
+  ];
+  let arenaUp = true;
+  let aiAccount = false;
+  let pastReads = 0;
+  let season: string | null = "s1";
+  await page.route("**/api/arena/battles/past", (route) =>
+    ++pastReads && aiAccount
+      ? route.fulfill({ status: 403, json: { error: "ai-account" } })
+      : arenaUp
+        ? route.fulfill({
+            headers: { date: new Date().toUTCString() },
+            json: { battles: votes, more: false, total: votes.length },
+          })
+        : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
+  );
+  // Arena's example Battle is null exactly when no Season serves Battles.
+  await page.route("**/api/arena/example", (route) =>
+    route.fulfill({ json: { example: season && { task: { id: "T001" } } } }),
+  );
+  // Arena's own window, wherever it opens.
+  await context.route(/\/schematic\?/u, (route) =>
+    route.fulfill({ contentType: "text/html", body: "<title>Arena</title>" }),
+  );
+
+  // Opening, closing and not showing the gate leave React nothing to say.
+  const unmountWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (/unmount/iu.test(message.text())) unmountWarnings.push(message.text());
+  });
+  await page.goto("/editor?new=1");
+  await awaitEditorReady(page);
+  const gate = page.getByTestId("arena-gate");
+  const close = gate.getByRole("button", { name: "Close", exact: true });
+  const count = page.getByTestId("arena-gate-count");
+
+  // The save completes first; then the gate opens and holds.
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(gate).toBeVisible();
+  expect(revision).toBe(1);
+  await expect(gate).toContainText(
+    "Vote in 5 Schematic Arena battles to continue",
+  );
+  await expect(count).toHaveText("Voted 0 / 5");
+  await expect(close).toHaveAttribute("aria-disabled", "true");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.activeElement?.closest("[data-testid=arena-gate]") !== null,
+      ),
+    )
+    .toBe(true);
+  // Neither Escape, Close nor the backdrop gets past it yet.
+  await page.keyboard.press("Escape");
+  // Playwright waits for an aria-disabled button; a person can still press it.
+  await close.click({ force: true });
+  await page.mouse.click(4, 4);
+  await expect(gate).toBeVisible();
+
+  // The battle page opens in a window of its own, marked as the gate's.
+  const [arena] = await Promise.all([
+    context.waitForEvent("page"),
+    gate.getByRole("link", { name: "Open the battle page" }).click(),
+  ]);
+  expect(new URL(arena.url()).pathname + new URL(arena.url()).search).toBe(
+    "/schematic?from=canvas-gate",
+  );
+  // Five Votes there; the gate counts them on its next read.
+  for (let vote = 1; vote <= 5; vote++)
+    votes.unshift({ id: `new-${vote}`, castAt: new Date().toISOString() });
+  await arena.close();
+  await page.bringToFront();
+  await expect(count).toHaveText("Voted 5 / 5", { timeout: 10_000 });
+  await expect(close).toHaveAttribute("aria-disabled", "false");
+  await page.keyboard.press("Escape");
+  await expect(gate).toHaveCount(0);
+
+  // Every Shelf opening opens it again; with no Season serving Battles, it
+  // closes at once.
+  season = null;
+  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  await expect(gate).toContainText(
+    "Arena has no battle to offer right now, so you can close this.",
+  );
+  await page.keyboard.press("Escape");
+  await expect(gate).toHaveCount(0);
+
+  // An unreachable Arena never traps anyone either.
+  season = "s1";
+  await placeComponentAt(page, "resistor", { x: 400, y: 240 });
+  arenaUp = false;
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(gate).toContainText(
+    "Arena can't be reached right now, so you can close this.",
+  );
+  await expect(gate.getByRole("link")).toHaveCount(0);
+  await close.click();
+  await expect(gate).toHaveCount(0);
+  expect(revision).toBe(2);
+
+  // An AI account, which may not vote, saves without any panel.
+  await placeComponentAt(page, "resistor", { x: 500, y: 240 });
+  arenaUp = true;
+  aiAccount = true;
+  const readsBefore = pastReads;
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => pastReads).toBe(readsBefore + 1);
+  await expect.poll(() => revision).toBe(3);
+  await awaitTwoFrames(page);
+  await expect(gate).toHaveCount(0);
+  expect(unmountWarnings).toEqual([]);
+});
+
+test("only the person's own opening of the Cloud shelf opens the Arena gate, so a reload always ends one (#1681)", async ({
+  page,
+}) => {
+  // The hosted Gallery, as gallery-test.ts selects it, has My shelf.
+  await page.addInitScript(() => {
+    Object.assign(window, { __icmLocalGalleryReplica: true });
+  });
+  await signIn(page, author);
+  await page.route("**/api/projects", (route) =>
+    route.fulfill({ json: { projects: [] } }),
+  );
+  let reads = 0;
+  await page.route("**/api/arena/battles/past", (route) => {
+    reads++;
+    return route.fulfill({
+      headers: { date: new Date().toUTCString() },
+      json: { battles: [], more: false, total: 0 },
+    });
+  });
+  await page.route("**/api/arena/example", (route) =>
+    route.fulfill({ json: { example: { task: { id: "T001" } } } }),
+  );
+  const gate = page.getByTestId("arena-gate");
+  const shelfTab = page.getByTestId("gallery-view-shelf");
+
+  // The Gallery opening on My shelf, from its address, opens no gate.
+  await page.goto("/?view=shelf");
+  await expect(shelfTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("gallery-view-gallery")).toBeEnabled();
+  // Choosing My shelf does.
+  await page.getByTestId("gallery-view-gallery").click();
+  await shelfTab.click();
+  await expect(gate).toBeVisible();
+  expect(reads).toBe(1);
+  await page.keyboard.press("Escape");
+  await expect(gate).toBeVisible();
+  // A reload, still on My shelf, ends it and opens none.
+  await page.reload();
+  await expect(shelfTab).toHaveAttribute("aria-selected", "true");
+  await expect(gate).toHaveCount(0);
+
+  // So too the account page's Cloud Projects.
+  await page.goto("/account?tab=projects");
+  const projectsTab = page.getByTestId("account-tab-projects");
+  await expect(projectsTab).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("account-tab-circuits").click();
+  expect(reads).toBe(1);
+  await projectsTab.click();
+  await expect(gate).toBeVisible();
+  expect(reads).toBe(2);
+  await page.reload();
+  await expect(projectsTab).toHaveAttribute("aria-selected", "true");
+  await expect(gate).toHaveCount(0);
+  expect(reads).toBe(2);
 });
 
 test("plain C/V works between internal tabs when system clipboard permission is denied", async ({

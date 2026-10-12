@@ -1,3 +1,4 @@
+import { gateAfterManualCloudSave } from "../components/arena-gate-request";
 import type { EditorExportDelivery } from "../hosts/export-delivery";
 import type { CloudProjectStore } from "../services/editor-services";
 import type {
@@ -455,6 +456,27 @@ export function useProjectFileLifecycle({
         return { status: "rejected", message };
       },
     });
+  }
+
+  /**
+   * A Cloud Save the person asked for (File > Save, Ctrl/Cmd+S, Check and
+   * save). Once it completes, the Arena gate opens; the save never waits
+   * for it (#1681). Agent saves, the replace guard's Save and continue and
+   * Shelf renames call saveProjectToCloud and open no gate.
+   */
+  function saveProjectToCloudByHand(
+    candidate?: CircuitProject,
+  ): Promise<CloudProjectSaveOutcome> {
+    return saveProjectToCloud(candidate).then(gateAfterManualCloudSave);
+  }
+
+  /** The person's Save: the Project's file, the Cloud, or an export. */
+  function saveByHand(): Promise<unknown> {
+    return nativeProjectStore
+      ? saveProjectToNative()
+      : projectStore
+        ? saveProjectToCloudByHand()
+        : exportProjectFile();
   }
 
   function saveProjectToNative(
@@ -1165,6 +1187,8 @@ export function useProjectFileLifecycle({
     noteProjectPublished,
     replaceActiveProject,
     saveProjectToCloud,
+    saveProjectToCloudByHand,
+    saveByHand,
     saveProjectToNative,
     isSaveInFlight: () =>
       saveCoordinator.isSaving() || nativeSaveCoordinator.isSaving(),

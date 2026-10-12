@@ -1,5 +1,6 @@
 // The editor's keyboard shortcuts, and the outside press that closes open
 // menus and commits text being edited.
+import { arenaGateShown } from "../components/arena-gate-request";
 import {
   useEffect,
   useLayoutEffect,
@@ -71,7 +72,6 @@ type SimulationPicking = ReturnType<typeof useSimulationPicking>;
 type SimulationPickCommands = ReturnType<typeof useSimulationPickCommands>;
 
 interface EditorShortcutDependencies {
-  projectStore: EditorServices["projectStore"];
   nativeProjectStore: EditorServices["nativeProjectStore"];
   setStatus: Dispatch<SetStateAction<string>>;
   componentEditor: ComponentEditorSession | null;
@@ -96,9 +96,7 @@ interface EditorShortcutDependencies {
   recoveryDialogOpen: ProjectFileLifecycle["recoveryDialogOpen"];
   setRecoveryDialogOpen: ProjectFileLifecycle["setRecoveryDialogOpen"];
   hasUnsafeWork: ProjectFileLifecycle["hasUnsafeWork"];
-  saveProjectToCloud: ProjectFileLifecycle["saveProjectToCloud"];
-  saveProjectToNative: ProjectFileLifecycle["saveProjectToNative"];
-  exportProjectFile: ProjectFileLifecycle["exportProjectFile"];
+  saveByHand: ProjectFileLifecycle["saveByHand"];
   setWireOptionsOpen: Dispatch<SetStateAction<boolean>>;
   getCurrentInteractionState: InteractionState["getCurrentState"];
   tool: InteractionState["tool"];
@@ -236,7 +234,6 @@ export function useEditorShortcuts({
 }
 
 function createEditorShortcutHandler({
-  projectStore,
   nativeProjectStore,
   setStatus,
   componentEditor,
@@ -261,9 +258,7 @@ function createEditorShortcutHandler({
   recoveryDialogOpen,
   setRecoveryDialogOpen,
   hasUnsafeWork,
-  saveProjectToCloud,
-  saveProjectToNative,
-  exportProjectFile,
+  saveByHand,
   setWireOptionsOpen,
   getCurrentInteractionState,
   tool,
@@ -315,6 +310,8 @@ function createEditorShortcutHandler({
   openNativeProject,
 }: EditorShortcutDependencies) {
   function onKeyDown(event: KeyboardEvent): void {
+    // The Arena gate over the editor owns every key, wherever focus is.
+    if (arenaGateShown()) return;
     if (versionHistoryOpen) return;
     // Project Info is modal: the canvas never handles its keys.
     // This router sees Escape first, so it closes the dialog here.
@@ -508,11 +505,7 @@ function createEditorShortcutHandler({
         void circuitClipboard.pasteSelection();
         return;
       case "save":
-        void (nativeProjectStore
-          ? saveProjectToNative()
-          : projectStore
-            ? saveProjectToCloud()
-            : exportProjectFile());
+        void saveByHand();
         return;
       case "open":
         if (nativeProjectStore) void openNativeProject();

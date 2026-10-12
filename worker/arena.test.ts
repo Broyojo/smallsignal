@@ -688,6 +688,32 @@ describe("handing a sign-in on to AnalogArena", () => {
     );
   });
 
+  it("brings the Arena gate's battle page to AnalogArena signed in, its vote source kept, and counts there on Analog Canvas's host", async () => {
+    // The editor's Arena gate (#1681) opens /schematic?from=canvas-gate in
+    // a window of its own and counts through Analog Canvas's host.
+    const { accounts, at, forwarded, visit } = canvas();
+    const cookie = await makerOf(accounts);
+    const { path, response } = await browse(
+      at,
+      `${CANVAS_ORIGIN}/schematic?from=canvas-gate`,
+      signedInOnCanvas(cookie),
+    );
+    expect(response.status).toBe(200);
+    expect(path.at(-1)).toBe(`${ARENA_ORIGIN}/schematic?from=canvas-gate`);
+    const id = await accountId(visit, cookie);
+    expect(forwardedAccount(forwarded.at(-1))).toMatchObject({ id });
+
+    // Its count, and whether a Season serves Battles, are read here.
+    for (const path of ["/api/arena/battles/past", "/api/arena/example"]) {
+      const read = await at(`${CANVAS_ORIGIN}${path}`, {
+        headers: { Cookie: cookie },
+      });
+      expect(read.status).toBe(200);
+      expect(forwarded.at(-1)!.url).toBe(`${CANVAS_ORIGIN}${path}`);
+      expect(forwardedAccount(forwarded.at(-1))).toMatchObject({ id });
+    }
+  });
+
   it("sets a host-only session and leaves no address behind", async () => {
     const { accounts, at } = canvas();
     const { completion, binding } = await completionFor(

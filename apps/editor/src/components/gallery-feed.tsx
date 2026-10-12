@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { cloudShelfOpened } from "./arena-gate-request";
 import "../styles/gallery-entry.css";
 
 import {
@@ -475,7 +476,12 @@ export function GalleryFeed({
               className="gallery-view-tab"
               data-testid={`gallery-view-${id}`}
               aria-selected={view === id}
-              onClick={() => updateFilters({ view: id })}
+              onClick={() => {
+                // Opening My shelf opens the Arena gate (#1681). A page
+                // loaded on the shelf opens none, so a reload ends a gate.
+                if (id === "shelf" && view !== "shelf") cloudShelfOpened();
+                updateFilters({ view: id });
+              }}
             >
               {label}
             </button>
