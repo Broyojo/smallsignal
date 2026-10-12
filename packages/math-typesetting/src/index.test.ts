@@ -4,10 +4,11 @@ import {
   ANALOG_CANVAS_MATH_PROFILE_ID,
   createFormulaTypesetter,
   formulaSourceHash,
-  loadFormulaAlphabet,
-  type FormulaAlphabet,
+  loadFormulaFontFile,
+  type FormulaFontFile,
   type FormulaRequest,
 } from "./index.js";
+import { clearFormulaArtifactCacheForTests, prepareFormula } from "./cache.js";
 
 const baseRequest: FormulaRequest = {
   latex: String.raw`V_{OUT}`,
@@ -167,11 +168,11 @@ describe("Analog Canvas formula typesetter", () => {
 });
 
 function recordingTypesetter() {
-  const loaded: FormulaAlphabet[] = [];
+  const loaded: FormulaFontFile[] = [];
   const typesetter = createFormulaTypesetter({
-    loadAlphabet(alphabet) {
-      loaded.push(alphabet);
-      return loadFormulaAlphabet(alphabet);
+    loadFontFile(file) {
+      loaded.push(file);
+      return loadFormulaFontFile(file);
     },
   });
   return { typesetter, loaded };
@@ -184,12 +185,15 @@ function resultDigest(result: unknown): string {
     .slice(0, 16);
 }
 
-// Digests of the complete typeset result produced by the build that bundled
-// every alphabet up front (origin/main at e73858c8). Lazy alphabets must not
-// change a single glyph, metric or attribute.
+// Digests of the complete typeset result from an eager build: the typesetter
+// of origin/main at e73858c8 with every file of MathJaxNewcmFont.dynamicFiles
+// imported and set up in the font's constructor. Lazy glyph files must not
+// change a single glyph, metric or attribute. To add a case, typeset it with
+// that eager build and take the first 16 hex digits of the sha256 of
+// JSON.stringify(result), as resultDigest does.
 const alphabetCases: readonly {
   latex: string;
-  alphabets: readonly FormulaAlphabet[];
+  alphabets: readonly FormulaFontFile[];
   inline: string;
   block: string;
 }[] = [
@@ -261,7 +265,7 @@ const alphabetCases: readonly {
   },
 ];
 
-describe("formula alphabets", () => {
+describe("lazy formula glyph files", () => {
   it("typesets a formula without extra alphabets without loading any", async () => {
     const { typesetter, loaded } = recordingTypesetter();
     for (const [latex, style, digest] of [
@@ -301,42 +305,105 @@ describe("formula alphabets", () => {
     },
   );
 
-  it("never renders a missing glyph while an alphabet is still loading", async () => {
+  it("never renders a missing glyph while another formula's alphabet is loading", async () => {
+    // Started together, the first conversion begins the calligraphic load and
+    // MathJax drops the placeholder of calligraphic L; the others must wait
+    // for that load rather than draw L from another alphabet.
     const typesetter = createFormulaTypesetter();
-    const [first, second] = await Promise.all([
-      typesetter.typeset({ ...baseRequest, latex: String.raw`\Bbb{R}` }),
-      typesetter.typeset({
-        ...baseRequest,
-        latex: String.raw`\Bbb{R}`,
-        display: "block",
-        bold: false,
-        italic: true,
-      }),
+    const results = await Promise.all(
+      [
+        String.raw`\mathcal{L}+\mathbb{R}`,
+        String.raw`\mathcal{L}`,
+        String.raw`\mathcal{L}_x`,
+      ].map((latex) => typesetter.typeset({ ...baseRequest, latex })),
+    );
+    expect(results.map(resultDigest)).toEqual([
+      "d3bc12b8192d52c6",
+      "c0ac47fcf70a8d68",
+      "8f7424dd02cd451e",
     ]);
-    expect(resultDigest(first)).toBe("bf8922905cc46880");
-    expect(resultDigest(second)).toBe("536f7fe17d3a2166");
   });
 
-  it("reports an alphabet that fails to load and loads it on the next request", async () => {
-    let attempts = 0;
-    const typesetter = createFormulaTypesetter({
-      loadAlphabet(alphabet) {
-        attempts += 1;
-        return attempts === 1
-          ? Promise.reject(new Error("Network unavailable."))
-          : loadFormulaAlphabet(alphabet);
-      },
-    });
-    const request = { ...baseRequest, latex: String.raw`\Bbb{R}` };
-    expect(await typesetter.typeset(request)).toEqual({
-      ok: false,
-      diagnostic: {
-        code: "FORMULA_RENDER_ERROR",
-        message: "Network unavailable.",
-      },
-    });
-    expect(resultDigest(await typesetter.typeset(request))).toBe(
-      "bf8922905cc46880",
+  it("prepares a batch of formulas sharing an alphabet with the eager glyphs", async () => {
+    clearFormulaArtifactCacheForTests();
+    const results = await Promise.all(
+      [
+        String.raw`\mathcal{L}+\mathbb{R}`,
+        String.raw`\mathcal{L}`,
+        String.raw`\mathcal{L}_x`,
+      ].map((latex) => prepareFormula({ ...baseRequest, latex })),
     );
+    expect(results.map(resultDigest)).toEqual([
+      "d3bc12b8192d52c6",
+      "c0ac47fcf70a8d68",
+      "8f7424dd02cd451e",
+    ]);
   });
+
+  it("reports a glyph file that fails to load, without failing other formulas, and loads it on the next request", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let attempts = 0;
+      const typesetter = createFormulaTypesetter({
+        loadFontFile(file) {
+          attempts += 1;
+          return attempts === 1
+            ? Promise.reject(new Error("Network unavailable."))
+            : loadFormulaFontFile(file);
+        },
+      });
+      const request = { ...baseRequest, latex: String.raw`\Bbb{R}` };
+      const [failed, unrelated] = await Promise.all([
+        typesetter.typeset(request),
+        typesetter.typeset({ ...baseRequest, latex: "x+y" }),
+      ]);
+      expect(failed).toEqual({
+        ok: false,
+        diagnostic: {
+          code: "FORMULA_FONT_UNAVAILABLE",
+          message: "Formula glyphs could not be loaded: Network unavailable.",
+        },
+      });
+      expect(unrelated).toMatchObject({ ok: true });
+      expect(resultDigest(await typesetter.typeset(request))).toBe(
+        "bf8922905cc46880",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it.each([
+    [String.raw`a\lll b\ggg c`, ["math"], "45f8a58b16935c93"],
+    [String.raw`\bigstar`, ["shapes"], "fbace4097f3225fc"],
+    [
+      String.raw`\longmapsto\circlearrowleft\leftrightarrows\rightsquigarrow`,
+      ["arrows"],
+      "89e54fe116f53366",
+    ],
+    [String.raw`\digamma`, ["greek"], "363bfec1e32eba50"],
+    [String.raw`\yen`, ["symbols-b-i"], "2836f6b5ab4b1ab3"],
+    ["é+ü+Å+ß+µ+‰", ["sans-serif-b", "sans-serif-ex"], "c9b6295baf1c4baf"],
+  ] as const)(
+    "loads the glyph files %s needs on first use",
+    async (latex, files, digest) => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        const { typesetter, loaded } = recordingTypesetter();
+        const result = await typesetter.typeset({ ...baseRequest, latex });
+        expect(resultDigest(result)).toBe(digest);
+        expect([...loaded].sort()).toEqual(files);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    },
+  );
 });

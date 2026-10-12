@@ -117,50 +117,115 @@ function extractSvg(
   };
 }
 
-/** A MathJax alphabet that loads only when a formula reaches one of its glyphs. */
-export type FormulaAlphabet =
-  "double-struck" | "calligraphic" | "script" | "fraktur" | "monospace";
-
-// Static import() paths let bundlers emit each alphabet as its own chunk, and
-// keep worker bundles self-contained: MathJax's own loader would fetch a URL.
-const alphabetModules: Record<FormulaAlphabet, () => Promise<unknown>> = {
+// Every glyph file of the font except sans-serif, which every formula uses.
+// Static import() paths let bundlers emit each file as its own chunk, loaded
+// the first time a formula reaches one of its glyphs, and keep worker bundles
+// self-contained: MathJax's own loader would fetch a URL instead.
+const fontFileModules = {
+  latin: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin.js"),
+  "latin-b": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin-b.js"),
+  "latin-i": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin-i.js"),
+  "latin-bi": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin-bi.js"),
   "double-struck": () =>
     import("@mathjax/mathjax-newcm-font/js/svg/dynamic/double-struck.js"),
-  calligraphic: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/calligraphic.js"),
-  script: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/script.js"),
   fraktur: () =>
     import("@mathjax/mathjax-newcm-font/js/svg/dynamic/fraktur.js"),
+  script: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/script.js"),
+  "sans-serif-r": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-r.js"),
+  "sans-serif-b": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-b.js"),
+  "sans-serif-i": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-i.js"),
+  "sans-serif-bi": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-bi.js"),
+  "sans-serif-ex": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-ex.js"),
   monospace: () =>
     import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace.js"),
-};
+  "monospace-l": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace-l.js"),
+  "monospace-ex": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace-ex.js"),
+  calligraphic: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/calligraphic.js"),
+  math: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/math.js"),
+  symbols: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/symbols.js"),
+  "symbols-b-i": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/symbols-b-i.js"),
+  greek: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/greek.js"),
+  "greek-ss": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/greek-ss.js"),
+  cyrillic: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/cyrillic.js"),
+  "cyrillic-ss": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/cyrillic-ss.js"),
+  phonetics: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/phonetics.js"),
+  "phonetics-ss": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/phonetics-ss.js"),
+  hebrew: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/hebrew.js"),
+  devanagari: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/devanagari.js"),
+  cherokee: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/cherokee.js"),
+  arabic: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/arabic.js"),
+  "braille-d": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/braille-d.js"),
+  braille: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/braille.js"),
+  arrows: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/arrows.js"),
+  marrows: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/marrows.js"),
+  accents: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/accents.js"),
+  "accents-b-i": () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/accents-b-i.js"),
+  shapes: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/shapes.js"),
+  mshapes: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/mshapes.js"),
+  variants: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/variants.js"),
+  PUA: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/PUA.js"),
+} satisfies Record<string, () => Promise<unknown>>;
 
-export async function loadFormulaAlphabet(
-  alphabet: FormulaAlphabet,
+/** A MathJax glyph file that loads only when a formula reaches one of its glyphs. */
+export type FormulaFontFile = keyof typeof fontFileModules;
+
+/** The default loader; tests wrap it to observe or fail loads. */
+export async function loadFormulaFontFile(
+  file: FormulaFontFile,
 ): Promise<void> {
-  await alphabetModules[alphabet]();
+  await fontFileModules[file]();
 }
 
-function isFormulaAlphabet(file: string): file is FormulaAlphabet {
-  return Object.hasOwn(alphabetModules, file);
+function isFormulaFontFile(file: string): file is FormulaFontFile {
+  return Object.hasOwn(fontFileModules, file);
 }
 
+/** Tests replace the loader to observe or fail font file loads. */
 export interface FormulaTypesetterOptions {
-  /** Loads one alphabet's glyph module; tests observe or fail it here. */
-  loadAlphabet?: (alphabet: FormulaAlphabet) => Promise<void>;
+  loadFontFile?: (file: FormulaFontFile) => Promise<void>;
 }
 
 export interface FormulaTypesetter {
   typeset(request: FormulaRequest): Promise<FormulaTypesetResult>;
 }
 
+class FontFileUnavailableError extends Error {}
+
 class SchematicFormulaFont extends MathJaxNewcmFont {
-  /** Alphabet loads MathJax is waiting on; a conversion retries after them. */
-  readonly alphabetLoads = new Set<Promise<void>>();
-  private readonly loadedAlphabets = new Map<FormulaAlphabet, Promise<void>>();
+  /** Font file loads still in flight; no conversion may run beside one. */
+  readonly pendingLoads = new Set<Promise<void>>();
+  /** Started loads by file, kept once they succeed. */
+  private readonly fontFileLoads = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly loadAlphabet: (alphabet: FormulaAlphabet) => Promise<void>,
+    private readonly loadFontFile: (file: FormulaFontFile) => Promise<void>,
   ) {
     super();
     SchematicFormulaFont.dynamicFiles["sans-serif"]!.setup(this);
@@ -170,26 +235,41 @@ class SchematicFormulaFont extends MathJaxNewcmFont {
   // it has not set up; it removes that glyph's placeholder and abandons the
   // conversion until the returned promise settles.
   override loadDynamicFile(dynamic: DynamicFile): Promise<void> {
-    const alphabet = dynamic.file;
-    if (!isFormulaAlphabet(alphabet)) return super.loadDynamicFile(dynamic);
-    const existing = this.loadedAlphabets.get(alphabet);
+    const file = dynamic.file;
+    const existing = this.fontFileLoads.get(file);
     if (existing) return existing;
-    const load = this.loadAlphabet(alphabet).then(
+    const load = (
+      isFormulaFontFile(file)
+        ? this.loadFontFile(file)
+        : Promise.reject(new Error(`Unknown formula font file ${file}.`))
+    ).then(
       () => dynamic.setup(this),
       (error: unknown) => {
-        // Restore the placeholders so the next conversion loads it again
-        // rather than rendering those glyphs as missing.
-        this.loadedAlphabets.delete(alphabet);
-        this.defineDynamicCharacters({ [alphabet]: dynamic });
-        throw error;
+        // Restore the placeholders so the next conversion loads the file
+        // again rather than drawing those glyphs as missing.
+        this.fontFileLoads.delete(file);
+        this.defineDynamicCharacters({ [file]: dynamic });
+        throw new FontFileUnavailableError(
+          error instanceof Error ? error.message : String(error),
+        );
       },
     );
-    this.loadedAlphabets.set(alphabet, load);
-    this.alphabetLoads.add(load);
-    const settle = () => this.alphabetLoads.delete(load);
+    this.fontFileLoads.set(file, load);
+    this.pendingLoads.add(load);
+    const settle = () => this.pendingLoads.delete(load);
     void load.then(settle, settle);
     return load;
   }
+}
+
+function renderError(error: unknown): FormulaTypesetResult {
+  return {
+    ok: false,
+    diagnostic: {
+      code: "FORMULA_RENDER_ERROR",
+      message: error instanceof Error ? error.message : String(error),
+    },
+  };
 }
 
 function retryPromise(error: unknown): unknown {
@@ -210,7 +290,7 @@ export function createFormulaTypesetter(
     },
   });
   const font = new SchematicFormulaFont(
-    options.loadAlphabet ?? loadFormulaAlphabet,
+    options.loadFontFile ?? loadFormulaFontFile,
   );
   // A Formula artifact is one self-contained SVG. MathJax 4 enables inline
   // line breaking by default and otherwise emits sibling SVG fragments around
@@ -270,29 +350,32 @@ export function createFormulaTypesetter(
       const diagnostic = validateFormulaRequest(request);
       if (diagnostic) return { ok: false, diagnostic };
 
-      try {
-        for (;;) {
-          // A conversion that started an alphabet load left that alphabet's
-          // glyphs without placeholders; converting before the load settles
-          // would draw them as missing.
-          await Promise.all(font.alphabetLoads);
+      for (;;) {
+        // MathJax removed the placeholders of glyphs whose file is loading, so
+        // a conversion beside a pending load could draw them as missing. No
+        // await may separate this check from the conversion.
+        while (font.pendingLoads.size > 0)
+          await Promise.allSettled(font.pendingLoads);
+        try {
+          return convert(request);
+        } catch (error) {
+          const retry = retryPromise(error);
+          if (!(retry instanceof Promise) || !font.pendingLoads.has(retry))
+            return renderError(error);
           try {
-            return convert(request);
-          } catch (error) {
-            const retry = retryPromise(error);
-            if (!(retry instanceof Promise) || !font.alphabetLoads.has(retry))
-              throw error;
             await retry;
+          } catch (loadError) {
+            if (!(loadError instanceof FontFileUnavailableError))
+              return renderError(loadError);
+            return {
+              ok: false,
+              diagnostic: {
+                code: "FORMULA_FONT_UNAVAILABLE",
+                message: `Formula glyphs could not be loaded: ${loadError.message}`,
+              },
+            };
           }
         }
-      } catch (error) {
-        return {
-          ok: false,
-          diagnostic: {
-            code: "FORMULA_RENDER_ERROR",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        };
       }
     },
   };
@@ -300,7 +383,7 @@ export function createFormulaTypesetter(
 
 const defaultFormulaTypesetter = createFormulaTypesetter();
 
-/** Typesets one formula, loading any alphabet it uses before it resolves. */
+/** Typesets one formula, loading the glyph files it uses before it resolves. */
 export function typesetFormula(
   request: FormulaRequest,
 ): Promise<FormulaTypesetResult> {
