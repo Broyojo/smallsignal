@@ -108,13 +108,14 @@ export function createEditorNavigationController({
   selectedInstance,
   setStatus,
 }: EditorNavigationControllerDependencies) {
-  const switchDocument = (nextDocumentId: string): void => {
-    if (nextDocumentId === document.id) return;
+  /** Show another Cell at its remembered view; true when it was opened. */
+  const switchDocument = (nextDocumentId: string): boolean => {
+    if (nextDocumentId === document.id) return false;
     documentViewBoxes.current.set(document.id, viewBox);
     const nextDocument = openDocument(nextDocumentId);
     if (!nextDocument) {
       setStatus(`Document not found: ${nextDocumentId}`);
-      return;
+      return false;
     }
     setViewBox(
       documentViewBoxes.current.get(nextDocument.id) ?? defaultViewBox,
@@ -122,6 +123,13 @@ export function createEditorNavigationController({
     );
     resetInteractionState();
     setStatus(`Opened Cell ${nextDocument.name}`);
+    return true;
+  };
+
+  // Descending into a block or leaving it shows the whole Cell, as F does,
+  // instead of whatever view that Cell last had (#1686).
+  const switchDocumentAndFit = (nextDocumentId: string): void => {
+    if (switchDocument(nextDocumentId)) fitDocument(nextDocumentId);
   };
 
   const selectDocumentFromHierarchy = (nextDocumentId: string): void => {
@@ -351,7 +359,7 @@ export function createEditorNavigationController({
         childDocumentId: targetId,
       },
     ]);
-    switchDocument(targetId);
+    switchDocumentAndFit(targetId);
   };
 
   const enterSelectedHierarchy = (): void => {
@@ -377,14 +385,14 @@ export function createEditorNavigationController({
       return;
     }
     setDocumentStack((current) => current.slice(0, -1));
-    switchDocument(frame.parentDocumentId);
+    switchDocumentAndFit(frame.parentDocumentId);
     if (parent?.instances.some((instance) => instance.id === frame.instanceId))
       selectOnly("instance", [frame.instanceId]);
   };
 
   const returnToTopDocument = (): void => {
     setDocumentStack([]);
-    switchDocument(project.topDocumentId);
+    switchDocumentAndFit(project.topDocumentId);
   };
 
   const selectSearchResult = (result: SearchResult): void => {
