@@ -23,6 +23,24 @@ async function builtJavaScriptContains(needle) {
   return contents.some((content) => content.includes(needle));
 }
 
+// Whether a script the route preloads, and so every first visit downloads,
+// contains the needle. Read from the built page, not from one loaded page,
+// so code that loads later (the Netlist panel's editor) does not count.
+async function routePreloadContains(html, route, needle) {
+  const match = new RegExp(
+    `const ${route}Resources = (\\[\\[.*?\\]\\]);`,
+    "s",
+  ).exec(html);
+  if (!match) throw new Error(`No ${route} preload resources in index.html`);
+  const scripts = JSON.parse(match[1])
+    .filter(([rel]) => rel === "modulepreload")
+    .map(([, href]) => href.replace(/^\/+/u, ""));
+  const contents = await Promise.all(
+    scripts.map((path) => readFile(resolve(editorDist, path), "utf8")),
+  );
+  return contents.some((content) => content.includes(needle));
+}
+
 async function loadedJavaScriptContains(page, needle) {
   const paths = await page.evaluate(() =>
     performance
@@ -283,6 +301,13 @@ async function main() {
   const routePreloadBeforeStylesheets =
     routePreload !== -1 &&
     (firstStylesheet === -1 || routePreload < firstStylesheet);
+  // The JSON grammar behind the property code views' inline controls loads
+  // with those views (#1673). "JsonText" is its top node's name.
+  const editorFirstLoadJsonParser = await routePreloadContains(
+    builtHtml,
+    "editor",
+    "JsonText",
+  );
   const report = {
     mounted,
     consoleErrors,
@@ -297,6 +322,7 @@ async function main() {
     editorLoadingScreens,
     editorSimulationServiceLoaded,
     routePreloadBeforeStylesheets,
+    editorFirstLoadJsonParser,
   };
 
   if (check) {
@@ -337,6 +363,9 @@ async function main() {
   }
   if (!report.routePreloadBeforeStylesheets) {
     throw new Error("Route preload script waits for a stylesheet");
+  }
+  if (report.editorFirstLoadJsonParser) {
+    throw new Error("Editor first load includes the JSON property-code parser");
   }
   if (report.consoleErrors.length > 0) {
     throw new Error(

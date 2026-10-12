@@ -13,5 +13,6 @@
     "Loading editor…"
   ],
   "editorSimulationServiceLoaded": false,
-  "routePreloadBeforeStylesheets": true
+  "routePreloadBeforeStylesheets": true,
+  "editorFirstLoadJsonParser": false
 }

@@ -5,11 +5,11 @@ import { resolveVisualAnchor } from "@icm/derived";
 import type { SymbolResolver } from "@icm/symbols";
 import { AnnotationPropertyCodeEditor } from "../properties/annotation-property-code-editor";
 import {
-  annotationPropertyAdapter,
   draftingPropertyValue,
   parseDraftingPropertyCode,
   serializeAnnotationPropertyCode,
 } from "../properties/annotation-property-code";
+import { annotationPropertyAdapter } from "../properties/annotation-property-code-assists";
 import { isClosedPolyline } from "./drafting-polyline";
 import type { DraftingStackingTarget } from "./drafting-manipulation";
 

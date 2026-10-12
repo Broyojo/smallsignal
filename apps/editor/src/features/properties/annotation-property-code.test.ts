@@ -11,8 +11,8 @@ import {
   serializeAnnotationPropertyCode,
   parseDraftingPropertyCode,
   parseAnnotationPropertyCode,
-  annotationPropertyAdapter,
 } from "./annotation-property-code";
+import { annotationPropertyAdapter } from "./annotation-property-code-assists";
 
 const anchor = { kind: "free" as const, position: { x: 100, y: 100 } };
 const base = { id: "drawing", locked: false, zIndex: 0, anchor };

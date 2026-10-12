@@ -9,14 +9,16 @@ import {
 
 import {
   formatGroupPropertyCode,
-  groupPropertyCodeChanges,
-  groupPropertyCodeSpans,
   groupPropertyItemNames,
   parseGroupPropertyCode,
   serializeGroupPropertyCode,
   type GroupPropertyCodeContext,
   type GroupPropertyCodeValue,
 } from "./group-property-code";
+import {
+  groupPropertyCodeChanges,
+  groupPropertyCodeSpans,
+} from "./group-property-code-assists";
 import type { PropertyJsonEditorAdapter } from "./component-property-json-editor";
 import { itemPropertyCode } from "./item-property-code";
 

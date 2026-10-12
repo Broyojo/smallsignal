@@ -7,13 +7,7 @@ import { z } from "zod";
 
 import { type Annotation, type SchematicDocument } from "@icm/model";
 
-import {
-  colorToRgb,
-  parseCanvasColor,
-  type CanvasPropertyField,
-} from "./component-property-fields";
-import { propertyCodeSpans } from "./component-property-code-assists";
-import type { PropertyJsonEditorAdapter } from "./component-property-json-editor";
+import { colorToRgb, parseCanvasColor } from "./component-property-fields";
 
 type Route = SchematicDocument["routes"][number];
 
@@ -43,54 +37,6 @@ const schema = z.strictObject({
 export type RoutePropertyCodeValue = z.infer<typeof schema>;
 export type RoutePropertyCodeResult =
   { ok: true; value: RoutePropertyCodeValue } | { ok: false; message: string };
-
-const fields: readonly CanvasPropertyField[] = [
-  {
-    path: "appearance.color",
-    label: "Wire color",
-    kind: "color",
-    description: "",
-  },
-  {
-    path: "display.visualAnnotation",
-    label: "Rail label",
-    kind: "boolean",
-    description: "",
-    help: "Show or hide the rail's name label without changing its Net.",
-  },
-  {
-    path: "net.scope",
-    label: "Net scope",
-    kind: "choice",
-    options: [
-      { value: "local", label: "Local to Cell" },
-      { value: "global", label: "Global across Cells" },
-    ],
-    description: "",
-  },
-  {
-    path: "appearance.lineStyle",
-    label: "Line style",
-    kind: "choice",
-    options: [
-      { value: "solid", label: "Solid" },
-      { value: "dashed", label: "Dashed" },
-      { value: "dotted", label: "Dotted" },
-    ],
-    description: "",
-  },
-  {
-    path: "appearance.directionArrow",
-    label: "Direction arrow",
-    kind: "choice",
-    options: [
-      { value: "none", label: "No arrow" },
-      { value: "middle", label: "Arrow at middle" },
-      { value: "end", label: "Arrow at end" },
-    ],
-    description: "",
-  },
-];
 
 function netLabelScope(
   document: SchematicDocument,
@@ -205,53 +151,4 @@ export function parseRoutePropertyCode(
       message: error instanceof Error ? error.message : "Invalid Route JSON",
     };
   }
-}
-
-export function routePropertyCodeAdapter(
-  powerRail = false,
-): PropertyJsonEditorAdapter {
-  const routeFields = powerRail
-    ? fields.map((field) =>
-        field.path === "net.scope"
-          ? {
-              ...field,
-              label: "Connection",
-              options: [
-                { value: "local", label: "Cell Pin" },
-                { value: "global", label: "Global" },
-              ],
-            }
-          : field,
-      )
-    : fields;
-  const spans = (source: string) =>
-    propertyCodeSpans(source, undefined, routeFields);
-  return {
-    parse: parseRoutePropertyCode,
-    spans,
-    changes(source, values) {
-      const ranges = spans(source);
-      const changes = Object.entries(values).map(([path, value]) => {
-        const matches = ranges.filter((span) => span.field.path === path);
-        return matches.length === 1
-          ? {
-              from: matches[0]!.from,
-              to: matches[0]!.to,
-              insert: JSON.stringify(value),
-            }
-          : null;
-      });
-      if (changes.some((change) => change === null)) return [];
-      const sorted = changes
-        .filter((change) => change !== null)
-        .sort((left, right) => left.from - right.from);
-      let candidate = source;
-      for (const change of [...sorted].reverse())
-        candidate =
-          candidate.slice(0, change.from) +
-          change.insert +
-          candidate.slice(change.to);
-      return parseRoutePropertyCode(candidate).ok ? sorted : [];
-    },
-  };
 }

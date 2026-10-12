@@ -8,10 +8,10 @@ import {
 
 import {
   parseRoutePropertyCode,
-  routePropertyCodeAdapter,
   routePropertyCodeValue,
   serializeRoutePropertyCode,
 } from "./route-property-code";
+import { routePropertyCodeAdapter } from "./route-property-code-assists";
 
 function fixture(scope: "local" | "global" = "local") {
   const document = createEmptyDocument("doc", "Route");
