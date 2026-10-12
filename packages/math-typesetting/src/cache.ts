@@ -28,7 +28,9 @@ export type FormulaDiagnosticCode =
   | "FORMULA_INVALID_REQUEST"
   | "FORMULA_DISALLOWED_COMMAND"
   | "FORMULA_PARSE_ERROR"
-  | "FORMULA_RENDER_ERROR";
+  | "FORMULA_RENDER_ERROR"
+  /** A glyph file failed to load; the next request loads it again. */
+  | "FORMULA_FONT_UNAVAILABLE";
 
 export interface FormulaDiagnostic {
   code: FormulaDiagnosticCode;
@@ -146,9 +148,12 @@ export async function prepareFormula(
   if (existing) return existing;
 
   const task = import("./index.js")
-    .then(({ typesetFormulaSync }) => typesetFormulaSync(request))
+    .then(({ typesetFormula }) => typesetFormula(request))
     .then((result) => {
-      artifacts.set(key, result);
+      // A glyph file that failed to load (offline, or replaced by a deploy)
+      // may load on the next request, so that failure is not remembered.
+      if (result.ok || result.diagnostic.code !== "FORMULA_FONT_UNAVAILABLE")
+        artifacts.set(key, result);
       return result;
     })
     .finally(() => pending.delete(key));
