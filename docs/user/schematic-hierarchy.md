@@ -1,356 +1,136 @@
 # Schematic hierarchy
 
-Analog Canvas treats every Project Document as one reusable schematic Cell.
-The top Cell is the saved default entry; other Cells may be instantiated any number of
-times or kept unreferenced while they are being authored.
+Every Project Document is a reusable schematic Cell. The top Cell is the
+saved default entry; other Cells can be placed any number of times or left
+unreferenced while you work on them. The top Cell can itself be placed in
+another Cell, as long as no recursion results.
 
-Open **Cell Manager…** (**Circuit** → **Hierarchy**), select a Cell and choose **Set as Top**, or drag it onto the first, **Top** row to change
-the saved default entry. The drop preview says **Set as Top**. Dragging among
-other rows only changes the saved list order; dropping at the bottom moves a Cell
-to the end. Both order and Top changes are undone together. This does not change the circuit, its callers, the
-current editing location, or an explicitly selected simulation entry. Undo and
-Redo restore this setting. Opening a definition from Manager clears caller
-context; enter through an instance when you need its specific parent path.
-The Manager's **Hierarchy** tree opens concrete instance occurrences. Expand
-only the branches you need; repeated calls to one Cell retain separate paths.
-The Cell list stays stable regardless of reachability. Double-click a row to open
-its definition; edit the detail heading to rename it (Enter or blur commits,
-Escape cancels). **Delete** is beside the selected Cell's heading. Alt+Up/Down also reorder a focused row;
-Alt+Up into the first row makes that Cell Top.
+## Cell Manager
 
-Use **Cell Manager…** under **Circuit** in the header, or **Manage Cells…**
-in the hierarchy toolbar, to manage the active Project's
-definitions in one place. It shows each
-Cell's projected Port and caller counts, opens or renames a definition, and lists
-each caller with **Jump to caller**. Equal Port names occupy one row, matching
-the generated Symbol; a marker count preserves visibility into repeated canvas
-declarations. A referenced Cell's delete control is
-disabled; delete its caller Instances normally before deleting the now
-unreferenced definition.
+Open **Cell Manager…** (**Circuit → Hierarchy**, or **Manage Cells…** in the
+hierarchy toolbar). It lists each Cell with its Port and caller counts, opens
+or renames it, and lists callers with **Jump to caller**.
 
-The Manager separates **Cells** (local schematics) from **External Circuits**
-(Project-owned native models or reviewed library declarations). Local Cell
-interfaces come from canvas Pins. Use **New External Circuit**, enter a
-SPICE `.subckt` or Spectre `subckt` body and choose **Apply & Place** to start placement in the original
-parent. Escape cancels placement and keeps the applied definition. **Apply model**
-applies without placing. Its name, terminal order and
-formal defaults are parsed beside a pin-labelled preview. For several entries,
-choose the public entry; helper definitions remain with the same source. New
-definitions can select an existing source owner to expose another entry.
+- **Set as Top**, or drag a Cell onto the **Top** row, changes the default
+  entry; dragging among other rows only reorders the list (`Alt+Up/Down` with
+  a row focused). Neither changes the circuit, the editing location or a
+  simulation's chosen Cell, and both are undoable.
+- Double-click a row to open the definition; edit its heading to rename it.
+  Opening from the Manager has no caller context; enter through an instance
+  (or the **Hierarchy** tree of concrete occurrences) to keep the parent path.
+- **New Cell** creates a module. **Delete** removes only an unreferenced,
+  non-top Cell (undoable); delete its callers first. Deleting an instance
+  never deletes its Cell.
+- **Import Cell** copies a Cell from another of your Cloud Projects with its
+  child Cells, compatible external models, ports and presentation, as one
+  undoable step. The copy is independent of the source; importing the same
+  Cell again opens the existing copy. Both Projects must use the same Symbol
+  Library version.
 
-The same native editor is available through **Edit → User Components… →
-Create Component…**. Circuit is the default. Circuit and Symbol retain one draft;
-Pin directions and expandable mappings are in Circuit.
-Enter SPICE or Spectre, choose Automatic or Custom artwork, and complete its Pin
-mapping before Apply or Place.
-Custom JSON pins map explicitly to the model's formal terminals. Choosing an existing source
-and an already exposed entry reuses its definition and stable terminals;
-choosing another entry exposes it without copying the source. Both entrances
-use the same Project model, checked symbol mapping and instance parameter controls.
-Applied models appear in Cell Manager's External Circuits list for later editing.
-Project Apply does not publish to the public library. **Publish** deliberately
-shares the applied native source, owned helpers, symbol and mapping. Placing a
-public revision captures these facts in the destination Project; later library
-updates do not rewrite that capture. **JSON artwork / primitive** retains its
-code-and-preview workspace, local Apply/Place and separate public Publish.
+**Place Cell** in the hierarchy toolbar (or **Edit → Place Cell from this
+Project…**) opens a searchable Cell picker; place the instance like any
+component (`R`, mirror, `Esc`). It shows the Cell name; its `Xn` instance name
+is the netlist identity. **Enter Cell** (`E`) opens a selected instance's
+child, **Shift+E** returns to the caller along the actual path, **Top** jumps
+to the root. Self-instantiation and cycles are refused with a reason.
 
-New Model starts with English guidance and commented pin/parameter examples.
-The SPICE declaration example is:
+## Cell Pins
+
+The hollow **Cell Pin** is an ordinary interface Pin; the solid **Bias
+Voltage Port** marks a bias input (`VB1`, `VB2`). Use a Net Label instead to
+name an internal Net only.
+
+1. Press `P`, or place **Cell Pin** / **Bias Voltage Port** from the Library.
+2. Click an existing contact to join its Net, or empty grid for a new Net.
+3. Double-click its label, or edit **Name** in Properties, to set the formal
+   Pin name (naming the Net separately does not rename the Pin).
+
+The generated block symbol is ready at once: inputs on the left, outputs on
+the right, other directions balanced. Supply Pins added before any parent
+places the Cell start on the block's top (VDD) or bottom (ground) edge; after
+that, new Pins no longer move the existing layout. Moving a pin on the block
+changes geometry, not netlist port order.
+
+Pins with the same name (case-insensitive) are one Port: the first fixes its
+order and spelling, and they are one electrical connection even without a
+wire. Different names on one Net stay separate Ports. A Net Label touching a
+Cell Pin's Net must use the Pin's name, or it is rejected as a conflict.
+Copying a Pin creates a new terminal with the same name and direction.
+
+Renaming a Pin updates parents only if the grouped interface changes;
+renaming onto an existing name, or deleting the last connected Pin, asks for
+confirmation because parent Nets merge or wires are detached (to editable
+Junctions). Undo restores everything. ERC and export report conflicting
+directions in one Port and external names that collide with local Cells;
+unfinished work can still be saved.
+
+Select a Cell instance in a parent and open **Properties** to set the block's
+size and each pin's side and offset (**Auto** returns a pin to its default),
+or **Edit symbol layout on canvas** for drag grips. Changes apply to every
+instance. Highlight a Net (`H`) to see its **Hierarchy Net trace** in
+Properties, with **Enter** and **Return** across instance boundaries.
+
+## Cell parameters
+
+Device values can be numbers (`180um`) or expressions (`{2*Rbase}`), kept as
+typed. To add a Cell parameter, declare it with a default in the Cell's
+Project Code (`Rbase=1k`), then use it in device values. The Manager lists
+declared parameters: edit a name or default and press `Enter`. Renaming
+updates internal uses and every caller's override key in one step; a
+parameter still in use cannot be deleted. On a parent instance, enter
+overrides in its Property JSON; an empty value inherits the default. Cells
+need defaults for every parameter to export.
+
+## External circuits
+
+The Manager's **External Circuits** list holds Project-owned native models.
+**New External Circuit** takes a SPICE `.subckt` or Spectre `subckt` body;
+its name, terminal order and defaults are parsed beside a pin-labelled
+preview. The starter text is commented examples:
 
 ```spice
 * .subckt my_cell PIN1 PIN2 params: PARAM1=1
 ```
-
-Spectre puts parameters on a separate line:
 
 ```spectre
 // subckt my_cell (PIN1 PIN2)
 // parameters PARAM1=1
 ```
 
-Uncomment the declarations, add the body, and end with `.ends my_cell` (SPICE)
-or `ends my_cell` (Spectre). The starter comments alone are not an implementation.
-Zero terminals and zero parameters are valid; whitespace is not an unnamed pin.
-The **Format / Process / Copy** row uses the same controls as the right-side
-netlist. Format shows SPICE or SCS (Spectre). Format and Process transform only
-this owner's visible draft; ordinary Apply commits it. Copy includes its applied
-definition and owned helpers, without the enclosing schematic or testbench.
-Unsaved changes or a saved draft disable Copy. Ctrl/Cmd+C still copies selected text.
+Uncomment, add the body and end with `.ends my_cell` (or `ends my_cell`).
+**Apply model** commits; **Apply & Place** then places it in the parent
+(`Esc` keeps the applied model). With several subcircuits, choose the public
+entry; helpers stay with the source. The same editor opens from **Edit → User
+Components… → Create Component…**.
 
-Process is derived from actual calls and library references. Current replacement
-supports reviewed core SKY130 1.8 V MOS and IHP SG13G2 low-voltage MOS counterparts,
-preserving four terminal roles, W/L units, finger count and multiplier. Other
-devices, variants, custom overrides and pinned libraries require explicit source
-edits. Ideal R/C and controlled-source models are process-independent and show
-**Abstract**: they have no PDK devices for this shortcut to replace. Selecting a
-technology cannot create a transistor implementation of an ideal model.
-Changing Process does not tune operating points or change canvas devices.
-An unsupported conversion keeps the text and selection, with one inline sentence
-explaining the process refusal and **Edit model**. It opens no dialog and moves
-focus only when clicked. Selecting a different model in the left list is separate
-from Format and Process; apply or preserve unfinished edits before leaving it.
+- **Format / Process / Copy** converts this model's draft between SPICE and
+  SCS and between processes, as the Netlist sidebar does. Only reviewed core
+  SKY130 1.8 V and IHP SG13G2 low-voltage MOS convert; anything else shows an
+  inline refusal with **Edit model**. Ideal models show **Abstract**. Copy
+  puts the applied definition and helpers on the clipboard.
+- **More** holds Save draft, Fork, Files and dependencies (extra files and
+  pinned library references), placeholder creation and deletion. **Symbol
+  layout and directions** sets pin directions and layout with a live preview.
+- **Save draft** keeps unfinished text through closing and saving, without
+  changing the applied block. If someone else changes the applied model
+  meanwhile, Apply refuses; **Keep my draft on the latest version** rebases
+  your text.
+- Interface edits update all callers in one undoable step; renaming or
+  removing a connected pin asks how to migrate (disconnect keeps the wire as a
+  stub). **Fork model…** makes a private copy for independent edits.
+- A block without an applied implementation is visibly unimplemented and
+  cannot simulate; **Define implementation…** opens its source. Reviewed PDK
+  interfaces are read-only: set parameters on instances.
 
-Choose **Place** directly in Manager for either kind. **Import Cell** copies a
-saved Cloud Cell, its children and required models, selects the import and
-retains the original parent for placement. **Open** is a separate action.
-Self-instantiation and cycles show a reason and disable Place.
+The Netlist sidebar and Copy Netlist include the full applied model bodies
+once per source; editing a model body there needs the Apply checkmark or
+`Ctrl/Cmd+Enter` and writes back to the same source. A supported Spectre
+model runs on ngspice through its derived SPICE; licensed Spectre execution is
+not provided. Move models still defined in simulation files into the Manager
+and remove the duplicates there.
 
-The action bar keeps Apply and Place together. **More** holds Save draft, Fork,
-Files and dependencies, placeholder creation and deletion. File tabs
-appear for multiple files. At narrow widths, select a list item to show its editor
-and use **Back to list** to return. Closing or switching with unsaved text asks
-whether to keep editing or discard the changes.
+## Netlist entry and simulation
 
-Native expressions, comments and continuation lines stay in the model files.
-**More → Files and dependencies** holds extra owned files and pinned Profile
-library references. **Symbol layout and directions** puts pin directions in two
-columns, with compact layout controls beside the live Symbol preview. These
-change appearance without changing the native interface. The block's Properties and simulation Code offer
-**Open model** navigation to its shared source. **Fork model…** starts a private
-copy; give its public/helper definitions nonconflicting names before Apply.
-Existing callers keep their original owner. Instance parameter overrides remain
-in Properties.
-
-The right-side Netlist code and both Copy Netlist buttons contain the full
-applied external `.subckt` bodies and owned helper definitions. Nested and
-repeated Cell calls include each reachable model source once. Editing a supported
-model body here requires the Apply checkmark or Ctrl/Cmd+Enter; Apply writes back
-to the same source shown in Manager. Copy waits until those edits are applied.
-An unfinished drawing still shows its applied external model definitions, but
-Copy waits for the drawing to be complete. A legacy external block with only an
-interface cannot be copied as a complete netlist. Move its definitions from
-experiment files into Manager and Apply them, then remove the duplicated
-experiment definitions; the shared Project source owns them thereafter.
-
-An interface edit updates all callers atomically. Reorder retains pin identity;
-rename/removal of a connected pin needs an explicit migration selection. Choosing
-disconnect keeps the wire as a stub. Apply errors preserve the previous model.
-**Save draft** retains unfinished text across Manager close and Project Save
-and never changes an existing block's name, pins or parameters;
-Run/Copy use the clearly identified applied version. If no implementation was
-applied, the block is visibly unimplemented and cannot simulate. **Create
-placeholder…** is a secondary interface-only path. Apply checks declarations;
-use Run to check simulator acceptance separately. Native language is distinct
-from execution engine: a supported Spectre source derives SPICE for ngspice.
-Unsupported native behavior or an unqualified external library blocks that
-target, preserving the owner. Licensed Cadence Spectre execution is not provided.
-
-If another edit changes the applied model while your editor is open, your text
-stays in the editor and Apply refuses the stale version. **Keep my draft on the
-latest version** explicitly accepts the newer version as its base before you
-Apply your text. A runtime diagnostic opens the exact applied source file; when
-there is a saved draft, that applied snapshot is read-only. **Open saved draft**
-returns to your retained work.
-
-Undo/Redo includes source and caller changes. Portable export, Cloud Save,
-recovery, cross-Project copy and Cell import carry owned model files and drafts.
-Legacy interface-only declarations remain readable and editable without guessed
-promotion; **Define implementation…** opens the native source path. Reviewed
-PDK definitions keep their fixed interfaces and library bindings. Definition
-deletion is refused while callers remain; the shared **Callers** list locates
-those instances.
-Promotion with an unchanged interface preserves the caller's custom artwork.
-Explicit port renames capture separate artwork with renamed canonical contacts;
-stable terminal IDs, positions and wire geometry stay intact. Other callers that
-share the original symbol keep it. A model-body-only Apply never redraws wires.
-Generic External blocks share the Cell symbol layout controls in Properties:
-body size, pin side/offset, and canvas drag handles. A layout edit updates every
-instance and follows connected routes in the same undoable transaction. Native
-PDK device symbols retain their reviewed artwork instead of exposing generic
-block resize handles.
-An exact reviewed PDK interface is read-only in Manager: its target, ordered
-terminals and parameter declarations belong to the reviewed mapping. Set device
-parameter values on instances instead. Neither a generic declaration nor a
-reviewed mapping alone proves that a particular simulation has its model sources.
-Local Cell symbols inherit the representative Port annotation's explicit
-RichText formatting. The current drawing's label settings can apply underscore,
-first-letter, case and slant conventions to visible pins as well as labels;
-see [label names and typography](getting-started.md#label-names-and-typography).
-Rendering pin names never changes a component's electrical pin identity or
-external model interface. Complement output bars are retained.
-
-Use **New Cell** in the Cell Manager to create a module. **Place Cell** in the
-hierarchy toolbar, or **Edit → Place Cell from this Project…**, opens the Insert
-dialog as a searchable, Cells-only **Place Hierarchical Cell** picker. Select a
-definition, then place its ordinary hierarchical Instance on the canvas using
-the same grid preview, `R` rotation, mirror shortcuts, and `Esc` cancellation
-as a library component. The commit keeps the `Xn` reference as internal
-netlist identity and shows only the Cell name at the normal instance-label
-position. **Enter Cell** opens the child of a selected hierarchical Instance.
-**Shift+E** follows the actual parent Instance path; **Top** returns directly to
-the root. Opening a Cell from Manager's definition list always opens the
-definition without caller context, even when it has only one caller. **Shift+E** is
-disabled in that context. Enter an instance or use the hierarchy tree to carry
-a concrete path; **Shift+E** then returns to and selects the original caller.
-
-In the Netlist panel, **Entry** chooses a Cell for this export only. **Default
-Top** follows the saved default; another selection drives the preview, structural
-check and copied netlist without changing Top or your editing location. Code
-edits apply to the displayed Cell's actual devices. Entry selection is disabled
-while a text draft is pending, and resets for a different opened Project.
-New simulation folders have their own **Simulation Cell** choice. The experiment
-keeps that circuit binding when the Project's default Top changes; simulation
-source files and analysis settings remain owned by the experiment.
-
-Use **Import Cell** in the Cell Manager to copy a Cell from another signed-in
-Cloud Project. The import includes every child Cell it calls, compatible
-external-subcircuit interfaces, formal ports, presentation, and referenced
-source metadata. It is one ordinary undoable Project transaction: the source
-Project is never modified, and the destination copy does not follow later
-source changes. Identity and colliding Cell names are remapped
-deterministically; importing the same source Cell again opens the existing
-copy rather than creating another hidden duplicate. The first release requires
-the source and destination to use the same exact Symbol Library lock and
-reports incompatible external interfaces without changing either Project.
-
-The default top Cell is still a reusable structural subcircuit; it can be placed
-in another Cell when this does not create a recursive hierarchy. The hollow
-**Cell Pin** is the ordinary interface Pin. The solid **Bias Voltage Port** is
-the marker for a bias-voltage entry, typically named `VB1`, `VB2`, and so on.
-Both define independently authored interface declarations. Use Net Label
-instead when you only need to name an internal Net.
-
-To define a real Cell port:
-
-1. Press `P`, or place **Cell Pin** / **Bias Voltage Port** from the Library.
-2. Click an exact existing electrical contact to attach to its Net, or click
-   empty grid space to create a new local Net.
-3. Double-click its default annotation, or select the Pin and edit **Name** in
-   **Properties**, to change its formal Cell Pin name. Properties keeps this
-   name editable even if the canvas annotation is absent. The Pin's Instance ID
-   is an internal identifier, not its interface name; naming its Net separately
-   does not rename the Cell Pin.
-
-Formal-Pin placement commits the ordinary `port`/`port-filled` Instance, its
-pin-`P` connection, and the stable formal Cell terminal as one revision. Inputs
-are placed on the left of generated parent symbols, outputs on the right, and
-other directions are balanced automatically. The symbol body and pin placement
-adapt without a separate interface editor.
-
-Each visible marker remains an ordinary Instance for selection, move, wiring,
-copy, and deletion. Copying a Cell Pin creates a new formal terminal with an
-independent stable identity while retaining the source's formal name and
-direction. Copy follows ordinary insertion: destination contacts
-determine connectivity; off-selection source connectivity is not inherited.
-Only explicitly selected wires travel with the copy. Markers keep independent
-canvas identities, but names have electrical meaning: equal case-insensitive
-Port names belong to one Logical Net. Sharing a name need not merge their
-underlying Base Net objects or draw a wire between the markers.
-
-When the Cell is used as a hierarchical block or exported, a read-only final
-projection groups case-insensitively equal Pin names into one Formal Port. The
-first Pin fixes that Port's order and spelling. Grouping does not rewrite the
-canvas objects, but the logical connection is real, including during export.
-Different Port names on the same internal Net remain separate interface pins.
-Moving a symbol pin to another side changes geometry, not the netlist port order.
-A supply Pin added to a Cell that no parent has placed yet starts on the block's
-edge, as textbooks draw it: a VDD Port, VDD Power marker or VDD Power Rail on
-top, a ground-named Pin below. Once a parent has placed the Cell, new Pins no
-longer move its block's existing layout.
-If a wire touches a Cell Pin, any ordinary Net Label on that logical Net must
-use the Pin's formal name (case-insensitively). A different Label name is
-rejected as a name conflict so it cannot silently connect the Pin to remote
-wires carrying that Label. Cutting a wire separates physical Base Nets, but
-same-name Pins or Labels on the resulting sides still denote one electrical
-Logical Net. Drawing an explicit connection from the Pin to a differently
-named labeled wire retires that wire's Label as part of the join; the Pin's
-formal name remains.
-
-Renaming that annotation changes only the selected Pin. Parent Instances are
-updated only if the before/after grouped interface actually changes. Deleting
-one of several same-name Pins leaves the parent Formal Port intact. Its layout
-follows the surviving representative, and its same-spelling RichText format is
-inherited unless the survivor already has an explicit format. Deleting
-the last removes it and detaches affected caller wire endpoints to editable
-Junctions in the same undoable Project transaction.
-Deleting the last connected Port requires internal confirmation; it does not
-require deleting all other Ports first. Renaming to an existing interface name
-also requires confirmation: this can merge the corresponding parent Nets.
-Cancel leaves the Project unchanged; Undo restores the complete operation.
-Incompatible power-domain connections remain rejected.
-
-ERC and formal netlist export diagnose conflicting directions within one
-effective Port, and external master names that collide with local exported Cell
-names. These findings do not prohibit saving unfinished work. Authoring previews
-retain missing positional nodes as explicit placeholders; they are not runnable
-netlists and must not be treated as successful simulation preparation.
-**Delete Cell** removes only a non-top, unreferenced Cell definition and can be undone or redone.
-Deleting a hierarchical Instance with the normal Delete command never deletes
-its reusable child Cell.
-
-Rectangles are drafting geometry only. Create reusable Cells through
-**Hierarchy** and place them with **Place Cell** in the hierarchy toolbar;
-**Enter Cell** never
-converts drawing objects.
-
-Select a Cell Instance in a parent and open **Properties** to adjust that
-Cell's shared symbol layout: body width/height and each pin side/offset. Pin
-names follow their pin automatically and never take over the external wiring
-anchor. Use **Auto** to return a pin to direction-aware placement. **Edit
-symbol layout on canvas** reveals explicit drag grips for the body and pins;
-the Properties values remain the precise fallback. These are definition operations,
-not top-level drawing tools.
-
-Highlight a connected Net with **H** or **Highlight Net** to inspect
-**Hierarchy Net trace** in Properties. Its **Enter** and **Return** actions
-follow the selected electrical connection across a concrete instance boundary
-and highlight the destination Net. Direct definition navigation does not invent
-an occurrence path.
-
-The generated Symbol is ready for the first placement without a separate review
-or apply step. Customize it from a placed parent Instance when needed. An
-unreferenced top Cell is reusable too: create another ordinary Cell, then use
-**Place Cell** to place the original top there. The
-Project top does not change.
-A valid zero-port interface is allowed; an absent formal interface must be
-authored first.
-
-Cell Manager does not expose destructive drawing/placement/body reset actions.
-Their typed editing operations remain available to explicit programmatic workflows.
-
-## Cell parameters
-
-Edit electrical values directly in a device's Property JSON. Numeric text such
-as `180um` or `80nm` and expressions such as `{Rbase}` or `{2*Rbase}` remain
-exactly as authored, without per-value buttons or redundant unit comments.
-For a new Cell parameter, declare its name and default in the Cell's Project
-Code first, then reference it in the device value. For example, declare
-`Rbase=1k` and set a resistor's value to `{Rbase}`. Existing declarations remain
-available to all devices in that Cell. Point lists and derived digital-clock
-controls are not scalar parameter slots.
-
-Manager lists declared parameter names and defaults. Hover a name to see internal
-reference and caller override counts; these counts are not another setting. Edit a name
-or default and press Enter or leave the field to commit. Renaming updates
-internal references and every caller's override key atomically, but does not
-rewrite expressions belonging to a parent Cell's own scope. Unused declarations
-remain until explicitly removed; references or caller overrides must be removed
-before deleting a declaration. Invalid or unsupported expressions are not
-silently rewritten.
-
-Select a parent Cell instance to enter overrides in its Property JSON.
-An empty value inherits the definition default; clearing an override restores
-inheritance. Changing a default affects inheriting instances, not explicit
-overrides. Manager hides the parameter table only when there are no declarations:
-an imported parameter without a default still appears and can be repaired.
-New local parameters require defaults, and internal Cells without defaults
-cannot be exported as executable netlists.
-
-Agents use the existing `create-cell` action and `place-cell` with
-`childDocumentId`, `instanceId`, optional `reference`, and `placement`, targeting
-the parent Document. The same Project transaction owns validation and history;
-these actions do not create or modify a simulation folder.
-
-The import planner and its small Project edits are also public API contracts.
-An Agent that already holds an authorized source Project can plan the same
-independent closure and submit it through the standard structural transaction;
-the transaction remains revision-guarded and atomic. Reading a private Cloud
-Project is a separate account-authorized operation and is never implied by
-simulation permission: the Agent Project resource (`list-projects`,
-`list-cells`, `import-cell`) requires the `project.import` scope.
-
-Hierarchy presentation is saved as definition-level size and pin-placement
-intent. Schema-24 and later projects open through the chained upgrade; schema-23 and older files remain unsupported. The
-block uses a closed polygon body and the shared Razavi rich-text renderer for
-pin and Cell names; it is compatible with that visual grammar rather than a
-pixel-for-pixel textbook symbol asset.
+In the Netlist panel, **Entry** chooses which Cell to export without changing
+Top or your location (**Default Top** follows the saved one). A simulation
+experiment keeps its own **Simulation Cell**, unaffected by Top changes.

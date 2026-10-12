@@ -8,833 +8,313 @@ pnpm build
 pnpm dev
 ```
 
-Run `pnpm build` once after installing, and again after pulling package
-changes: the development server's Vite configuration loads some workspace
-packages from their built `dist/` output.
+Run `pnpm build` again after pulling package changes, then open the displayed
+loopback URL. The editor starts with an empty `New Circuit` Project whose one
+Cell is `dut`; nothing needs to be opened first.
 
-Open the displayed loopback URL. Open **File** and use **Import SPICE / SCS…**
-to select one `.cir`, `.sp`, `.spi`, or `.scs` entry plus its local include
-files. **Import Cadence SPICE (`!` globals)…** also treats net names ending in
-`!` as global Nets. Imported instances begin unplaced so that the user can
-decide the presentation. A normal launch starts with a genuinely empty
-`New Circuit` Project whose one Cell is `dut`, for palette-first manual
-authoring; no Project file needs to be opened first.
+To start from a netlist, choose **File → Import SPICE / SCS…** and select one
+`.cir`, `.sp`, `.spi` or `.scs` entry plus its local include files.
+**Import Cadence SPICE (`!` globals)…** also treats net names ending in `!` as
+global Nets. Imported parts start in the **Placement Tray** so you decide the
+layout.
 
-New Resistor, Capacitor, and Inductor instances—including their adjustable
-variants—start with `1k`, `1p`, and `1n` respectively. T-coil starts with
-`L1=1n`, `L2=1n`, `K=1`, and `CB=1p`; XFMR starts with `Lp=1n`, `Ls=1n`, and
-`K=1`; a Center-Tap Inductor starts with `L1=1n`, `L2=1n` and `K=0`, two
-plain series halves. These are authored parameter values rather than
-placeholders. In the netlist, a T-coil, XFMR or Center-Tap Inductor calls a
-built-in `tcoil`, `xfmr` or `ct_inductor` subcircuit of coupled inductors
-(plus the T-coil's bridge capacitor), written once in the file; each winding
-starts at its polarity dot. SPICE import still does not recognize such a
-network, so all three are placed by hand.
+## The editor
 
-## Edit and connect
+The header has **File**, **Edit** and **Circuit** menus and the **Simulate**,
+**Agent** and **Publish** actions. **File** holds Project Info (circuit and
+Cell names) and the file commands; **New Project** replaces the current tab's
+circuit after asking about unsaved work. **Circuit** holds **Hierarchy** (Cell
+Manager) and **Netlist**.
 
-- Open **Library** to choose a categorized built-in symbol by its inline
-  preview, or press `I` (**Edit / Insert component…**) to search the full
-  library, then click the canvas to place it. The
-  **Placement Tray** keeps imported or returned Instances without deleting
-  their netlist facts: drag one to the canvas, select **Place…** for a cursor
-  placement, or use **Place all** for a deterministic starter grid. **Return
-  to tray** is reversible through Undo and is distinct from permanent Delete.
-- Click to select, `Shift`/`Ctrl`-click to extend the selection, or drag blank
-  canvas to box-select. Dragging one selected instance moves the whole
-  selection atomically.
-- `Shift+R` mirrors the selection left/right and `Ctrl/Cmd+R` top/bottom;
-  both are also on the right-click menu. Everything selected mirrors together
-  as one drawing — components, wires, Junctions, labels and drawing objects —
-  and every connection stays as it was. Wires alone mirror too, which helps
-  when drawing a symmetric circuit. The axis runs through the selection's
-  centre, so mirroring again puts it back. Text stays readable: a wire label
-  keeps its place along the mirrored wire on the mirrored side, and left- or
-  right-aligned text grows the other way.
-- Internal wires and Junctions move with a selected component group; only
-  wires leaving the group stretch. Select the components and wires to reuse,
-  press `C` to immediately attach a copy to the cursor, then click to place it.
-  `Esc` cancels; no `V` is needed.
-  With nothing selected, press `C` first and click a component to pick up its
-  copy; the following click places it. Further clicks place more copies until
-  `Esc` exits, just like copying an already selected component. A copy lands
-  as if newly inserted: it keeps the wiring and labels inside the selection,
-  but no connection or Net name from the circuit around it. It gets its own
-  component names (R1 becomes R2 when R1 is taken), yet reads as drawn: a label
-  you wrote yourself, such as `I_SS1` on `I1`, stays as you wrote it.
-- To reuse an editable circuit in another tab, press `C` and click the other
-  tab: the copy stays under the pointer, and a click places it there. Or press
-  `Ctrl/Cmd+C`, switch to the destination canvas or window and press
-  `Ctrl/Cmd+V`; it places exactly what `C` would. After `Esc`, `V` starts a new
-  placement of the last copy. Both Ctrl and Cmd are supported on the canvas. Move the preview
-  and click to place; `Esc` cancels. Devices, parameters, selected wires, node labels,
-  custom definitions and referenced
-  child Cells travel together. Name conflicts receive fresh names; explicit
-  global supplies retain their normal shared meaning. Each placement is one
-  undoable operation. In text/code fields, these shortcuts still copy and paste
-  text. Pasting appends to the destination, including when it already contains
-  a circuit. A copy looks exactly like its source, even when the destination
-  uses a different font size or line thickness in its style settings. To make a
-  selected copy follow the destination's style, choose **Use this drawing's
-  style** under **Copied style** in Properties.
-- The header has three menus beside the site logo, **File**, **Edit** and
-  **Circuit**, and three actions: **Simulate**, **Agent** and **Publish**.
-  **File** holds Project Info and the file commands. **New Project** replaces
-  the circuit in the current tab with a blank one, asking first if it has
-  unsaved work. **File → Project Info**, the first File command, edits the
-  full circuit name and the current Cell's name and shows any Gallery
-  contributor and notes; Save applies both names as one undoable edit.
-  Double-click a project tab's name to rename it in place: Enter or clicking
-  outside applies one undoable edit; Escape cancels. An empty name leaves the
-  old name intact. Right-click a project tab for **Close**, **Close Others**
-  and **Close All**; unsaved tabs are confirmed once. Your saved Cloud
-  Projects are under **Cloud Projects** on your account page and in the tab
-  bar's ▾ Shelf. Rename marks the project unsaved; **Save** still saves
-  explicitly. The open projects are the tabs below the header. **Circuit**
-  holds **Hierarchy** (the Cell Manager) and **Netlist**. A long name never
-  widens the header: it is the tooltip of **File** and shown whole in its tab
-  and in Project Info. **Report bug**, the GitHub repository and the credit
-  stay in view beside your account.
-- The compact project tab bar opens several independent circuits in one editor.
-  Use **+** for a new project, **Open file in new tab** for a local file, or
-  **Open Shelf project in tab** for a saved draft. Tabs keep separate cameras,
-  selections, undo histories, Cloud Save bindings and browser recovery copies.
-  Copy selected objects, switch tabs, and paste to merge them into that circuit.
-  Apply or discard pending code edits before switching. Closing an unsaved tab
-  asks first. Refresh restores this browser window's tabs, unsaved circuits,
-  active tab and views, but not Undo stacks or unfinished text-field edits.
-  After you close the browser tab, opening the editor in a new one offers
-  **Reopen tabs** for the tabs it left.
-  This browser-local workspace is not a Cloud backup: save or export work you
-  need to keep. Agent connections are scoped to their paired workspace; other
-  tabs remain independent.
-- Use **Wire** or press `W`, then choose two pins, Junctions, or route segments.
-  Passing across a conductor remains a Crossing; ending on one creates a
-  Junction automatically. An exact multi-route intersection is rejected as
-  ambiguous instead of silently merging Nets.
-- While wiring, click blank canvas to fix bends; double-click blank canvas or
-  press `Enter` to finish at any grid point. `Backspace` removes the latest
-  uncommitted bend and `Escape` cancels the session.
-- A wire end near a drawn rectangle's straight edge is pulled to the grid point
-  nearest a third, the middle or two thirds of that edge, so inputs and outputs
-  meet a block diagram's boxes evenly. The box stays drawing geometry: landing
-  on it connects nothing.
-- Select any route segment to expose its movement handle. Drag the handle
-  perpendicular to that segment to stretch adjacent geometry without rerouting
-  the rest of the wire. If the moved segment lands exactly on a component pin,
-  the pin connects and a junction dot appears; crossing another wire's
-  interior remains unconnected. The contextual **Delete wire** action removes
-  that electrical branch, not only its drawing, and can split its Net.
-- Select a component and press `Q` to open **Properties**. Its editable
-  JSON keeps raw parameters (W/L/NF/M and additional
-  netlist overrides), the independent visual `displayName`, `netlistName`, and
-  target netlist together with position as `"coordinate": [x, y]`, plus 45-degree-step
-  rotation, mirror, supported Visual annotation/Value visibility, and line color.
-  Placement, appearance, and display stay at the top. The code area is ordinary
-  selectable raw JSON. Press Enter to confirm without inserting a line break;
-  use Shift+Enter when you want a new JSON line. `displayName` changes only the
-  drawing label, while `netlistName` is the exported electrical instance name;
-  `display.visualAnnotation` only controls the drawing label. Declared parameter
-  units appear beside their JSON values without becoming data, and
-  `netlistTarget` has a compact inline selector. Type values directly, use the
-  small switches after `display.visualAnnotation` and
-  `display.value` to toggle label visibility, click the buttons after
-  `placement.rotation` and `placement.mirror` to rotate clockwise, mirror
-  left/right, or mirror top/bottom. Mirror is written as `"horizontal"`,
-  `"vertical"`, or `"both"` and never changes the rotation value. Use the color button after
-  `appearance.color` for light gray, red, green, blue, black, and one RGB
-  tuple input such as `[220,38,38]`.
-  Differential-input blocks expose `appearance.inputsSwapped`; fully
-  differential amplifiers also expose `appearance.outputsSwapped`. Edit these
-  booleans or use their inline switches to exchange the +/− positions
-  independently. Connections follow their named pins, and internal marks stay
-  intact; a wire that would land on another Net's wire on its way to the moved
-  pin is redrawn around it. **Defaults** resets both swaps to `false`.
-  These controls are visual only and are absent from selected, copied, and
-  saved JSON. Fixed colors display as
-  `[R, G, B]` (0–255); hex input also works. Type `"auto"` directly to inherit
-  document ink. Components expose no `background` or `fillColor`; those belong
-  only to drawable shapes that can contain paint.
-  Valid edits update the drawing immediately; invalid or rejected edits keep
-  the last accepted drawing. Undo restores prior edits. Parameter values are strings: type unit suffixes
-  yourself; `EV` remains `EV`, and `2u` is not changed to `2um`.
-  The Properties header contains **Defaults**, **Copy JSON**, and **Discard draft**
-  when text is invalid or rejected. Defaults restores known defaults immediately
-  without moving, renaming or rebinding the component. Copy JSON copies
-  the whole draft. Compatible drawing
-  variants and formula overrides are in the same editor, with no duplicate
-  Parameters/Actions/Netlist Target forms. Drag the panel's left edge to set a
-  comfortable width. JSON expands completely; scroll the panel rather than a
-  nested text area. Escape leaves the editor without discarding incomplete text.
-- For a MOS device, the compact **Bulk** row shows its current Net or
-  **Unconnected** beside **Connect**. Click the button to draw from the bulk
-  terminal on the canvas. Hover the status for the terminal name and connection
-  source. A configured default connection shows its Net rather than a warning;
-  **Draw** lets you make an explicit route. The dashed route follows the MOS
-  line color; selecting it shows a Bulk-specific action instead of ordinary
-  wire styling controls. Place an unplaced device first.
-- Netlist export and simulation use actual Bulk connections, including those
-  established by placement defaults. Connect a missing Bulk or mark it NoConnect;
-  no output path repairs it. Module interfaces and hierarchy calls retain
-  their authored Pins and order. A drawing that needs a supply it does not
-  draw — a MOS body left unconnected, or a logic gate, flip-flop or converter
-  whose model reads VDD and VSS — gets a `VDD` Pin and ground in the netlist,
-  never in the drawing; an exported module states ground as its `VSS` Pin. A
-  comparator's output swings up to its own VDD (`vhigh` `VDD`, the default),
-  so it gets the `VDD` Pin alone; a number in `vhigh` sets a fixed level.
-  An op-amp's output stops at its own supplies once a VDD is drawn or
-  selected for it (`vhigh` `VDD` and `vlow` `VSS`, the defaults), and at
-  +5 V and −5 V when none is; numbers in `vhigh` and `vlow` set fixed
-  limits. So op-amp oscillators and Schmitt triggers saturate as drawn.
-  With several positive supplies drawn, select the op-amp's VDD in
-  Properties; until then a warning says which limit falls back to +5 V or
-  −5 V. Likewise, when an op-amp with a VDD has several grounds or negative
-  supplies to choose from, select its VSS; until then its low limit is
-  ground. The fully differential op-amp is not limited.
-  Explicitly Global supplies stay global, and separate supplies such as `AVDD`
-  and `DVDD` retain their connections: when several compete, choose one in
-  Properties.
-- Right-click an endpoint for the distinct **Disconnect endpoint** and
-  **Delete connection** actions.
-- `Delete` on a connected component removes it with any wire that only tapped
-  it into other wiring: a stub from its pin to a junction on another wire, or to
-  nowhere. A wire that runs on to another part's pin stays, open where the pin
-  was, so a replacement set down there reconnects. A wire carrying a Net label
-  stays too. Any wire left ending in the open is flagged in Issues.
-- Select an instance to edit its displayed name. Select a wire Route to add an
-  electrical Net label; assigning the same name to another Net explicitly
-  connects those Nets. While placing a Net label (`L`), or with placed ones
-  selected, press `R` to turn it a quarter: its text runs right, down, left
-  or up from the wire, always clear of it. Press `T` or choose **Text** for a non-electrical note: move its translucent
-  preview with the pointer, click to place it, then edit the text. `Esc` cancels
-  placement. Label handles may be dragged near their owner, while plain text moves freely.
-  Text notes and text inside drawn boxes default to **bold**. Use **B** to
-  switch selected text to normal weight; that choice survives saving and reopening.
-- Double-click the text inside a block, such as an ADC, a transfer function or
-  a lettered amplifier, to edit it like any label: upright or italic, bold,
-  subscripts and superscripts, overbars, fractions and formulas. A word such
-  as ADC or DAC is upright by default; an amplifier's single letter, such as A,
-  is italic.
-- To mix a stacked fraction with other text, use **Insert fraction** (the
-  a-over-b button) in the text toolbar. Type the numerator, press `Tab` for the
-  denominator, then `Tab` again to continue the line, for example `+ R₁`.
-  Subscript and superscript work inside either part. Selecting `1u/150n` before
-  clicking the button converts it while preserving character formatting.
-  Double-click a note or visual annotation to edit its fractions again.
-  Both parts stay centered under the same axis, and the bar follows the wider part.
-  Use **ƒx** for a complete mathematical formula such as `\frac{1}{g_{mN}} + R_1`.
-- Use **Ω** in the text toolbar for Greek letters (every lowercase letter and
-  the capitals Γ Δ Θ Λ Ξ Π Σ Υ Φ Ψ Ω) and common circuit symbols. Faster
-  still, type a LaTeX name such as `\phi` or `\Omega` and press Space: it
-  turns into φ or Ω where you typed it. In a Net, Pin or device name the
-  netlist writes the letter as its name, a small letter in small letters and
-  a capital in capitals: a Net drawn as φ₁ is `phi1` in the netlist, Φ₁ is
-  `PHI1`, and Ω is `OMEGA`.
-- Press `R` to rotate, `F` to fit,
-  `Ctrl+Z` to undo, and `Ctrl+Y` or `Ctrl+Shift+Z` to redo. Shortcuts do not
-  fire while typing in a field.
-- Use `Ctrl`+mouse wheel to zoom around the cursor and middle-button drag to
-  pan. While wiring, a middle click cycles **opposite right-angle corner →
-  45° → any angle → automatic right-angle corner**. Auto follows the incoming
-  leg; it is one of the two right-angle shapes, not a third extra stop.
-  Without a middle button (for example a Mac trackpad), press `/` for the same
-  cycle, or click the Wire chip in the status bar (`F3`) to pick the route
-  and corner directly.
-  View changes do not increment the Document revision.
+Each project tab is an independent circuit with its own view, selection, undo
+history and Cloud binding. Use **+** for a new project, **Open file in new
+tab**, or **Open Shelf project in tab**. Double-click a tab's name to rename
+it; right-click it for **Close**, **Close Others** and **Close All**. Refresh
+restores this window's tabs and unsaved circuits (not Undo stacks); after
+closing the browser tab, a new editor tab offers **Reopen tabs**. This
+browser-local workspace is not a backup: save or export what you need.
 
-## Editing multiple components
+## Draw and connect
 
-Select components together with Shift-click or a selection rectangle, then
-press `Q`. Properties shows one editable JSON block. `name` shows the name
-every selected component shows, or `as is` where they differ. Write one name
-there to name them all: the component that already has that name keeps it;
-otherwise the one you selected first is renamed to it. The others keep their
-own netlist names and show it as a display alias, drawn the same way. A name
-none of them can take — another part's name, a space, the wrong first letter —
-is shown by all of them as an alias, and the status bar says who carries it.
-A list of names by Reference still renames each component by its own entry.
-Every parameter all the selected components have is listed one entry per
-component, even across types: an NMOS and a PMOS share `w`, `l`, `nf` and
-`m`. Edit an entry to change that component, or write one value in place of
-the list to set them all. A parameter that means something different on each
-type — a resistor's `value` in ohms and a capacitor's in farads — only takes
-one value per component. Blank parameters keep each component's existing
-value. Colors and the visibility switches show one value where the components
-agree and one entry each where they differ. Color compares the actual
-document ink, so inherited black and explicitly assigned black show the same
-RGB value. The `symbol` field shows the common type; it is blank for differing
-types and is informational. Each valid code edit applies atomically and can be
-undone once. Invalid edits keep the last accepted drawing. Changing selection
-discards its pending draft.
+- Open **Library** to pick a symbol, or press `I` to search the whole
+  library, then click to place. The **Placement Tray** holds imported or
+  returned parts: drag one out, use **Place…**, or **Place all**. **Return to
+  tray** is undoable and different from Delete.
+- Click to select, `Shift`/`Ctrl`-click to add, drag on blank canvas to
+  box-select. Dragging a selected part moves the whole selection; wires inside
+  it move along and only wires leaving it stretch.
+- `R` rotates, `Shift+R` mirrors left/right and `Ctrl/Cmd+R` top/bottom (also
+  on the right-click menu). Everything selected mirrors together, wires alone
+  included, with every connection kept; mirroring again restores it.
+- Press `W` (or **Wire**) and click pins, Junctions or wire segments. Click
+  blank canvas to add bends; double-click or press `Enter` to finish,
+  `Backspace` removes the last bend, `Esc` cancels. Crossing a wire does not
+  connect; ending on one adds a Junction. Middle-click (or `/`, or the Wire
+  chip in the status bar, `F3`) cycles the corner shape: opposite right angle,
+  45°, any angle, automatic right angle.
+- A wire end near a drawn rectangle's edge snaps to its third, middle or
+  two-thirds point; the box is drawing only and connects nothing.
+- Select a wire segment and drag its handle to move just that segment. Landing
+  exactly on a pin connects it. **Delete wire** removes that electrical branch
+  and can split its Net. Right-click a wire end for **Disconnect endpoint** or
+  **Delete connection**.
+- `Delete` on a connected part also removes wires that only tapped it; a wire
+  running on to another part, or carrying a Net label, stays open so a
+  replacement reconnects. Open wire ends appear in Issues.
+- Copy: select parts and wires and press `C`; the copy follows the pointer
+  until you click (more clicks place more copies, `Esc` stops). With nothing
+  selected, press `C`, then click a part. `C` then clicking another tab places
+  it there; `Ctrl/Cmd+C` and `Ctrl/Cmd+V` work across tabs and windows, and `V`
+  places the last copy again. A copy keeps its internal wiring and labels but
+  no outside connection, takes fresh names where needed, and looks like its
+  source; **Use this drawing's style** under **Copied style** in Properties
+  adopts the destination's style.
+- `Ctrl`+wheel zooms, middle-drag pans, `F` fits, `Ctrl+Z` undoes, `Ctrl+Y` or
+  `Ctrl+Shift+Z` redoes. Shortcuts do not fire while typing.
 
-## Label names and typography
+## Properties
 
-Double-click a bound label to edit its text and formatting. Labels default to
-bold italic. Bold, italic, upright text, color and superscript remain
-independent of the electrical name; changing a name preserves those choices.
-`Use display alias` is off by default. It turns on by itself when what you
-type cannot be the part's netlist name — a Greek letter such as `Φ2`, a space,
-another part's name, or the wrong first letter: the label shows your text and
-the netlist keeps the part's name, which the status bar tells you. A Cell
-Pin's label has the same checkbox: its alias is drawn at the Pin and on the
-Cell's block in every parent, while the netlist and the parent's connections
-keep the Pin's name. Unchecking it shows the Pin's name again.
+Select a part and press `Q` to edit it as JSON: parameters, `displayName` (the
+drawn label), `netlistName` (the exported instance name), netlist target,
+`"coordinate": [x, y]`, rotation, mirror (`"horizontal"`, `"vertical"`,
+`"both"`), label visibility and color. Inline controls beside values offer
+rotate/mirror buttons, visibility switches, a target selector, unit hints and
+a color picker (presets, `[R, G, B]`, hex, or `"auto"` for document ink).
+Values are strings: type unit suffixes yourself (`2u`). `Enter` confirms,
+`Shift+Enter` adds a line. Valid edits apply at once and are undoable; invalid
+text keeps the last accepted drawing. The header has **Defaults** (restores
+default values without moving or renaming), **Copy JSON** and **Discard
+draft**. Drag the panel's left edge to resize it.
 
-A label's name and its look are separate. The name is what the netlist,
-simulation and Agents use; it is always exactly what you typed. Changing the
-characters on a label renames it exactly as typed, with no underscore added
-or removed. Applying or removing a subscript, overbar, slant or weight only
-changes how the label is drawn, never its name. See
-[names and labels](../specs/names-and-labels.md) for the full rules.
+Differential-input blocks have `appearance.inputsSwapped` (and fully
+differential amplifiers `outputsSwapped`) to exchange the +/− positions;
+connections follow their pins.
 
-New parts start in their standard look, saved with the label:
+For a MOS, the **Bulk** row shows the body's Net or **Unconnected**; **Connect**
+draws a dashed body wire from the bulk terminal. Netlists and simulation use
+real Bulk connections, including placement defaults; connect a missing Bulk or
+mark it NoConnect.
 
-- VDD Power and a drawn VDD Rail: an italic V with an upright subscript, as
-  V_DD. A supply named `VDDH` or `VCC` keeps that look; `AVDD` is shown as
-  written.
-- A device name: its device letter in italic over an upright subscript of the
-  rest, as M₁, R₁₂, R_L1, C_L or R_FB. A part called through a subcircuit
-  (an `X` name) or a block keeps its letters together over an index, as XU₀;
-  a name without one, such as `XBIAS`, is shown as written.
-- A Pin or Net name that is a V followed by letters or digits, such as `Vin`,
-  `Vout`, `VBP`, `VBN` or `VcasP`, whether you typed it or the editor chose
-  it: an italic V with an upright subscript, as V_BP.
-- A Pin or Net name for a current, an I followed by letters or digits such as
-  `Iout`, `IREF` or `I1`: an italic I with an upright subscript, as I_out.
-  Inputs such as `IN`, `INP` or `INN` and an `IO` pin are left alone. Any other
-  name, such as `CLK` or `OUT`, is shown as written.
+A drawing that needs a supply it does not draw (an unconnected MOS body, a
+logic gate or converter whose model reads VDD and VSS) gets a `VDD` Pin and
+ground in the netlist, never on the canvas. A comparator's output swings to
+its own VDD unless `vhigh` is a number. An op-amp clips at its own supplies
+once a VDD is drawn or selected (`vhigh` `VDD`, `vlow` `VSS`), else at ±5 V;
+numbers set fixed limits. With several supplies to choose from, pick the
+block's VDD or VSS in Properties; a warning says which limit falls back.
+Built-in analog blocks have `supplies.VDD`/`supplies.VSS` selectors (empty is
+**Auto**: the one drawn positive supply or ground). Explicitly Global supplies
+stay global.
 
-Renaming keeps a standard look in step with the new name. Once you restyle a
-label, your formatting is kept instead: to show `VBP` without a subscript,
-select `BP` in the label and turn Subscript off. The name stays `VBP`.
+### Editing several parts
 
-Subscripts and superscripts are upright by default, even when you apply them
-to part of an italic label. To slant one, select it and press Italic; your
-choice is kept.
+Select parts and press `Q` for one JSON block. `name` shows the common name or
+`as is`; writing one name gives it to the part that has it (else the first
+selected), and the others show it as a display alias. Shared parameters are
+listed one entry per part; write one value to set them all (blank keeps each
+value). Colors and switches show one value where the parts agree. Each edit
+applies atomically with one undo; changing the selection discards a draft.
 
-A label without its own formatting, such as one in an older drawing, keeps
-its historical look: an underscore starts a subscript, so `M_1` is drawn as
-M₁, and a name ending in `_bar` is drawn with an overbar. The name itself
-keeps the underscore. The other way round, putting an overbar over a Net or
-Cell Pin label names its complement: D with an overbar is `D_bar`, a signal
-apart from D. Free text and explicit display aliases remain
-presentation-only.
+## Labels and text
 
-Clear the selection and open **Properties** to change the current drawing's
-`labels` settings. Each field has a dropdown in the editable code. Valid changes
-refresh existing labels immediately, including pin labels and simple names
-inside analog blocks such as `A_1`. Real expressions such as `1/s` retain their
-formula formatting.
+Select a part to edit its displayed name. Select a wire to add a Net label
+(`L`); the same name on another Net connects the two. Press `R` while placing
+or with labels selected to turn a Net label a quarter. Press `T` (**Text**)
+for a non-electrical note; notes and text in drawn boxes default to bold (use
+**B** for normal weight).
 
-- `underscore_subscript`: `true` displays `A_1` as A₁; `false` keeps `A_1`
-  literally, without renaming its electrical source.
-- `subscript_after_first`: `true` draws each existing name's first letter over
-  a subscript of the rest (`Start` as S with subscript tart); `false`, the
-  default for new drawings, takes that look away again. It only changes the
-  drawing: names in the netlist are never changed, and standard looks such
-  as V_DD, M₁ and V_in stay as they are.
-- `subscript_case`: `preserve`, `uppercase`, or `lowercase`. Changing case
-  updates existing underscore suffixes and historical explicit subscripts in
-  both the labels and netlist. `preserve` leaves current spelling alone.
-- `subscript_italic`: `true` for italic subscripts, `false` for upright.
-- `first_letter_italic`: `true` for an italic initial, `false` for upright,
-  independently of the subscript.
+Double-click any label or block text (an ADC, a transfer function) to edit it
+with italic, bold, subscripts, superscripts and overbars. **Insert fraction**
+(a-over-b) stacks a fraction: type the numerator, `Tab` to the denominator,
+`Tab` to continue the line. **ƒx** enters a formula such as
+`\frac{1}{g_{mN}} + R_1`. **Ω** inserts Greek letters and circuit symbols, or
+type a LaTeX name (`\phi`) and press Space. In names the netlist spells the
+letter out in matching case: φ₁ is `phi1`, Φ₁ `PHI1`, Ω `OMEGA`.
 
-Each change is undoable and stored in the current Cell's Project Code. Editing
-these presentation settings directly in Project Code also updates existing
-labels. Other drawings retain their own settings. Color and weight are
-preserved; individual labels remain freely editable afterwards. Style choices
-do not change electrical names. Same-name Nets
-and Pins denote one electrical connection. Instance names must remain unique:
-typing another part's name on a label shows it as a display alias and keeps
-this part's netlist name, without opening a blocking dialog.
+### Label names and typography
 
-## Arrow styles
+A label's name and its look are separate. The name, used by the netlist,
+simulation and Agents, is exactly what you typed; subscripts, overbars, slant
+and weight only change the drawing (see
+[names and labels](../specs/names-and-labels.md)). Labels default to bold
+italic. If what you type cannot be the part's netlist name (a Greek letter, a
+space, another part's name, the wrong first letter), **Use display alias**
+turns on: the label shows your text and the netlist keeps the name, as the
+status bar says. A Cell Pin's alias is drawn at the Pin and on the Cell's
+block in every parent.
 
-Choose **Arrow** in the Library's **Annotations** group. A new arrow is a line
-arrow with a filled end head: click each bend in sequence and double-click or
-press `Enter` at the endpoint; it can later be curved. Change its endpoint
-styles, or turn a straight arrow into a hollow outline, in Properties.
+New labels start in a standard look:
 
-Arrow and construction-line points snap quietly to nearby pins, wires and
-drawing geometry, including any point along a rectangle, circle, line or curve.
-Only the transient capture marker is shown; no snap points are added to the
-drawing. Hold `Alt` to suppress snapping. A visual snap aligns coordinates but
-does not create electrical connectivity or make one drawing follow another.
+- VDD power and VDD rails: V_DD (`VDDH`, `VCC` likewise; `AVDD` as written).
+- Device names: italic letter over an upright subscript (M₁, R_L, C_L);
+  subcircuit `X` names keep their letters over an index (XU₀).
+- Pin and Net names `V…` or `I…` followed by letters or digits (`Vin`,
+  `VBP`, `Iout`): italic V or I with an upright subscript. `IN`, `INP`, `IO`,
+  `CLK`, `OUT` and other names are shown as written.
 
-Select any annotation and press `Q`, or use its right-click Properties action,
-to edit its JSON. Placement and appearance come first; text content (including
-rich text runs) follows geometry and stacking. Valid edits update immediately
-as one undoable edit. Invalid or locked edits retain the last accepted drawing;
-**Discard draft** restores the current code. Semantic labels retain their
-electrical text bindings; their code changes presentation only. Values with a
-fixed set of choices have a small dropdown arrow beside the JSON value: line
-style, arrow endpoint styles, layer, text alignment/weight, visibility and locking.
-The menu shows the available choices without repeating the selected value.
+Renaming keeps a standard look in step; once you restyle a label your
+formatting is kept (select `BP` in `VBP` and turn Subscript off). Subscripts
+are upright unless you make them italic. Older unformatted labels draw `M_1`
+as M₁ and `_bar` as an overbar. An overbar on a Net or Cell Pin label names
+its complement (`D_bar`).
 
-For arrows, `appearance.startStyle` and `appearance.endStyle` independently
-choose `small-arrow`, `medium-arrow`, `large-arrow`, `dot`, `none`, or
-`open-arrow`. Each value has its own dropdown. Start and end follow the first
-and last points of the path when it rotates or mirrors. `appearance.arrowShape`
-chooses a line shaft or a straight outline silhouette; existing curves must be
-straightened before switching to outline.
-`appearance.strokeScale` changes stroke weight; an outline's `geometry.width`
-changes its shape without changing weight. `placement.rotation` is a clockwise
-angle in degrees: 0° points right and 90° points down. For a bent line it is the
-direction of the first segment; changing it rotates the whole path. The menu
-offers common 45° angles; rectangles and paths also accept custom angles in
-code, while text uses 45° steps. `geometry.tangentAngles` sets the curve angle
-for each segment.
-Endpoint, width and rotation handles remain available on the canvas.
+With nothing selected, **Properties** shows the drawing's `labels` settings,
+applied to existing labels at once and undoable:
 
-Rectangles and circles have independent `appearance.color` (border) and
-`appearance.fillColor`. Click either color swatch for presets or RGB input;
-hex and `[R, G, B]` are also accepted in code. `"auto"` inherits the document
-border color and makes the fill transparent. `stacking.layer` selects
-`"back"` or `"front"` relative to circuit artwork. The numeric drawing order
-is managed internally; **Bring to front** and **Send to back** place a shape
-above or below other drawings. Width, height and radius live in `geometry`.
+- `underscore_subscript`: draw `A_1` as A₁ (or literally);
+- `subscript_after_first`: draw each name's first letter over a subscript of
+  the rest (off by default);
+- `subscript_case`: `preserve`, `uppercase` or `lowercase` (also changes
+  netlist spelling of underscore suffixes);
+- `subscript_italic` and `first_letter_italic`.
 
-Existing head sizes remain intact when loading or restyling old drawings.
-Converting a bent/curved line arrow to an outline is disabled: no bends are
-discarded. Changing a selected object's style does not change the next-object
-creation default. These are non-electrical drawings, separate from current
-markers attached to conductors and arrows inside device symbols.
+## Drawing shapes and arrows
+
+**Arrow** is in the Library's **Annotations** group: click each bend, then
+double-click or press `Enter`. Arrow and construction points snap quietly to
+pins, wires and shapes (hold `Alt` to stop); snapping never connects anything.
+Select a shape and press `Q` to edit its JSON: endpoint styles
+(`small-arrow`, `medium-arrow`, `large-arrow`, `dot`, `none`, `open-arrow`),
+`arrowShape` (line or outline; straighten curves first), `strokeScale`,
+`placement.rotation` (clockwise degrees, 0° right), `tangentAngles` for
+curves, border `color` and `fillColor`, and `stacking.layer` (`"back"` or
+`"front"`; **Bring to front**/**Send to back** reorder). Values with fixed
+choices have a dropdown. Shapes are drawing only.
 
 ## Save and recover
 
-**File / Save** (or `Ctrl+S`) saves the current content to one private Cloud
-Project. Repeated saves update that Project instead of creating snapshots. A
-new or imported drawing is unbound until its first Save, which creates and
-binds its Cloud Project. A dot beside the Project name means
-the Cloud Project has unsaved changes. Browser Back, Refresh, and tab or window
-close then show the browser's standard leave warning; only an acknowledged
-Cloud Save of the current content clears it.
+**File → Save** (`Ctrl+S`) saves to one private Cloud Project, updating it on
+each save; a new or imported drawing creates its Cloud Project on first save.
+A dot beside the name means unsaved changes, and leaving the page warns. Your
+Cloud Projects are on your account page and in the tab bar's ▾ Shelf.
 
-Edits also stage an origin-local IndexedDB recovery copy. Recovery is silent
-crash protection, not Save, and can be lost if browser site data is cleared.
-If Cloud is unavailable, continue editing normally and use **Export Project
-File…** when you want a portable copy. A direct **Download Backup** action is
-shown contextually if browser recovery itself cannot protect current work.
+Edits are also kept as a browser recovery copy (not a save; clearing site data
+loses it). If a newer unsaved copy is found at start, a banner offers
+**Restore**, **Download backup** or **Ignore**; **File → Recover Unsaved
+Work…** lists copies. Without Cloud, keep working and use **Export Project
+File…** for a portable `.icproj.json`. New, Open, Revert and going to the
+Gallery ask to **Save to Cloud and continue**, **Continue without saving**
+(discards that working copy) or **Stay**. Returning from the Gallery reopens
+the last Cloud Project of this tab. **Import Project File…** opens a portable
+file; invalid or future-version files leave your work unchanged.
 
-New, Open, Revert, and the same-tab trip to Gallery ask whether to **Save to
-Cloud and continue**, **Continue without saving**, or **Stay** when the current
-Project is dirty. The prompt also identifies where each explicit save goes:
-Cloud Save keeps the Project in your private Cloud Projects, up to the
-per-account limit the prompt shows, while **Export Project File…** downloads a
-local `.icproj.json` file. Continue without saving
-means discard: that working copy is removed before the action
-continues. If a newer
-unsaved recovery copy is found on a later start, a small banner offers
-**Restore**, **Download backup**, or **Ignore**. The same copies remain
-available through **File / Recover Unsaved Work…**; recovery never silently
-replaces the current Project.
+**Privacy** (status bar and account menu) explains what the site keeps;
+**Stop counting me**, Do Not Track or Global Privacy Control refuse the visitor
+cookie. **Delete account…** removes your account, Cloud Projects, published
+circuits, shared components and likes and cannot be undone; export first.
 
-**Privacy** (beside the visitor count, in the status bar, and in the account
-menu) opens the site's notice: what it keeps, for how long, and who else
-handles it. Returning visitors are counted with one cookie of the site's own;
-**Stop counting me** on that page, Do Not Track or Global Privacy Control
-refuses it. **Delete account…** in the
-account menu deletes your account with your Cloud Projects, published circuits,
-shared components and likes; it cannot be undone, so export anything you want
-to keep first. Drawings kept only in your browser are not affected.
+SPICE files are import inputs: a saved Project keeps the schematic and source
+provenance, not `.spi`, `.lib` or `.inc` contents. Keep the originals.
 
-Returning from Gallery reopens the last active Cloud Project for this browser
-tab. The tab stores only that Cloud Project id; the editor fetches the formal
-Project again rather than treating browser state as Save. A newer unsaved
-recovery copy still gets the first decision.
+## Project Code and custom components
 
-Use the Cloud Projects list in **File** to open formal work. Use **Import
-Project File…** to validate a portable `.icproj.json`; invalid or future-version
-input leaves the current Document unchanged. **Export Project File…** does not
-change Cloud save state. The old rolling cloud
-snapshot and local File System Access Save paths have been removed.
+**Project Code** in the toolbar edits the whole Project as JSON; paste it into
+another editor's Project Code and **Apply** (`Ctrl/⌘+Enter`) to reproduce the
+drawing and its component definitions. Apply is undoable; invalid code changes
+nothing. Selecting parts highlights their JSON.
 
-### Project Code and custom components
+To edit a component's definition, select it and press `E` (`Q` still edits the
+instance). **Edit → User Components… → Create Component…** opens the
+**Circuit** and **Symbol** tabs: enter SPICE or Spectre (or choose a Project
+source), use Automatic or Custom JSON artwork, and map each native terminal to
+a pin or to VDD/VSS. **Apply model** changes the Project in one undoable step;
+**Place** applies first; **More → Save draft** keeps unfinished work (even
+invalid text) in the Project. See [schematic hierarchy](schematic-hierarchy.md)
+for external models.
 
-Open **Project Code** from the top toolbar to edit the complete Project. Copy
-all of its JSON into another editor's Project Code and choose **Apply** (or
-press Ctrl/⌘ + Enter) to reproduce the drawing, including its component
-definitions. The receiving editor keeps its own Project identity and Cloud
-binding. Apply is undoable; invalid code leaves the live drawing unchanged.
-Select parts on the canvas while Project Code is open, and it lights each
-part's whole block of JSON and scrolls the first one into view.
+**Publish** shares an applied definition publicly (sign-in required) with its
+source, owned helper files and artwork, not drafts or testbenches. Authors and
+administrators update their records; others use **Publish as new component**.
+Placing a public component captures it in your Project, so later library
+changes or deletion never alter your circuit. **Needs repair** cards show why
+an old definition no longer validates; **Copy raw record** and repair it in
+**Create Component**. **Refresh** reloads the public list. Administrators can
+mark entries **Official**, delete them or restore them from **Deleted**.
 
-To edit one component, select it and press **E**, or right-click and choose
-**Edit Component Definition**. **Q** continues to edit instance properties.
-A hierarchical Cell uses **E / Enter Cell** to navigate into its circuit.
+Custom artwork can also be edited in Project Code under
+`componentDefinitions` (`symbol` shapes and pins; `electrical` and
+`subcircuit` interface); applying updates every instance using that
+`symbol.id`. To change only some instances, copy the definition under a new ID
+and point those instances' `symbolId` at it in the same edit. A Project keeps
+one definition per used component type; deleting the last use removes it.
 
-**Edit / User Components… / Create Component…** starts in **Circuit**. The
-**Circuit** and **Symbol** tabs edit one retained authoring session:
+## Netlist and export
 
-- **Circuit:** enter SPICE or Spectre, select its subcircuit entry, or choose an
-  existing Project source. Format, Process and Copy use the same controls and
-  qualified conversions as External Circuits in Cell Manager.
-- **Symbol:** use Automatic layout, or Custom JSON with an
-  isolated preview. Custom preserves the full Symbol DSL; mouse drawing tools
-  for internal shapes are not provided. A last valid preview remains visible
-  while JSON is unfinished, without replacing the unfinished text.
-- **Circuit / Pin mapping:** map each native terminal to a distinct graphical pin or explicit
-  VDD/VSS property supply. Add a graphical pin for an unmapped terminal, or
-  explicitly remove an unused graphical pin. Electrical direction is distinct
-  from the pin's drawing side. Unknown, duplicate or missing mappings block Apply.
+**File → Export** saves the whole drawing as SVG, PNG (3×) or vector PDF.
+**Edit → Copy selection as PNG/SVG** copies the selection as an image with a
+transparent background (needs HTTPS or localhost and clipboard permission).
 
-The native source declares port order and parameter defaults. Symbol JSON
-owns artwork and graphical names; `circuitBinding.terminals` is the single
-correspondence to stable native terminal IDs. Complete exact same-name pins can
-initialize this mapping. Graphical order and names may differ from source order.
-Hidden supplies require explicit supply mappings and never acquire a parent
-Net from their name.
+The **Netlist** button copies the netlist and opens its code in the right
+sidebar. **Format** (SPICE or SCS) and **Process** (Abstract, SKY130 by
+default, IHP SG13G2, TSMC 28, TSMC 180, Custom) are independent; a transistor
+you draw takes the selected Process's model. Process changes are undoable and
+keep your values. **Fill N devices** gives older unbound devices the Process's
+model and dimensions in one undoable step. Choices are remembered in this
+browser. Missing fields block output, and the sidebar and **Check Report**
+name the device and field. Export never adds model cards, analyses or a
+testbench.
 
-**Apply model** validates the complete candidate and changes the Project in one
-undoable transaction. Failed or stale Apply leaves applied facts unchanged.
-**Place** applies pending work first; canceling placement keeps the applied
-model. Use **View applied version** to deliberately place or publish an existing
-applied revision while keeping its saved draft. Compatible parameter overrides
-and logical connections survive interface-preserving edits. Changed Custom
-artwork needs a fresh `symbol.id` to preserve immutable peer captures.
+**Netlist → Configuration…** edits the Process presets as JSON: `selected`
+(`abstract`, `sky130`, `sg13g2`, `tsmc28`, `tsmc180`, `custom`) and its entry
+under `profiles`.
 
-**More / Save draft** retains the whole authoring candidate: native files,
-entry, symbol mode, raw JSON (including invalid text), directions, layout and
-mappings. Project Save, recovery and portable files retain these non-executable
-drafts. Reopen them under **User Components / Project drafts**. Ctrl/Cmd+S in
-the component workspace saves the draft; Ctrl/Cmd+Enter applies. Switching the
-two views or the advanced definition type retains pending work. Closing an
-unsaved session uses the existing keep/discard protection.
+- `abstract`: ideal R/C/L and generic NMOS/PMOS names.
+- `sky130`: SKY130 transistor wrappers, ideal R/C unless you target
+  `sky130_fd_pr__res_high_po` or `sky130_fd_pr__cap_mim_m3_1` with `w`/`l` in
+  metres; set `library.path` and `library.section` for your PDK.
+- `sg13g2`: IHP SG13G2 devices as its xschem symbols name them
+  (`sg13_lv_nmos`/`sg13_lv_pmos`, `sg13_hv_*`, HBTs `npn13G2…`, `pnpMPA`;
+  `rsil`, `rppd`, `rhigh`, `cap_cmim`, `cap_rfcmim` for physical R/C). Include
+  the PDK's ngspice libraries and OSDI modules yourself.
+- `tsmc28` / `tsmc180`: TSMC reference MOS names; point `library.path` at your
+  PDK.
+- `custom`: keeps your targets and fills missing fields from your defaults.
 
-The **Primitive / Artwork (advanced)** definition type retains free JSON,
-primitive device mapping and explicit interface-only definitions. **Apply** and
-**Place** work locally without signing in. A new applied artwork candidate is
-session-local until placed; Save draft preserves unfinished work without adding
-an unused runtime component to the Project's used-class catalog.
+**Netlist → Instances…** edits every instance's `reference`, model `target`
+and `parameters` as one JSON document, applied together with one undo.
 
-**Publish** is a separate, deliberate public operation requiring sign-in. It
-accepts only an applied definition. A native snapshot contains the selected
-artwork, interface, source and reachable owned helper files, with pinned
-third-party dependency identities and digests. Drafts, unrelated Project files
-and testbenches are excluded. Missing external dependencies still block execution.
-Authors and administrators update a permitted record; other contributors use
-**Publish as new component**. The library has one current revision per record,
-without archived public revisions. A lost reply can be retried with the same
-publication identity and key for seven days.
+**Netlist → Check and Save** checks the Project (ERC and visual issues) and
+saves it; findings appear in **Issues** and on the canvas until you edit
+again. **Straighten angled wires in this Cell** fixes non-45° segments.
 
-Reopening **User Components** reuses your last loaded public list for up to one
-minute. **Refresh** immediately loads new or updated entries from other users;
-publishing or managing an entry here refreshes automatically. If a refresh fails,
-loaded cards remain available and **Try Again** retries. A failed **Load More**
-retries that page without discarding earlier cards. Deleted entries always
-require a fresh authorized request.
-
-An older definition that no longer validates appears as **Needs repair**, with
-its name, author and validation reason. **Copy raw record** preserves the original
-source for inspection. Repair the copied definition in **Create Component**
-before applying or publishing; an invalid record cannot be placed. Other valid
-cards remain available. Agent listings report the invalid record explicitly.
-
-Placing a public native revision captures source, interface and artwork in your
-Project through ordinary placement. Compatible repeated insertion reuses its
-model and allocates a new reference. Conflicts refuse without overwriting the
-Project. Existing captures survive public updates, deletion and unavailable
-network; they remain in Project saves, portable files and Undo/Redo. Copied and
-exported netlists and qualified simulation use the same applied definition closure.
-
-Older artwork with a `subcircuit` interface but no implementation remains
-placeable and visibly unimplemented; its target name does not bind an existing
-Project model by itself. **E** opens the same Circuit/Symbol session to
-provide source or explicitly choose an existing model. Inspect every formal
-terminal, add missing pins and select mappings before Apply. The interface
-summary shows native and legacy terminal counts and the actual number of calls
-sharing the source. Repair defaults to the current captured class; **Selected
-instance** creates a separate capture. Editing shared native source still affects
-all of its real callers. Fork the source first when an independent circuit is needed.
-
-Connected removed legacy ports need explicit **Disconnect … and keep wires**
-under **Repair connections**. Native port rename/remove uses its **Migrate**
-selector, preserving compatible connections or wire stubs and clearing removed
-No Connects. One Undo restores source, captures and connection migrations.
-Attaching unchanged applied source preserves its original callers, revision and
-private source draft. Repair does not change unrelated classes with the same
-target name. Editing a public record uses an isolated authoring snapshot;
-Apply does not publish it or upgrade earlier Project captures.
-
-Administrators can mark an entry **Official**, delete it from the public list,
-or restore it using the **Deleted** filter. Official entries can be updated
-only by an administrator; anyone may fork them. Deletion retains the stored
-definition, and circuits that already contain it remain complete and usable.
-Official here means an administrator-reviewed public library entry, not an
-automatic change to the repository's built-in component files.
-
-Custom component artwork is also editable through complete Project Code. Find its entry in
-`componentDefinitions`: `symbol` contains the shapes and pins, while
-`electrical` and optional `subcircuit` describe its netlist interface. Edit the
-included definition and apply it to update every instance that references its
-`symbol.id`. There is no mouse editor for the component's internal shapes.
-Ordinary canvas placement, rotation, mirroring and circuit wiring remain
-available and do not rewrite that shared definition.
-
-To customize just some instances, copy the definition, give `symbol.id` and
-any included `electrical.symbolId` / `subcircuit.symbolId` the same new ID, and
-set those instances' `symbolId` to that ID in the same edit. Keep pin names and
-electrical pin order unchanged when only adjusting artwork. A moved pin keeps
-its identity; existing route geometry may need a manual adjustment.
-
-The Project carries one definition per used component type, including uses in
-other Cells. Deleting its final use removes the definition; Undo restores it.
-Unused definitions inside a Project are not a component library. When editing
-through Project Code, keep a placed instance while developing a definition.
-The User Defined library stores published definitions independently. Agents author through the same Project transactions. The `user_components` MCP
-tool lists, reads, publishes, updates, forks and inserts public records. Public
-writes need their own grant and the signed-in Editor principal; they do not accept
-a caller-supplied author. Inserts require a selected library revision and current
-Project/Cell revisions. Stale versions refuse rather than choosing a newer record.
-
-SPICE files are import inputs, not embedded source attachments. Saving an
-imported Project preserves the editable schematic and source provenance, but
-does not preserve `.spi`, `.lib`, or `.inc` contents; keep those original files
-when you need to import them again.
-
-## Export
-
-**File / Export** exports the entire current drawing as SVG, PNG, or PDF containing only formal schematic
-layers. PNG uses 3x raster scale. Browser PDF converts the same formal SVG to
-vector paths and text on a page matching the SVG viewBox, so circuit geometry
-stays sharp when enlarged.
-
-To reuse only selected content as an image, choose **Edit / Copy selection as
-PNG** or **Edit / Copy selection as SVG**, then paste into another application.
-Attached visible labels travel with their selected objects, but remote objects
-sharing a Net do not. Clipboard copies omit editor overlays, use a transparent
-page background, and do not change the circuit or Undo history. PNG is rendered
-at 3x with a bounded image size. SVG stays vector: formulas are label text,
-or paths for the few a label's type cannot set, and the receiving application
-determines paste/editing support. Clipboard writes
-require HTTPS or localhost and browser permission. Failures are reported without
-silently downloading a file or substituting a different format. These commands
-remain separate from editable circuit copying with **C** (immediate placement)
-or **Ctrl/Cmd+C**, then **V** / **Ctrl/Cmd+V**.
-
-Use **Netlist / Check and Save** to check the whole Project for ERC and
-visual issues and save it through the existing private Cloud Project service.
-Findings appear in **Issues**, the bottom status summary, and existing canvas
-markers. Observations stay behind their explicit toggle. Neither producer
-runs automatically while drawing. Further edits mark the last check out of
-date and hide its markers; check again to refresh it. Save still proceeds
-when issues exist, and an offline or signed-out save still leaves the local
-check available. This command does not repair Bulk connections or rewrite
-the circuit. A Route segment that is neither horizontal, vertical, nor exactly
-45° appears as an actionable wiring issue. **Straighten angled wires in this
-Cell** replaces only those segments with local right-angle corners in one
-undoable edit; intentional 45° segments stay unchanged. Locked and trunk Routes
-remain listed for manual repair. **File / Save** and **Ctrl+S** remain save-only.
-
-Click the top **Netlist** copy button to put the netlist on the clipboard and
-open its live code in the right sidebar. That panel's **Format** (SPICE or SCS)
-and **Process** selectors are independent. The editor starts in SKY130, and a
-transistor you draw is bound to the selected process as you place it. Choose
-Abstract, SKY130, IHP SG13G2, TSMC 28, TSMC 180 or Custom, then optionally choose
-NMOS/PMOS/R/C/L targets below the code. Process changes update the circuit and
-can be undone; existing values are retained. Unbound native devices use the
-cached template's defaults when the panel opens. **Default** restores the
-mapping the editor starts in and output preferences. An older circuit whose
-devices have no model shows **Fill N devices** beside it: one undoable click
-gives exactly those devices the selected process's model and dimensions, and
-leaves every value you authored alone. The code area is as tall as the netlist,
-up to the room the sidebar has, and scrolls inside itself beyond that.
-The selected templates, format and port-name case are remembered in this browser.
-Editing the circuit refreshes the visible code. Clipboard failures leave the
-code selectable for manual copy.
-
-A switch drawn with **Open**, **Closed** or **Simple** is controlled by the
-clock phase its label names. A freshly placed switch is clocked by its own name,
-so `S1` is driven by a phase called `S1` until you name another. Write the phase
-on its label, such as `Φ₁`, to share one clock among several switches; the
-label becomes a display alias by itself. The SPICE netlist then writes the switch
-as `S1 a b PHI1 VSS ideal_switch`, with one `.model ideal_switch SW(…)` card in
-the same Cell. Draw the clock on a Net named `Φ1`, or give the Cell a Pin named
-`Φ1`, and the switch follows it. A phase nothing in the Cell drives becomes an
-input of the Cell in its netlist (`.subckt … PHI1`), for the testbench or the
-Cell that uses it to drive. A phase written with an overbar, such as `E̅N̅`, is
-its own signal `EN_bar` on the same plain switch: draw an inverter if `EN_bar`
-comes from `EN` in your circuit, or let the testbench drive both. **Ctrl SW** takes
-its control from its CTRL pin instead.
-Switches are written in SPICE only.
-
-A diode you place in Abstract, SKY130, IHP SG13G2 or Custom takes the generic
-model `DIODE`. Until you choose another model, the SPICE netlist defines it
-with one `.model DIODE D(IS=1e-14 N=1)` card in the same Cell, and the Check
-Report names the diodes that use it. A `.model DIODE` card in your own
-simulation files replaces it. An NPN or PNP you place in Abstract or Custom
-takes the generic model `NPN` or `PNP` in the same way, defined by
-`.model NPN NPN(IS=1e-16 BF=100 VAF=100)` or
-`.model PNP PNP(IS=1e-16 BF=50 VAF=50)`.
-
-**Netlist / Instances…** opens the Project's netlist instances as one editable
-JSON document in the right sidebar. Paste whole blocks to change references,
-model bindings and parameters together. Outer keys are Cell IDs; inner keys are
-stable instance IDs. Edit `reference` to renumber, `target` for the typed model
-binding, or `parameters` for values. `symbol` is read-only. Omitted instances and
-fields remain unchanged; a supplied `parameters` object replaces that instance's
-parameter set, so deleting a parameter clears it. Valid edits apply together;
-invalid JSON or conflicting references leave the circuit unchanged. **Edit / Undo**
-and **Redo** undo or restore the complete batch.
-
-**Netlist / Configuration…** opens one raw JSON document in the right sidebar.
-Copy, paste, or replace the whole configuration. Set `selected` to `abstract`,
-`sky130`, `sg13g2`, `tsmc28`, `tsmc180`, or `custom`; edit the corresponding entry under
-`profiles`. Valid edits apply immediately and are remembered in this browser.
-Invalid JSON pauses copying until corrected. The circuit itself is unchanged.
-
-- `abstract`: ideal R/C/L and generic NMOS/PMOS model names, with editable
-  fallback values and dimensions. No transistor model cards are invented.
-- `sky130`: real SKY130 transistor wrappers, with ideal R/C by default. For
-  physical R/C, set the target to `sky130_fd_pr__res_high_po` or
-  `sky130_fd_pr__cap_mim_m3_1` and supply `w`/`l` in metres (for example `5u`),
-  plus `mult` or `mf`. The resistor's `substrate` defaults to `0`. Ideal values
-  are not converted into geometry. Set `library.path` and `library.section`
-  for your installed PDK. SCS exports stay in Spectre syntax and reference that
-  configured path with a native `include` declaration.
-- `sg13g2`: IHP SG13G2 (IHP-Open-PDK) devices called as its xschem symbols
-  write them: `sg13_lv_nmos`/`sg13_lv_pmos` (1.2 V, or `sg13_hv_*` at 3.3 V)
-  with `w`, `l`, `ng`, `m` in metres, the SiGe HBTs `npn13G2`, `npn13G2l` and
-  `npn13G2v` with `le`, `we` and the emitter count `Nx`, and `pnpMPA`. R and C
-  are ideal by default; set `rsil`, `rppd` or `rhigh`, or `cap_cmim` or
-  `cap_rfcmim`, for physical ones. HBT, resistor and RF-MIM substrates default
-  to `0`. Include the PDK's ngspice model libraries yourself, with the OSDI
-  modules its MOS and resistors need.
-- `tsmc28` / `tsmc180`: TSMC reference MOS names (`nch_ulvt_mac`/`pch_ulvt_mac`
-  with `multi`, or `nch`/`pch` with `m`) and ideal R/C/L. Point `library.path`
-  at your installed PDK.
-- `custom`: keep authored component targets, and fill missing fields from your
-  editable defaults. Existing component values always take priority.
-
-Every preset requires an actual MOS Bulk connection or an explicit NoConnect.
-Missing connections block export rather than creating an invisible VDD Net.
-Built-in Analog Blocks have hidden `VDD` and `VSS` Net selectors in Properties.
-The JSON `supplies.VDD` and `supplies.VSS` dropdowns use an empty value for
-`Auto`, which uses a uniquely drawn positive supply or ground; select an existing Net
-explicitly for another rail. Missing or ambiguous supplies block export rather
-than adding Cell Pins or silently declaring global supply nodes.
-
-Fields still missing after these defaults block netlist output; the sidebar and
-Check Report identify the exact device and field. Refresh applies configured
-defaults in one undoable Project change. Existing values, connections, and
-formal pin order are retained.
-Copied code contains no generated comments; detailed findings remain in Check
-Report. SPICE keeps an empty first title line so a simulator does not consume
-the first directive. An explicitly marked NoConnect becomes a floating node
-such as `NC0001`; structural errors such as an unmarked non-bulk open pin,
-conflicting names, or unsupported devices show an error instead of stale or
-partial code.
-
-Choose the arrow beside Netlist, then **Check Report** to inspect the same
-SPICE/Spectre preview, change the naming profile, or navigate to a finding.
-The report lists structural findings and current-revision ERC readiness
-separately. The export includes the library path/section you configured, but does
-not add model cards, analyses, or a complete testbench. Exporting a file does not
-make the circuit ready for simulation.
+Switches (**Open**, **Closed**, **Simple**) are clocked by the phase their
+label names: write `Φ₁` on several switches to share a clock, and drive it
+with a Net or Cell Pin named `Φ1`; an undriven phase becomes a Cell input. An
+overbar (`E̅N̅`) names a separate signal `EN_bar`. **Ctrl SW** uses its CTRL pin.
+Diodes without a model use a generic `DIODE` card, and NPN/PNP in Abstract or
+Custom generic `NPN`/`PNP` cards, until you choose a model or define one in
+your simulation files.
 
 ## Import Spectre / SCS
 
-Use **File / Import SPICE / SCS…** and select one `.scs` entry together with
-its local include files. `circuit.scs` is recognized as the entry when several
-netlist files are selected. Conversion happens in the browser and works locally.
-The converted structure uses the existing import and placement flow. Errors
-show the source filename and line, and leave your current circuit unchanged.
+**File → Import SPICE / SCS…** also takes a `.scs` entry with its includes
+(`circuit.scs` is preferred among several), converted in the browser. Common
+devices, subcircuits, parameters, DC/AC/PULSE/SIN/PWL sources and simple
+analyses are supported; anything else is an error with file and line, never a
+partial circuit. See [SPICE compatibility](spice-compatibility.md).
 
-The converter supports common structural devices, ordered subcircuits, parameters,
-DC/AC/PULSE/SIN/PWL sources and simple OP/AC/DC/TRAN analyses. It preserves a
-SPICE-language section in SCS. Unsupported parameters, native model syntax,
-behavioral expressions and ngspice control scripts cannot be translated into
-native Spectre; they produce an error instead of a partial circuit. Simulation
-source folders remain the place for complete original testbenches. See the
-[SPICE compatibility guide](spice-compatibility.md) for the current import and
-export support matrix.
+## Gallery
 
-## Finding duplicate circuits
+Open your Gallery entry, choose Publish, then **Version history** (also on
+**My submissions**): the current publication and up to three earlier
+snapshots. **Compare** highlights added (green), removed (red) and changed
+(amber) components per Cell; **Branch** opens a version as an independent
+draft; **Restore** republishes it, keeping link and likes. Private Shelf
+projects have their own **Version history** (see
+[private save history](../specs/persistence-and-recovery.md#private-save-history)).
 
-Administrators can click **Check duplicates** at the bottom of the Community
-Gallery's left column to scan every public circuit, independently of the current
-search, author or tag filters. The control is not shown to other users. The scan
-runs in a cancellable background worker. Results show duplicate groups with
-previews and links, the number of extra copies (a group of three contributes
-two), and badges on matching Gallery cards. The entry point is hidden for
-visitors and ordinary members.
-
-Each group selects the oldest publication to keep; choose another copy if
-preferred. **Keep selected, remove…** cleans one group, and **Remove all extra
-copies** cleans every listed group using those selections. Removed copies go
-to the admin recycle bin with their project, likes and version history intact.
-They are exempt from automatic author recycle-bin limits and can be restored
-from **Open recycle bin**. The server requires an administrator and rechecks
-the current electrical netlists before changing anything in a group. If a
-group changed or cannot be compared, it stays untouched and shows an error;
-other groups can still succeed. Results are a snapshot; scan again after
-library changes.
-
-Comparison uses the extracted electrical netlist, not titles or drawing JSON.
-Instance names, internal node names, drawing positions and instance order do
-not matter. Device classes, models, values, terminal roles and the ordered
-external port contract do. Equivalent numeric spellings such as `1k` and
-`1000` match. Unset model/value fields match only the same unset fields, with
-NMOS and PMOS kept distinct. The check does not apply a viewer's PDK preset or
-claim that externally supplied models have identical implementations.
-
-Simple hierarchy is expanded for comparison. Parameterized hierarchy,
-behavioral references, circuits without usable connectivity, and comparisons
-that exceed bounded computation are listed under **Unable to compare**, with
-a reason; they are never silently classified as unique. Candidate summaries
-only narrow the search: duplicates require an exact electrical graph match.
+Administrators can run **Check duplicates** at the bottom of the Gallery's left
+column. It compares extracted electrical netlists (not names, layout or
+order), lists groups and **Unable to compare** entries with reasons, and
+**Keep selected, remove…** or **Remove all extra copies** moves extras to the
+admin recycle bin after rechecking them.
 
 ## Portable release
-
-Build the versioned bundle and start it with Node 24:
 
 ```powershell
 pnpm release:package
 node output/release/analog-canvas-v0.9.2/start.mjs
 ```
 
-Open `http://127.0.0.1:4173`. Chromium can install the app from its browser
-install action. The server accepts only loopback connections.
-
-## Deployment
-
-The editor is served by the Production Cloudflare Worker in `worker/`. A merged
-non-documentation pull request deploys through
-`.github/workflows/cloudflare.yml`; a `v*` release tag or explicit dispatch may
-redeploy a selected commit already on `main`. The Worker hosts the built editor
-and the gallery, account, Agent-session, and simulation endpoints behind it;
-see [deployment](../deployment.md). The former hosted Preview site is offline,
-with its isolated data retained but unreachable.
-
-The private Cloud Project is the formal saved copy. Exported `.icproj.json`
-and downloaded backups remain portable user-owned copies. Browser recovery is
-specific to one browser profile and may disappear when site data is cleared;
-publishing to the Gallery is a deliberate, separate act rather than a backup.
-
-Before a public release, verify opening, refreshing, importing and exporting,
-browser recovery, and PWA installation at the deployed URL.
-
-## Gallery version history
-
-Open your Gallery entry, choose Publish, then **Version history**; your entries
-also offer this action on **My submissions**. The current publication and up to
-three previous snapshots are retained. Every update and restore snapshots the
-previous state; older snapshots are pruned.
-
-- **Compare** shows the historical and current published circuits side by side.
-  Added components are green, removed ones red, and modified ones amber. Click a
-  highlight or component row for parameter, placement, name and connection changes.
-  Choose a Cell to inspect a child circuit. The comparison does not edit the canvas.
-- **Branch** opens the complete historical Project as an independent draft. Save
-  it to create a new Shelf project; the original publication and draft are unchanged.
-- **Restore** updates the original publication while preserving its link and likes.
-  The pre-restore current version becomes a historical snapshot.
-
-History is available to the author and administrators/moderators. Previously
-pruned versions cannot be recovered by the new three-snapshot limit. This is a
-small publication history, not a full Git merge system. Private saved projects
-have a separate **Version history** action in their Shelf card menu: compare,
-restore with revision protection, or branch into an independent draft. See
-[private save history](../specs/persistence-and-recovery.md#private-save-history)
-for retention and publication boundaries.
+Open `http://127.0.0.1:4173` with Node 24; Chromium can install it as an app.
+It accepts only loopback connections.
