@@ -51,6 +51,16 @@ const OPENS_UNFILTERED =
   `return!(text(s.author)||text(s.ownerUserId)||text(s.source)||list(s.tags)||` +
   `list(s.parts)||s.netlistable===true||s.liked===true||s.attention===true)}`;
 
+/**
+ * The address's query as the wall reads it: a reload drops the text search
+ * (#1675, gallery-filters' resolveGalleryFilters), keeping everything else.
+ */
+const OPENING_SEARCH =
+  `function(){var search=location.search;try{` +
+  `var nav=performance.getEntriesByType("navigation")[0];` +
+  `if(nav&&nav.type==="reload"){var params=new URLSearchParams(search);` +
+  `params.delete("q");search=params.toString()}}catch(e){}return search}`;
+
 type EarlyResponses = Record<string, Promise<Response>>;
 
 /**
@@ -69,7 +79,7 @@ export function galleryEarlyFetchScript(): string {
   return (
     `if(/^\\/?$/.test(location.pathname)&&(${JSON.stringify(EXAMPLE_HOSTS)}.indexOf(location.hostname)<0||window.${LOCAL_GALLERY_REPLICA}===true)){var raw=null;` +
     `try{raw=localStorage.getItem(${JSON.stringify(GALLERY_EARLY_FILTERS_KEY)})}catch(e){}` +
-    `if((${OPENS_UNFILTERED})(location.search,raw)){` +
+    `if((${OPENS_UNFILTERED})((${OPENING_SEARCH})(),raw)){` +
     `var early=window.${GALLERY_EARLY_GLOBAL}={};` +
     // The order the wall opens with (#1615): the reader's kept choice, or a
     // shuffle whose seed the wall then takes up. The URLs are galleryEarlyUrls'.

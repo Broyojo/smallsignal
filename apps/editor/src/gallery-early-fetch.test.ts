@@ -55,6 +55,7 @@ describe("the landing page's early Gallery requests (#1592)", () => {
     stored: string | null = null,
     order: string | null = null,
     hostname = "analog-canvas.tokenzhang.com",
+    navigation = "navigate",
   ) => {
     const window: Record<string, unknown> = {};
     const fetch = vi.fn(() => Promise.resolve(new Response("{}")));
@@ -70,6 +71,11 @@ describe("the landing page's early Gallery requests (#1592)", () => {
               : null,
       },
       fetch,
+      performance: {
+        getEntriesByType: (kind: string) =>
+          kind === "navigation" ? [{ type: navigation }] : [],
+      },
+      URLSearchParams,
     });
     return { window, fetch };
   };
@@ -136,6 +142,40 @@ describe("the landing page's early Gallery requests (#1592)", () => {
         galleryFeedQueryKey({ ...filters, q: "", source: null }),
         `${search} ${stored}`,
       ).toBe("");
+    }
+  });
+
+  it("start for a reloaded search, which the wall opens without (#1675)", () => {
+    const cases: [
+      search: string,
+      navigation: string,
+      starts: boolean,
+      expectedSearch: string,
+    ][] = [
+      // A shared link's search is that search's own wall.
+      ["?q=mirror", "navigate", false, "mirror"],
+      ["?q=mirror", "back_forward", false, "mirror"],
+      // Reloaded, the search is gone and the wall is the unfiltered one.
+      ["?q=mirror", "reload", true, ""],
+      // Every other filter stays, so the wall is still narrowed.
+      ["?q=mirror&tags=bias", "reload", false, ""],
+    ];
+    for (const [search, navigation, starts, expectedSearch] of cases) {
+      const label = `${navigation} ${search}`;
+      const fetched =
+        run("/", search, null, null, undefined, navigation).fetch.mock.calls
+          .length > 0;
+      expect(fetched, label).toBe(starts);
+      // The landing preload resolves the same filters the wall opens with.
+      const filters = resolveGalleryFilters(search, null, {
+        reload: navigation === "reload",
+      });
+      expect(filters.search, label).toBe(expectedSearch);
+      if (fetched)
+        expect(
+          galleryFeedQueryKey({ ...filters, q: filters.search, source: null }),
+          label,
+        ).toBe("");
     }
   });
 

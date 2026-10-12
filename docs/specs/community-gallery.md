@@ -191,9 +191,15 @@ deleted.
   returning to the bare address restores it, including an emptiness the reader
   chose. A link that names any narrowing parameter is somebody's request for
   exactly that slice and replaces the stored preference outright rather than
-  intersecting with it. The text query is answered in the browser over what
-  has loaded, so it never speaks for the wall's `total`. The store is a
-  convenience: a browser that refuses it loses only the memory, never the wall.
+  intersecting with it. The text (`q`) is the exception (#1675): the store
+  never keeps it, and a stored search from before is not restored, so a later
+  visit opens unsearched. A reload of the page opens with the search cleared
+  and `q` gone from the address, keeping every other filter and the wall; the
+  landing's early requests ask for that unsearched wall. A link that carries
+  `q`, opened fresh, still shows that search. The text query is answered in
+  the browser over what has loaded, so it never speaks for the wall's
+  `total`. The store is a convenience: a browser that refuses it loses only
+  the memory, never the wall.
 - `/` serves the full-screen feed; each tile links to `/g/<id>`, which the
   editor opens through the ordinary protocol boundary. `/editor` is the
   plain editor; `/editor?example=<id>` opens a bundled example. One thing

@@ -15,7 +15,11 @@ import {
 } from "../gallery-client";
 import { earlyGalleryFetch } from "../gallery-early-fetch";
 import { galleryOrderPreference, galleryShuffleSeed } from "../gallery-order";
-import { GALLERY_FILTERS_KEY, resolveGalleryFilters } from "../gallery-filters";
+import {
+  GALLERY_FILTERS_KEY,
+  isPageReload,
+  resolveGalleryFilters,
+} from "../gallery-filters";
 import { galleryFocusEntryId } from "../gallery-focus";
 import "../../analytics/analytics.css";
 import "../styles.css";
@@ -58,9 +62,12 @@ export function mountWebEditor() {
     } catch {
       // An explicit URL filter still works when browser storage is disabled.
     }
+    // Resolved as the wall resolves them, so a reload asks for the
+    // unsearched wall it then opens (#1675).
     const filters = resolveGalleryFilters(
       window.location.search,
       storedFilters,
+      { reload: isPageReload() },
     );
     // "View in Gallery" links one circuit on the whole, unfiltered wall.
     const focusId = galleryFocusEntryId(window.location.search);

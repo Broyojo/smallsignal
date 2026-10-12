@@ -4,8 +4,10 @@ import {
   galleryFilterSearch,
   galleryFiltersNarrowQuery,
   parseGalleryFilterQuery,
+  isPageReload,
   parseStoredGalleryFilters,
   resolveGalleryFilters,
+  storedGalleryFilters,
 } from "./gallery-filters";
 
 describe("gallery filter preferences", () => {
@@ -179,6 +181,84 @@ describe("gallery filter preferences", () => {
     ).toBe("");
   });
 
+  it("opens a reload unsearched, keeping every other filter and view (#1675)", () => {
+    const link =
+      "?view=shelf&author=alice&owner=account-alice&tags=bias&q=mirror&netlist=1&ai=0&liked=1&attention=1&reason=global-vdd&parts=6-10&source=analoggenie";
+    expect(resolveGalleryFilters(link, null, { reload: true })).toEqual({
+      view: "shelf",
+      author: "alice",
+      ownerUserId: "account-alice",
+      tags: ["bias"],
+      search: "",
+      netlistable: true,
+      withoutNetlist: false,
+      ai: "human",
+      liked: true,
+      attention: true,
+      attentionKind: "global-vdd",
+      parts: ["6-10"],
+      source: "analoggenie",
+    });
+    // A reloaded search alone narrows nothing, so the reader's remembered
+    // filters come back without it.
+    const stored = JSON.stringify({ tags: ["bias"], search: "mirror" });
+    expect(
+      resolveGalleryFilters("?q=mirror", stored, { reload: true }),
+    ).toEqual({ ...createDefaultGalleryFilters(), tags: ["bias"] });
+  });
+
+  it("opens a fresh link's search as it was shared (#1675)", () => {
+    const stored = JSON.stringify({ tags: ["bias"] });
+    expect(resolveGalleryFilters("?q=mirror", stored)).toEqual({
+      ...createDefaultGalleryFilters(),
+      search: "mirror",
+    });
+    expect(
+      resolveGalleryFilters("?q=mirror&liked=1", stored, { reload: false }),
+    ).toEqual({
+      ...createDefaultGalleryFilters(),
+      search: "mirror",
+      liked: true,
+    });
+  });
+
+  it("never remembers the search, nor restores one an older store kept (#1675)", () => {
+    const filters = {
+      ...createDefaultGalleryFilters(),
+      tags: ["bias"],
+      search: "mirror",
+    };
+    const raw = storedGalleryFilters(filters);
+    expect(JSON.parse(raw)).not.toHaveProperty("search");
+    expect(parseStoredGalleryFilters(raw)).toEqual({
+      ...filters,
+      search: "",
+    });
+    expect(
+      parseStoredGalleryFilters(JSON.stringify({ search: "mirror" }))?.search,
+    ).toBe("");
+    expect(resolveGalleryFilters("", JSON.stringify(filters)).search).toBe("");
+  });
+
+  it("knows a reload from its navigation entry, and anything else as none", () => {
+    const timing = (type?: string) => ({
+      getEntriesByType: (kind: string) =>
+        kind === "navigation" && type ? [{ type }] : [],
+    });
+    expect(isPageReload(timing("reload"))).toBe(true);
+    expect(isPageReload(timing("navigate"))).toBe(false);
+    expect(isPageReload(timing("back_forward"))).toBe(false);
+    expect(isPageReload(timing())).toBe(false);
+    expect(isPageReload(undefined)).toBe(false);
+    expect(
+      isPageReload({
+        getEntriesByType: () => {
+          throw new Error("unsupported");
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("restores the reader's last choice when the link asks for nothing", () => {
     const stored = JSON.stringify({
       view: "gallery",
@@ -196,7 +276,7 @@ describe("gallery filter preferences", () => {
       author: "alice",
       ownerUserId: "account-alice",
       tags: ["bias"],
-      search: "mirror",
+      search: "",
       netlistable: true,
       withoutNetlist: false,
       ai: null,
@@ -256,7 +336,8 @@ describe("gallery filter preferences", () => {
       }),
     );
     expect(restored?.author).toHaveLength(200);
-    expect(restored?.search).toHaveLength(200);
+    // A stored search, however long, is not restored at all (#1675).
+    expect(restored?.search).toBe("");
     expect(restored?.tags).toEqual(["bias", "opamp"]);
     // Only a real boolean turns a mark on.
     expect(restored?.netlistable).toBe(false);

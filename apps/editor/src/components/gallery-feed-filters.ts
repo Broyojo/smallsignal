@@ -7,7 +7,9 @@ import {
   GALLERY_FILTERS_KEY,
   createDefaultGalleryFilters,
   galleryFilterSearch,
+  isPageReload,
   resolveGalleryFilters,
+  storedGalleryFilters,
   type GalleryFilterState,
 } from "../gallery-filters";
 
@@ -16,16 +18,20 @@ export function useGalleryFilters() {
   // state, because a reader changes them for one reason. It rides in the URL
   // so a link and the Back button carry the same slice, and in browser
   // storage so opening a circuit and coming back does not widen the wall.
+  // The words are the exception: storage never keeps them, and a reload
+  // opens without them (#1675); the address effect below then drops `q`.
   const [filters, setFilters] = useState<GalleryFilterState>(() => {
     if (typeof window === "undefined") return createDefaultGalleryFilters();
+    const opening = { reload: isPageReload() };
     try {
       return resolveGalleryFilters(
         window.location.search,
         window.localStorage.getItem(GALLERY_FILTERS_KEY),
+        opening,
       );
     } catch {
       // Private-mode storage throws on read; the link still decides.
-      return resolveGalleryFilters(window.location.search, null);
+      return resolveGalleryFilters(window.location.search, null, opening);
     }
   });
   const { search: searchQuery } = filters;
@@ -46,7 +52,10 @@ export function useGalleryFilters() {
   // circuit must come back to the same slice, so this write cannot wait.
   useEffect(() => {
     try {
-      window.localStorage.setItem(GALLERY_FILTERS_KEY, JSON.stringify(filters));
+      window.localStorage.setItem(
+        GALLERY_FILTERS_KEY,
+        storedGalleryFilters(filters),
+      );
     } catch {
       // The wall works without storage; only the memory of it is lost.
     }
