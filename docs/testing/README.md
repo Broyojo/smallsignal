@@ -1,13 +1,7 @@
 # Test System
 
-Tests protect current behavior, explicit rejection boundaries, and safety
-invariants. They are not a line-coverage contest and must not silently turn an
-implementation detail into a public contract.
-
-The [contract matrix](contract-matrix.md) identifies the primary owner for each
-cross-cutting behavior. Co-locate a low-cost unit or module-contract test with
-its implementation; keep browser workflows under `apps/editor/e2e/`; keep
-release, generated-artifact, and visual checks in their existing scripts.
+Tests protect current behavior, rejection boundaries and safety invariants.
+The [contract matrix](contract-matrix.md) names each behavior's primary test.
 
 ## Layers
 
@@ -20,328 +14,147 @@ release, generated-artifact, and visual checks in their existing scripts.
 | Browser workflow      | a user-visible flow that cannot be proved below the browser      | `apps/editor/e2e/`                          |
 | Release and golden    | built product, artifacts, visual reference, packaging            | root scripts and release checks             |
 
-Use the cheapest layer that can prove the behavior. Keep one primary contract
-test per behavior; add a higher-layer test only when it proves wiring or a real
-user path that the lower layer cannot prove.
+Use the cheapest layer that proves the behavior, one primary contract test per
+behavior; add a higher-layer test only for wiring or a real user path the lower
+layer cannot prove.
 
-Test against the real counterpart. An Agent client or MCP test talks to the
-real editor: `liveAgentEditor()` in
-`apps/editor/src/agent/live-agent-editor.test-support.ts` builds the editor's
-live controller, Circuit service and File, Project and Simulation hosts as the
-browser does. Script only what lies outside the editor: pairing and network
-faults at the relay, and the answers of services the editor calls over the
-network (simulation, Gallery, Cloud Projects). Never write the editor's answers
-by hand. A stand-in editor drifts from the real one, so a test against it
-proves nothing about the product.
+Agent client and MCP tests talk to the real editor via `liveAgentEditor()`
+(`apps/editor/src/agent/live-agent-editor.test-support.ts`); script only relay
+faults and the network services the editor calls, never the editor's answers.
 
-## Advisory gate planning
-
-Before expensive validation, inspect the real commands selected for the
-change:
+## Gate planning
 
 ```powershell
-pnpm gate:plan -- --path packages/model/src/schema/document.ts
+pnpm gate:plan -- --path <file>
 pnpm gate:plan -- --base <base-ref>
 pnpm gate:preflight -- --base <base-ref>
 pnpm gate:affected -- --base <base-ref>
 ```
 
-Use the current target's fixed base for local checks and the mainline base for
-the entire delivery candidate, as described below.
-
-The versioned catalog at `config/validation-gates.json` maps repository paths
-to preflight, affected, and final gates. Shared-core, production-boundary,
-unknown non-documentation, and gate-policy changes select the conservative
-branch/full fallback for local planning. The PR planner separately translates
-shipped product paths into focused browser contracts. Unit tests, package
-manifests and the Node-only local host stay in Core contracts instead of
-allocating a browser. An unmapped browser path gets a
-small insertion/runtime-safety fallback alongside all mapped contracts; an
-unmapped path never removes another changed path's selected tests. CI never
-runs the complete browser suite; `pnpm test:e2e` runs it locally.
-
-`gate:preflight` runs cheap static contracts and cross-checks the commit's test
-impact declaration. `gate:affected` runs the catalog's bounded unit, focused
-browser, release, or branch checks. Review the printed reasons before
-execution. `full-delivery` records the broad delivery obligations rather than
-requiring the aggregate command after every edit. Record how final local tests,
-additional risk checks and required queue checks fulfill them. Avoid adding
-`gate:full` mechanically when its checks are already covered. Remote checks
-remain required; local success does not exempt a merged candidate. Run
-`pnpm setup:e2e` once per machine or Playwright version.
-
-Every `apps/editor/e2e/*.spec.ts` file must belong to a focused path group and
-select itself. The gate-planner tests enumerate the directory so adding a spec
-without routing ownership fails deterministically instead of silently relying
-on the generic browser fallback.
-
-The editor's browser workflows have separate owners: the general editing
-specs, one per feature (`editor-shell.spec.ts`, `wire-drawing.spec.ts`,
-`label-editing.spec.ts` and the rest of the `editor-browser` gate), retain
-general integration, `wiring-semantics.spec.ts` owns wire interaction,
-`component-property-workflows.spec.ts`
-owns live property/model/display edits, and `netlist-workflows.spec.ts` owns
-import, authoring and export. Shared app/canvas dependencies select all three;
-wire-tool changes select their dedicated contract without selecting unrelated
-general, property and netlist UI workflows. A shared fixture module in
-`apps/editor/e2e` selects every spec that imports it, directly or through
-another fixture. The full component catalog is checked by
-`component-property-catalog.test.ts`; browser catalog checks cover representative
-capabilities and the VDD exception rather than repeating the same UI for every
-symbol. Keep specialized history, rejection, hierarchy and terminal tests.
-
-Queued browser contracts are sharded by the tests they select: about 25
-tests to a shard, from two shards up to eight, with three workers per runner.
-The count is read from the selected specs' sources. Playwright splits the
-selected tests into equal runs, so a large selection on few shards once left
-one runner on a whole slow spec while the others idled. A lightweight
-`Browser tests` aggregation job preserves the required check name and
-succeeds only after all selected shards pass. This keeps broad but legitimate
-focused selections within the queue's wall-clock budget without raising
-per-runner Chromium contention.
-
-The packaged Windows desktop preview is accepted by its release workflow when
-a preview is released, not in the merge queue; no merge ships it.
+`config/validation-gates.json` maps paths to gates; review the printed reasons
+before running. `full-delivery` is a batch delivery obligation, not a command
+after every edit: record in the PR how final local, risk and queue checks fulfil it, and
+skip `gate:full` when they already cover it. Run `pnpm setup:e2e` once per
+machine or Playwright version. A new `apps/editor/e2e/*.spec.ts` needs a focused
+path group that selects it.
 
 ## Validation timing
 
-The [development workflow](../development-workflow.md) selects the stage.
-Iterate at the confirmed public seam with focused unit/browser checks and
-regular typechecking. Before selected affected, build or release gates, run
-the target-base preflight and refresh the advisory plan from the real diff.
+- Edit loop: focused unit/browser checks and typecheck at the confirmed seam.
+- Before affected, build or release gates: run the target-base preflight and
+  refresh the plan from the real diff.
+- At the end of each original `implement` invocation (each ticket separately),
+  before its code-review and commit, run once:
 
-At the end of each original `implement` invocation, run the complete suites
-once, then its code-review and commit stages:
+  ```powershell
+  pnpm test:local
+  pnpm test:e2e:local
+  ```
 
-```powershell
-pnpm test:local
-pnpm test:e2e:local
-```
+  This repository reads the original's "full suite" as all Vitest and
+  Playwright tests. Local browser runs use one worker; pass `--workers` for more.
 
-A local browser run takes one worker, so it does not load a shared machine;
-pass `--workers` to ask for more. CI keeps its own worker count.
-
-For this trial, these commands define the original's final full suite as all
-Vitest and Playwright tests. The original does not specify runner scope; this
-is a deliberate conservative repository choice and costs more. Required
-merge checks still protect the merged candidate. Record extra findings and
-time so the human can later decide whether to change this interpretation.
-
-An unchanged candidate needs no repeated final local run. Repair or rebase
-that changes behavior can invalidate evidence; validate the actual changes
-and affected risks again. Each separately invoked ticket retains its own
-final original check, rather than silently deferring all tests to the last
-ticket. Documentation and mechanical maintenance outside `implement` use
-their relevant deterministic checks; executable tooling and gate changes are
-validated according to their actual risk, not their directory name.
-
-Keep validation scope distinct from publication scope. Before a local commit,
-`pnpm gate:plan -- --base HEAD` describes its uncommitted delta. After one
-target commit, `HEAD^` is its base; for a target spanning several commits, use
-the base before that target began. Test-Impact validation reads committed
-trailers and therefore runs after the target commit. Direct focused unit/browser
-checks belong to the edit loop; apply the selected preflight before executing
-affected, build, or release gates. A target needing broad validation should get
-it, but a `full-delivery` entry records a batch delivery
-obligation rather than requiring full delivery after each local edit.
-
-A delivered pull request may carry one change or a related batch. Before publishing it,
-refresh the mainline base, regenerate the gate plan for the combined diff
-against `origin/main`, and follow
-[delivery checks](../deployment.md#development-and-delivery-cadence). This checks
-interactions and shared contracts across everything the pull request carries.
-An unchanged candidate does not need its already-passing local checks repeated
-while remote CI runs; new edits or unresolved failures can require fresh
-verification.
-
-The [deployment guide](../deployment.md#development-and-delivery-cadence)
-owns the local-to-Production handoff and rollback.
+- An unchanged candidate needs no repeated run; a repair or rebase that changes
+  behavior needs its affected checks again.
+- Docs and mechanical maintenance outside `implement` use their deterministic
+  checks; tooling and gate changes are validated by actual risk.
+- Bases: `HEAD` before committing, `HEAD^` after one target commit, else the
+  commit before the target began. Test-Impact checks run after committing.
+- Before publishing a PR, refresh the mainline base, regenerate the plan for
+  the combined diff against `origin/main` and follow
+  [delivery](../deployment.md#development-and-delivery-cadence).
 
 ## Gallery census
 
-Fixtures are tidy. The Community Gallery holds drawings in the states earlier
-versions left behind, and some defects shipped because only those states
-reach them. `pnpm gallery:census` puts every drawing of the newest private
-snapshot through the paths that meet them:
+`pnpm gallery:census` runs every drawing of the newest private Gallery snapshot
+through loading, netlisting, copying and rotation
+(`apps/editor/census/gallery.census.ts`); `--base <ref>` lists drawings that
+behave differently on the base. It reads user drawings, so it runs only
+locally; reports stay in `plan/`.
 
-- loading and the SPICE netlist;
-- copying each supply marker alone, and the whole drawing into another
-  Project and into itself;
-- copying the copies together with their sources;
-- turning every part a full circle with its labels.
+Run it before acceptance or delivery for changes to the paths
+`scripts/lib/verify-pr-selection.mjs` selects (copying and placement, instance
+labels, netlist extraction and printing, Gallery import, Agent copy);
+`pnpm verify:pr` prints the command. It cannot certify VACASK compilation,
+source assertions or result parsing: simulation changes need their own
+source/engine regressions and any named original case.
 
-With `--base <ref>` it runs the same census on the mainline base, in a
-temporary worktree, and lists every drawing that behaves differently. The
-harness is `apps/editor/census/gallery.census.ts`. The census reads user
-drawings, so it runs only locally and never in CI, and its reports stay in the
-untracked `plan/`. Run it before acceptance or delivery for changes to copying
-or placement (`apps/editor/src/features/clipboard/`,
-`apps/editor/src/features/component-insert/`), instance labels
-(`packages/derived/src/instance-label-placement.ts`,
-`packages/edit-engine/src/transaction-instance-annotations.ts`) or netlist
-extraction/structural printing (`packages/netlist/src/`). The executable
-selection in `scripts/lib/verify-pr-selection.mjs` also covers the Gallery
-import and Agent copy entry points. It excludes test files and simulation-only
-`simulation-*`/`vacask-*` modules: the census exports drawings as SPICE, and
-cannot certify VACASK compilation, source assertions or result parsing. Unknown
-design helpers retain the conservative netlist check. Simulation changes still
-require their relevant source/engine regressions and any named original case;
-that case may be a Project file or testbench, not necessarily a Gallery entry.
-Use the newest private snapshot:
-`node scripts/gallery-private-snapshot.mjs --cached`.
+Snapshot: `node scripts/gallery-private-snapshot.mjs --cached`; for an
+operator-provided one, `node scripts/gallery-private-snapshot.mjs --local <dir>`
+then `pnpm gallery:census -- --backup <dir>/gallery.sqlite`. Unavailable
+private data is a recorded, explicitly accepted delivery limitation, never a
+census pass.
 
-For an operator-provided local snapshot, run
-`node scripts/gallery-private-snapshot.mjs --local <snapshot-directory>` then
-`pnpm gallery:census -- --backup <snapshot-directory>/gallery.sqlite` with the
-required base/checks. Local validation makes no GitHub calls; it checks private
-directory access (POSIX permissions or Windows ACL), regular unlinked files,
-the recorded consistent-capture/offline-restore flags, and SQLite integrity.
-These flags are operator evidence, not cryptographic authentication of a backup.
-Ordinary Agent/GUI tests isolate the external Gallery service and exercise the
-real Editor. They do not require private snapshots or live Gallery credentials.
-Unavailable private data must be recorded and explicitly accepted as a delivery
-limitation, never counted as a census pass.
-
-The census rejects new drawing failures, netlist text changes, labels that
-stop following parts and changed Gallery marks while `NETLIST_MARK_RULE_VERSION`
-is unchanged. Fix each finding or explain an accepted change in the commit.
-A real-data defect also gets a small synthetic regression in the ordinary suite.
+The census rejects new drawing failures, netlist text changes, labels that stop
+following parts and changed Gallery marks while `NETLIST_MARK_RULE_VERSION` is
+unchanged. Fix each finding or explain the accepted change in the commit. A
+real-data defect also gets a small synthetic regression.
 
 ## Pull-request checks
 
-Every implementation change keeps two required checks, run once in the merge
-queue:
-
-- `Core contracts` shares one checkout and dependency install while running
-  all static and generated checks, the complete unit/module suite, the build,
-  release goldens, production smoke, packaging, and
-  `performance-baseline.mjs` budgets.
-- `Browser tests` runs the specs mapped to the changed shipped-product paths
-  with three workers. An unmapped browser-product path runs the small component
-  insertion and runtime-crash fallback. A non-browser implementation change
-  skips this required job successfully without allocating a runner. GitHub's
-  runner Chrome avoids downloading a separate browser image. `ci:e2e` first
-  compiles the Editor and MCP workspace dependencies whose `dist/` the Vite
-  configuration and Node-side MCP specs load; `test:e2e:local` uses the same
-  dependency preparation. Vite serves the editor sources
-  directly because the Core job already owns the production build.
-
-Nothing runs on a schedule, and CI has no full browser audit. Run
-the final local suite through `test:e2e:local` for original implementation;
-`pnpm test:e2e` also remains available for auditing the browser map.
-On the pull request itself, CI only plans the change scope and checks the
-Test-Impact trailers; the two required checks are skipped there, which GitHub
-counts as passing, so the pull request can enter the merge queue at once. The
-queue runs the path-planned checks on the PR merged with current `main`, never
-the complete browser suite, and merges it when both pass. CI does not repeat on the subsequent
-`main` push;
-the Production workflow builds, deploys, and verifies the merged commit.
-A release tag or explicit dispatch may redeploy another selected commit only
-when that commit is already on `main`.
-[Deployment](../deployment.md) owns that sequence and recovery.
+The merge queue runs two required checks once on the PR merged with current
+`main`: `Core contracts` (static, full unit/module suite, build, goldens,
+smoke, packaging, performance budgets) and `Browser tests` (specs mapped to
+changed product paths). On the PR itself CI only plans scope and checks
+Test-Impact trailers. Only `pnpm test:e2e`, run locally, covers every browser
+spec.
 
 ## Change discipline
 
-Every commit that changes implementation code must carry one test-impact
-trailer:
+Every commit that changes implementation code carries one trailer:
 
 ```text
 Test-Impact: tests-updated
+Test-Impact: no-test-change — <evidence that behavior did not change>
 ```
 
-For behavior-neutral work, use `no-test-change` and state the evidence on the
-same line:
-
-```text
-Test-Impact: no-test-change — formatting-only change; no emitted code or behavior changed
-```
-
-`pnpm test:impact -- --base <base-ref>` checks the changed range. It accepts a
-test update with `tests-updated`, or a testless implementation change with an
-explicit evidence-based `no-test-change` decision. It deliberately does not
-force meaningless test-file edits. The trailer lives with the diff in Git; a
-local untracked plan may still be used as scratch work, but it is not a gate
-input.
+`pnpm test:impact -- --base <base-ref>` checks the range.
 
 ## Removing or simplifying a test
 
-A test is not dead merely because it mentions a retired shape. Keep rejection,
-migration, authorization, and input-hardening tests while their boundary is
-reachable. Remove or merge a test only when all are true:
+Keep rejection, migration, authorization and input-hardening tests while their
+boundary is reachable. Remove or merge a test only when all hold:
 
-1. Its protected production surface is unreachable or is covered by a named
-   primary contract at the same or stronger boundary.
-2. Deletion does not remove the only rejection, compatibility, history, or
-   safety assertion for the behavior.
-3. The target plan records the replacement protection or why none is needed.
+1. Its production surface is unreachable or covered by a named primary
+   contract at the same or stronger boundary.
+2. It is not the only rejection, compatibility, history or safety assertion for
+   the behavior.
+3. The commit names the replacement protection or why none is needed.
 
-A browser test meets condition 1 when a named lower-layer test covers the
-same behavior, unless the browser itself is the point, for example real
-pointer or focus, layout, font metrics, clipboard or download, cross-tab
-behavior, or it is the only test of that flow's GUI wiring. Before removing
-it, push any assertion no lower-layer test covers down to one.
+A browser test meets condition 1 when a named lower-layer test covers it,
+unless the browser is the point (pointer or focus, layout, font metrics,
+clipboard, download, cross-tab, or the flow's only GUI wiring test); push any
+uncovered assertion down first.
 
-Split an oversized suite by protected behavior, not by arbitrary line count.
-Prefer small shared fixture builders over copying an entire Project when only a
-few facts are relevant.
+## Unused code and file size
 
-## Unused code
-
-`pnpm typecheck` refuses unused locals and parameters; prefix a parameter kept
-on purpose with `_`. `pnpm deadcode` runs Knip ([configuration](../../knip.config.js))
-twice: over every file with the tests, then over only what the product
-reaches from its entries. `pnpm verify:pr` runs it after the typecheck; CI
-does not. An export only tests use is dead: delete it with its tests by the
-rules above, or tag it `@internal` with the reason when the test is the point.
-
-## File size
-
-`pnpm verify:pr` warns, without failing, about each changed product file past
-1,000 lines, naming it and its length (#1537). Product files are the code of
-`apps/`, `packages/`, `worker/` and `containers/`; tests, browser specs, test
-support and fixtures, the Gallery census and generated files are not. A
-reviewer decides whether to split the file along its seams, as a
-behavior-preserving move.
-
-## Coverage
-
-Coverage is diagnostic evidence, not a merge threshold. Use it to find an
-unexercised critical boundary, then add a behavior-level test. Do not retain
-large, brittle tests solely to preserve a percentage.
+An export only tests use is dead (`pnpm deadcode`, run by `pnpm verify:pr`):
+delete it with its tests under the rules above, or tag it `@internal` with the
+reason. For a changed product file past 1,000 lines (`verify:pr` warns), the
+reviewer decides whether to split it along its seams. Coverage is diagnostic,
+never a threshold.
 
 ## Circuit/model and fixture validation
 
-Keep each circuit fixture in `netlists/<circuit-name>/`. Preserve explicit
-`.subckt` interfaces and instance pin order; interface changes check every
-caller. Keep local models beside the netlist unless the target introduces a
-deliberate shared library. Preserve vendor/foundry data and distinguish
-simplified models and topology-only fixtures.
+Each circuit fixture lives in `netlists/<circuit-name>/` with its local models.
+Preserve `.subckt` interfaces, pin order (changes check every caller) and
+foundry data; label simplified models and topology-only fixtures.
 
 Electrical behavior changes report simulator, models, analyses, corners and
-acceptance criteria, or the reason simulation is blocked. Syntax inspection
-alone cannot establish electrical correctness.
+acceptance criteria, or why simulation is blocked; syntax inspection alone
+proves nothing electrical.
 
-Project-owned native model acceptance can use
-`node scripts/model-source-smoke.mjs <HTTPS executor origin>` after `pnpm build`.
-The hosted site runs simulations only for signed-in accounts; scripts like this
-one send `SIMULATION_SMOKE_TOKEN` from the environment when it is set, which
-only a Production deploy holds.
-This operator-run check uses the actual Apply, export and preparation boundaries,
-then a qualified ngspice executor; it does not belong to offline CI. Its finite
-gain, single-pole model checks OP and complex AC values against analytic results,
-changes the shared gain, and checks model revision and input identity. It verifies
-the source pipeline, not transistor-level amplifier performance.
+Native model-source acceptance (operator-run, after `pnpm build`):
+`node scripts/model-source-smoke.mjs <HTTPS executor origin>`; hosted runs need
+`SIMULATION_SMOKE_TOKEN`. It proves the source pipeline, not transistor-level
+performance.
 
-Accepted Symbol geometry/pin changes explain known drawing impacts. Historical
-layouts may need manual repair; completing the target does not require a
-general migration. Use a bounded one-off repair only when a few clear
-deterministic rules suffice. Protect user drawings, binary assets and generated
-authorities.
+Symbol geometry/pin changes state their known drawing impacts; repair old
+layouts only with a bounded one-off when a few deterministic rules suffice.
 
-For unclear, intermittent, cross-layer or real-data defects, read the complete
-fixed-version diagnosing-bugs reference from the development workflow.
-Raise intermittent reproduction rates; measure performance before bisecting.
-Without an effective feedback loop report attempted methods and missing input.
-A missing correct regression seam is an architecture finding. Clean probes and
-record the confirmed cause; redact private artifacts and obtain authorization
-for environment access or production instrumentation.
+For unclear, intermittent, cross-layer or real-data defects use diagnosing-bugs
+([development workflow](../development-workflow.md#特殊入口)). Raise
+intermittent reproduction rates, measure performance before bisecting, report
+attempted methods and missing input when no feedback loop exists, redact
+private artifacts and obtain authorization for environment access or
+production instrumentation.
