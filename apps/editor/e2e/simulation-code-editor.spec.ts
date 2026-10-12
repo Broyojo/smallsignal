@@ -1,6 +1,18 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { harnessModuleUrl, harnessPagePreamble } from "./helpers/harness-url";
+import { sourceEditor } from "./simulation-e2e-fixtures.js";
+
+/** Show the Explorer if it is hidden, then open the experiment's configuration. */
+async function openExperimentJson(page: Page) {
+  const explorer = page.getByRole("button", { name: "Explorer", exact: true });
+  if ((await explorer.getAttribute("aria-expanded")) !== "true")
+    await explorer.click();
+  await page
+    .getByRole("treeitem", { name: "experiment.json", exact: true })
+    .first()
+    .click();
+}
 
 // What each Helper entry, completion and diagnostic writes is the language
 // modules' tests (vacask-language, code-native-language, spec-results). These
@@ -19,20 +31,17 @@ test.beforeEach(async ({ page }) => {
     }),
   );
   await page.goto("/code-component-check");
-  await expect(
-    page.getByRole("textbox", { name: "Simulation source editor" }),
-  ).toBeVisible();
+  await expect(sourceEditor(page)).toBeVisible();
 });
 
 test("native save and dc arguments open automatically and preview their Canvas target", async ({
   page,
 }) => {
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   await editor.fill("* test\ncontrol\nsave");
   await page.keyboard.press("End");
   await page.keyboard.type(" ");
+  const body = page.locator("body");
   const output = page.getByRole("option").filter({
     has: page.locator(".cm-completionLabel", { hasText: /^v\(out\)$/ }),
   });
@@ -48,26 +57,17 @@ test("native save and dc arguments open automatically and preview their Canvas t
       '.cm-tooltip-autocomplete [aria-selected="true"] .cm-completionLabel',
     )
     .textContent();
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-focused-signal",
-    selected!,
-  );
+  await expect(body).toHaveAttribute("data-focused-signal", selected!);
   await output.hover();
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-focused-signal",
-    "v(out)",
-  );
+  await expect(body).toHaveAttribute("data-focused-signal", "v(out)");
   await page.keyboard.press("Escape");
-  await expect(page.locator("body")).toHaveAttribute("data-focused-signal", "");
+  await expect(body).toHaveAttribute("data-focused-signal", "");
   await editor.fill("* test\ncontrol\nsave v(out)");
   await page.keyboard.press("End");
   await page.keyboard.press("ArrowLeft");
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-focused-signal",
-    "v(out)",
-  );
+  await expect(body).toHaveAttribute("data-focused-signal", "v(out)");
   await editor.blur();
-  await expect(page.locator("body")).toHaveAttribute("data-focused-signal", "");
+  await expect(body).toHaveAttribute("data-focused-signal", "");
   await editor.fill("* test\ncontrol\nsweep bias instance=");
   await page.keyboard.press("End");
   await page.keyboard.type(" ");
@@ -79,11 +79,10 @@ test("native save and dc arguments open automatically and preview their Canvas t
 test("Helper finds commands by purpose, Tab fills ghost arguments that never reach saved source, and the Spec entry writes the language's comment", async ({
   page,
 }) => {
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   const trigger = page.getByRole("button", { name: /Helper/ }).first();
   const popup = page.getByRole("dialog", { name: "Insert / Helper" });
+  const ghost = page.locator(".simulation-parameter-ghost");
   // The trigger toggles a compact popup closed; so does Escape.
   await trigger.click();
   await expect(popup).toBeVisible();
@@ -108,9 +107,7 @@ test("Helper finds commands by purpose, Tab fills ghost arguments that never rea
     .getByRole("textbox", { name: "Search commands or purpose" })
     .fill("频响");
   await page.getByRole("option").click();
-  await expect(page.locator(".simulation-parameter-ghost")).toContainText(
-    "from=start Hz",
-  );
+  await expect(ghost).toContainText("from=start Hz");
   await expect(page.getByTestId("draft-source")).toHaveText(
     JSON.stringify("* test\r\ncontrol\r\nanalysis ac1 ac "),
   );
@@ -129,11 +126,11 @@ test("Helper finds commands by purpose, Tab fills ghost arguments that never rea
   );
   // Escape suppresses the ghosts for the rest of the line.
   await editor.fill("* test\ncontrol\nanalysis ac1 ac ");
-  await expect(page.locator(".simulation-parameter-ghost")).toBeVisible();
+  await expect(ghost).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".simulation-parameter-ghost")).toHaveCount(0);
+  await expect(ghost).toHaveCount(0);
   await page.keyboard.insertText("dec");
-  await expect(page.locator(".simulation-parameter-ghost")).toHaveCount(0);
+  await expect(ghost).toHaveCount(0);
   // VACASK rejects a SPICE `*` comment; `//` is its comment (#1315).
   await editor.fill("* test\n.control\nmeas tran peak MAX v(out)");
   await page.getByRole("button", { name: "Helper", exact: true }).click();
@@ -152,9 +149,7 @@ test("Helper finds commands by purpose, Tab fills ghost arguments that never rea
 test("diagnostics stay on their line: an invalid Spec before any run, invalid text that stays editable and saveable", async ({
   page,
 }) => {
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   // The run's parser checks the annotation as it is written (#1311).
   await editor.fill("Wien bridge\n// @spec per10 range 9.0m 11.1m unit=s\n");
   await page.locator(".cm-lintRange").first().hover();
@@ -174,28 +169,16 @@ test("diagnostics stay on their line: an invalid Spec before any run, invalid te
 test("Explorer opens sideways, configuration is advanced, and results maximize/restore without a new fixed panel", async ({
   page,
 }) => {
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   const before = await editor.boundingBox();
   await expect(page.getByRole("tab", { name: "Configuration" })).toHaveCount(0);
   await page.getByRole("button", { name: "Explorer", exact: true }).click();
-  await expect(
-    page.getByRole("complementary", { name: "Simulation files" }),
-  ).toBeVisible();
+  const files = page.getByRole("complementary", { name: "Simulation files" });
+  await expect(files).toBeVisible();
   const after = await editor.boundingBox();
   expect(after!.y).toBe(before!.y);
   expect(after!.x - before!.x).toBeGreaterThan(100);
-  if (
-    (await page
-      .getByRole("button", { name: "Explorer", exact: true })
-      .getAttribute("aria-expanded")) !== "true"
-  )
-    await page.getByRole("button", { name: "Explorer", exact: true }).click();
-  await page
-    .getByRole("treeitem", { name: "experiment.json", exact: true })
-    .first()
-    .click();
+  await openExperimentJson(page);
   await expect(
     page.getByRole("tab", { name: "Configuration" }),
   ).toHaveAttribute("aria-selected", "true");
@@ -206,53 +189,37 @@ test("Explorer opens sideways, configuration is advanced, and results maximize/r
   await expect(page.locator(".simulation-spec-results")).toBeVisible();
   await page.getByRole("button", { name: "Restore results" }).click();
   await expect(editor).toBeVisible();
-  await expect(
-    page.getByRole("complementary", { name: "Simulation files" }),
-  ).toBeVisible();
+  await expect(files).toBeVisible();
 });
 
 test("edits, saves and undoes exact source bytes through Ctrl+S or Save source, keeping a save boundary and readonly generated text", async ({
   page,
 }) => {
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
-  const original = JSON.parse(
-    (await page.getByTestId("draft-source").textContent())!,
-  );
+  const editor = sourceEditor(page);
+  const draftSource = page.getByTestId("draft-source");
+  const savedSource = page.getByTestId("saved-source");
+  const original = JSON.parse((await draftSource.textContent())!);
   await editor.click();
   await page.keyboard.press("ControlOrMeta+End");
   await page.keyboard.insertText("// edited");
-  await expect(page.getByTestId("draft-source")).toHaveText(
-    JSON.stringify(original + "// edited"),
-  );
+  await expect(draftSource).toHaveText(JSON.stringify(original + "// edited"));
   await page.keyboard.press("ControlOrMeta+z");
-  await expect(page.getByTestId("draft-source")).toHaveText(
-    JSON.stringify(original),
-  );
+  await expect(draftSource).toHaveText(JSON.stringify(original));
   const redoShortcut = await page.evaluate(() =>
     /Mac|iPhone|iPad/.test(navigator.platform) ? "Meta+Shift+z" : "Control+y",
   );
   await page.keyboard.press(redoShortcut);
-  await expect(page.getByTestId("draft-source")).toHaveText(
-    JSON.stringify(original + "// edited"),
-  );
+  await expect(draftSource).toHaveText(JSON.stringify(original + "// edited"));
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page.getByTestId("saved-source")).toHaveText(
-    JSON.stringify(original + "// edited"),
-  );
+  await expect(savedSource).toHaveText(JSON.stringify(original + "// edited"));
   await page.keyboard.press("ControlOrMeta+z");
-  await expect(page.getByTestId("draft-source")).toHaveText(
-    JSON.stringify(original + "// edited"),
-  );
+  await expect(draftSource).toHaveText(JSON.stringify(original + "// edited"));
   // The button saves the same current source as the shortcut.
   await editor.fill("* saved by button\ncontrol\nendc\n");
-  await expect(page.getByTestId("draft-source")).toContainText(
-    "saved by button",
-  );
-  const draft = await page.getByTestId("draft-source").textContent();
+  await expect(draftSource).toContainText("saved by button");
+  const draft = await draftSource.textContent();
   await page.getByRole("button", { name: "Save source" }).click();
-  await expect(page.getByTestId("saved-source")).toHaveText(draft!);
+  await expect(savedSource).toHaveText(draft!);
   await page.getByRole("tab", { name: /circuit.spice/ }).click();
   await expect(editor).toHaveAttribute("contenteditable", "false");
 });
@@ -260,9 +227,7 @@ test("edits, saves and undoes exact source bytes through Ctrl+S or Save source, 
 test("file switching preserves caret, selection, scroll and local Undo history", async ({
   page,
 }) => {
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   const long =
     "* file navigation\n" +
     Array.from({ length: 90 }, (_, i) => `// line ${i}\n`).join("");
@@ -285,16 +250,7 @@ test("file switching preserves caret, selection, scroll and local Undo history",
   const scroller = page.locator(".cm-scroller");
   const scroll = await scroller.evaluate((el) => el.scrollTop);
   expect(scroll).toBeGreaterThan(100);
-  if (
-    (await page
-      .getByRole("button", { name: "Explorer", exact: true })
-      .getAttribute("aria-expanded")) !== "true"
-  )
-    await page.getByRole("button", { name: "Explorer", exact: true }).click();
-  await page
-    .getByRole("treeitem", { name: "experiment.json", exact: true })
-    .first()
-    .click();
+  await openExperimentJson(page);
   await editor.fill('{"version":1,"different":true}');
   await page.getByRole("tab", { name: "run.cir" }).click();
   await expect(editor).toBeFocused();

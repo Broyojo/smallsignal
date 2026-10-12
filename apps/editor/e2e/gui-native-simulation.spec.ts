@@ -1,43 +1,20 @@
 import { test, expect } from "@playwright/test";
-import { readFile } from "node:fs/promises";
-import { parseProject } from "@icm/project-protocol";
-import { createSimulationFolder } from "@icm/model";
-import { exportedProject, openProjectFile } from "./editor-fixtures.js";
+import type { parseProject } from "@icm/project-protocol";
+import { exportedProject } from "./editor-fixtures.js";
+import { createAgentNativeExecutor } from "./native-simulation-executor.mjs";
 import {
-  agentNativeProfile,
-  agentNativeSource,
-  createAgentNativeExecutor,
-} from "./native-simulation-executor.mjs";
+  folderFile,
+  nativeRcProject,
+  openSimulation,
+  rcExample,
+} from "./simulation-e2e-fixtures.js";
 
 // The GUI's one end-to-end native run: replayed VACASK records by default,
 // the real executable with ICM_E2E_VACASK_REAL=1.
 test("GUI shows unruled VACASK measurements and opens their Console evidence", async ({
   page,
 }) => {
-  const project = parseProject(
-    await readFile(
-      "apps/editor/src/examples/simulation-rc.icproj.json",
-      "utf8",
-    ),
-  );
-  const folder = createSimulationFolder({
-    id: "native-specs",
-    name: "Native measurements",
-    profileId: agentNativeProfile,
-  });
-  folder.input.entry = "run.sim";
-  folder.input.circuitBindings = [];
-  folder.input.files = [
-    {
-      path: "experiment.json",
-      text: JSON.stringify({
-        version: 2,
-        environment: { profileId: agentNativeProfile },
-      }),
-    },
-    { path: "run.sim", text: agentNativeSource },
-  ];
-  project.simulationFolders = [folder];
+  const project = await nativeRcProject("native-specs", "Native measurements");
   const executor = await createAgentNativeExecutor();
   try {
     await page.route("**/api/simulate", async (route) => {
@@ -51,10 +28,11 @@ test("GUI shows unruled VACASK measurements and opens their Console evidence", a
         '\nICM_MEASUREMENT_V1 {"name":"native_gain","status":"available","value":2,"unit":"V"}';
       return route.fulfill({ json: result });
     });
-    await page.goto("/editor");
-    await openProjectFile(page, project, "native-specs.icproj.json");
-    await page.getByTestId("open-analog-simulation").click();
-    const panel = page.getByRole("region", { name: "Analog simulation" });
+    const panel = await openSimulation(
+      page,
+      project,
+      "native-specs.icproj.json",
+    );
     await panel.getByRole("button", { name: "Run", exact: true }).click();
     await expect(panel.getByRole("status")).toHaveText("completed");
     await panel.getByRole("tab", { name: "Specs", exact: true }).click();
@@ -87,12 +65,7 @@ test("GUI shows unruled VACASK measurements and opens their Console evidence", a
 test("GUI creates an offline experiment with the VACASK candidate identity", async ({
   page,
 }) => {
-  const project = parseProject(
-    await readFile(
-      "apps/editor/src/examples/simulation-rc.icproj.json",
-      "utf8",
-    ),
-  );
+  const project = rcExample();
   project.simulationFolders = [];
   await page.route("**/api/simulate", (route) =>
     route.fulfill({
@@ -109,10 +82,11 @@ test("GUI creates an offline experiment with the VACASK candidate identity", asy
       },
     }),
   );
-  await page.goto("/editor");
-  await openProjectFile(page, project, "no-experiments.icproj.json");
-  await page.getByTestId("open-analog-simulation").click();
-  const panel = page.getByRole("region", { name: "Analog simulation" });
+  const panel = await openSimulation(
+    page,
+    project,
+    "no-experiments.icproj.json",
+  );
   await panel
     .getByRole("button", { name: "Set up manually", exact: true })
     .click();
@@ -129,16 +103,12 @@ test("GUI creates an offline experiment with the VACASK candidate identity", asy
   ).toBeVisible();
   const saved: ReturnType<typeof parseProject> = await exportedProject(page);
   const folder = saved.simulationFolders[0]!;
-  const config = JSON.parse(
-    folder.input.files.find((f) => f.path === folder.input.configPath)!.text,
-  );
+  const config = JSON.parse(folderFile(folder, folder.input.configPath).text);
   expect(config).toEqual({
     version: 2,
     environment: { profileId: "vacask-sky130-candidate" },
   });
-  const entry = folder.input.files.find(
-    (f) => f.path === folder.input.entry,
-  )!.text;
+  const entry = folderFile(folder).text;
   expect(entry).toContain("analysis op op");
   expect(entry).not.toContain(".control");
 });

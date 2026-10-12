@@ -2,12 +2,17 @@ import { test, expect } from "@playwright/test";
 import { createSimulationFolder } from "@icm/model";
 import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
-import { openProjectFile } from "./editor-fixtures.js";
 import {
   nativeSimulationDevices,
   type NativeModelLibrarySymbols,
 } from "@icm/netlist";
-import { ota } from "./simulation-e2e-fixtures.js";
+import {
+  abortRunsOffering,
+  chooseHelperEntry,
+  openSimulation,
+  ota,
+  sourceEditor,
+} from "./simulation-e2e-fixtures.js";
 
 test("Profile-backed OP picker discovers an implicit library without writing its generated include", async ({
   page,
@@ -35,37 +40,23 @@ test("Profile-backed OP picker discovers an implicit library without writing its
     documentId: project.topDocumentId,
   });
   project.simulationFolders = [folder];
-  let executions = 0;
   // Browser authoring proof only. The separate real-runtime OTA test validates
   // these captured model paths against the actual dependency and native process.
-  await page.route("**/api/simulate", (route) => {
-    if (route.request().postDataJSON().operation !== "capabilities") {
-      executions++;
-      return route.abort();
-    }
-    return route.fulfill({
-      json: {
-        configured: true,
-        rawfileCollection: "native-multi-ascii",
-        inputs: ["source"],
-        profiles: [
-          { ...profile, modelLibrary: { dependencyId: library.dependencyId } },
-        ],
-        analyses: ["op", "ac"],
-        parsedAnalyses: ["op", "ac"],
-        maxTimeoutMs: 30000,
-        maxInputBytes: 1048576,
-        cancel: true,
-      },
-    });
+  const executions = await abortRunsOffering(page, {
+    configured: true,
+    rawfileCollection: "native-multi-ascii",
+    inputs: ["source"],
+    profiles: [
+      { ...profile, modelLibrary: { dependencyId: library.dependencyId } },
+    ],
+    analyses: ["op", "ac"],
+    parsedAnalyses: ["op", "ac"],
+    maxTimeoutMs: 30000,
+    maxInputBytes: 1048576,
+    cancel: true,
   });
-  await page.goto("/editor");
-  await openProjectFile(page, project, "profile-probes.icproj.json");
-  await page.getByTestId("open-analog-simulation").click();
-  await page.getByRole("button", { name: "Helper", exact: true }).click();
-  await page
-    .getByRole("option", { name: "Save device operating point…", exact: true })
-    .click();
+  await openSimulation(page, project, "profile-probes.icproj.json");
+  await chooseHelperEntry(page, "Save device operating point…");
   const picker = page.getByRole("dialog", { name: "Save signal" });
   const device = nativeSimulationDevices(project, folder.input).find(
     (d) => d.instanceId === "M1",
@@ -78,17 +69,12 @@ test("Profile-backed OP picker discovers an implicit library without writing its
   });
   await choice.click();
   await expect(choice).toContainText("Added");
-  const editor = page.getByRole("textbox", {
-    name: "Simulation source editor",
-  });
+  const editor = sourceEditor(page);
   await expect(editor).toContainText(gm.save);
   await expect(editor).not.toContainText("icm-models");
   await expect(picker.getByRole("status")).toHaveCount(0);
   await picker.getByRole("button", { name: "Done", exact: true }).click();
-  await page.getByRole("button", { name: "Helper", exact: true }).click();
-  await page
-    .getByRole("option", { name: "Save terminal current…", exact: true })
-    .click();
+  await chooseHelperEntry(page, "Save terminal current…");
   const current = picker.getByRole("button", { name: /M1\.D current/ });
   await current.click();
   await expect(current).toContainText("Added");
@@ -97,5 +83,5 @@ test("Profile-backed OP picker discovers an implicit library without writing its
   )!;
   await expect(editor).toContainText(sense.save);
   await expect(editor).not.toContainText(".probe");
-  expect(executions).toBe(0);
+  expect(executions()).toBe(0);
 });

@@ -1,11 +1,11 @@
-import { parseSavedProject } from "./editor-fixtures";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { compileNgspiceSourceSimulation } from "@icm/netlist";
 import {
-  createSimulationEnvironmentMetadata,
-  createSimulationInputMetadata,
-} from "@icm/spice-run";
-import { profile } from "./simulation-e2e-fixtures.js";
+  completedNgspiceRun,
+  ngspiceCapabilities,
+  profile,
+} from "./simulation-e2e-fixtures.js";
+import { sessionUser, signIn } from "./gallery-fixtures.js";
 import {
   createEmptyDocument,
   createEmptyProject,
@@ -24,11 +24,35 @@ import { serializeProject } from "@icm/project-protocol";
 import {
   revealPropertiesShelf,
   clickCommand,
-  downloadBytes,
+  exportedProject,
+  expectStatus,
   openCellManager,
+  openCellManagerTab,
   openMenu,
+  openProject,
+  openProjectFile,
   copyNetlistText,
+  showNetlistPanel,
 } from "./editor-fixtures.js";
+import { placedInstance } from "./canvas-fixtures.js";
+
+function fitsWidth(locator: Locator): Promise<boolean> {
+  return locator.evaluate((el) => el.scrollWidth <= el.clientWidth);
+}
+
+function listItem(manager: Locator, name: string | RegExp): Locator {
+  return manager.locator(".cell-manager-list-item").filter({ hasText: name });
+}
+
+function modelNetlist(manager: Locator): Locator {
+  return manager.getByLabel("External model netlist");
+}
+
+async function applyModel(manager: Locator): Promise<void> {
+  await manager
+    .getByRole("button", { name: "Apply model", exact: true })
+    .click();
+}
 
 test("process shortcuts change only visible model text and clipboard failure stays inline", async ({
   page,
@@ -43,15 +67,8 @@ test("process shortcuts change only visible model text and clipboard failure sta
     }),
   );
   await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  const editor = manager.getByLabel("External model netlist");
+  const manager = await openCellManagerTab(page, "External Circuits");
+  const editor = modelNetlist(manager);
   await editor.fill(
     ".subckt pair D G S B\nX1 D G S B sky130_fd_pr__nfet_01v8 w=2 l=0.15 nf=2 m=8\n.ends pair\n",
   );
@@ -59,18 +76,14 @@ test("process shortcuts change only visible model text and clipboard failure sta
   await manager.getByLabel("Model process").selectOption("sg13g2");
   await expect(editor).toContainText("sg13_lv_nmos");
   await expect(editor).toContainText("ng=2");
-  await expect(
-    manager.getByRole("button", { name: "Copy model netlist", exact: true }),
-  ).toBeDisabled();
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
-  await expect(manager.getByLabel("Model process")).toHaveValue("sg13g2");
-  const before = await editor.innerText();
   const copy = manager.getByRole("button", {
     name: "Copy model netlist",
     exact: true,
   });
+  await expect(copy).toBeDisabled();
+  await applyModel(manager);
+  await expect(manager.getByLabel("Model process")).toHaveValue("sg13g2");
+  const before = await editor.innerText();
   await copy.click();
   await expect(manager.getByRole("status")).toContainText(
     "Could not copy model netlist.",
@@ -89,9 +102,7 @@ test("process shortcuts change only visible model text and clipboard failure sta
   await editor.fill(
     ".subckt GM_STAGE INP INN OUT VSS params: GM=1m RL=10k CL=10p\nGsignal VSS OUT INP INN {GM}\nRload OUT VSS {RL}\nCload OUT VSS {CL}\nRinp INP VSS 1T\nRinn INN VSS 1T\n.ends GM_STAGE\n",
   );
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await applyModel(manager);
   await expect(manager.getByLabel("Model process")).toHaveValue("abstract");
   const independent = await editor.innerText();
   await manager.getByLabel("Model process").focus();
@@ -110,13 +121,8 @@ test("process shortcuts change only visible model text and clipboard failure sta
   await expect(
     manager.getByRole("heading", { name: "New External Circuit", exact: true }),
   ).toBeVisible();
-  await manager
-    .locator(".cell-manager-list-item")
-    .filter({ hasText: "GM_STAGE" })
-    .click();
-  await expect
-    .poll(() => manager.getByLabel("External model netlist").innerText())
-    .toBe(independent);
+  await listItem(manager, "GM_STAGE").click();
+  await expect.poll(() => modelNetlist(manager).innerText()).toBe(independent);
   await expect(page.getByRole("dialog")).toHaveCount(1);
 });
 
@@ -124,15 +130,8 @@ test("converts the external draft with the reused format selector and keeps fail
   page,
 }) => {
   await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  const editor = manager.getByLabel("External model netlist");
+  const manager = await openCellManagerTab(page, "External Circuits");
+  const editor = modelNetlist(manager);
   await editor.fill(
     ".subckt rc A B params: RVAL=1k\nR1 A B {RVAL}\n.ends rc\n",
   );
@@ -145,9 +144,7 @@ test("converts the external draft with the reused format selector and keeps fail
   await editor.press("ControlOrMeta+Shift+z");
   await expect(manager.getByLabel("Model format")).toHaveValue("spectre");
   await expect(editor).toContainText("parameters RVAL=1000");
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await applyModel(manager);
   await expect(manager.getByLabel("Model format")).toHaveValue("spectre");
   await editor.fill("subckt rc (A B)\nB1 (A B) bsource v=sin(time)\nends rc\n");
   await manager.getByLabel("Model format").focus();
@@ -175,15 +172,8 @@ test("starts an external model with English comments and copies only its applied
     });
   });
   await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  const editor = manager.getByLabel("External model netlist");
+  const manager = await openCellManagerTab(page, "External Circuits");
+  const editor = modelNetlist(manager);
   const starter = await editor.innerText();
   expect(starter.trim().split("\n")).toHaveLength(2);
   expect(starter).toMatch(/^\* [A-Za-z]/);
@@ -213,9 +203,7 @@ test("starts an external model with English comments and copies only its applied
   await expect.poll(() => editor.innerText()).toBe(starter);
   await editor.fill(".subckt empty\n.ends empty\n");
   await expect(copy).toBeDisabled();
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await applyModel(manager);
   await expect(copy).toBeEnabled();
   await copy.click();
   const text = await page.evaluate(
@@ -239,32 +227,21 @@ for (const viewport of [
   }) => {
     await page.setViewportSize(viewport);
     await page.goto("/editor");
-    await openCellManager(page);
-    const manager = page.getByRole("dialog", {
-      name: "Cell Manager",
-      exact: true,
-    });
-    await manager
-      .getByRole("tab", { name: "External Circuits", exact: true })
-      .click();
-    await manager
-      .getByLabel("External model netlist")
-      .fill(".subckt layout A B\nR1 A B 1k\n.ends layout\n");
+    const manager = await openCellManagerTab(page, "External Circuits");
+    await modelNetlist(manager).fill(
+      ".subckt layout A B\nR1 A B 1k\n.ends layout\n",
+    );
     const box = await manager
       .getByRole("button", { name: "Apply & Place" })
       .boundingBox();
-    expect(
-      await manager.evaluate((el) => el.scrollWidth <= el.clientWidth),
-    ).toBe(true);
+    expect(await fitsWidth(manager)).toBe(true);
     expect(box!.y).toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
     const interfaceBox = await manager
       .getByLabel("Parsed model interface")
       .boundingBox();
     expect(interfaceBox!.y + interfaceBox!.height).toBeLessThanOrEqual(box!.y);
-    await manager
-      .getByRole("button", { name: "Apply model", exact: true })
-      .click();
+    await applyModel(manager);
     const controls = manager.getByLabel("Cell symbol layout", { exact: true });
     const preview = manager.getByLabel("Symbol preview", { exact: true });
     await expect(preview).toBeVisible();
@@ -281,9 +258,7 @@ for (const viewport of [
       expect(a!.y).toBe(b!.y);
       expect(b!.x).toBeGreaterThan(a!.x);
     }
-    expect(
-      await controls.evaluate((el) => el.scrollWidth <= el.clientWidth),
-    ).toBe(true);
+    expect(await fitsWidth(controls)).toBe(true);
     expect(
       await controls.evaluate((el) => {
         const bounds = el.getBoundingClientRect();
@@ -293,9 +268,7 @@ for (const viewport of [
         }).every(Boolean);
       }),
     ).toBe(true);
-    expect(
-      await manager.evaluate((el) => el.scrollWidth <= el.clientWidth),
-    ).toBe(true);
+    expect(await fitsWidth(manager)).toBe(true);
     await manager.getByLabel("Model A direction").selectOption("input");
     await expect(manager.getByLabel("Model A direction")).toHaveValue("input");
   });
@@ -305,20 +278,11 @@ test("searches definitions without discarding the selected model", async ({
   page,
 }) => {
   await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  await manager
-    .getByLabel("External model netlist")
-    .fill(".subckt searchable A B\nR1 A B 1k\n.ends searchable\n");
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  const manager = await openCellManagerTab(page, "External Circuits");
+  await modelNetlist(manager).fill(
+    ".subckt searchable A B\nR1 A B 1k\n.ends searchable\n",
+  );
+  await applyModel(manager);
   const list = manager.getByRole("complementary", {
     name: "External Circuits",
   });
@@ -326,9 +290,7 @@ test("searches definitions without discarding the selected model", async ({
   await list.getByRole("searchbox").fill("missing");
   await expect(list.getByRole("button", { name: /searchable/ })).toHaveCount(0);
   await expect(list.getByRole("status")).toHaveText("No matches");
-  await expect(manager.getByLabel("External model netlist")).toContainText(
-    "R1 A B 1k",
-  );
+  await expect(modelNetlist(manager)).toContainText("R1 A B 1k");
   await list.getByRole("searchbox").fill("SEARCH");
   await expect(list.getByRole("button", { name: /searchable/ })).toBeVisible();
   await expect(manager.locator(".external-model-symbol")).toBeVisible();
@@ -339,20 +301,13 @@ test("applies and places an external model in a compact narrow Manager", async (
 }) => {
   await page.setViewportSize({ width: 430, height: 800 });
   await page.goto("/editor");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  const manager = await openCellManagerTab(page, "External Circuits");
   await expect(manager.getByRole("group", { name: "Model files" })).toHaveCount(
     0,
   );
-  await manager
-    .getByLabel("External model netlist")
-    .fill(".subckt compact A B\nR1 A B 1k\n.ends compact\n");
+  await modelNetlist(manager).fill(
+    ".subckt compact A B\nR1 A B 1k\n.ends compact\n",
+  );
   // Closing or switching tabs asks before an unsaved model is dropped.
   const guard = page.getByRole("dialog", { name: "Unsaved model" });
   for (const leave of [
@@ -361,9 +316,7 @@ test("applies and places an external model in a compact narrow Manager", async (
   ]) {
     await leave.click();
     await guard.getByRole("button", { name: "Keep editing" }).click();
-    await expect(manager.getByLabel("External model netlist")).toContainText(
-      "R1 A B 1k",
-    );
+    await expect(modelNetlist(manager)).toContainText("R1 A B 1k");
   }
   const applyPlace = manager.getByRole("button", {
     name: "Apply & Place",
@@ -371,40 +324,26 @@ test("applies and places an external model in a compact narrow Manager", async (
   });
   const bounds = await applyPlace.boundingBox();
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(800);
-  expect(await manager.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
-    true,
-  );
+  expect(await fitsWidth(manager)).toBe(true);
   await applyPlace.click();
   await expect(manager).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("active-instance-count")).toHaveText("0");
-  await openCellManager(page);
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  await openCellManagerTab(page, "External Circuits");
   await manager.getByRole("button", { name: /compact/ }).click();
   await manager.getByRole("button", { name: "Place", exact: true }).click();
   await page.getByRole("button", { name: "Netlist", exact: true }).click();
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 200, y: 250 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-  await openCellManager(page);
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  await placeFirstAt(page, { x: 200, y: 250 });
+  await openCellManagerTab(page, "External Circuits");
   await manager.getByRole("button", { name: /compact/ }).click();
-  await manager
-    .getByLabel("External model netlist")
-    .fill(".subckt compact A B\nR1 A B 2k\n.ends compact\n");
+  await modelNetlist(manager).fill(
+    ".subckt compact A B\nR1 A B 2k\n.ends compact\n",
+  );
   await manager.getByText("Callers (1)", { exact: true }).click();
   await manager.getByRole("button", { name: "Jump to caller" }).click();
   await expect(guard).toBeVisible();
   await guard.getByRole("button", { name: "Keep editing" }).click();
-  await expect(manager.getByLabel("External model netlist")).toContainText(
-    "R1 A B 2k",
-  );
+  await expect(modelNetlist(manager)).toContainText("R1 A B 2k");
   await manager.getByRole("button", { name: "Jump to caller" }).click();
   await guard.getByRole("button", { name: "Discard changes" }).click();
   await expect(manager).toHaveCount(0);
@@ -448,48 +387,24 @@ test("refuses copying a legacy interface-only model until its native implementat
   experiment.input.files.push({ path: "legacy.spice", text: body });
   project.simulationFolders.push(experiment);
   await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "legacy.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  if (
-    (await page
-      .getByTestId("netlist-panel-toggle")
-      .getAttribute("aria-pressed")) !== "true"
-  )
-    await page.getByTestId("netlist-panel-toggle").click();
-  const netlist = page.getByRole("region", {
-    name: "Live netlist",
-    exact: true,
-  });
+  await openProjectFile(page, serializeProject(project), "legacy.icproj.json");
+  const netlist = await showNetlistPanel(page);
   await expect(netlist.getByTestId("netlist-issues")).toContainText(
     "Legacy declaration legacy_gain has no Project-owned implementation",
   );
   await expect(netlist.getByTestId("copy-netlist-panel")).toBeDisabled();
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", {
-    name: "Cell Manager",
-    exact: true,
-  });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  const manager = await openCellManagerTab(page, "External Circuits");
   await manager.getByRole("button", { name: /legacy_gain/ }).click();
   await manager
     .getByRole("button", { name: "Define implementation…", exact: true })
     .click();
-  await manager.getByLabel("External model netlist").fill(body);
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await modelNetlist(manager).fill(body);
+  await applyModel(manager);
   await manager.getByLabel("Close Cell Manager").click();
   const copied = await copyNetlistText(page, "spice");
   expect(copied).toContain(body);
   expect(copied.match(/^\.subckt legacy_gain\b/gm)).toHaveLength(1);
-  const saved: CircuitProject = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: CircuitProject = await exportedProject(page);
   expect(
     saved.externalSubcircuitDefinitions[0]!.terminals.map(
       (terminal) => terminal.id,
@@ -509,20 +424,14 @@ test("shares multiple model entries, explicitly forks and reopens an undoable po
     return route.abort();
   });
   await page.goto("/editor?new=1");
-  await openCellManager(page);
-  let manager = page.getByRole("dialog", { name: "Cell Manager" });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  let manager = await openCellManagerTab(page, "External Circuits");
   const text =
     ".subckt first A B\nR1 A B 1k\n.ends first\n.subckt second A B\nR1 A B 2k\n.ends second\n";
-  await manager.getByLabel("External model netlist").fill(text);
+  await modelNetlist(manager).fill(text);
   await manager
     .getByLabel("External model entry", { exact: true })
     .selectOption("first");
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await applyModel(manager);
   await manager
     .getByRole("button", { name: "New External Circuit", exact: true })
     .click();
@@ -532,41 +441,27 @@ test("shares multiple model entries, explicitly forks and reopens an undoable po
   await manager
     .getByLabel("External model entry", { exact: true })
     .selectOption("second");
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await applyModel(manager);
   await expect(manager.getByRole("alert")).toHaveCount(0);
   await expect(manager).toContainText("Shared by 2 definitions");
   await manager.getByText("More", { exact: true }).click();
   await manager
     .getByRole("button", { name: "Fork model…", exact: true })
     .click();
-  await manager
-    .getByLabel("External model netlist")
-    .fill(
-      text
-        .replaceAll("first", "fork_first")
-        .replaceAll("second", "fork_second"),
-    );
+  await modelNetlist(manager).fill(
+    text.replaceAll("first", "fork_first").replaceAll("second", "fork_second"),
+  );
   await manager
     .getByLabel("External model entry", { exact: true })
     .selectOption("fork_first");
-  await manager
-    .getByRole("button", { name: "Apply model", exact: true })
-    .click();
+  await applyModel(manager);
   await manager.getByLabel("Close Cell Manager").click();
   await page.keyboard.press("Control+z");
-  await openCellManager(page);
-  manager = page.getByRole("dialog", { name: "Cell Manager" });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
+  manager = await openCellManagerTab(page, "External Circuits");
   await expect(manager.locator(".cell-manager-list-item")).toHaveCount(2);
   await manager.getByLabel("Close Cell Manager").click();
   await page.keyboard.press("Control+Shift+z");
-  const saved: CircuitProject = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: CircuitProject = await exportedProject(page);
   expect(saved.modelSources).toHaveLength(2);
   expect(saved.externalSubcircuitDefinitions).toHaveLength(3);
   expect(
@@ -574,23 +469,10 @@ test("shares multiple model entries, explicitly forks and reopens an undoable po
       .slice(0, 2)
       .map((d) => d.implementation!.sourceId),
   ).toEqual([saved.modelSources![0]!.id, saved.modelSources![0]!.id]);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "owned.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(saved)),
-  });
-  await openCellManager(page);
-  manager = page.getByRole("dialog", { name: "Cell Manager" });
-  await manager
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  await manager
-    .locator(".cell-manager-list-item")
-    .filter({ hasText: "fork_first" })
-    .click();
-  await expect(manager.getByLabel("External model netlist")).toContainText(
-    ".subckt fork_first A B",
-  );
+  await openProjectFile(page, serializeProject(saved), "owned.icproj.json");
+  manager = await openCellManagerTab(page, "External Circuits");
+  await listItem(manager, "fork_first").click();
+  await expect(modelNetlist(manager)).toContainText(".subckt fork_first A B");
   expect(executions).toBe(0);
 });
 
@@ -651,18 +533,12 @@ test("imports a long-named Cloud Cell with a child and owned model into the orig
     updatedAt: "2026-10-07T00:00:00Z",
     projectText: serializeProject(reusable),
   };
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "author",
-          displayName: "Author",
-          email: "author@example.com",
-          role: "user",
-          provider: "github",
-          isAdmin: false,
-        },
-      },
+  await signIn(
+    page,
+    sessionUser({
+      id: "author",
+      displayName: "Author",
+      email: "author@example.com",
     }),
   );
   await page.route("**/api/projects", (route) =>
@@ -679,8 +555,7 @@ test("imports a long-named Cloud Cell with a child and owned model into the orig
   );
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto("/editor?new=1");
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  const manager = await openCellManager(page);
   await manager
     .getByRole("button", { name: "Import Cell", exact: true })
     .click();
@@ -706,34 +581,16 @@ test("imports a long-named Cloud Cell with a child and owned model into the orig
     manager.getByRole("button", { name: "Place", exact: true }),
   ).toBeEnabled();
   await manager.getByRole("button", { name: "Place", exact: true }).click();
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 280, y: 200 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-  const saved: CircuitProject = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  await placeFirstAt(page, { x: 280, y: 200 });
+  const saved: CircuitProject = await exportedProject(page);
   expect(
     saved.documents.find((d) => d.id === saved.topDocumentId)!.instances,
   ).toHaveLength(1);
   expect(saved.documents).toHaveLength(3);
   expect(saved.modelSources![0]!.files[0]!.text).toContain("R1 A B 7k");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "imported.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(saved)),
-  });
-  await openCellManager(page);
-  await page
-    .getByRole("dialog", { name: "Cell Manager" })
-    .getByRole("tab", { name: "External Circuits", exact: true })
-    .click();
-  await page
-    .getByRole("dialog", { name: "Cell Manager" })
-    .locator(".cell-manager-list-item")
-    .filter({ hasText: "imported_model" })
-    .click();
+  await openProjectFile(page, serializeProject(saved), "imported.icproj.json");
+  await openCellManagerTab(page, "External Circuits");
+  await listItem(manager, "imported_model").click();
   await expect(page.getByLabel("External model netlist")).toContainText(
     "R1 A B 7k",
   );
@@ -744,29 +601,16 @@ test("places a selected local Cell directly from Manager and explains self place
 }) => {
   const project = createEmptyProject("manager-placement", "Manager placement");
   project.documents.push(createEmptyDocument("child", "Child"));
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "cells.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  await openCellManager(page);
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  await openProject(page, project, "cells.icproj.json");
+  const manager = await openCellManager(page);
   await expect(
     manager.getByRole("button", { name: "Place", exact: true }),
   ).toBeDisabled();
   await expect(manager).toContainText("A Cell cannot contain itself");
-  await manager
-    .locator(".cell-manager-list-item")
-    .filter({ hasText: "Child" })
-    .click();
+  await listItem(manager, "Child").click();
   await manager.getByRole("button", { name: "Place", exact: true }).click();
   await expect(manager).toHaveCount(0);
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 350, y: 220 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  await placeFirstAt(page, { x: 350, y: 220 });
 });
 
 test("a runtime diagnostic opens the exact applied helper file while retaining its saved draft", async ({
@@ -837,24 +681,8 @@ test("a runtime diagnostic opens the exact applied helper file while retaining i
     if (request.operation === "capabilities")
       return route.fulfill({
         json: {
-          configured: true,
-          rawfileCollection: "declared-single-ascii",
-          maxOutputBytes: 1048576,
+          ...ngspiceCapabilities(["op", "ac", "tran", "noise"]),
           inputs: ["source", "raw"],
-          analyses: ["op", "ac", "tran", "noise"],
-          parsedAnalyses: ["op", "ac", "tran", "noise"],
-          profiles: [
-            {
-              id: profile.id,
-              corners: ["tt"],
-              dependencies: [
-                { id: profile.models.id, sha256: profile.models.contentSha256 },
-              ],
-            },
-          ],
-          maxTimeoutMs: 120000,
-          maxInputBytes: 1048576,
-          cancel: true,
         },
       });
     await route.fulfill({
@@ -865,38 +693,13 @@ test("a runtime diagnostic opens the exact applied helper file while retaining i
         ],
         log: "Error: unknown_function",
         durationMs: 1,
-        metadata: {
-          schemaVersion: 1,
-          input: await createSimulationInputMetadata({
-            inputRevision: request.inputRevision,
-            netlist: request.netlist,
-            testbench: request.testbench,
-            deck: request.preparedDeck,
-          }),
-          configuration: { modelLibrary: null },
-          environment: await createSimulationEnvironmentMetadata({
-            executor: "local-host",
-            reproducibility: "observed",
-            profileId: profile.id,
-            platform: "linux/x64",
-            simulator: {
-              name: "ngspice",
-              version: profile.simulator.version,
-              binarySha256: null,
-            },
-            models: null,
-            startupSha256: null,
-          }),
-        },
+        // The same run metadata a completed run reports.
+        metadata: (await completedNgspiceRun(request)).metadata,
       },
     });
   });
   await page.goto("/editor?new=1");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "runtime.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProjectFile(page, serializeProject(project), "runtime.icproj.json");
   await page.getByTestId("open-analog-simulation").click();
   const panel = page.getByRole("region", { name: "Analog simulation" });
   await panel.getByRole("button", { name: "Run", exact: true }).click();
@@ -913,7 +716,7 @@ test("a runtime diagnostic opens the exact applied helper file while retaining i
     })
     .click();
   const manager = page.getByRole("dialog", { name: "Cell Manager" });
-  const editor = manager.getByLabel("External model netlist");
+  const editor = modelNetlist(manager);
   await expect(editor).toContainText("B1 A 0 V={unknown_function(0)}");
   await expect(editor).toHaveAttribute("aria-readonly", "true");
   await expect(manager.locator(".cm-code-highlight")).toContainText("B1 A 0");
@@ -923,32 +726,44 @@ test("a runtime diagnostic opens the exact applied helper file while retaining i
   await expect(editor).toContainText(".subckt unfinished A");
   await expect(editor).toHaveAttribute("aria-readonly", "false");
   await manager.getByLabel("Close Cell Manager").click();
-  const saved: CircuitProject = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: CircuitProject = await exportedProject(page);
   expect(saved.modelSources![0]!.files[1]!.text).toBe(helper);
   expect(saved.modelSources![0]!.draft!.files[0]!.text).toBe(
     project.modelSources![0]!.draft!.files[0]!.text,
   );
 });
 
-async function runCellCommand(
-  page: import("@playwright/test").Page,
-  name: "Hierarchy" | "Place Cell",
+/** Press at a box's center and move by `delta`, leaving the button down. */
+async function pressAndMove(
+  page: Page,
+  box: { x: number; y: number; width: number; height: number },
+  delta: { x: number; y: number },
 ): Promise<void> {
-  if (name === "Hierarchy") {
-    await openCellManager(page);
-    return;
-  }
-  await clickCommand(page, "Edit", "Place Cell from this Project…");
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + delta.x, y + delta.y);
 }
 
-async function createCell(
-  page: import("@playwright/test").Page,
-  name: string,
+/** Click the armed placement onto the canvas as the first instance. */
+async function placeFirstAt(
+  page: Page,
+  position: { x: number; y: number },
 ): Promise<void> {
-  await runCellCommand(page, "Hierarchy");
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  await page.getByTestId("schematic-canvas").click({ position });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+}
+
+/** Type into the open canvas text editor and apply it. */
+async function applyCanvasText(page: Page, text: string): Promise<void> {
+  await page.getByRole("textbox", { name: "Canvas text editor" }).fill(text);
+  await page.getByRole("button", { name: "Apply text changes" }).click();
+}
+
+async function createCell(page: Page, name: string): Promise<void> {
+  const manager = await openCellManager(page);
   await manager.getByRole("button", { name: "New Cell" }).click();
   const editor = page.getByRole("dialog", { name: "New Cell" });
   await expect(editor).toHaveAttribute("autocomplete", "off");
@@ -961,26 +776,19 @@ async function createCell(
 }
 
 async function openCellDefinition(
-  page: import("@playwright/test").Page,
+  page: Page,
   name: string | RegExp,
 ): Promise<void> {
-  await runCellCommand(page, "Hierarchy");
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
-  await manager
-    .locator(".cell-manager-list-item")
-    .filter({ hasText: name })
-    .first()
-    .dblclick();
+  const manager = await openCellManager(page);
+  await listItem(manager, name).first().dblclick();
 }
 
-async function openTopCell(
-  page: import("@playwright/test").Page,
-): Promise<void> {
+async function openTopCell(page: Page): Promise<void> {
   await openCellDefinition(page, /Top/u);
 }
 
 async function placeCellPin(
-  page: import("@playwright/test").Page,
+  page: Page,
   options: {
     name: string;
     direction?: "input" | "output" | "inout" | "passive";
@@ -997,13 +805,9 @@ async function placeCellPin(
     .click({ position: options.position });
   await page.keyboard.press("Escape");
   await labels.nth(existingLabelCount).dblclick();
-  await page
-    .getByRole("textbox", { name: "Canvas text editor" })
-    .fill(options.name);
-  await page.getByRole("button", { name: "Apply text changes" }).click();
+  await applyCanvasText(page, options.name);
   if (options.direction) {
-    await runCellCommand(page, "Hierarchy");
-    const manager = page.getByRole("dialog", { name: "Cell Manager" });
+    const manager = await openCellManager(page);
     await manager
       .getByRole("table", { name: "Formal port order" })
       .getByRole("row")
@@ -1015,24 +819,22 @@ async function placeCellPin(
 }
 
 async function renameCellPinOnCanvas(
-  page: import("@playwright/test").Page,
+  page: Page,
   instanceId: string,
   name: string,
 ): Promise<void> {
   await page
     .getByTestId(`annotation-hit-instance-label-${instanceId}`)
     .dblclick();
-  await page.getByRole("textbox", { name: "Canvas text editor" }).fill(name);
-  await page.getByRole("button", { name: "Apply text changes" }).click();
+  await applyCanvasText(page, name);
 }
 
 async function setCellTerminalDirection(
-  page: import("@playwright/test").Page,
+  page: Page,
   name: string,
   direction: "input" | "output" | "inout" | "passive",
 ): Promise<void> {
-  await runCellCommand(page, "Hierarchy");
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  const manager = await openCellManager(page);
   await manager
     .getByLabel(`Formal port ${name} direction`)
     .selectOption(direction);
@@ -1044,27 +846,11 @@ test("saves ordinary Cell order without changing Top and restores it with Undo",
 }) => {
   const project = hierarchyParameterFixture();
   project.documents.push(createEmptyDocument("extra", "Extra"));
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "order.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
-  const snapshot = async () =>
-    parseSavedProject(
-      (await downloadBytes(page, "File", "Export Project File…")).toString(),
-    );
+  await openProject(page, project, "order.icproj.json");
+  const snapshot = () => exportedProject(page);
   const normalized = await snapshot();
-  await runCellCommand(page, "Hierarchy");
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
-  await manager
-    .locator(".cell-manager-list-item")
-    .filter({ hasText: "Extra" })
-    .dragTo(
-      manager
-        .locator(".cell-manager-list-item")
-        .filter({ hasText: "Resistors" }),
-    );
+  const manager = await openCellManager(page);
+  await listItem(manager, "Extra").dragTo(listItem(manager, "Resistors"));
   await expect(manager.locator(".cell-manager-list-item strong")).toHaveText([
     "dut",
     "Extra",
@@ -1105,13 +891,10 @@ test("manages external declarations independently of local Cell interfaces", asy
     "External subcircuit formal parameters",
   );
   const openAmplifier = async () => {
-    await runCellCommand(page, "Hierarchy");
-    await types
-      .getByRole("tab", { name: "External Circuits", exact: true })
-      .click();
+    await openCellManagerTab(page, "External Circuits");
     await externalList.getByRole("button", { name: /amplifier/ }).click();
   };
-  await runCellCommand(page, "Hierarchy");
+  await openCellManager(page);
   await expect(
     manager.getByLabel("Cell interface", { exact: true }),
   ).toBeVisible();
@@ -1214,10 +997,7 @@ test("a Cell Pin shows a display alias, here and on its block, and keeps its nam
   const alias = page.getByRole("checkbox", { name: "Use display alias" });
   await expect(alias).not.toBeChecked();
   await alias.check();
-  await page
-    .getByRole("textbox", { name: "Canvas text editor" })
-    .fill("Bias input");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
+  await applyCanvasText(page, "Bias input");
   await expect(page.getByTestId("status")).toHaveText(
     "Showing Bias input as a display alias; the Pin stays IN",
   );
@@ -1225,14 +1005,11 @@ test("a Cell Pin shows a display alias, here and on its block, and keeps its nam
   // Reopened, it is still the alias, and editing it keeps the Pin's name.
   await page.getByTestId("annotation-hit-instance-label-P1").dblclick();
   await expect(alias).toBeChecked();
-  await page
-    .getByRole("textbox", { name: "Canvas text editor" })
-    .fill("Bias in");
-  await page.getByRole("button", { name: "Apply text changes" }).click();
+  await applyCanvasText(page, "Bias in");
   await expect(pinLabel).toHaveText("Bias in");
 
   await openTopCell(page);
-  await runCellCommand(page, "Place Cell");
+  await clickCommand(page, "Edit", "Place Cell from this Project…");
   await page
     .getByRole("dialog", { name: "Place Hierarchical Cell" })
     .getByRole("option", { name: /AliasStage/u })
@@ -1285,27 +1062,21 @@ test("declares and places a Cell Pin on a new local Net", async ({ page }) => {
   await page.getByTestId("annotation-hit-instance-label-P1").dblclick();
   await nameEditor.fill("OUT");
   await page.getByRole("button", { name: "Apply text changes" }).click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Renamed Cell Pin to OUT",
-  );
+  await expectStatus(page, "Renamed Cell Pin to OUT");
   await page.getByTestId("hit-P1").click();
   await expect(
     page.locator('[data-object-id="instance-label-P1"]'),
   ).toContainText("OUT");
   await setCellTerminalDirection(page, "OUT", "input");
-  await expect(page.getByTestId("status")).toContainText(
-    "Updated Cell port direction",
-  );
+  await expectStatus(page, "Updated Cell port direction");
 
   await openTopCell(page);
-  await runCellCommand(page, "Place Cell");
+  await clickCommand(page, "Edit", "Place Cell from this Project…");
   const insertDialog = page.getByRole("dialog", {
     name: "Place Hierarchical Cell",
   });
   await insertDialog.getByRole("option", { name: /ReusableStage/u }).click();
-  await canvas.click({ position: { x: 420, y: 180 } });
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("active-instance-count")).toHaveText("1");
+  await placeFirstAt(page, { x: 420, y: 180 });
   await expect(canvas.locator('[data-pin-name="OUT"]')).toHaveCount(1);
 
   await page.getByTestId("hit-X1").click();
@@ -1317,13 +1088,9 @@ test("declares and places a Cell Pin on a new local Net", async ({ page }) => {
   await expect(layout).toBeVisible();
   await layout.getByLabel("Cell symbol width").fill("120");
   await layout.getByLabel("Cell symbol width").press("Tab");
-  await expect(page.getByTestId("status")).toContainText(
-    "Resized ReusableStage",
-  );
+  await expectStatus(page, "Resized ReusableStage");
   await layout.getByLabel("Cell symbol OUT pin side").selectOption("north");
-  await expect(page.getByTestId("status")).toContainText(
-    "Moved Cell symbol pin",
-  );
+  await expectStatus(page, "Moved Cell symbol pin");
   await layout
     .getByRole("button", { name: "Edit symbol layout on canvas" })
     .click();
@@ -1333,59 +1100,31 @@ test("declares and places a Cell Pin on a new local Net", async ({ page }) => {
   const bodyHandleBox = await bodyHandle.boundingBox();
   expect(bodyHandleBox).not.toBeNull();
   if (bodyHandleBox) {
-    await page.mouse.move(
-      bodyHandleBox.x + bodyHandleBox.width / 2,
-      bodyHandleBox.y + bodyHandleBox.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      bodyHandleBox.x + bodyHandleBox.width / 2 + 30,
-      bodyHandleBox.y + bodyHandleBox.height / 2 + 30,
-    );
+    await pressAndMove(page, bodyHandleBox, { x: 30, y: 30 });
     await expect(page.getByTestId("cell-symbol-layout-preview")).toBeVisible();
     const previewBodyBox = await bodyHandle.boundingBox();
     expect(previewBodyBox!.x).toBeGreaterThan(bodyHandleBox.x);
     await page.mouse.up();
     await expect(page.getByTestId("cell-symbol-layout-preview")).toHaveCount(0);
   }
-  await expect(page.getByTestId("status")).toContainText(
-    /Resized ReusableStage|Committed revision/u,
-  );
+  await expectStatus(page, /Resized ReusableStage|Committed revision/u);
   const pinHandle = page.locator('[data-testid^="cell-symbol-pin-handle-"]');
   const pinHandleBox = await pinHandle.boundingBox();
   expect(pinHandleBox).not.toBeNull();
   if (pinHandleBox) {
-    await page.mouse.move(
-      pinHandleBox.x + pinHandleBox.width / 2,
-      pinHandleBox.y + pinHandleBox.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      pinHandleBox.x + pinHandleBox.width / 2 + 20,
-      pinHandleBox.y + pinHandleBox.height / 2,
-    );
+    await pressAndMove(page, pinHandleBox, { x: 20, y: 0 });
     await expect(page.getByTestId("cell-symbol-layout-preview")).toBeVisible();
     await expect(page.getByTestId("cell-symbol-layout-preview")).toContainText(
       "OUT",
     );
     await page.mouse.up();
   }
-  await expect(page.getByTestId("status")).toContainText(
-    "Moved Cell symbol pin",
-  );
+  await expectStatus(page, "Moved Cell symbol pin");
 
   // Pointer cancellation discards only the preview, with no persisted edit.
   const committedPinBox = await pinHandle.boundingBox();
   expect(committedPinBox).not.toBeNull();
-  await page.mouse.move(
-    committedPinBox!.x + committedPinBox!.width / 2,
-    committedPinBox!.y + committedPinBox!.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(
-    committedPinBox!.x + committedPinBox!.width / 2 + 40,
-    committedPinBox!.y + committedPinBox!.height / 2,
-  );
+  await pressAndMove(page, committedPinBox!, { x: 40, y: 0 });
   await expect(page.getByTestId("cell-symbol-layout-preview")).toBeVisible();
   await pinHandle.dispatchEvent("pointercancel", {
     pointerId: 1,
@@ -1415,15 +1154,7 @@ test("declares and places a Cell Pin on a new local Net", async ({ page }) => {
   const beforeMove = await instanceHit.boundingBox();
   expect(beforeMove).not.toBeNull();
   if (beforeMove) {
-    await page.mouse.move(
-      beforeMove.x + beforeMove.width / 2,
-      beforeMove.y + beforeMove.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      beforeMove.x + beforeMove.width / 2 + 40,
-      beforeMove.y + beforeMove.height / 2,
-    );
+    await pressAndMove(page, beforeMove, { x: 40, y: 0 });
     await page.mouse.up();
     await expect
       .poll(async () => (await instanceHit.boundingBox())?.x ?? 0)
@@ -1436,11 +1167,7 @@ test("confirms connected last-Port deletion and restores caller wires with Undo 
 }) => {
   const project = createEmptyProject("delete-port", "Delete Port");
   const child = createEmptyDocument("child", "Child");
-  child.instances.push({
-    id: "P1",
-    symbolId: "port",
-    placement: { position: { x: 300, y: 180 }, rotation: 0, mirror: "none" },
-  });
+  child.instances.push(placedInstance("P1", "port", 300, 180));
   child.nets.push({
     id: "inside",
     terminals: [{ instanceId: "P1", pinName: "P" }],
@@ -1455,10 +1182,8 @@ test("confirms connected last-Port deletion and restores caller wires with Undo 
   project.documents.push(child);
   const parent = project.documents[0]!;
   parent.instances.push({
-    id: "X1",
-    symbolId: hierarchicalSymbolId("Child"),
+    ...placedInstance("X1", hierarchicalSymbolId("Child"), 300, 180),
     reference: "X1",
-    placement: { position: { x: 300, y: 180 }, rotation: 0, mirror: "none" },
     netlist: {
       parameters: {},
       binding: { kind: "subcircuit", childDocumentId: child.id },
@@ -1484,17 +1209,9 @@ test("confirms connected last-Port deletion and restores caller wires with Undo 
       modes: ["manual"],
     }),
   );
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "delete.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "delete.icproj.json");
   await openCellDefinition(page, child.name);
-  const snapshot = async (): Promise<CircuitProject> =>
-    parseSavedProject(
-      (await downloadBytes(page, "File", "Export Project File…")).toString(),
-    );
+  const snapshot = (): Promise<CircuitProject> => exportedProject(page);
   const circuit = (value: CircuitProject) =>
     value.documents.map(
       ({ revision: _revision, sourceStatus: _status, ...document }) => document,
@@ -1538,7 +1255,7 @@ test("places an existing Cell and blocks deleting its shared definition", async 
   await createCell(page, "ReusableStage");
   await openTopCell(page);
 
-  await runCellCommand(page, "Place Cell");
+  await clickCommand(page, "Edit", "Place Cell from this Project…");
   const dialog = page.getByRole("dialog", { name: "Place Hierarchical Cell" });
   await expect(
     dialog.getByRole("option", { name: /ReusableStage/u }),
@@ -1564,7 +1281,7 @@ test("places an existing Cell and blocks deleting its shared definition", async 
   await expect(fullInsert).not.toHaveClass(/insert-cell-dialog/u);
   await page.keyboard.press("Escape");
 
-  await runCellCommand(page, "Place Cell");
+  await clickCommand(page, "Edit", "Place Cell from this Project…");
   const cellDialog = page.getByRole("dialog", {
     name: "Place Hierarchical Cell",
   });
@@ -1580,17 +1297,14 @@ test("places an existing Cell and blocks deleting its shared definition", async 
   await expect(preview).toHaveAttribute("transform", /scale\(-1 1\)/u);
   await canvas.click({ position: { x: 360, y: 230 } });
   await expect(page.getByTestId("active-instance-count")).toHaveText("1");
-  await expect(page.getByTestId("status")).toContainText(
-    "Placed ReusableStage as X1",
-  );
+  await expectStatus(page, "Placed ReusableStage as X1");
   await expect(canvas.locator('[data-kind="instance-value"]')).toContainText(
     "ReusableStage",
   );
   await expect(canvas.locator('[data-kind="instance-label"]')).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  await runCellCommand(page, "Hierarchy");
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  const manager = await openCellManager(page);
   await expect(
     manager.getByRole("button", { name: "Delete", exact: true }),
   ).toBeDisabled();
@@ -1611,7 +1325,7 @@ test("allows distinct Cell Pins to expose one internal contact", async ({
   await canvas.click({ position: { x: 240, y: 200 } });
   // The existing Port is the visible current Net name, so a second Cell Pin
   // placed on the same contact adopts it while retaining independent identity.
-  await expect(page.getByTestId("status")).toContainText("Added Cell Pin Vinp");
+  await expectStatus(page, "Added Cell Pin Vinp");
   await page.keyboard.press("Escape");
 
   await expect(page.getByTestId("hit-P1")).toBeVisible();
@@ -1660,17 +1374,14 @@ test("same-name Cell Pins stay independent while the final interface groups them
       .locator('[data-object-id="instance-label-P2"]')
       .locator('[data-text-run="subscript"]'),
   ).toHaveCount(0);
-  await runCellCommand(page, "Hierarchy");
-  const manager = page.getByRole("dialog", { name: "Cell Manager" });
+  const manager = await openCellManager(page);
   await expect(
     manager.getByRole("table", { name: "Formal port order" }).getByRole("row"),
   ).toHaveCount(1);
   await expect(manager).toContainText("2 markers");
   await expect(manager).toContainText("Direction conflict");
   await manager.getByRole("button", { name: "Close Cell Manager" }).click();
-  const saved: CircuitProject = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(),
-  );
+  const saved: CircuitProject = await exportedProject(page);
   const terminals = saved.documents[0]!.netlist!.terminals;
   expect(terminals.map((terminal) => terminal.name)).toEqual(["VIN", "vin"]);
   expect(new Set(terminals.map((terminal) => terminal.id)).size).toBe(2);

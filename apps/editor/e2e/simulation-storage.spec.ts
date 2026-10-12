@@ -1,14 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { readFile } from "node:fs/promises";
-import { parseProject } from "@icm/project-protocol";
-import { openProjectFile } from "./editor-fixtures.js";
-import { createSimulationFolder } from "@icm/model";
+import { openProject } from "./editor-fixtures.js";
 import { unzipSync } from "fflate";
+import { createAgentNativeExecutor } from "./native-simulation-executor.mjs";
 import {
-  agentNativeProfile,
-  agentNativeSource,
-  createAgentNativeExecutor,
-} from "./native-simulation-executor.mjs";
+  downloadClicked,
+  nativeRcProject,
+  openSimulation,
+  rcExample,
+} from "./simulation-e2e-fixtures.js";
 
 import { harnessModuleUrl } from "./helpers/harness-url";
 
@@ -19,30 +18,7 @@ const lockUrl = harnessModuleUrl("browser-simulation-storage-lock");
 test("GUI retries failed evidence storage and downloads a complete run without executing again", async ({
   page,
 }) => {
-  const project = parseProject(
-    await readFile(
-      "apps/editor/src/examples/simulation-rc.icproj.json",
-      "utf8",
-    ),
-  );
-  const folder = createSimulationFolder({
-    id: "storage-retry",
-    name: "Storage retry",
-    profileId: agentNativeProfile,
-  });
-  folder.input.entry = "run.sim";
-  folder.input.circuitBindings = [];
-  folder.input.files = [
-    {
-      path: "experiment.json",
-      text: JSON.stringify({
-        version: 2,
-        environment: { profileId: agentNativeProfile },
-      }),
-    },
-    { path: "run.sim", text: agentNativeSource },
-  ];
-  project.simulationFolders = [folder];
+  const project = await nativeRcProject("storage-retry", "Storage retry");
   const executor = await createAgentNativeExecutor();
   let executions = 0;
   try {
@@ -66,25 +42,20 @@ test("GUI retries failed evidence storage and downloads a complete run without e
         return put.call(this, value, key);
       };
     });
-    await page.goto("/editor");
-    await openProjectFile(page, project, "storage-retry.icproj.json");
-    await page.getByTestId("open-analog-simulation").click();
-    const panel = page.getByRole("region", { name: "Analog simulation" });
+    const panel = await openSimulation(
+      page,
+      project,
+      "storage-retry.icproj.json",
+    );
+    const retry = panel.getByRole("button", { name: "Retry saving results" });
+    const persistence = panel.getByLabel("Run evidence persistence");
     await panel.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(
-      panel.getByRole("button", { name: "Retry saving results" }),
-    ).toBeVisible();
-    await expect(panel.getByLabel("Run evidence persistence")).toContainText(
-      "Collection: complete",
-    );
-    await expect(panel.getByLabel("Run evidence persistence")).toContainText(
-      "Persistence: failed",
-    );
+    await expect(retry).toBeVisible();
+    await expect(persistence).toContainText("Collection: complete");
+    await expect(persistence).toContainText("Persistence: failed");
     expect(executions).toBe(1);
-    await panel.getByRole("button", { name: "Retry saving results" }).click();
-    await expect(
-      panel.getByRole("button", { name: "Retry saving results" }),
-    ).toBeEnabled();
+    await retry.click();
+    await expect(retry).toBeEnabled();
     expect(executions).toBe(1);
     await page.evaluate(() => {
       (window as any).refuseEvidence = false;
@@ -92,15 +63,14 @@ test("GUI retries failed evidence storage and downloads a complete run without e
     await panel
       .getByRole("treeitem", { name: /Storage retry/ })
       .click({ button: "right" });
-    const downloading = page.waitForEvent("download");
-    await page
-      .getByRole("menuitem", { name: "Download complete run…", exact: true })
-      .click();
-    const stream = await (await downloading).createReadStream();
-    if (!stream) throw new Error("Downloaded evidence stream unavailable");
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-    const zipped = unzipSync(Buffer.concat(chunks));
+    const zipped = unzipSync(
+      await downloadClicked(
+        page.getByRole("menuitem", {
+          name: "Download complete run…",
+          exact: true,
+        }),
+      ),
+    );
     expect(Object.keys(zipped)).toContain("evidence/result.json");
     expect(Object.keys(zipped)).toContain("evidence/evidence-manifest.json");
     expect(Object.keys(zipped).some((name) => name.endsWith(".raw"))).toBe(
@@ -110,9 +80,7 @@ test("GUI retries failed evidence storage and downloads a complete run without e
       JSON.parse(new TextDecoder().decode(zipped["evidence/result.json"]!)).data
         .analyses.length,
     ).toBeGreaterThan(0);
-    await expect(
-      panel.getByRole("button", { name: "Retry saving results" }),
-    ).toHaveCount(0);
+    await expect(retry).toHaveCount(0);
     expect(executions).toBe(1);
   } finally {
     await executor.close();
@@ -122,15 +90,9 @@ test("GUI retries failed evidence storage and downloads a complete run without e
 test("Run history can reveal browser results from other folders without changing the selected folder", async ({
   page,
 }) => {
-  const project = parseProject(
-    await readFile(
-      "apps/editor/src/examples/simulation-rc.icproj.json",
-      "utf8",
-    ),
-  );
+  const project = rcExample();
   const folderId = project.simulationFolders[0]!.id;
-  await page.goto("/editor");
-  await openProjectFile(page, project, "history-folders.icproj.json");
+  await openProject(page, project, "history-folders.icproj.json");
   await page.evaluate(
     async ({ projectId, folderId, archiveUrl }) => {
       const { createBrowserSimulationArchiveStore } = await import(archiveUrl);
