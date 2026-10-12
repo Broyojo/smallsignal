@@ -109,7 +109,8 @@ RUN set -eu; \
 # ngspice reaches — it does not fork — and far below a fork bomb. 524288
 # blocks is 256 MiB in dash's 512-byte units, a ceiling on what one `write`
 # can pour onto the scratch disk; no rawfile of a schematic-sized circuit
-# comes near it.
+# comes near it. The harness reads both back at startup, as this account,
+# and is not ready if a run would not be under them (#1665).
 #
 # RUN_ROOT is spelled once, above, and referred to from here on: an image that
 # prepared one directory while the harness looked in another would fail every

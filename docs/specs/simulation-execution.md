@@ -401,15 +401,17 @@ deadline.
 | Maximum deadline        | 120 s                        | a longer request is clamped to it                                                 |
 | Lifecycle grace         | 10 s                         | hard lease watchdog after the run deadline                                        |
 | Identity probe          | 5 s                          | given up on, not waited for                                                       |
-| Processes               | 128 (`RLIMIT_NPROC`)         | image-set `ulimit` before `exec`                                                  |
-| Written file size       | 256 MiB (`RLIMIT_FSIZE`)     | image-set `ulimit` before `exec`                                                  |
+| Processes               | 128 (`RLIMIT_NPROC`)         | image-set `ulimit` before `exec`; checked at startup, not ready without it        |
+| Written file size       | 256 MiB (`RLIMIT_FSIZE`)     | image-set `ulimit` before `exec`; checked at startup, not ready without it        |
 
 The independent log cap is divided between the simulator's two streams, so a
 flood of printed values on one cannot push the single line that explains the
 run off the end of the other. The two kernel limits are set by the image
 rather than defaulted by the harness, because `RLIMIT_NPROC` counts every
 process the account owns and a number chosen for a container that runs one
-simulator is wrong anywhere else.
+simulator is wrong anywhere else. A limit the image sets is a precondition:
+the harness reads both back from a wrapped probe at startup and is not ready
+if either is missing, and a run whose shell cannot apply one is never started.
 
 Ngspice defaults are shared in `packages/spice-run`: 64 MiB collected waveform
 and 1 MiB combined logs. `SIMULATION_MAX_OUTPUT_BYTES` configures only waveform

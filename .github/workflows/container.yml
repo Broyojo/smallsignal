@@ -142,6 +142,10 @@ jobs:
             if (health.activity?.state !== "idle") throw new Error("a fresh container is not idle");
             if (health.limits.concurrentRuns !== 1) throw new Error("the slot is not single");
             if (health.environment.simulator.name !== "ngspice") throw new Error("no simulator identified");
+            // Reported only once the harness has read them back in force (#1665).
+            if (health.limits.maxProcesses !== 128 || health.limits.maxFileBlocks !== 524288) {
+              throw new Error(`kernel limits not in force: ${JSON.stringify(health.limits)}`);
+            }
             if (!/^[0-9a-f]{64}$/.test(health.environment.fingerprint)) throw new Error("no fingerprint");
             // A container that fell back to the platform temp directory still
             // runs circuits, but it is not the image it was built to be.
@@ -236,6 +240,25 @@ jobs:
             cat /tmp/slow-result.json || true; echo
             exit 1
           fi
+          # The kernel limits, read off the running simulator itself rather
+          # than the harness's word for them (#1665): dash once ignored the
+          # process limit while /health reported it. Retried briefly: the slot
+          # is active a moment before the wrapper shell becomes ngspice.
+          for _ in $(seq 1 25); do
+            docker exec icm-ngspice-check sh -c '
+              for pid in /proc/[0-9]*; do
+                [ "$(cat "$pid/comm" 2>/dev/null)" = ngspice ] || continue
+                grep -E "^Max (processes|file size) " "$pid/limits" && exit 0
+              done
+              exit 1
+            ' > /tmp/run-limits.txt && break
+            sleep 0.2
+          done
+          cat /tmp/run-limits.txt
+          grep -Eq '^Max processes +128 +128 ' /tmp/run-limits.txt \
+            || { echo "The run is not under the image's process limit."; exit 1; }
+          grep -Eq '^Max file size +268435456 +268435456 ' /tmp/run-limits.txt \
+            || { echo "The run is not under the image's 256 MiB file-size limit."; exit 1; }
           second="$(curl --silent --max-time 20 -o /tmp/second.json -D /tmp/second.head \
             --write-out '%{http_code}' \
             -H 'content-type: application/json' --data @/tmp/run-request.json \

@@ -157,13 +157,12 @@ const runSupervisor = new SimulationRunSupervisor({
 /**
  * Ask a binary something, with a deadline.
  *
- * The deadline is the point. This runs at startup to identify the simulator,
- * and `/health` and the first run both wait on the answer — so a binary that
- * does not return from `--version` would leave the container permanently not
- * ready and permanently unable to say why. An unanswered probe reports
- * `unreported` and the container gets on with its job.
+ * The deadline is the point. This runs at startup to identify the simulator
+ * and to check its limits, and `/health` and the first run both wait on the
+ * answers — so a binary that does not return would leave the container
+ * permanently not ready and permanently unable to say why.
  */
-function commandOutput(binary, args) {
+function probe(binary, args) {
   return new Promise((resolve) => {
     execFile(
       binary,
@@ -181,10 +180,16 @@ function commandOutput(binary, args) {
         env: runEnvironment("/nonexistent"),
       },
       (error, stdout, stderr) => {
-        resolve(error ? "unreported" : `${stdout ?? ""}${stderr ?? ""}`.trim());
+        resolve({ error, stdout: stdout ?? "", stderr: stderr ?? "" });
       },
     );
   });
+}
+
+/** An unanswered identity probe reports `unreported`; the container goes on. */
+async function commandOutput(binary, args) {
+  const { error, stdout, stderr } = await probe(binary, args);
+  return error ? "unreported" : `${stdout}${stderr}`.trim();
 }
 
 function ngspiceVersion(output) {
@@ -425,8 +430,9 @@ const LIMITS = {
   outputBytes: MAX_OUTPUT_BYTES,
   logBytes: MAX_LOG_BYTES,
   ...runSupervisor.limits,
-  maxProcesses: MAX_PROCESSES,
-  maxFileBlocks: MAX_FILE_BLOCKS,
+  // Reported only once a run is known to be under them; see verifyKernelLimits.
+  maxProcesses: null,
+  maxFileBlocks: null,
 };
 
 /**
@@ -472,6 +478,7 @@ const runtimeReadyPromise = Promise.all([
   ngspiceBinaryPromise,
   environmentPromise,
   runRootPromise,
+  verifyKernelLimits(),
 ]);
 runtimeReadyPromise.catch(() => undefined);
 
@@ -534,37 +541,75 @@ function runEnvironment(directory) {
 }
 
 /**
- * Start the simulator, under the image's kernel limits when it set any.
+ * Start a command under the image's kernel limits when it set any.
  *
- * `exec` means the shell is replaced by ngspice rather than sitting above it,
- * so the pid we hold is the simulator's own and the process group has no
- * extra member in it. A shell without `ulimit`, or one refusing a limit,
- * still runs the deck: the limits are a ceiling on a hostile deck, not a
- * precondition for an honest one.
+ * `exec` means the shell is replaced by the command rather than sitting above
+ * it, so the pid we hold is the simulator's own and the process group has no
+ * extra member in it. A limit the image set is a precondition, not a hope: a
+ * shell that cannot apply one exits instead of starting the command without
+ * it. `ulimit -u` is bash's RLIMIT_NPROC and dash, the image's /bin/sh, has
+ * only `-p` (#1665); that refusal used to be silenced, so no hosted run was
+ * ever under the process limit its `/health` reported.
  */
-function simulatorCommand(binary) {
+function limitedCommand(command, args) {
   const preamble = [
     MAX_FILE_BLOCKS === null
       ? null
-      : `ulimit -f ${MAX_FILE_BLOCKS} 2>/dev/null || true`,
+      : `ulimit -f ${MAX_FILE_BLOCKS} 2>/dev/null || refuse "file size"`,
     MAX_PROCESSES === null
       ? null
-      : `ulimit -u ${MAX_PROCESSES} 2>/dev/null || true`,
+      : `{ ulimit -u ${MAX_PROCESSES} || ulimit -p ${MAX_PROCESSES}; } 2>/dev/null || refuse process`,
   ].filter((clause) => clause !== null);
-  if (preamble.length === 0) {
-    return { command: binary, args: ["-b", DECK_NAME] };
-  }
+  if (preamble.length === 0) return { command, args };
+  const refuse =
+    'refuse() { echo "simulation harness: the $1 limit could not be applied; nothing was started" >&2; exit 125; }';
   return {
     command: "/bin/sh",
     args: [
       "-c",
-      `${preamble.join("; ")}; exec "$@"`,
+      [refuse, ...preamble, 'exec "$@"'].join("\n"),
       "sh",
-      binary,
-      "-b",
-      DECK_NAME,
+      command,
+      ...args,
     ],
   };
+}
+
+/**
+ * Check, once at startup, that a command started the way a run is started
+ * really is under every limit the image set. The same wrapper reads the
+ * limits back after applying them, so a shell that refuses one, silently
+ * ignores one, or clamps one to something else leaves the container not
+ * ready: an image that asked for a limit never serves without it.
+ */
+async function verifyKernelLimits() {
+  const expected = [
+    ["file size", "ulimit -f", MAX_FILE_BLOCKS],
+    ["process", "ulimit -u 2>/dev/null || ulimit -p", MAX_PROCESSES],
+  ].filter(([, , value]) => value !== null);
+  if (expected.length > 0) {
+    const { command, args } = limitedCommand("/bin/sh", [
+      "-c",
+      expected.map(([, read]) => read).join("\n"),
+    ]);
+    const { error, stdout, stderr } = await probe(command, args);
+    const observed = stdout.split("\n").map((line) => line.trim());
+    const wrong = error
+      ? [stderr.trim() || String(error)]
+      : expected
+          .map(([name, , value], index) => [name, value, observed[index]])
+          .filter(([, value, seen]) => seen !== String(value))
+          .map(
+            ([name, value, seen]) =>
+              `the ${name} limit is ${seen || "unreported"}, not ${value}`,
+          );
+    if (wrong.length > 0) {
+      throw new Error(
+        `The simulator would not run under the kernel limits the image set: ${wrong.join("; ")}`,
+      );
+    }
+  }
+  return { maxProcesses: MAX_PROCESSES, maxFileBlocks: MAX_FILE_BLOCKS };
 }
 
 /**
@@ -581,8 +626,7 @@ function runNgspice(binary, directory, run, entryPath = DECK_NAME) {
     const startedAt = Date.now();
     const stdout = createCappedSink(Math.ceil(MAX_LOG_BYTES / 2));
     const stderr = createCappedSink(Math.floor(MAX_LOG_BYTES / 2));
-    const { command, args } = simulatorCommand(binary);
-    args[args.length - 1] = `./${entryPath}`;
+    const { command, args } = limitedCommand(binary, ["-b", `./${entryPath}`]);
     let settled = false;
     let exited = null;
     let spawnError = null;
@@ -804,7 +848,7 @@ async function handleRun(body, streaming = false) {
     };
   }
 
-  const [binary, observed, runRoot] = runtime;
+  const [binary, observed, runRoot, kernelLimits] = runtime;
   const mounted = dependencies.map((dependency) =>
     observed.dependencies.find(
       (available) =>
@@ -910,7 +954,7 @@ async function handleRun(body, streaming = false) {
           rawfile: raw.rawfile,
           rawfileName: raw.rawfileName,
           rawfileFormat: raw.rawfileFormat,
-          limits: { ...LIMITS, timeoutMs: run.timeoutMs },
+          limits: { ...LIMITS, ...kernelLimits, timeoutMs: run.timeoutMs },
           environment: observed.environment,
           // The cell libraries this run mounted, by measured identity (#1596).
           ...(mountedCells.length > 0 ? { cellLibraries: mountedCells } : {}),
@@ -964,12 +1008,12 @@ const server = createServer((request, response) => {
     // write one answers every run with the same failure, and a deploy check
     // should be able to see that before a circuit does.
     runtimeReadyPromise.then(
-      ([, observed, runRoot]) => {
+      ([, observed, runRoot, kernelLimits]) => {
         const activity = runSupervisor.snapshot();
         send(activity.state === "fatal" ? 503 : 200, {
           status: activity.state === "fatal" ? "not-ready" : "ready",
           activity,
-          limits: LIMITS,
+          limits: { ...LIMITS, ...kernelLimits },
           runRoot,
           ...(runRootFailures.length > 0 ? { runRootFailures } : {}),
           environment: observed.environment,
