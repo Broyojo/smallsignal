@@ -703,8 +703,8 @@ describe("handing a sign-in on to AnalogArena", () => {
     const id = await accountId(visit, cookie);
     expect(forwardedAccount(forwarded.at(-1))).toMatchObject({ id });
 
-    // Its count, and whether a Season serves Battles, are read here.
-    for (const path of ["/api/arena/battles/past", "/api/arena/example"]) {
+    // Its count, and the Battles left (Arena's session), are read here.
+    for (const path of ["/api/arena/battles/past", "/api/arena/session"]) {
       const read = await at(`${CANVAS_ORIGIN}${path}`, {
         headers: { Cookie: cookie },
       });
