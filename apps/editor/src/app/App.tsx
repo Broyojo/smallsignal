@@ -1,5 +1,4 @@
 import { editorSnapshotDerived } from "./editor-snapshot-derived-cache";
-import { gateAfterManualCloudSave } from "../components/arena-gate-request";
 import {
   holdWorkspaceWindow,
   workspaceWindowId,
@@ -1149,6 +1148,8 @@ function WorkspaceEditor({
     noteProjectPublished,
     replaceActiveProject,
     saveProjectToCloud,
+    saveProjectToCloudByHand,
+    saveByHand,
     saveProjectToNative,
     isSaveInFlight,
     saveBusy,
@@ -1926,9 +1927,7 @@ function WorkspaceEditor({
     sessionId: projectSessionId,
     resolver,
     index: projectConnectivityIndex,
-    // Check and save is a manual Cloud Save, after which the Arena gate opens.
-    save: (candidate) =>
-      saveProjectToCloud(candidate).then(gateAfterManualCloudSave),
+    save: saveProjectToCloudByHand,
     beforeCheck: captureAuthoredProject,
     isSaving: isSaveInFlight,
     openIssues: openIssuesPanel,
@@ -4445,7 +4444,6 @@ function WorkspaceEditor({
     commitTextEditing,
     document,
     readShortcutDependencies: () => ({
-      projectStore,
       nativeProjectStore,
       setStatus,
       componentEditor,
@@ -4470,9 +4468,7 @@ function WorkspaceEditor({
       recoveryDialogOpen,
       setRecoveryDialogOpen,
       hasUnsafeWork,
-      saveProjectToCloud,
-      saveProjectToNative,
-      exportProjectFile,
+      saveByHand,
       setWireOptionsOpen,
       getCurrentInteractionState,
       tool,
@@ -5011,7 +5007,7 @@ function WorkspaceEditor({
         savedProjectBaseline={savedProjectBaseline}
         isDirtyWork={isDirtyWork}
         hasUnsavedChanges={hasUnsavedChanges}
-        saveProjectToCloud={saveProjectToCloud}
+        saveByHand={saveByHand}
         saveProjectToNative={saveProjectToNative}
         isSaveInFlight={isSaveInFlight}
         saveBusy={saveBusy}

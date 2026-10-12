@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { requestArenaGate } from "./arena-gate-request";
+import { cloudShelfOpened } from "./arena-gate-request";
 import { createPortal } from "react-dom";
 import "../styles/gallery-entry.css";
 
@@ -397,7 +397,7 @@ export function AccountDashboard({
     // Returning to Cloud Projects opens the shelf again, and with it the
     // Arena gate; its first opening mounts the shelf, which opens the gate.
     if (next === "projects" && tab !== next && visited.includes(next))
-      requestArenaGate();
+      cloudShelfOpened();
     setVisited((current) =>
       current.includes(next) ? current : [...current, next],
     );

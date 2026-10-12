@@ -1,9 +1,6 @@
 // The editor's menus bound to its commands: the header with its project tabs,
 // File, Edit and Circuit menus and toolbars, and the canvas context menu.
-import {
-  gateAfterManualCloudSave,
-  requestArenaGate,
-} from "../components/arena-gate-request";
+import { cloudShelfOpened } from "../components/arena-gate-request";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import {
   deriveRoutingAffectedClosure,
@@ -120,7 +117,7 @@ export function EditorMenuBar({
   savedProjectBaseline,
   isDirtyWork,
   hasUnsavedChanges,
-  saveProjectToCloud,
+  saveByHand,
   saveProjectToNative,
   isSaveInFlight,
   saveBusy,
@@ -223,7 +220,7 @@ export function EditorMenuBar({
   savedProjectBaseline: ProjectFileLifecycle["savedProjectBaseline"];
   isDirtyWork: ProjectFileLifecycle["isDirtyWork"];
   hasUnsavedChanges: ProjectFileLifecycle["hasUnsavedChanges"];
-  saveProjectToCloud: ProjectFileLifecycle["saveProjectToCloud"];
+  saveByHand: ProjectFileLifecycle["saveByHand"];
   saveProjectToNative: ProjectFileLifecycle["saveProjectToNative"];
   isSaveInFlight: ProjectFileLifecycle["isSaveInFlight"];
   saveBusy: ProjectFileLifecycle["saveBusy"];
@@ -365,10 +362,9 @@ export function EditorMenuBar({
             cloudProjects={cloudProjects}
             onRenameShelf={renameShelfProject}
             onDeleteShelf={deleteShelfProject}
-            onRefreshShelf={() => {
+            onShelfOpened={() => {
               void reloadCloudProjects();
-              // Every opening of the Cloud shelf opens the Arena gate.
-              requestArenaGate();
+              cloudShelfOpened();
             }}
             onOpenShelf={(id) => {
               void openCloudProjectById(id, true);
@@ -437,12 +433,7 @@ export function EditorMenuBar({
         },
         projectInputRef,
         onNewProject: createNewProject,
-        onSave: () =>
-          void (nativeProjectStore
-            ? saveProjectToNative()
-            : projectStore
-              ? saveProjectToCloud().then(gateAfterManualCloudSave)
-              : exportProjectFile()),
+        onSave: () => void saveByHand(),
         onImportProject: (file) => void openProjectFile(file),
         onImportSpice: (files, namingProfile) =>
           void importSpiceFiles(files, namingProfile),

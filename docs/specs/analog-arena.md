@@ -48,13 +48,6 @@ when its host and path call for it:
   Arena page on AnalogArena's host, `/arena…` becoming `/schematic…`, with
   the query kept, through the [sign-in handoff](#sign-in-handoff) (`302` to
   its beginning). This is Analog Canvas's way to AnalogArena.
-  - A `/schematic` or `/schematic/…` request whose `Sec-Fetch-Dest` is
-    present and is not `document` stays and is forwarded: the editor's Arena
-    gate (cascode-ai/analog-canvas#1681) shows the battle page in a frame on
-    Analog Canvas's own origin, signed in as Analog Canvas is, and the frame
-    loads its files and pages there, query kept. A visit in the browser's
-    window, or a request without the header, still goes through the
-    handoff.
 - Elsewhere (local development), `/arena` and `/arena/…` go to the same path
   under `/schematic` on the same origin (`301`).
 
@@ -122,14 +115,50 @@ Every other answer of Arena, its own `404` among them, passes through. A
 visitor never meets a crash, and Arena keeps 5xx for failures, not for answers
 it designed.
 
+## The Arena gate
+
+After a manual Cloud Save and on every opening of the Cloud shelf, the
+editor asks a signed-in person for five Votes before its panel closes
+(cascode-ai/analog-canvas#1681). The person votes in Arena's own window on
+AnalogArena's host; Analog Canvas only counts. Arena's pages never run on
+Analog Canvas's origin.
+
 ### Vote source
 
-The editor's Arena gate frames the battle page at
-`/schematic?from=canvas-gate`. Arena records every Vote cast on a page
-opened with `from=canvas-gate` with the source `canvas-gate`, its queued
-retries included, and every other Vote with the source `arena`
-(Arcadia-1/chip-arena#234). Analog Canvas adds nothing to the vote requests
-themselves; the Worker forwards the page's query unchanged.
+The panel's "Open the battle page" link opens `/schematic?from=canvas-gate`
+on Analog Canvas's host in a new window, which the
+[sign-in handoff](#sign-in-handoff) brings to
+`https://chip-arena.com/schematic?from=canvas-gate`, signed in, query kept.
+Arena records every Vote cast on a page opened with `from=canvas-gate` with
+the source `canvas-gate`, its queued retries included, and every other Vote
+with the source `arena` (Arcadia-1/chip-arena#234). Analog Canvas adds
+nothing to the vote requests themselves.
+
+### Counting
+
+The gate reads Arena's answers on Analog Canvas's host, forwarded with the
+vouched account:
+
+- `GET /api/arena/battles/past`: the Voter's voted Battles, newest first,
+  each with `castAt`, the time Arena recorded the Vote. The gate opens at
+  the `Date` of Arena's first answer (to the second) and counts the listed
+  Votes cast at or after it; the first page of 20 is enough for 5. It reads
+  again every 4 seconds while the page is visible and when the person
+  returns to the window.
+- `403 consent-required` still opens the gate: the person agrees in Arena's
+  window, and Votes count once the list answers.
+- `401`, `403 ai-account`, or an answer that is not JSON (no Arena behind
+  the server) shows no panel.
+- `GET /api/arena/leaderboard` with `season: null` means no Season serves
+  Battles: the panel may close at once. It is read when the gate opens and
+  when the person returns to the window; it assigns nothing.
+- A failure as the gate opens (unreachable, `5xx`, the Worker's
+  `arena-unavailable`), or three failed reads in a row while counting, lets
+  the panel close at once.
+
+Arena has no read-only signal for a Voter who has voted on every pairing;
+such a Voter, and anyone, can end the gate by reloading the page. The gate
+keeps nothing across a reload, and that bypass is accepted.
 
 ## Drawing delivery
 
@@ -228,7 +257,6 @@ signing out on one leaves the other signed in.
 Sign-in stays Analog Canvas's.
 `GET /api/auth/<github|google>/start?return=<return>` comes back to
 `<return>` after a successful sign-in when `<return>` is either
-
 - a path on the same origin whose normalized path is `/schematic` or starts
   with `/schematic/`, or
 - the full address of such a page on AnalogArena's host,
@@ -253,13 +281,13 @@ that asked for it and takes no return.
   binding: the vouched account and its facts, a forged header dropped, the
   credentials kept from Arena, other paths left alone (the account
   deletion's path among them), the failure answers, the hosts' redirects,
-  the sign-in handoff, the Arena gate's frame on Analog Canvas's host
-  (its `from=canvas-gate` query kept),
-  the sign-in return, and
+  the sign-in handoff, the sign-in return, and
   account deletion's call to Arena with its failures, retry and absent
   binding.
 - [`apps/editor/src/components/arena-gate.test.ts`](../../apps/editor/src/components/arena-gate.test.ts)
-  checks that the gate frames `/schematic?from=canvas-gate`.
+  checks the gate's count, its unlocking signals and the page it opens;
+  `worker/arena.test.ts` brings that page to AnalogArena with its query and
+  forwards the count's read on Analog Canvas's host with the account.
 - [`apps/editor/src/components/privacy-page.test.tsx`](../../apps/editor/src/components/privacy-page.test.tsx)
   checks that the privacy notice describes AnalogArena.
 - [`worker/index.test.ts`](../../worker/index.test.ts) pins the binding and the

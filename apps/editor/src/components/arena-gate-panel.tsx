@@ -6,12 +6,11 @@ import {
   createArenaGate,
   gateClosable,
   VOTES_REQUIRED,
-  watchArenaFrame,
   type ArenaGateState,
 } from "./arena-gate";
 import "./arena-gate.css";
 
-/** How often an open gate reads the count again between Arena's answers. */
+/** How often an open gate reads the count again while the page is seen. */
 const RECOUNT_MS = 4000;
 
 /**
@@ -48,14 +47,14 @@ export function mountArenaGate(onClosed: () => void): void {
 function statusLine(state: ArenaGateState): string {
   if (state.status === "free")
     return state.reason === "no-battle"
-      ? "Arena has no battle for you right now, so you can close this."
+      ? "Arena has no battle to offer right now, so you can close this."
       : state.reason === "signed-out"
         ? "You're no longer signed in to Arena, so you can close this."
         : "Arena can't be reached right now, so you can close this.";
   if (state.status !== "voting") return "";
   const left = VOTES_REQUIRED - state.voted;
   return left > 0
-    ? `Your work is safe. Close unlocks after ${VOTES_REQUIRED} new votes: ${left} to go.`
+    ? `Your work is safe. Vote on the battle page; Close unlocks after ${VOTES_REQUIRED} new votes: ${left} to go.`
     : "Thank you! Your votes are in, so you can close this.";
 }
 
@@ -92,42 +91,51 @@ function ArenaGatePanel({
     dialogRef.current?.focus();
   }, [showing, onShown]);
 
-  const recount = useCallback(() => {
-    void gate.recount().then(setState);
-  }, [gate]);
   const closable = gateClosable(state);
   const counting = status === "voting" && !closable;
+  const recount = useCallback(
+    (season = false) => {
+      void gate.recount({ season }).then(setState);
+    },
+    [gate],
+  );
+  // Read again every few seconds while the page is seen, and at once, with
+  // whether a Season still serves Battles, when the person comes back from
+  // Arena's window.
   useEffect(() => {
     if (!counting) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") recount();
     }, RECOUNT_MS);
-    return () => clearInterval(timer);
+    const returned = () => {
+      if (document.visibilityState === "visible") recount(true);
+    };
+    window.addEventListener("focus", returned);
+    document.addEventListener("visibilitychange", returned);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", returned);
+      document.removeEventListener("visibilitychange", returned);
+    };
   }, [counting, recount]);
-
-  const watchFrame = useCallback(
-    (frame: HTMLIFrameElement | null) => {
-      const page = frame?.contentWindow;
-      if (!page) return;
-      try {
-        watchArenaFrame(page, {
-          noBattle: () => setState(gate.noBattle()),
-          voted: recount,
-        });
-      } catch {
-        // A page that cannot be watched is still counted by the timer.
-      }
-    },
-    [gate, recount],
-  );
+  // Once it may close, Escape closes it wherever focus is.
+  useEffect(() => {
+    if (!showing || !closable) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, [showing, closable, onClose]);
 
   if (!showing) return null;
   const tryClose = () => {
     if (closable) onClose();
     else setNudged(true);
   };
-  const showFrame =
-    status === "voting" || (status === "free" && state.reason === "no-battle");
   return (
     <div
       className="arena-gate-backdrop"
@@ -136,7 +144,7 @@ function ArenaGatePanel({
         if (event.target === event.currentTarget) event.preventDefault();
       }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) tryClose();
+        if (event.target === event.currentTarget && closable) onClose();
       }}
     >
       <section
@@ -149,27 +157,41 @@ function ArenaGatePanel({
         tabIndex={-1}
         data-testid="arena-gate"
         onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
-          event.preventDefault();
-          tryClose();
+          // Locked, Escape stays; unlocked, the window's listener closes.
+          if (event.key === "Escape" && !closable) {
+            event.preventDefault();
+            setNudged(true);
+          }
         }}
       >
-        <header className="arena-gate-header">
-          <div>
-            <h2 id="arena-gate-title">Vote in the Schematic Arena</h2>
-            <p
-              id="arena-gate-status"
-              className="arena-gate-status"
-              data-nudged={nudged && !closable ? "" : undefined}
-              aria-live="polite"
-            >
-              {statusLine(state)}
-            </p>
-          </div>
+        <h2 id="arena-gate-title">
+          Vote in {VOTES_REQUIRED} Schematic Arena battles to continue
+        </h2>
+        {state.status === "voting" ? (
+          <p className="arena-gate-count" data-testid="arena-gate-count">
+            Voted {state.voted} / {VOTES_REQUIRED}
+          </p>
+        ) : null}
+        <p
+          id="arena-gate-status"
+          className="arena-gate-status"
+          data-nudged={nudged && !closable ? "" : undefined}
+          aria-live="polite"
+        >
+          {statusLine(state)}
+        </p>
+        <div className="arena-gate-actions">
           {state.status === "voting" ? (
-            <span className="arena-gate-count" data-testid="arena-gate-count">
-              Voted {state.voted} / {VOTES_REQUIRED}
-            </span>
+            // A link opened by the person's own click: a new tab or window
+            // that no popup blocker stops, on chip-arena.com signed in.
+            <a
+              className="arena-gate-open"
+              href={ARENA_GATE_PAGE}
+              target="_blank"
+              rel="noopener"
+            >
+              Open the battle page
+            </a>
           ) : null}
           <button
             type="button"
@@ -184,20 +206,7 @@ function ArenaGatePanel({
           >
             Close
           </button>
-        </header>
-        {showFrame ? (
-          <iframe
-            ref={watchFrame}
-            className="arena-gate-frame"
-            title="Schematic Arena battle"
-            src={ARENA_GATE_PAGE}
-            // Each page the frame loads is watched afresh and recounted.
-            onLoad={(event) => {
-              watchFrame(event.currentTarget);
-              recount();
-            }}
-          />
-        ) : null}
+        </div>
       </section>
     </div>
   );

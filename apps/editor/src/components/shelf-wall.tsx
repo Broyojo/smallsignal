@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TilePreview } from "./tile-preview";
 import { InlineConfirm } from "./inline-confirm";
-import { requestArenaGate } from "./arena-gate-request";
+import { cloudShelfOpened } from "./arena-gate-request";
 
 import {
   CLOUD_PROJECT_LIMIT,
@@ -259,7 +259,7 @@ export function ShelfWall() {
     void loadShelf().then((next) => {
       if (cancelled) return;
       setState(next);
-      if (next.status === "ready") requestArenaGate();
+      if (next.status === "ready") cloudShelfOpened();
     });
     return () => {
       cancelled = true;

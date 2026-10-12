@@ -1,4 +1,10 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Route,
+} from "@playwright/test";
 import {
   awaitEditorReady,
   exportedProject,
@@ -526,36 +532,16 @@ test("the Shelf appends a Cloud Project tab, deduplicates and saves Cloud identi
   ).toHaveCount(0);
 });
 
-/**
- * A stand-in for the Schematic Arena's battle page: like the real page, it
- * asks Arena for a Battle as it loads and sends each Vote with fetch.
- */
-const ARENA_PAGE = `<!doctype html><title>Arena</title>
-<button id="vote" disabled>Vote</button><p id="state">Loading</p>
-<script>
-  let cast = 0;
-  fetch("/api/arena/battles/next", { method: "POST", body: "{}" }).then((r) => {
-    document.getElementById("state").textContent = r.ok ? "Battle" : "No battle";
-    document.getElementById("vote").disabled = !r.ok;
-  });
-  document.getElementById("vote").onclick = () =>
-    fetch("/api/arena/battles/b-" + ++cast + "/vote", {
-      method: "POST",
-      body: JSON.stringify({ choice: "A" }),
-    });
-</script>`;
-
-test("the Arena gate opens after a manual Cloud Save and on every Shelf opening, and closes after five new votes or when Arena has nothing to offer (#1681)", async ({
+test("the Arena gate opens after a manual Cloud Save and on every Shelf opening, sends the person to Arena's window, and closes after five new votes or when Arena has nothing to offer (#1681)", async ({
+  context,
   page,
 }) => {
   await signIn(page, author);
   let revision = 0;
-  await page.route("**/api/projects", (route) => {
-    if (route.request().method() !== "POST")
-      return route.fulfill({ json: { projects: [] } });
+  const saveAnswer = (route: Route) => {
     const body = route.request().postDataJSON();
     return route.fulfill({
-      status: 201,
+      status: route.request().method() === "POST" ? 201 : 200,
       json: {
         project: {
           id: "cloud-gate",
@@ -567,57 +553,40 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
         },
       },
     });
-  });
-  await page.route("**/api/projects/cloud-gate", (route) => {
-    const body = route.request().postDataJSON();
-    return route.fulfill({
-      json: {
-        project: {
-          id: "cloud-gate",
-          name: body.name,
-          revision: ++revision,
-          schemaVersion: parseSavedProject(body.projectText).schemaVersion,
-          updatedAt: "2026-10-12T00:00:00Z",
-          projectText: body.projectText,
-        },
-      },
-    });
-  });
-  // The Voter's own voted Battles, newest first; one voted before any gate.
-  const voted = ["old"];
+  };
+  await page.route("**/api/projects", (route) =>
+    route.request().method() === "POST"
+      ? saveAnswer(route)
+      : route.fulfill({ json: { projects: [] } }),
+  );
+  await page.route("**/api/projects/cloud-gate", saveAnswer);
+  // Arena behind Analog Canvas's Worker: the Voter's voted Battles, newest
+  // first with when each was cast, answered with Arena's clock.
+  const castAt = [new Date(Date.now() - 3_600_000).toISOString()];
   let arenaUp = true;
-  let offering = true;
+  let season: string | null = "s1";
   await page.route("**/api/arena/battles/past", (route) =>
     arenaUp
       ? route.fulfill({
+          headers: { date: new Date().toUTCString() },
           json: {
-            battles: voted.map((id) => ({ id })),
+            battles: castAt.map((time, index) => ({
+              id: `b${index}`,
+              castAt: time,
+            })),
             more: false,
-            total: voted.length,
+            total: castAt.length,
           },
         })
       : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
   );
-  await page.route("**/api/arena/battles/next", (route) =>
-    offering
-      ? route.fulfill({ status: 201, json: { id: "b-next" } })
-      : route.fulfill({
-          status: 404,
-          json: {
-            error: "exhausted",
-            message: "You've voted on every pairing.",
-          },
-        }),
+  await page.route("**/api/arena/leaderboard", (route) =>
+    route.fulfill({ json: { season } }),
   );
-  await page.route("**/api/arena/battles/*/vote", (route) => {
-    voted.unshift(route.request().url().split("/").at(-2)!);
-    return route.fulfill({ json: { voted: true } });
-  });
-  const framed: string[] = [];
-  await page.route(/\/schematic(?:\?|$)/u, (route) => {
-    framed.push(new URL(route.request().url()).search);
-    return route.fulfill({ contentType: "text/html", body: ARENA_PAGE });
-  });
+  // Arena's own window, wherever it opens.
+  await context.route(/\/schematic\?/u, (route) =>
+    route.fulfill({ contentType: "text/html", body: "<title>Arena</title>" }),
+  );
 
   await page.goto("/editor?new=1");
   await awaitEditorReady(page);
@@ -629,9 +598,11 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await page.keyboard.press("ControlOrMeta+s");
   await expect(gate).toBeVisible();
   expect(revision).toBe(1);
+  await expect(gate).toContainText(
+    "Vote in 5 Schematic Arena battles to continue",
+  );
   await expect(count).toHaveText("Voted 0 / 5");
   await expect(close).toHaveAttribute("aria-disabled", "true");
-  await expect(gate).toContainText("Close unlocks after 5 new votes: 5 to go.");
   await expect
     .poll(() =>
       page.evaluate(
@@ -647,39 +618,42 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await page.mouse.click(4, 4);
   await expect(gate).toBeVisible();
 
-  const arena = page.frameLocator('iframe[title="Schematic Arena battle"]');
-  await expect(arena.getByText("Battle", { exact: true })).toBeVisible();
-  // Arena records the Votes cast here with the source "canvas-gate".
-  expect(framed).toEqual(["?from=canvas-gate"]);
-  for (let vote = 1; vote <= 5; vote++) {
-    await arena.getByRole("button", { name: "Vote" }).click();
-    await expect(count).toHaveText(`Voted ${vote} / 5`);
-  }
+  // The battle page opens in a window of its own, marked as the gate's.
+  const [arena] = await Promise.all([
+    context.waitForEvent("page"),
+    gate.getByRole("link", { name: "Open the battle page" }).click(),
+  ]);
+  expect(new URL(arena.url()).pathname + new URL(arena.url()).search).toBe(
+    "/schematic?from=canvas-gate",
+  );
+  // Five Votes there; the gate counts them on its next read.
+  for (let vote = 0; vote < 5; vote++) castAt.unshift(new Date().toISOString());
+  await arena.close();
+  await page.bringToFront();
+  await expect(count).toHaveText("Voted 5 / 5", { timeout: 10_000 });
   await expect(close).toHaveAttribute("aria-disabled", "false");
-  await close.click();
+  await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
 
-  // Every Shelf opening opens it again; with no Battle to offer, it closes at once.
-  offering = false;
+  // Every Shelf opening opens it again; with no Season serving Battles, it
+  // closes at once.
+  season = null;
   await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
-  await expect(gate).toBeVisible();
   await expect(gate).toContainText(
-    "Arena has no battle for you right now, so you can close this.",
+    "Arena has no battle to offer right now, so you can close this.",
   );
-  await gate.focus();
   await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
 
   // An unreachable Arena never traps anyone either.
+  season = "s1";
   await placeComponentAt(page, "resistor", { x: 400, y: 240 });
   arenaUp = false;
   await page.keyboard.press("ControlOrMeta+s");
   await expect(gate).toContainText(
     "Arena can't be reached right now, so you can close this.",
   );
-  await expect(
-    page.locator('iframe[title="Schematic Arena battle"]'),
-  ).toHaveCount(0);
+  await expect(gate.getByRole("link")).toHaveCount(0);
   await close.click();
   await expect(gate).toHaveCount(0);
   expect(revision).toBe(2);

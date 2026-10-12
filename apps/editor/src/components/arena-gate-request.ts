@@ -6,7 +6,7 @@
 let gateOpen = false;
 
 /** Opens the Arena gate over whatever page is showing. */
-export function requestArenaGate(): void {
+function requestArenaGate(): void {
   if (gateOpen || typeof document === "undefined") return;
   gateOpen = true;
   void import("./arena-gate-panel")
@@ -31,4 +31,12 @@ export function gateAfterManualCloudSave<Outcome extends { status: string }>(
 ): Outcome {
   if (outcome.status === "saved") openGate();
   return outcome;
+}
+
+/**
+ * The Cloud shelf has opened: the editor's Shelf menu, the Gallery's My
+ * shelf or the account page's Cloud Projects. Every opening opens the gate.
+ */
+export function cloudShelfOpened(): void {
+  requestArenaGate();
 }

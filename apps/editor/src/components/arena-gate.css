@@ -1,5 +1,5 @@
-/* The Arena gate (#1681): the Schematic Arena's battle page in a panel over
-   the whole page, with its count and the reason Close waits. */
+/* The Arena gate (#1681): a locked card over the whole page with the count,
+   the way to Arena's battle page and the reason Close waits. */
 
 .arena-gate-backdrop {
   position: fixed;
@@ -7,17 +7,16 @@
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 1.25rem;
+  padding: 1rem;
   background: rgb(55 53 47 / 36%);
   backdrop-filter: blur(4px);
 }
 
 .arena-gate {
-  display: flex;
-  flex-direction: column;
-  width: min(80rem, 100%);
-  height: min(60rem, 100%);
-  overflow: hidden;
+  display: grid;
+  gap: 0.6rem;
+  width: min(30rem, 100%);
+  padding: 1.15rem 1.25rem 1rem;
   border: 1px solid var(--icm-border);
   border-radius: var(--icm-radius-lg);
   background: var(--icm-surface);
@@ -29,28 +28,24 @@
   outline: none;
 }
 
-.arena-gate-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--icm-border);
-}
-
-.arena-gate-header > div {
-  flex: 1;
-  min-width: 0;
-}
-
-.arena-gate-header h2 {
+.arena-gate h2 {
   margin: 0;
-  font-size: var(--icm-font-lg);
+  font-size: 16px;
+  line-height: var(--icm-line-tight);
+}
+
+.arena-gate-count {
+  margin: 0;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 
 .arena-gate-status {
-  margin: 0.15rem 0 0;
+  margin: 0;
   color: var(--icm-text-muted);
-  font-size: var(--icm-font-sm);
+  font-size: var(--icm-font-md);
+  line-height: var(--icm-line);
 }
 
 .arena-gate-status[data-nudged] {
@@ -58,48 +53,42 @@
   font-weight: 600;
 }
 
-.arena-gate-count {
-  font-size: var(--icm-font-md);
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  white-space: nowrap;
+.arena-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
 }
 
+.arena-gate-open,
 .arena-gate-close {
+  display: inline-flex;
+  align-items: center;
   height: var(--icm-control-h-lg);
   padding: 0 0.9rem;
-  border: 1px solid transparent;
+  border: 1px solid var(--icm-border-strong);
   border-radius: var(--icm-radius-sm);
-  background: var(--icm-accent);
-  color: #fff;
   font: inherit;
   font-size: var(--icm-font-md);
+  font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
 }
 
+.arena-gate-open {
+  border-color: transparent;
+  background: var(--icm-accent);
+  color: #fff;
+}
+
+.arena-gate-close {
+  background: var(--icm-surface);
+  color: var(--icm-text);
+}
+
 .arena-gate-close[aria-disabled="true"] {
-  border-color: var(--icm-border-strong);
   background: var(--icm-surface-muted);
   color: var(--icm-text-disabled);
   cursor: not-allowed;
-}
-
-.arena-gate-frame {
-  flex: 1;
-  width: 100%;
-  border: 0;
-}
-
-@media (max-width: 600px) {
-  .arena-gate-backdrop {
-    padding: 0;
-  }
-
-  .arena-gate {
-    border-radius: 0;
-  }
-
-  .arena-gate-header {
-    flex-wrap: wrap;
-  }
 }
