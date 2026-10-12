@@ -596,7 +596,15 @@ export function ExternalModelSourceEditor({
         },
       });
     }
-    if (!existing || !selectedDefinition) {
+    // A draft naming no applied entry gets its own placeholder owner, but an
+    // applied owner keeps its binding: its draft is stored beside it. Any
+    // source counts, not only this one, so a draft never unbinds an owner
+    // applied elsewhere.
+    const ownerIsApplied = project.externalSubcircuitDefinitions.some(
+      (d) =>
+        d.id === selectedDefinitionId && d.implementation?.kind === "source",
+    );
+    if ((!existing || !selectedDefinition) && !ownerIsApplied) {
       edits.push({
         kind: "upsert_external_subcircuit_definition",
         definition: {
