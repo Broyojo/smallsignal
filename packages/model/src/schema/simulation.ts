@@ -9,7 +9,7 @@ export const SIMULATION_NOISE_INPUT_DENSITY_ID = "noise-input-density";
 
 /**
  * Authored simulation intent persisted with the Project (Simulation rationale, amended
- * 2026-09-04; `docs/specs/simulation.md`, "Persistence and compatibility").
+ * 2026-09-04; `docs/specs/simulation.md`, "Saved folder").
  * A folder names what to run and where to look; results, run ids, receipts,
  * prepared decks, simulator paths, and caches are transient and never appear
  * here. Source values (DC, AC magnitude and phase, waveforms) live on the

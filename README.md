@@ -214,8 +214,8 @@ and [delivery cadence](docs/deployment.md#development-and-delivery-cadence).
   tools, and the pinned external research-source manifest.
 - [`eda/`](docs/eda-import.md): Canvas export and single/batch EDA imports,
   with PyAether and Virtuoso Bridge adapters.
-- `docs/`: current architecture, user guides, normative contracts, ADRs, and
-  delivery plans.
+- `docs/`: current architecture, user guides, normative contracts, ADRs and
+  the roadmap.
 
 The [Razavi reference manifest](fixtures/visual-reference/razavi-reference-v1/)
 is the sole visual authority. Every non-documentation merge to `main` deploys

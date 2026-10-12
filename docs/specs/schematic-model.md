@@ -4,290 +4,159 @@ Status: `accepted`
 
 Primary owner: `packages/model`
 
-The Project contains Documents; each Document owns revisioned electrical,
-geometric, and presentation facts. The current model is strict schema 58 and has
-no compatibility shape.
+A Project contains Documents, each owning revisioned electrical, geometric and
+presentation facts. The model is strict schema 58 with no compatibility shape;
+the [file format](project-file-format.md) owns versions and migration. All
+mutation goes through atomic [Edit Engine](edit-engine.md) transactions;
+cross-Document edits use one Project transaction guarded by
+`structureRevision`.
 
 ## Coordinate domains
 
-Instance placements, Junctions and Route bends are finite integer multiples
-of the Document's `presentation.grid`. Annotation anchors and drafting
-points/controls/centers instead use 1-unit integer precision, allowing text and
-explanatory artwork to move independently of the electrical grid. These are
-validation boundaries, not merely editor snap preferences; see
-[Document validation](../../packages/model/src/schema/document.ts).
-
-Renderer bounds, rich-text layout, route-relative anchor resolution, curves,
-rotated corners, diagnostics, pointer/screen positions, and symbol-local
-artwork may use finite floats. They are read-only or transient coordinate
-domains and must be converted to the appropriate authored domain before
-persistence. Parametric scalars such as route-anchor `t` and normal offset are
-not page Points.
-
-Normalized model validation does not round invalid coordinates. Portable-file
-compatibility belongs to the [file-format contract](project-file-format.md).
-Invalid authored coordinates are rejected with their data path.
+- Instance placements, Junctions and Route bends are integer multiples of
+  `presentation.grid`; annotation anchors and drafting geometry use 1-unit
+  integers. These are validation rules
+  ([schema](../../packages/model/src/schema/document.ts)), not snap
+  preferences; invalid coordinates are rejected with their path, never
+  rounded.
+- Renderer bounds, text layout, resolved anchors, curves, diagnostics,
+  pointer positions and symbol artwork may be floats; they are read-only or
+  transient and converted before persistence. Route-anchor `t` and normal
+  offset are not page Points.
 
 ## Electrical authority
 
-- `Instance` selects one exact canonical symbol and optional visual variant.
-  `Instance.reference` is its sole authored Reference when the Instance has
-  one. The value is projected on canvas and remains independent from stable
-  `Instance.id` and typed master binding. Process/model selection preserves
-  it. The [netlist exporter](netlist-export.md#persisted-data-model) derives legal
-  dialect-specific names without rewriting the authored Reference: a device
-  named `M1` may emit as `XM1` for a SPICE subcircuit call while Spectre retains
-  `M1`. A Cell Pin instead projects `CellTerminal.name` and has no Instance
-  Reference.
-- A Base Net indexes physical terminal membership in the normalized model.
-  [Portable connection facts](project-file-format.md#one-connection-source)
-  are authoritative at the file boundary. A terminal is
-  `{instanceId, pinName}` and belongs to at most one Base Net.
+- `Instance` selects one canonical symbol and optional variant.
+  `Instance.reference` is its sole authored Reference, independent of `id` and
+  binding, kept across process/model selection; the
+  [netlist exporter](netlist-export.md#persisted-data-model) derives dialect
+  names without rewriting it (`M1` may emit `XM1`). Its prefix must match the
+  invocation kind and it is unique case-folded within the Cell. Cell Pins
+  project `CellTerminal.name` instead.
+- Parameters live in `Instance.netlist`, defined only by the Device
+  Descriptor (key, requiredness, editor kind, unit/example/help, display
+  role); Insert, Properties, validation, Value and export all consume it.
+  Import terminal order and symbol mapping live only in
+  `Instance.importProvenance`; `Instance.properties` does not persist.
+- A Base Net indexes physical membership; a terminal `{instanceId, pinName}`
+  belongs to at most one. [Portable connection facts](project-file-format.md#one-connection-source)
+  are authoritative at the file boundary.
 - `ConnectivityEvidence` records owner-addressed name claims, explicit SPICE
-  globals, non-electrical source-name hints, and SPICE source identity for one
-  Base Net at a time. There is no generic persisted equivalence edge.
+  globals, non-electrical source-name hints and SPICE source identity, one
+  Base Net each; no generic persisted equivalence edge.
   [Connectivity](connectivity-and-routing.md#net-naming-and-lifecycle) owns
-  derived name equivalence, effective scope and conflict behavior; source
-  evidence remains non-electrical provenance.
-- `Route` owns editable geometry for one Net and connects terminal or Junction
-  endpoints only.
-- `Junction` owns explicit branch/anchor geometry.
-- `NoConnect` targets one terminal only and cannot overlap Net membership.
-- `Document.netlist.terminals` is the ordered list of authored Cell Pins. Each
-  declaration has a stable ID, name, direction, Net ID, and a singleton
-  `interfaceInstanceIds` array pointing to its one ordinary canvas Cell Pin
-  Instance. Equal folded names intentionally identify one Logical Net while
-  the declarations and physical Base Nets remain independently editable. A
-  declaration's Port Name may differ from a visible internal Net Label; the
-  Port name supplies interface identity without overwriting that Label.
+  name equivalence, scope and conflicts.
+- `Route` owns one Net's geometry between terminal or Junction endpoints; its
+  Net agrees with both ends; legs end at stable bend IDs and own their mode.
+  `Junction` owns branch geometry. `NoConnect` targets one terminal and
+  excludes Net membership.
+- `Document.netlist.terminals` lists authored Cell Pins: stable ID, name,
+  direction, Net ID and a singleton `interfaceInstanceIds` naming its one
+  canvas Instance (pin `P`). Each formal terminal has exactly one interface
+  owner; there is no free-Port collection. Equal folded names resolve to one
+  Logical Net while declarations, directions and Base Nets stay separate. A
+  Port name may differ from a visible internal Net Label without overwriting
+  it.
+- `port` is the hollow Cell Pin, `port-filled` the solid Bias Voltage Port
+  (same storage). VDD Power owns a Cell-Pin declaration by default and can be
+  switched to Global in Properties. A local Power Rail owns a formal terminal
+  through its `power-label` annotation (no hidden Instance); a global one has
+  only the claim.
+- `projectCellInterface` groups declarations by case-insensitive Port Name
+  (first declaration's order and spelling); never persisted, never merges
+  objects, creates no connectivity (hierarchy trace omits a multi-member Port
+  unless electrical facts already join its members).
+- Ground, Global VDD, Net Label and Power Rail author the same `name-claim`,
+  which owns scope and optional supply role. New VDD and Power Rail default
+  local; Ground is global node `0`. `AVDD` and `DVDD` differ even with the same
+  `vdd` role.
+- GUI naming writes the owner's `name-claim` on an existing Base Net; never
+  `merge_nets` or `Net.name`. Only physical contact merges Base Nets.
+  Contacting equal-folded local and global Nets gives the group global scope
+  while both claims stay. No normalization from legacy metadata or by text.
+- Conflicting claims block export and the introducing transaction; so does a
+  formal Cell Pin plus a Global declaration on one Logical Net, except Ground
+  `0`.
+- `electricalTopologyHash` covers Instances, Nets, membership, Routes,
+  Junctions, NoConnects and formal terminals, not placement, annotations or
+  drafting.
+- Internal subcircuit bindings reference one child Document (Cell name
+  derived); external bindings reference one project-level definition;
+  unresolved imported bindings keep a target name.
 
-Canvas `port` and `port-filled` share one formal-terminal storage protocol but
-not one visible meaning: `port` is the hollow Cell Pin, while `port-filled` is
-the solid Bias Voltage Port.
-VDD Power also owns a Cell-Pin declaration by default and can be switched
-explicitly to a Global marker in Properties. A local Power Rail owns a formal
-terminal directly through its `power-label` annotation; it does not require a
-hidden Instance. Instance-owned formal terminals use an ordinary single-pin
-Instance with pin `P`. Each formal terminal has exactly one interface owner and
-uses ordinary Net membership and Route endpoints. The model has no
-free-Port branch or separate Port collection. Equal Port Names do not merge
-terminal identity, direction, Base Net, annotations, or lifecycle, but they
-resolve to one Logical Net in the current Document.
+## MOS bulk
 
-Consumers that need a Cell's formal interface use the pure
-`projectCellInterface` read model. It groups declarations by case-insensitive
-Port Name, preserving the first declaration's order and spelling. The
-projection is never persisted and never merges or rewrites authored objects.
-It also creates no editing-time connectivity: hierarchy trace/highlight omits
-a multi-member Formal Port unless independent electrical facts already place
-every member on the same Logical Net.
+`nmos`/`pmos` have D/G/S/B; `textbook-3terminal` is presentation only. B
+resolves from explicit membership, then a configured cell-default Net, then
+the one wired supply marker of its domain in the Cell (`ground` for NMOS,
+`vdd-port` for PMOS) as read-only `supply-default`, never written. None or
+several markers leave B unresolved; export then places it as
+[netlist export](netlist-export.md#implicit-supplies-and-mos-bodies) states.
+Persisted `supply-default` bindings stay readable. Cross-Document copy turns
+an effective `cell-default` into `instance-override`. Imported MOS without a
+fourth node stay unresolved; when all imported MOS of one polarity in a Cell
+share a B Net, that Net becomes the Cell default (mixed sets none). A visible
+`bulk-dashed` route is an explicit override that atomically removes the
+implicit default binding.
 
-Ground, Global VDD, route Net Label, and Power Rail author the same
-`name-claim`. A local VDD Power Cell Pin gets its name from the formal terminal
-and derives the `vdd` role from its interface owner. A local Power Rail combines
-editable Route/Junction presentation with an annotation-owned formal terminal;
-an explicitly global Power Rail has the claim but no terminal. A marker claim
-owns its scope and optional supply role. New VDD and Power Rail authoring
-defaults local; Ground remains global SPICE node `0`. `AVDD` and
-`DVDD` are separate Logical Nets because their names differ, even though both
-may carry the `vdd` role.
+## Instance lifecycle
 
-High-level GUI Net naming starts from an existing candidate Base Net plus a
-stable Net Label owner. It writes or updates that owner's `name-claim`; it
-never emits `merge_nets` or creates a new `Net.name` projection. Matching
-claims join only in the derived Logical-Net view. Physical contact alone uses
-the internal Base-Net merge primitive. Explicitly contacting equal-folded
-local and global Nets is permitted; the merged group's effective scope is
-global while both authored claims remain unchanged.
-
-The editor does not normalize from inert legacy Base-Net metadata or coalesce
-Base Nets by text. Compatible same-name claims are ordinary logical identity;
-conflicting claims block electrical export and the introducing transaction.
-A formal Cell Pin combined with a Global declaration on the same Logical Net is
-also a blocking contract conflict; the two interface modes are mutually
-exclusive. The established global SPICE ground reference `0` remains the sole
-exception so Ground keeps its existing placement and routing behavior.
-
-Canonical MOS Instances use `nmos`/`pmos` with D/G/S/B electrical pins. The
-default `textbook-3terminal` variant is presentation-only. B membership is
-explicit first, then materialized from a configured cell-default Net, and
-failing both it follows the one wired supply marker of its domain in that Cell
-— `ground` for an NMOS body, `vdd-port` for a PMOS body — resolved on read as
-`supply-default` and never written into persisted connectivity. A Cell with no
-such marker, or with more than one, leaves the body unresolved. Strict
-extraction reports `MISSING_PIN_NET` for an unresolved body unless an explicit
-NoConnect supplies the separate floating-node contract; no export guesses a
-supply from device polarity or from a Net's spelling, and a marker is an
-authored placement rather than a guess. Nothing writes a new `supply-default`
-binding; persisted ones from an earlier release remain readable for
-compatibility.
-Cross-Document composition converts an effective source `cell-default` to an
-instance-owned `instance-override` so target Cell policy cannot retarget the
-copied body.
-Imported/source-bound MOS instances with missing fourth-node evidence remain
-unresolved and follow the same missing-terminal export rule.
-When all imported MOS instances of one polarity in a Cell share the same B
-Net, import records that Net as the Cell default for later instances of that
-polarity. The source B memberships remain explicit; mixed B Nets set no
-default for that polarity.
-
-A visible `bulk-dashed` route is an explicit override. The override atomically
-removes the implicit cell-default binding before connecting B to the selected
-body-bias Net, so the default never remains as a hidden parallel connection.
+Tray (`placement: null`), placed, or deleted. Returning to the Tray keeps all
+electrical, netlist and annotation facts (annotations hidden and unhittable);
+visible Route endpoints detach to a Junction at the grid landing. Deletion is
+a separate atomic composition clearing membership, NoConnect, owned
+annotations and unlocked layout references.
 
 ## Presentation authority
 
-Every visible editable label is a `SchematicAnnotation` with bounded RichText
-`content` and one `VisualAnchor`. Anchors are free, object-relative, or
-route-relative and include a deterministic fallback position for dangling
-visual references. While an anchor resolves, its resolved position is the one
-text baseline used by rendering, editor hit/marquee geometry, export bounds,
-and visual diagnostics; `fallbackPosition` is used only for a dangling target.
-`instance-reference` resolves only `Instance.reference`. It, `net-name`, and
-`cell-terminal-name` may use a same-text Annotation RichText `formatOverride`;
-`instance-value` resolves typed component parameters. A visible master label or
-other custom object-attached text is a literal Annotation and has no identity
-or export authority. A device's visual `instance-label` starts as a Reference
-projection; canvas content editing switches that same object to literal
-`content`, removing `binding` and `formatOverride`. Only an explicit reset
-restores following. `Instance.reference` is the Netlist Reference, not a second
-editable presentation string. No extra stored label field is needed.
-Renderers never derive visible Instance text from IDs,
-master bindings, provenance, or copied properties. Drafting objects are
-visual-only and cannot create connectivity.
-
-Rectangle and circle drafting objects may independently override border and
-opaque fill paint. Their optional `layer` selects the background plane below
-circuit artwork or the foreground plane above annotations; an absent layer is
-foreground for compatibility. `zIndex` orders objects within each plane.
-
-An Annotation may independently persist presentation-only `textColor`. With
-that field absent, an `instance-label` or `instance-value` inherits the owning
-Instance's effective foreground; all other annotation kinds use the Document
-profile foreground. A semantic binding identifies the owning Instance before
-an object anchor does. Annotation paint never changes electrical topology,
-netlisting, SPICE parameters, or the owning Instance style.
-
-RichText has one canonical persisted authority. A document is either ordinary
-Razavi styled runs or one atomic formula run containing bounded LaTeX source
-and an explicit inline/display mode. Generated formula SVG, font paths, bounds,
-and caches are derived and are never persisted. Formula source cannot create
-connectivity or a second annotation identity.
-
-A Cell definition may additionally persist optional `presentation.cellSymbol`
-intent: a symbol-local minimum body size and unique `terminalId`-keyed visual
-side/offset placement. It is not electrical terminal data, parent-instance
-geometry, or persisted artwork. The Symbol resolver derives the block and all
-pin anchors. Each placement must reference one existing formal terminal and no
-two explicit placements may occupy the same side/offset slot. A supply Cell Pin
-(a VDD Power port, or a Port named like VDD/VCC or VSS/GND) added to a Cell
-that no parent has placed yet gets an explicit placement on the top or bottom
-edge, in the same transaction, as the textbook draws it; a Cell already placed
-somewhere keeps the automatic layout its drawings were made with. While no
-parent has placed a Cell, its derived block also puts each Pin without a
-stored placement on the side its Port is drawn on, left or right of the
-middle of the Cell's drawing, in their drawn order from top to bottom (a Port
-on the middle keeps the automatic side), and is tall and wide enough for each
-top or bottom Pin's name to clear the side Pins' names and the body's sides.
-Its first placement persists those placements and that size, as explicit
-placements and the minimum body size, in the same transaction, so the block
-keeps them once placed; a placed Cell's block is never changed by this rule.
-
-## Core invariants
-
-- IDs are unique within their object class and every reference resolves.
-- A Route's Net agrees with both endpoints. Its non-final legs end at stable
-  bend IDs and its final leg ends at the Route endpoint; every leg owns its
-  own mode and stable ID.
-- Net membership and NoConnect are mutually exclusive.
-- Layout groups and constraints reference existing objects.
-- Cell-Pin declarations reference existing Nets and connected Port Instances
-  with unique stable IDs and singleton marker bindings. Formal Port names are
-  unique only after read-only name projection.
-- Internal subcircuit bindings reference one child Document; their emitted
-  Cell name is derived from that child. External bindings reference one
-  project-level external definition, and unresolved imported bindings retain
-  only a target name until resolution.
-- The sole authored Reference lives in `Instance.reference`. Primitive cards
-  and subcircuit calls use it directly. Its prefix must agree with the current
-  invocation kind and it is unique under case folding within the Cell.
-  Parameters live in `Instance.netlist`.
-  Parameters are defined only by the matching Device Descriptor: every field
-  declares its key, requiredness, editor kind, optional unit/example/help, and
-  display role. Insert, Properties, validation, Value projection, and export
-  consume that definition; UI adapters do not maintain a second parameter
-  registry.
-  Imported terminal order and symbol-mapping identity live only in typed
-  `Instance.importProvenance`; `Instance.properties` does not persist.
-- `electricalTopologyHash` includes Instances, Nets, terminal membership,
-  Routes, Junctions, NoConnects, and formal cell terminals, but excludes
-  placement, annotation, and drafting presentation.
-
-An Instance has three lifecycle states: retained in the Placement Tray
-(`placement: null`), placed (`placement` present), or deleted (absent). Returning
-to the Tray retains every electrical, netlist, and object-anchored annotation
-fact, but retained-instance annotations are not rendered or hit-testable until
-the Instance is re-placed. Any visible Route endpoint is first detached to a
-Junction at the endpoint's grid landing; its derived artwork-to-grid escape
-disappears with the Instance. Deletion is a separate atomic composition
-that clears membership, NoConnect, owned annotation, and unlocked layout
-references before removing the Instance.
-
-Mutation occurs only through atomic Edit Engine transactions against an exact
-Document revision. GUI and Agent writes use the same schema and invariants.
-Formal-interface edits and add/remove Document operations are composed with
-ordinary Schematic edits inside one Project structural transaction. The
-Project's `structureRevision` protects this cross-Document boundary and the
-editor records it as one undoable structural commit.
-
-The [Project file format](project-file-format.md) owns the current schema,
-supported compatibility floor and read/write boundary. Migration transforms
-preserve authored intent before handing current-only data to this model;
-their implementation and tests, not a second chronology here, own the steps.
-[Simulation](simulation.md) owns Project-level source folders and repairable
-references; removing a referenced Cell may diagnose preparation without
-invalidating the saved Project. Simulation output labels never name or join
-circuit Nets.
+- Every visible editable label is a `SchematicAnnotation`: bounded RichText
+  `content` and one `VisualAnchor` (free, object- or route-relative) with a
+  fallback position used only when the target dangles. The resolved position
+  is the one baseline for rendering, hit geometry, export bounds and
+  diagnostics.
+- `instance-reference` resolves only `Instance.reference`; it, `net-name` and
+  `cell-terminal-name` may carry a same-text `formatOverride`;
+  `instance-value` resolves typed parameters. Editing an `instance-label`'s
+  text makes it literal (drops `binding` and `formatOverride`) until explicit
+  reset. Literal and custom attached text has no identity or export
+  authority. Renderers never derive text from IDs, bindings, provenance or
+  copied properties. Drafting objects never create connectivity.
+- Optional `textColor` is presentation only; absent, instance labels/values
+  inherit the Instance foreground and other kinds the Document profile.
+- RichText is either styled runs or one formula run (bounded LaTeX plus
+  inline/display); generated SVG, paths, bounds and caches never persist.
+- Rectangle/circle drafting may override border and fill; `layer` is
+  background (below circuit) or foreground (default); `zIndex` orders within
+  a plane.
+- `presentation.cellSymbol` (optional): minimum body size and unique
+  `terminalId`-keyed side/offset placements (existing terminals, one per
+  slot); the resolver derives block and anchors. While no parent has placed
+  the Cell, new supply Pins (VDD Power, or named like VDD/VCC/VSS/GND) get a
+  top/bottom placement and unplaced Pins sit on the side their Port is drawn
+  (top-to-bottom order; middle stays automatic), sized so names clear; the
+  first placement persists these, and a placed Cell's block never changes by
+  this rule.
 
 ## Project-owned external model sources
 
-An external definition may bind to one Project `modelSources` resource and a
-native subcircuit entry, or explicitly declare an unimplemented placeholder.
-An absent binding retains the legacy/reviewed-library contract. A source owner
-contains SPICE files, one entry path, pinned dependencies, an applied revision
-and optional private draft. It is separate from import history and experiments.
-Multiple exposed entries share the resource and its helper definitions.
-
-The native declaration owns the target name, ordered terminals and formal
-defaults. The saved external interface is a checked projection. Terminal IDs
-remain stable across reorder and explicit rename mappings; direction and symbol
-layout remain independent metadata. Source models do not acquire reviewed
-device semantics by matching a library name. Reviewed interfaces stay fixed.
-
-GUI and Agent use `apply_model_source` in the Project transaction. Apply checks
-declarations, include closure and migration without executing a simulator.
-Connected removal requires an explicit remap/disconnect; wires become retained
-junction stubs. Source, interfaces and affected callers commit atomically with
-Undo/Redo. `save_model_source_draft` stores unapplied bytes with a revision
-guard. Import may add an owner through `upsert_model_source`; raw replacement
-of an existing owner is refused. Typed Apply and validated in-session Project
-Code edits share the native source/interface authority. Project Code ignores
-authored concurrency tokens and advances the applied model revision when its
-files, entry or dependencies change. An unchanged saved draft retains its old
-base; accepting it against a newer applied model requires an explicit rebase.
-Reviewed interfaces and implementations cannot be replaced in place through
-either entrance. Inconsistent projections and stale edits refuse.
-
-Source-backed custom artwork is stored in `componentDefinitions` with a checked
-`circuitBinding` to stable formal terminal IDs. Native source owns executable
-facts; JSON owns graphical identities, geometry and presentation. The shared
-symbol resolver projects correspondence into ordinary formal-name endpoints;
-the netlist extractor consumes the same checked mapping. An explicit property
-supply uses the existing supply resolution and cannot also have a drawn route
-or No Connect. See [Symbol DSL](symbol-dsl.md#source-backed-custom-artwork).
-
-Apply may capture artwork and select caller occurrences in the same transaction.
-A changed captured ID is refused; callers not selected keep their own captures.
-Only a successful Apply advances an editing window's own caller baseline.
-External changes still require reopening the caller. Invalid mappings, including
-ones submitted through lower-level Project edits, refuse without a partial commit.
+- An external definition binds one `modelSources` owner (SPICE files, entry,
+  pinned dependencies, applied revision, optional draft; shareable by several
+  entries) and a native subcircuit entry, or declares a placeholder; no
+  binding keeps the legacy/reviewed-library contract.
+- The native declaration owns target, terminal order and defaults; the saved
+  interface is a checked projection; terminal IDs survive reorder and explicit
+  rename; a matching library name grants no reviewed semantics; reviewed
+  interfaces stay fixed.
+- `apply_model_source` (GUI and Agent, one Project transaction) checks
+  declarations, include closure and migration without simulating; connected
+  removal needs explicit remap/disconnect (wires become Junction stubs);
+  source, interfaces and callers commit atomically.
+  `save_model_source_draft` stores unapplied bytes under a revision guard;
+  `upsert_model_source` may only add an owner. Project Code ignores authored
+  concurrency tokens and advances the applied revision when files, entry or
+  dependencies change; an unchanged draft needs explicit rebase. Stale or
+  inconsistent edits refuse.
+- Custom artwork follows [Symbol DSL](symbol-dsl.md#source-backed-custom-artwork);
+  a property supply cannot also have a route or No Connect.
+- Simulation source folders are [simulation](simulation.md)'s; output labels
+  never name or join Nets.

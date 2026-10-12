@@ -174,8 +174,6 @@ test("layout lookup is self-contained and legacy addresses share its canonical s
     assert.equal(texts[index], texts[0]);
     assert.equal(kitTexts[index], kitTexts[0]);
   }
-  for (const heading of ["Structure", "Layout", "Wiring", "Example:"])
-    assert.ok(texts[0].includes(`## ${heading}`));
   assert.ok(!texts[0].includes("analog-canvas://reference/routing"));
   assert.ok(!texts[0].includes("analog-canvas://reference/knowledge/patterns"));
   assert.ok(

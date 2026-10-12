@@ -1,102 +1,46 @@
 # Desktop distribution credential boundary
 
-The desktop application and its corresponding source are public material. No
-production credential may be embedded in either. Minification, an executable
-wrapper, deleting a UI button, or removing source from a ZIP is not a credential
-protection mechanism.
-
-## Audit of the first published preview
-
-On 2026-09-26, the review downloaded the actual
-[first Windows preview](https://github.com/cascode-ai/analog-canvas/releases/tag/desktop-preview-655ee760bb22-1),
-whose source is `655ee760bb228e6451acd201368be04557024532`. It inspected the 207
-distributed files and the nested archive containing 2,330 source files, and
-scanned 302 commits reachable from that mainline revision with Gitleaks 8.30.1.
-
-No production credential was identified. The only scanner finding was a fixed
-32-character test value in `packages/agent-adapter/src/http.test.ts`, explicitly
-passed to an isolated loopback test server. It is not a deployed credential.
-The reviewed exception in `.gitleaks.toml` requires both that exact value and
-that exact source path; it does not exempt other tests or other values.
-
-Neither the runnable tree nor its source archive contained `.env`, `.dev.vars`,
-private-key files, Git authentication state, a browser profile, cookies or a
-user database. Production credential variable names were absent from the
-runnable JS/JSON/HTML/CSS/text files. The source archive does include public
-Worker authentication implementation, tests, workflow definitions and secret
-variable **names**, as does the public repository; these are not secret values.
+The desktop application and its source are public; no production credential
+may be in either. Minification, wrappers, hidden buttons or removing source
+from a ZIP protect nothing.
 
 ## Where production authority lives
 
-| Material                                                              | Storage and use                                                                                                                                   | Desktop distribution                                                 |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| OAuth client secrets, email service key and simulation upstream token | Worker runtime secrets; the simulation token is also kept in the deployment environments (`main`/`v*` only) and synced by the deployment workflow | No production secrets are passed to desktop build or acceptance jobs |
-| `ADMIN_EMAILS` and `ADMIN_EMAILS_EXTRA`                               | Worker runtime secrets; each authenticated session's verified email is checked server-side                                                        | Neither list is embedded in the runnable files                       |
-| Account sessions                                                      | Random login/session tokens; server stores token hashes and validates expiry                                                                      | No existing user profile or account session is copied into a package |
-| Gallery backup token                                                  | Worker runtime secret; authorizes specific bounded reads, not administrator writes or private Cloud Projects                                      | No token value is part of source or runtime output                   |
-| Store backup token                                                    | Worker runtime secret; authorizes only the whole-store backup pages (including private Cloud Projects), no other read, no writes                  | No token value is part of source or runtime output                   |
-| UI `isAdmin` / moderator affordances                                  | Server-derived identity controls the display; privileged endpoints independently resolve the server session                                       | Changing client code does not grant server authority                 |
+- OAuth client secrets, email key, simulation token, `ADMIN_EMAILS(_EXTRA)`,
+  Gallery and store backup tokens: Worker runtime secrets only.
+- Account sessions: random tokens; the server stores hashes and checks expiry.
+- `isAdmin` / moderator UI is display only; privileged endpoints resolve the
+  server session themselves.
 
-GitHub and Google sign-in only use provider-verified email addresses for the
-administrator check. The account IDs/display-name migrations in
-`worker/auth-do.ts` rename stored profiles; they do not grant administrator
-authority. `GALLERY_ADMIN_TOKEN` is retired from the runtime authorization
-path, and its repository secret was removed on 2026-10-07. Removing an
-unused stored secret is operational housekeeping, not a substitute for server
-authorization or a response to an identified leak.
-
-The audit could enumerate GitHub secret names but could not read their values;
-therefore it does not claim byte-for-byte comparison with every production
-secret. Anonymous and deliberately invalid-credential live probes received
-403 before an application JSON response, so they are not counted as proof of
-application authorization. The server code review and focused authentication
-tests provide that evidence. Pattern scanning cannot prove the absence of all
-possible secrets or replace a complete penetration test.
+None of these reach desktop build or acceptance jobs or packages. The
+administrator check uses only provider-verified emails. Pattern scans cannot
+prove no secret exists; server review and auth tests are the evidence.
 
 ## Enforced distribution checks
 
-1. Desktop Vite builds disable `.env` loading and all `VITE_*` environment
-   exposure. A build test injects sentinel values through both sources and
-   verifies they do not reach output. Web build behavior is unchanged.
+1. Desktop Vite builds disable `.env` loading and `VITE_*` exposure; a build
+   test injects sentinels through both and checks the output.
 2. Package assembly rejects tracked private configuration, key, profile and
-   database paths before creating the corresponding source archive. The final
-   gate independently inspects runtime paths and the actual source ZIP's entry
-   paths without extracting it. Symlinks are rejected.
-3. The Windows workflow uses pinned Gitleaks 8.30.1 to scan runtime contents and
-   nested source before upload. Missing tools, scanner errors or findings fail
-   closed. Synthetic disposable keys verify detection in both runtime and
-   source-only locations, and verify that the fixture exception is path-bound.
-4. A successful scan adds `SECURITY.json` with the source commit, scanner version
-   and inventory. Archiving checks that this and `ACCEPTANCE.json` match the
-   package source. Unpublished Actions artifacts and published prereleases
-   from the manual release workflow use the same gate; the Web merge queue
-   does not package the desktop preview. Raw browser profiles are no longer uploaded as failure artifacts;
-   scanner diagnostics retain only rule, path and line.
+   database paths and symlinks; the final gate re-inspects runtime paths and
+   the source ZIP's entries without extracting it.
+3. The Windows workflow scans runtime contents and nested source with pinned
+   Gitleaks 8.30.1 before upload, failing closed on missing tools, errors or
+   findings; synthetic keys prove detection and a path-bound fixture exception.
+4. A passing scan adds `SECURITY.json` (commit, scanner version, inventory);
+   archiving checks it and `ACCEPTANCE.json` against the package source.
+   Actions artifacts and manual prereleases share this gate. Browser profiles
+   are never uploaded; scanner diagnostics keep only rule, path and line.
+5. The renderer build checks every chunk's module inventory
+   (`desktop-modules.json`): account, Cloud/Gallery clients, cloud component
+   library, telemetry, browser simulation sessions and Agent hosts/transports
+   must be absent.
+6. Desktop CSP is `connect-src 'self' data:` (for the PDF exporter's embedded
+   fonts); all external requests and navigation are blocked. About may ask the
+   main process to open a fixed product link by identifier, never an arbitrary
+   URL or Project data. Packaged acceptance checks real exports and blocked
+   requests.
 
-The corresponding source and original notices remain distributed. If an actual
-credential is ever found, block distribution and revoke/rotate it at the issuer;
-removing a file or a release cannot invalidate a previously copied credential.
-Audit the public Git history as well as build outputs before restoring access.
-
-The desktop renderer build additionally checks every emitted chunk's module
-inventory (`desktop-modules.json`) against the online implementation policy.
-Account, Cloud/Gallery clients, cloud component library, telemetry, browser
-simulation sessions and Agent hosts/transports must be absent. Shared pure model,
-source-editing and API schema descriptors can remain; endpoint text in a schema
-does not itself provide a network client. UI capability checks and the main
-process's request/navigation restrictions remain independent defenses.
-
-Desktop CSP allows `connect-src 'self' data:` so the PDF exporter can read its
-bundled, embedded font bytes. `data:` is an in-memory resource, not an external
-network destination. External HTTP/WebSocket/file requests and navigation from
-the renderer remain blocked. About can explicitly ask the main process to open
-the fixed author, repository or source link in the system browser. This command
-accepts a product-link identifier, never an arbitrary URL; it passes no Project
-bytes, file paths or credentials. It does not enable renderer networking,
-background requests or online services. Packaged acceptance observes real SVG/PNG/PDF and netlist exports
-and independently tests prohibited network requests. Web CSP is unchanged.
-
-For local validation, install the reviewed scanner and set `GITLEAKS_BINARY` to
-its executable, then run `pnpm --filter @icm/desktop security:preview` after
-packaging and acceptance. The scan is mandatory in the distribution workflow;
-the local package command alone is not approval to publish a package.
+If a real credential is found, block distribution, revoke/rotate it at the
+issuer and audit Git history and build outputs before restoring access. Local
+check (not publish approval): set `GITLEAKS_BINARY`, then
+`pnpm --filter @icm/desktop security:preview` after packaging and acceptance.

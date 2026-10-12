@@ -5,46 +5,8 @@ Status: `accepted`
 Primary owners: `worker/agent-session.ts`, `worker/agent-session-runtime.ts`,
 `worker/agent-session-do.ts`, and `apps/editor/src/agent`
 
-The browser Project is authoritative. Clicking **Agent** creates a
-tab/workspace session with full circuit editing, file and simulation access;
-there is no permission-tier picker. The relay returns a short-lived pairing
-code; claim redemption returns `sessionId`, authorized `documentIds`, a
-short-lived bearer, and a
-session-bound connector credential. A still-valid claim may be redeemed again
-only to rotate both credentials. Bearers are never persisted. The local MCP
-Helper may persist the connector in the user's private profile; the relay
-stores only its verifier, and session revoke invalidates both credentials.
-A long-running Helper holds its default per-origin connector file by a lease
-(holder process id, checked for liveness): a second Helper running at the same
-time keeps its connector in memory and pairs with its own claim, and a stale
-lease left by an exited holder passes to the next one. An explicit connector
-path takes no lease.
-
-Automation that opens the editor itself pairs headlessly: with `?agent=pair`
-in the editor URL, the page creates a connection on load, as Connect Agent
-does but without opening the panel or adding a control, unless it recovered
-one, and offers its claim code only to script in that page as
-`window.analogCanvasAgent.claimCode()`. The claim code never enters a URL,
-storage or logs.
-
-## Resources
-
-Browser reconnect credentials are scoped to the current tab's sessionStorage.
-Refresh, opening or switching Projects, and Gallery return retain that pairing.
-Gallery silently maintains transport with an empty Document roster; circuit
-operations report `NO_ACTIVE_PROJECT`. No recovery banner or copied Project
-store is introduced. Returning to Editor registers fresh services and context.
-
-Manual pause remains authoritative across request completion, socket recovery,
-and connector bearer renewal. A transport failure does not revoke a pairing.
-
-The browser displays the Claim as soon as creation succeeds; socket readiness
-is still reported separately. The creation response's HTTP `Date` supplies the
-relay time for its countdown, advanced using the page's elapsed clock so an
-incorrect or changed computer clock cannot discard a fresh code. Expiry removes
-the code, not its explanation; reconnecting does not reset the handoff. A failed
-or canceled setup removes its code. New connection replaces the old handoff, and
-Disconnect remains locally terminal even while earlier requests are pending.
+The browser Project is authoritative; the relay only forwards. Circuit
+operations are in the [Agent API](agent-api.md).
 
 ```text
 GET  /api/agent/kit
@@ -58,259 +20,147 @@ POST /api/agent/sessions/{sessionId}/projects
 GET  /api/agent/openapi.json
 ```
 
-`GET /api/agent/kit` is one small public, static JSON download for the Agent's
-private scratch folder. It contains `README.md`, `AGENTS.md`, one session
-`SKILL.md`, concise authoring rules, and a projection of the reviewed
-built-in palette catalog: every symbol a person can pick from the palette,
-Razavi-reference and house entries alike, with the forms Properties reaches
-from them (extended MOS devices, 3- and 4-input gates). It contains no Project data, claim code, token, or mutation
-operation; it is not part of the Circuit OpenAPI. The catalog supplies only
-known built-in authoring facts before first placement; a Snapshot remains the
-authority for every object in the live Project. The Agent fetches the Kit only
-when a human gives it a connection setup, then writes the listed files locally
-before redeeming the claim.
+## Pairing
 
-The Circuit resource implements only API 3.0
-`capabilities/snapshot/transact/render`. File Resource handles advertised
-bounded Project/formal-artifact downloads, approved candidate staging, simulation
-raw workspaces, and execution artifacts. The sibling Simulation resource uses
-the shared prepare/start/read/cancel/export lifecycle; saved setup edits remain
-Project structure edits. See [simulation execution](simulation-execution.md).
+- **Agent** creates a tab/workspace session with every supported scope (no
+  tier picker; replacement also grants full access; recovery resumes the
+  original scopes). The relay returns a short-lived Claim; redemption returns
+  `sessionId`, authorized `documentIds`, a bearer and a session-bound
+  connector. Redeeming a still-valid Claim again only rotates both.
+- `?agent=pair` pairs headlessly: the page creates a connection on load
+  (unless it recovered one) without panel or control, exposing the Claim only
+  as `window.analogCanvasAgent.claimCode()`. A Claim never enters a URL,
+  storage or logs.
+- The Claim shows as soon as creation succeeds; its countdown uses the
+  response `Date` advanced by the page's elapsed clock (a wrong computer clock
+  cannot expire it). Expiry removes the code, not its explanation; failed or
+  cancelled setup removes it; a new connection replaces the handoff;
+  Disconnect is locally terminal even with requests pending.
+- `GET /api/agent/kit`: one small public static JSON (`README.md`,
+  `AGENTS.md`, a session `SKILL.md`, authoring rules, the built-in palette
+  catalog) with no Project data, secrets or mutation, outside the Circuit
+  OpenAPI; fetched only when a human hands over setup, before redeeming.
 
-There is no arbitrary filesystem or host-code execution resource, retired query
-operation, dynamic catalog Snapshot, or unapproved whole-Project replacement.
-Running authored SPICE in the configured isolated executor is a scoped simulation
-capability, not general shell access.
+## Credentials
 
-## Binding and authority
+- Claim redeemable 30 minutes; bearer ≤ 8 hours, never persisted; session and
+  connector expire after 30 minutes idle (no absolute limit); idempotent
+  results cached 5 minutes within entry/byte ceilings.
+- Idle is reset by redemption, admitted Circuit/File/Simulation/Project
+  operations and responses, manual Document edits (Cell roster included) and
+  pause/resume; not by capabilities probes, connector refresh, heartbeat
+  acks, SSE keepalives or reconnects.
+- Presence: while the editor socket is attached and the tab is visible or had
+  input in the last 30 minutes, the editor sends the editor-secret `presence`
+  control every 5 minutes, renewing only within 8 hours of the last Agent
+  operation or edit; a relay without an attached socket ignores it.
+  `session.expiring` (1 minute before) shows **Keep connected**, which sends
+  `keep-alive` (renews like pause/resume). Disconnect ends both. The relay
+  persists the deadline, reschedules expiry and emits `session.renewed`;
+  `session.expired` ends idle sessions. Relay forwards time out after 30 s.
+- Every credential needs a live session. Claim redemption rotates connector
+  and bearer; connector resume rotates the bearer; rotation invalidates the
+  previous one; revoke or expiry invalidates all three. The relay stores only
+  verifiers. The MCP Helper may persist only the connector in its private
+  profile, holding the default per-origin file by a liveness-checked lease (a
+  concurrent Helper keeps its connector in memory with its own Claim; stale
+  leases pass on; explicit paths take no lease). Browser recovery persists
+  neither credential. A returned connector expiry is a snapshot: resume
+  always asks the server.
+- Ended sessions bulk-delete download copies (failures retried later) and
+  answer the typed expired/revoked errors.
 
-A session binds the browser workspace, scopes, expiry and editor secret. Project
-identity and the Cell roster are current context supplied by the authenticated
-browser heartbeat, not a second authorization lifecycle. `projectSessionId` in
-older persisted records is historical metadata, not an authorization boundary.
+## Binding and context
 
-Each Editor host registration publishes a `contextRevision`. Claim, resume and
-status report it; successful Circuit snapshot responses expose it in
-`x-agent-context`. Project-bound requests send that header. The relay and browser
-both reject stale context without revoking credentials. The original context
-travels with a request across asynchronous forwarding; never replay an old write
-against a newly selected Project. Cell switches do not change this context.
-Connection readiness waits for the matching heartbeat acknowledgement, not a
-full Snapshot. Refresh context on an explicit switch or stale-context failure,
-not before every operation.
+- A session binds the browser workspace, scopes, expiry and editor secret.
+  Project identity and Cell roster come from the authenticated heartbeat, not
+  a second authorization; `projectSessionId` in old records is metadata.
+- Each host registration publishes `contextRevision`, reported by claim,
+  resume and status and in `x-agent-context` on Snapshot responses.
+  Project-bound requests send it; relay and browser reject stale context
+  without revoking. A request keeps its original context through forwarding;
+  never replay a write against a newly selected Project. Cell switches keep
+  context. Readiness waits for the matching heartbeat ack.
+- Reconnect credentials live in the tab's sessionStorage; refresh, Project
+  switches and Gallery return keep the pairing. In the Gallery the roster is
+  empty and circuit operations return `NO_ACTIVE_PROJECT`. Manual pause stays
+  authoritative across completion, recovery and renewal; transport failure
+  never revokes.
+- Simulation services, prepared inputs and results keep their originating
+  controller; selecting another Project cannot retarget them.
+- Project resource `workspace` lists live tabs and Cell revisions, activates,
+  opens, saves and copies into a live target via the GUI planner (one Undo);
+  Cloud discovery and `import-cell` read saved versions only.
+- `insert-gallery-entry` copies a source Cell (top by default) into the bound
+  target Cell through GUI import and placement, rechecking revisions and
+  identity after download, with no tab switch or publication; empty sources
+  reject; one Undo removes it. Scopes: `project.import` + the three
+  circuit-edit scopes. The receipt maps source/target, revisions, objects and
+  dependencies.
 
-File staging and its existing human approval boundary remain unchanged.
-Simulation services, prepared inputs and results retain their originating
-controller across tab selection; selecting another Project cannot retarget them.
+## Transport
 
-The Project resource's `workspace` operation lists live tabs and their Cell
-revisions, activates a tab, opens a Cloud Project, saves/Save As, and copies a
-selection or whole Cell into a specified live target. Copy uses the GUI's
-dependency/placement planner and one undoable transaction. Cloud discovery and
-`import-cell` remain separate from live working-copy discovery; they read saved
-Cloud versions, not unsaved tab contents. No separate copy engine is introduced.
+- `GET …/status` authenticates the bearer (also while paused) and reports
+  relay observations without forwarding, renewing, resuming or entering the
+  request ledger (schema in `packages/agent-adapter/src/envelope.ts`):
+  `authorization` active|paused (revoked/expired are typed errors), `editor`
+  attached|detached with `observedAt` and idle `expiresAt`. Attached only
+  means a socket was seen. A failed probe keeps the pairing and reports
+  unknown; only a Circuit response proves execution transport. No operation
+  requires a status read first.
+- Browser states (only declared transitions apply):
 
-`insert-gallery-entry` reads through the Editor's signed-in Gallery access and
-copies a selected source Cell (top Cell by default) into the target Cell of the
-workspace selected by the existing envelope binding. It shares GUI import
-normalization, clipboard anchor and dependency/placement transactions. Explicit
-position locates that anchor; required Document and structure revisions and
-bound Project identity are rechecked after download. No tab switch, Project
-replacement or publication mutation occurs. Empty sources reject. One undo
-removes the whole insertion and imported dependency closure. Scopes are
-`project.import` and all three existing circuit-edit scopes. Source/target IDs,
-target revisions, object mapping and dependency IDs form the response receipt;
-the existing write replay contract prevents duplicate application of one ID.
+  ```text
+  idle -> creating -> waiting-for-agent -> connected <-> working
+  connected -> paused -> reconnecting -> connected
+  connected|working -> offline -> reconnecting
+  any live state -> revoked|expired
+  ```
 
-## Credential lifetimes and rotation
-
-The deployed defaults are part of the accepted transport contract:
-
-- a Claim remains redeemable for 30 minutes;
-- an Agent bearer remains valid for at most 8 hours and is never persisted;
-- the session and its connector expire after 30 minutes of inactivity;
-  activity renews the deadline without an absolute lifetime limit;
-- a person present in the paired editor renews it too, but only within 8
-  hours (the bearer lifetime) of the last Agent operation or edit;
-- a completed request result remains in the idempotency cache for 5 minutes,
-  still subject to the configured entry-count and byte ceilings.
-
-Claim redemption, admitted Circuit/File/Simulation/Project operations and their
-responses, manual Document edits (including changes to the Cell roster), and
-explicit pause/resume reset the idle window. Capabilities probes, connector refresh, heartbeat acknowledgements,
-SSE keepalives, and transport reconnects do not.
-
-A person reading or reviewing in the paired editor is present, not idle:
-conversational drawing pauses between turns for longer than the idle window.
-While its editor socket is attached and its tab is visible or had pointer,
-keyboard or scroll input in the last 30 minutes, the editor sends the
-editor-secret `presence` control every 5 minutes, which renews the idle
-deadline. Presence is not activity: it renews only within 8 hours of the last
-Agent operation or edit (the bearer lifetime), so a forgotten open tab still
-expires, and a relay without an attached editor socket ignores it. A closed tab
-sends nothing, so its session still expires 30 minutes after the last
-activity. When `session.expiring` arrives, one minute before the deadline, the
-editor's status bar says "Agent connection ends in 1 minute" with **Keep
-connected**; that explicit choice sends the `keep-alive` control and renews as
-Pause and Resume do. Both remain bound to the editor secret and are ended at
-once by Disconnect. Relay forwards time out after
-30 seconds, well within the idle window. The relay persists the renewed
-deadline, reschedules expiry, and sends `session.renewed` so browser recovery
-and its timer follow the same deadline. `session.expired` ends idle sessions.
-An ended session's download copies are deleted from storage in bulk; copies
-storage cannot delete at once are retried later, and the session ends either
-way, answering with the typed expired or revoked errors.
-The initial connector expiry returned to a client is a deadline snapshot;
-resume must ask the server even if that saved timestamp has passed.
-
-Every credential requires a live session, even before its own expiry.
-Redeeming a still-valid Claim rotates both the connector and bearer; connector resume rotates the bearer.
-Each rotation invalidates the previous credential. Session revoke or expiry
-invalidates the Claim, bearer, and connector together. The
-local MCP Helper may persist only the connector in its private user profile;
-browser recovery persists neither Agent credential.
-
-The workspace's transport controller owns socket creation, liveness probes and
-reconnect timers independently of React rendering and active Cell selection.
-After a scheduling gap or browser wake it probes the existing socket before
-closing it; validated business traffic also establishes liveness. A fresh probe
-has a five-second response window. Reconnect uses bounded jittered backoff.
-Close diagnostics retain at most 16 local records with reason categories,
-timestamps and visibility, never credentials or message payloads.
-
-The browser may authenticate the existing status resource with its editor
-secret to verify an elapsed local deadline or a failed handshake. This read
-neither renews nor resumes the session. Local deadline snapshots cannot revoke
-authorization: only a server terminal response or an explicit local revoke
-clears the pairing. A failed network check preserves it.
-
-Circuit, File, Simulation and Project clients share request deduplication and
-exact-payload network recovery. An `EDITOR_OFFLINE` rejection precedes dispatch
-and gets up to three delayed retries (500/1000/2000 ms) under the same request ID.
-An `EDITOR_DISCONNECTED` response has an uncertain outcome and is surfaced for
-reconciliation, not automatically replayed. No normal request needs a separate
-status/readiness probe and no mutation is queued indefinitely while offline.
-
-## Transport state machine
-
-The Session status resource authenticates the existing bearer (including while
-paused) and reads relay observations without forwarding to the browser. Its
-canonical schema lives in `packages/agent-adapter/src/envelope.ts`, alongside
-the existing Session envelopes. `authorization` is active or paused; revoked
-and expired sessions return the existing typed errors. `editor` is attached or
-detached, with `observedAt` and the authoritative idle `expiresAt`. Attachment
-only means an open socket was observed, not that an operation will succeed.
-The read does not resume the session, renew its deadline, or enter the Circuit
-request ledger. It is not a fifth Circuit operation.
-
-MCP and direct clients use this same resource for status. The shared client
-retains pairing on a failed network probe and reports unknown; its previous
-observation remains timestamped evidence, not current confirmation. Only an
-actual Circuit response establishes online execution transport. Normal Circuit
-operations do not require a status request first.
-
-The official thin browser states are:
-
-```text
-idle -> creating -> waiting-for-agent -> connected <-> working
-connected -> paused -> reconnecting -> connected
-connected|working -> offline -> reconnecting
-any live state -> revoked|expired
-```
-
-Only declared transitions are applied. Heartbeats detect a stale transport;
-bounded exponential reconnect keeps the same Project/session binding. Bearer
-tokens remain Agent-side only; browser recovery stores only the editor-side
-session record required for same-browser reconnect.
-
-## Request timing and activity
-
-Timing is observational metadata on the existing transport, not another handshake.
-HTTP clients record request ID, resource/operation, attempt, HTTP status/outcome,
-`headerMs` through response headers, and `bodyMs` for JSON transfer, parsing and
-canonical validation. `totalMs` now includes that consumed-body work rather than
-ending at headers. Byte-download timings stop at headers; stream transfer belongs
-to the downloading consumer. Retry delay is reported separately from attempt time.
-No credentials or request/file bodies are recorded.
-
-Relay response headers add `serverMs` (DO fetch entry through response construction),
-`preForwardMs`, `forwardMs`, and `postForwardMs`; the latter three partition that
-server interval. `restoreMs` is a subset of pre-forward, not an extra additive phase.
-Forward includes socket dispatch/response processing; post-forward includes completion
-and persistence. Legacy `relayMs` retains forward plus post-forward, not pure socket
-latency. Host scheduling before DO fetch entry and outer HTTP routing are not measured
-by these server phases. Each layer uses its own elapsed clock; do not subtract remote
-wall timestamps. Errors and cache hits report current phases; hits have no new forward
-or editor measurement. Editor work and visibility remain the browser's observations.
-
-Client timings retain 64 attempts; MCP defaults to the last eight and reports omitted
-counts. Existing status/activity reads expose bounded details when needed, never as a
-mandatory next step. Relay activity retains 32 records in the current live DO instance,
-including admitted failures and cache hits; it is not persistent audit history and may
-disappear on instance replacement. `hidden` alone is not proof of a latency cause.
+- The workspace transport controller owns sockets, probes (5 s) and bounded
+  jittered reconnects, independent of React and Cell selection, probing
+  before closing after a scheduling gap. Only a server terminal response or
+  explicit revoke clears the pairing; reading status with the editor secret
+  checks a deadline without renewing.
+- `EDITOR_OFFLINE` (before dispatch) retries up to three times
+  (500/1000/2000 ms) under the same ID; `EDITOR_DISCONNECTED` is uncertain and
+  surfaced, never replayed; nothing is queued indefinitely.
+- Timing (client `headerMs`/`bodyMs`/`totalMs`, relay `serverMs` =
+  `preForwardMs` + `forwardMs` + `postForwardMs`) and close diagnostics are
+  bounded observations without credentials or bodies; never subtract remote
+  wall clocks.
 
 ## Idempotency and revisions
 
-Each request ID is bound to the canonical exact payload hash while active.
-An exact retry returns the cached terminal response or resumes the same
-pending request; a different payload under the same ID returns
-`REQUEST_ID_REUSED`. Read-only requests leave no durable request ledger entry
-and may run again after their bounded result cache is evicted. Mutations retain
-their request identity for the session: after the result cache is gone, a
-completed mutation returns `REQUEST_RESULT_UNAVAILABLE` rather than executing
-again. The Agent must reconcile its outcome before making a new write.
+A request ID binds its exact payload hash: an exact retry returns the cached
+result or joins the pending one; a different payload is `REQUEST_ID_REUSED`.
+Reads leave no ledger entry. A completed mutation's identity (ID, hash,
+timestamps, never its result) is stored once under its own Durable Object key
+for the session; after the result cache is gone it answers
+`REQUEST_RESULT_UNAVAILABLE` instead of re-executing. Session state keeps only
+pending mutations; session end deletes both. On `STALE_REVISION`, uncertain
+outcome, reconnect or a human revision event the Agent refreshes and
+reconciles, never blindly replays.
 
-The relay stores each completed mutation's identity (request ID, payload hash
-and timestamps, never its result) once, under its own Durable Object storage
-key, and looks it up when a request ID is not in memory. The session state
-value keeps only mutations not yet completed, so it stays the same size
-however many writes a session makes. Ending the session deletes both.
+## Permissions and limits
 
-Raw Circuit edits target one exact Document revision. Target-resolving high-level
-actions plan on the current Document and commit in one step; pass-through forms
-and undo/redo retain their revision guards. Dry-run is optional and shares commit
-validation. On `STALE_REVISION`, uncertain write outcome, reconnect,
-or human revision event, the Agent refreshes affected state and reconciles
-before deciding what to do; it never blindly changes and replays a request.
-
-## Permissions
-
-New browser connections grant the complete supported scope set. Replacing a
-connection also grants full access; automatic recovery resumes the original
-session with its existing scopes. Pause and Disconnect remain available.
-
-Circuit permissions independently cover Snapshot, render, source spans,
-geometry, connectivity, presentation, and temporary semantic editor control.
-File permissions independently cover Project download, visual download, and
-candidate staging (`project.import`), which also gates the Project resource.
-The separate `simulation.run` scope covers Simulation operations and File
-Resource simulation workspaces, independent of every edit scope; Simulation
-capability and authoring-help requests need no scope. A saved Project-folder
-source update needs both `simulation.run` and `project.import`, plus the
-connectivity edit scope when it carries circuit edits. The `gallery.publish`
-scope covers publishing or updating a Gallery entry through the Project
-resource, independent of every edit scope: drawing a circuit is not
-publishing it. A session paired before the scope existed needs a new
-connection to use it. The relay checks bearer
-token, session/document binding, scope, expiry, body size, and rate limits
-before forwarding. A File Resource request or response carries up to 10 MB
-decoded, the `fileResource.maxBytes` the editor advertises and enforces;
-clients build in no ceiling of their own. The relay's 16 MB body and message
-ceilings leave room for the base64 envelope, well under the 32 MiB WebSocket
-message a Durable Object receives.
-
-Semantic editor control may select a canonical locator, highlight a Net,
-activate/fit an existing Cell, or clear focus. It never advances revision,
-enters undo history, or changes Project data.
-
-## Security and failure behavior
-
-- Claims, bearer tokens, and connectors use constant-time comparison and
-  redacted telemetry; the relay persists verifiers rather than raw secrets.
-- Responses use `Cache-Control: no-store`; payloads and secrets are excluded
-  from analytics and recovery.
-- Browser offline, revoked, expired, replaced, connector-invalid, permission-denied, stale-
-  revision, invalid-request, and request-ID-reuse failures are typed.
-- Revoke is locally terminal even when the relay is unreachable.
-- CORS/origin, payload, rate, cache, expiry, and reconnect behavior are covered
-  by deterministic Worker/browser tests.
+- Circuit scopes: Snapshot, render, source spans, geometry, connectivity,
+  presentation, semantic editor control. File scopes: Project download, visual
+  download, staging (`project.import`, which also gates the Project resource).
+  `simulation.run` covers Simulation operations and simulation workspaces
+  (capability/help requests need none); saving a Project-folder source needs
+  `simulation.run` + `project.import` (+ connectivity edit if it edits the
+  circuit). `gallery.publish` is independent of edit scopes; older sessions
+  need a new connection for it.
+- Semantic control selects a locator, highlights a Net, activates/fits a Cell
+  or clears focus; never advances revision or history.
+- The relay checks bearer, session/document binding, scope, expiry, body size
+  and rate before forwarding. File Resource payloads ≤ 10 MB decoded
+  (`fileResource.maxBytes`, advertised and enforced by the editor; clients
+  build in no ceiling). Relay body/message ceiling 16 MB (base64 headroom,
+  under the 32 MiB Durable Object WebSocket message).
+- Secrets use constant-time comparison and redacted telemetry. Responses are
+  `no-store`; payloads and secrets stay out of analytics and recovery.
+  Offline, revoked, expired, replaced, connector-invalid, permission-denied,
+  stale-revision, invalid-request and request-ID-reuse failures are typed.
+  Revoke is locally terminal even when the relay is unreachable.

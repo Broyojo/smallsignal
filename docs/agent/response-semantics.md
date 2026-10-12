@@ -1,43 +1,36 @@
 # Circuit responses and recovery
 
-Read structured success/error fields, diagnostic paths and object IDs before
-human-readable messages. A successful transaction confirms edit validation,
-not visual quality or electrical performance.
+Read structured fields, diagnostic paths and object IDs before messages. A
+successful transaction confirms edit validation, not visual quality or
+electrical performance.
 
 ## Receipts
 
-`revision` is the current revision; a dry-run leaves it unchanged and may return
-`proposedRevision`. `diff.changedObjectIds` identifies touched objects.
-`resolvedRoutes` gives their normalized route polylines; inspect it after moving
-instances or editing paths. Do not count a dry-run as a committed change.
-MCP receipts count the Cell's `errors` and `warnings`; `unwiredPins` says how
-many of those errors are pins not wired yet (`MISSING_PIN_NET`), as most are
-while a circuit is being drawn. Errors beyond that count need attention now.
-A change to the Project's structure alone, such as `create-cell`, leaves the
-open Cell unchanged and carries no findings; `changedObjectIds` names the new
-Cell, and its own findings come with its first edit.
-
-MCP receipts also identify stages such as compile and commit; an explicit
-`dryRun` request is not committed and reports `applied: false`. A
-`STATE_CHANGED` receipt means re-inspect and reconsider; it is not a transport
-retry instruction. Raw HTTP callers separately manage exact-payload retries.
+`revision` is current; a dry run (`applied: false`) leaves it unchanged, may
+return `proposedRevision`, and is not a committed change.
+`diff.changedObjectIds` names touched objects; `resolvedRoutes` gives their
+normalized polylines (check them after moving instances or editing paths). MCP
+receipts count the Cell's `errors` and `warnings` and name stages such as
+compile and commit; `unwiredPins` counts the errors that are pins not wired yet
+(`MISSING_PIN_NET`), as most are mid-drawing; errors beyond it need attention.
+A structure-only change (`create-cell`) leaves the open Cell unchanged with no
+findings; `changedObjectIds` names the new Cell. `STATE_CHANGED` means
+re-inspect and reconsider, not retry.
 
 ## Recovery by cause
 
 | Cause | Action |
 | --- | --- |
-| INVALID_REQUEST / MCP EDIT_SCHEMA_INVALID | Correct reported fields using the current schema; changed input needs new identity |
-| STALE_REVISION / STALE_STRUCTURE_REVISION / MCP STATE_CHANGED | Refresh affected Document/Project facts and reconsider the operation |
-| EDIT_PRECONDITION | Inspect path/objectIds for locks, pin maps or current state; do not reorder edits to bypass validation |
+| INVALID_REQUEST / MCP EDIT_SCHEMA_INVALID | Fix the reported fields from the current schema; changed input needs a new identity |
+| STALE_REVISION / STALE_STRUCTURE_REVISION / MCP STATE_CHANGED | Refresh affected facts and reconsider the operation |
+| EDIT_PRECONDITION | Inspect path/objectIds for locks, pin maps or state; never reorder edits to bypass validation |
 | PERMISSION_DENIED | Narrow the operation or obtain authorization; no alternate mutation path |
-| LIMIT_EXCEEDED | Split coherent edits within advertised bounds without dropping connectivity work |
-| SNAPSHOT_TOO_LARGE | Select an appropriate existing child Document or report the limit; do not invent a query operation |
+| LIMIT_EXCEEDED | Split coherent edits within the advertised bounds, keeping all connectivity work |
+| SNAPSHOT_TOO_LARGE | Select an existing child Document or report the limit |
 | RENDER_TOO_LARGE | Request bounded render regions |
 
-Session credentials, offline transport and request-cache recovery belong to the
-selected MCP/CLI/HTTP entry guide. File and Simulation resources also return
-their own domain errors; recoverable input/execution failures are not revocation.
-
-Use [diagnostic policy](shared/diagnostics.md) for structural findings and visual
-observations. Follow the [task workflow](workflow.md) for completion scope;
-reading a value does not require a full drawing-quality audit.
+Credentials, offline transport and request-cache recovery belong to the
+transport's entry guide. File and Simulation resources return their own domain
+errors; recoverable input/execution failures do not revoke the session. Use
+[diagnostic policy](shared/diagnostics.md) for findings and the
+[task workflow](workflow.md) for completion scope.

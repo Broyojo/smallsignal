@@ -1,81 +1,58 @@
 # Circuit transaction and geometry contract
 
-The Circuit resource has four operations: `capabilities`, `snapshot`, `transact`
-and `render`. File, Simulation and Project are separate advertised resources.
+The Circuit resource has four operations, `capabilities`, `snapshot`,
+`transact` and `render`; File, Simulation and Project are separate resources.
 Capabilities reports versions, permissions, limits, transaction forms and edit
-kinds; it does not return a Project Index. Snapshot has one protocol operation
-with several projections: `bootstrap` contains connection identities and counts;
-`state` contains the current Document revision, counts and optional diagnostic
-items; `folder-directory` lists saved experiment metadata without source text;
-`geometry` selects authored objects, and with `textBounds` measures each drawn
-label's text; `pins` resolves selected instances' endpoints
-and bulk; and the default `full` projection contains
-the selected Document and Project editing context. Use the current transport
-schema for exact fields.
+kinds, not a Project Index. Snapshot projections: `bootstrap` (identities,
+counts), `state` (revision, counts, optional diagnostics), `folder-directory`
+(experiment metadata without source), `geometry` (selected authored objects;
+`textBounds` measures label text), `pins` (selected instances' endpoints and
+bulk) and the default `full` (Document and Project editing context). A built-in
+catalog describes assets, never live positions or Net membership.
 
 ## Transactions
 
-- Ordinary edits use `expectedRevision`; structure edits additionally use
-  `expectedStructureRevision` and the target revisions of nested Document edits.
-- A transaction accepts exactly one payload form: edits, structureEdits,
-  wireIntent, semanticIntent or command. Edits commit atomically; dry-run does
-  not advance revision. Semantic focus changes do not mutate Project data.
-- Snapshot is read-only evidence, not a replacement Project payload. GUI and
-  Agent changes use the same edit validation and locks.
-- `diagnosticDeltaDetail:"compact"` retains current and added diagnostics but
-  replaces removed bodies with `removedIds` (stable diagnostic identities).
-  Raw HTTP defaults to full; MCP edits default to compact and accept `detail:"full"`.
-  An empty compact `removed` array does not mean no diagnostics were removed.
-- Clean full Snapshots may be reused across unchanged reads and transaction
-  planning. Every mutation still supplies `expectedRevision` (and structure
-  revision when required); stale rejection, not a precautionary reread before
-  every operation, is the authoritative concurrency boundary.
-
-For MCP calls the helper constructs the envelope. Raw HTTP callers construct it
-from published OpenAPI. A built-in catalog describes available assets, never
-live positions or Net membership.
+- Ordinary edits use `expectedRevision`; structure edits also use
+  `expectedStructureRevision` and nested Document edits' target revisions.
+  Stale rejection, not a precautionary reread, is the concurrency boundary;
+  clean full Snapshots may be reused for planning.
+- A transaction has exactly one payload form: edits, structureEdits,
+  wireIntent, semanticIntent or command (HTTP also `actions`). It commits
+  atomically; a dry run does not advance the revision; semantic focus does not
+  mutate Project data. GUI and Agent edits share validation and locks; a
+  Snapshot is evidence, not a replacement payload.
+- `diagnosticDeltaDetail:"compact"` keeps current and added diagnostics and
+  replaces removed bodies with `removedIds`; an empty compact `removed` does
+  not mean nothing was removed. Raw HTTP defaults to full; MCP edits default to
+  compact and accept `detail:"full"`.
 
 ## Geometry and electrical identity
 
-`wireIntent.routingMode` supports `orthogonal`, `octilinear` and `free`.
-Orthogonal is the default planner constraint, not a universal persisted-route
-restriction. With no `routingMode`, a 45° step between via points, or between
-an end's landing and the first or last via point, is refused with the step
-named, never bent into a corner: name `octilinear` to keep the diagonal, or
-`orthogonal` for the corner. Free-angle wires are valid. Power rails remain a single nonzero
+`wireIntent.routingMode` is `orthogonal` (planner default), `octilinear` or
+`free`; free-angle wires are valid. Without a mode, a 45° step between via
+points, or between an end's landing and the first/last via, is refused naming
+the step: choose `octilinear` or `orthogonal`. Power rails are one nonzero
 horizontal or vertical segment.
 
-Persisted Routes contain a starting endpoint and stable-ID legs to bends or an
-endpoint. A route-segment attachment uses `{routeId, legId}` and the actual
-point; a derived segmentIndex is not a stable identifier across revisions.
-Segment modes such as manual, locked or trunk do not compute an autoroute.
-`wire-at` selects a tap by `point` on the evolving wire batch, optionally
-restricted by `net` or a member `{instanceId,pinName}`; `net` selects the
-nearest existing conductor to the other anchor. These selectors use the same
-wire planner, including a trunk created earlier in the batch, without an
-intermediate Snapshot. A `wire-at` point is tapped exactly there; like a via
-point it must align to the pin grid and is refused off it, never moved. A `net`
-target taps the nearest conductor where a pointer there would land. A `free`
-anchor is not an implicit tap. Crossings of
-different Nets may remain ordinary crossings, but a tap that would join them
-is rejected; specifying a Net does not make a Junction electrically isolated.
+Routes have a starting endpoint and stable-ID legs to bends or an endpoint. A
+route-segment attachment uses `{routeId, legId}` and the actual point; a
+segment index is not stable across revisions. Manual, locked or trunk segments
+do not autoroute. `wire-at` taps a `point` on the evolving wire batch,
+optionally restricted by `net` or a member `{instanceId,pinName}`, including a
+trunk created earlier in the batch; the point is tapped exactly and, like a via
+point, must be on the pin grid (refused, never moved). A `net` target taps that
+Net's nearest conductor where a pointer would land. A `free` anchor is not a
+tap. Different Nets may cross, but a tap joining them is rejected.
 
-A crossing does not connect Nets by itself. Real branches use explicit
-Junctions; a bend is not a branch. For normal wiring, the shared wire planner
-creates the required splits and Junctions. Use returned endpoint/Net identities,
-not a pixel intersection, to decide whether a connection exists.
+A crossing connects nothing; real branches use Junctions; a bend is not a
+branch. The wire planner makes the splits and Junctions. Decide connectivity
+from returned endpoint/Net identities, not pixel intersections.
 
-Moving an instance translates its attached annotations and can stretch connected
-Routes. Wiring that hangs only from the moved parts, such as an open stub from
-a pin with its bends, open Junctions and Net labels, travels with them whole;
-wires to parts that stay stretch. Inspect returned `resolvedRoutes`; movement
-does not promise a finished global layout. Group movement must preserve the
-intended boundary connections.
+Moving an instance moves its attached annotations and stretches connected
+Routes; wiring that hangs only from moved parts (open stubs with bends, open
+Junctions, Net labels) travels whole. Check `resolvedRoutes`; group moves must
+keep intended boundary connections.
 
-Formal render shows persisted presentation, without selection, grid or diagnostic
-overlays. Diagnostic render is a separate inspection mode. Interpret findings
-using [diagnostic policy](shared/diagnostics.md).
-
-The optional repository RouteGraph library has narrower expansion constraints
-than `wireIntent`. It is not an MCP tool or HTTP request form; operating Agents
-do not need to install it to draw a circuit.
+Formal render shows persisted presentation without selection, grid or
+diagnostic overlays; diagnostic render is a separate mode (see
+[diagnostic policy](shared/diagnostics.md)).

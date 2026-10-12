@@ -1,75 +1,57 @@
 # Analog Canvas MCP quickstart
 
-Before pairing, `connection_status({"refresh":false})` reports the loaded
-version and exact API origin locally. When the origin matches, connect directly
-and let the capabilities/bootstrap exchange confirm compatibility. Fetch the
-bootstrap manifest and read [installation](mcp-install.md) only for a missing,
-wrong-origin, or rejected incompatible adapter; installed-package integrity
-checks are not part of ordinary pairing.
+## Connect
 
-Call `connect` with the Claim once, or omit it to resume the saved connector.
-Its reply already includes lightweight authoritative context. Capabilities and
-that bootstrap Snapshot are fetched in parallel. Pairing lists every capability;
-a resume keeps operations, permissions and limits but counts the edit kinds
-(`editKindCount`), and `connect({"detail":"full"})` lists them again. Use the
-returned identity, counts and revisions immediately; no duplicate `get_context`
-is required. Use
-`inspect` when you need objects. For new instance endpoints, use
-`inspect({"target":{"kind":"pins","instanceIds":["<stable-id>"]}})`:
-up to 64 selected instances, resolved pins and bulk, without full Snapshot.
-For only current placement, route,
-annotation-anchor or drafting geometry, use
-`inspect({"target":{"kind":"geometry","objectIds":["<stable-id>"]}})`;
-this reads selected authored objects without constructing a full Snapshot.
-Other inspections reuse the clean full Snapshot after its first load;
-`refresh:true` forces a reread after a known human change or for reconciliation.
-MCP manages credentials, request IDs and expected revisions.
+`connection_status({"refresh":false})` reports the loaded version and API
+origin locally. When the origin matches, `connect` with the Claim once (omit it
+to resume the saved connector); the exchange checks compatibility. Read
+[installation](mcp-install.md) only for a missing, wrong-origin or incompatible
+adapter. The reply is authoritative context (identity, counts, revisions,
+capabilities; a resume counts edit kinds as `editKindCount`, and
+`connect({"detail":"full"})` lists them), so no `get_context` follows. MCP
+manages credentials, request IDs and expected revisions.
 
-Pairing does not prove support for every edit. New adapters report
-`compatibility.unsupportedEditKinds` from the Editor's advertised contract; keep
-using supported operations, and upgrade from the exact origin's manifest before
-using any listed edit. For project model sources, an older adapter that lacks
-this report must resolve `describe_tool({"editKind":"apply_model_source"})`
-before its first Apply. `UNKNOWN_EDIT_CONTRACT` means this feature needs an
-adapter upgrade, not a new Claim or a Project Code replacement. Model-source
-Apply and mapped source origins require MCP 0.17.45 or later; custom artwork
-migration additionally requires 0.17.46. Already installed older binaries cannot
-be changed by a website deployment. Reloading a host may require the user's
-restart or a new conversation; never restart it automatically.
+`compatibility.unsupportedEditKinds` lists edits this adapter lacks: upgrade
+from the exact origin's manifest before using one. An older adapter without
+that report resolves `describe_tool({"editKind":"apply_model_source"})` before
+its first model-source Apply. `UNKNOWN_EDIT_CONTRACT` means upgrade the
+adapter, not a new Claim or Project Code replacement (model-source Apply and
+mapped source origins need MCP 0.17.45+, custom artwork migration 0.17.46+). A
+deployment cannot change an installed binary; reloading a host may need the
+user's restart or a new conversation, never an automatic restart.
 
-To reuse a Gallery drawing, use `gallery_circuits` `action:"insert"` with its
-entry ID, `targetDocumentId` and `position`. It copies into the existing Circuit
-in one undo, without opening a tab. Bind another workspace first when needed;
-see [tool details](mcp/tools.md). Gallery requires the Editor's account login,
-not an extra Agent permission or another Claim. Simulation testing does not
-require a Gallery Cell: reproducible authored/imported circuits are valid inputs.
+## Read only what the task needs
 
-Choose only the guidance needed for the task:
+- New instance endpoints:
+  `inspect({"target":{"kind":"pins","instanceIds":["<stable-id>"]}})` (≤64).
+- Known objects' geometry:
+  `inspect({"target":{"kind":"geometry","objectIds":["<stable-id>"]}})`.
+- Other inspections reuse the clean full Snapshot; `refresh:true` rereads
+  after a known human change.
 
-Use a focused tool's displayed parameters directly. For a hidden or unfamiliar
-field, `describe_tool` can select its exact offline contract by `tool`, optional
-`operations`, and `field` (argument JSON Pointer; `*` for array items).
-For example, `{"tool":"simulation_plot","field":"/request/formats"}`
-returns the format field and its context. Contract lookup is optional, not a
-prerequisite for calling a tool.
+Plan with the current revision; accepted receipts need no reread. Replan after
+a stale revision and keep `verify` for milestones. Simulation `prepare`
+freezes its input, so start/read/download need no circuit reread.
+
+## Task guidance
 
 - Circuit editing: [authoring](shared/authoring.md), then the built-in catalog
-  before placing unfamiliar symbols. Select known symbol IDs with resource
-  `analog-canvas://catalog/builtins?symbols=nmos,pmos,port`; use the full catalog
-  for discovery. [Tool details](mcp/tools.md) cover less common edits.
-- Simulation: [simulation calls](mcp/simulation.md). Start with its quick path
-  and follow its detailed-contract link only for the feature being used.
-- Failures: [recovery](response-semantics.md). Keep uncertain write/start identities;
-  reconcile before repeating a mutation. Never restart a run just to fetch results.
+  for unfamiliar symbols (`analog-canvas://catalog/builtins?symbols=nmos,pmos,port`
+  selects IDs); [tool details](mcp/tools.md) for less common calls.
+- Simulation: [simulation calls](mcp/simulation.md); any authored or imported
+  circuit is a valid input.
+- Failures: [recovery](response-semantics.md). Keep uncertain write/start
+  identities and reconcile before repeating; never restart a run to fetch
+  results.
+- Gallery reuse: `gallery_circuits` `action:"insert"` (entry ID,
+  `targetDocumentId`, `position`; one undo, no tab), with the Editor's login.
 
-Sessions renew on Agent operations and manual edits, with a 30-minute idle
-deadline; a person present in the open editor also renews it, for up to 8 hours
-after the last operation or edit. Keep the editor open. Closing connection
-details does not disconnect.
-Read [session rules](shared/session.md) when investigating lifecycle behavior.
-HTTP fallback requires the user's explicit choice; it is not MCP acceptance.
+Use displayed parameters directly; `describe_tool` (`tool`, `operations`,
+`field`, e.g. `{"tool":"simulation_plot","field":"/request/formats"}`) is for
+unfamiliar fields, never a prerequisite.
 
-Use the planning revision for transactions; accepted receipts need no
-confirmation reread. Replan after a stale-revision response and reserve
-`verify` for milestones. Simulation `prepare` freezes a revisioned input, so
-start/read/download need no circuit reread.
+Sessions renew on Agent operations and manual edits with a 30-minute idle
+deadline; a person present in the open editor extends it up to 8 hours after
+the last operation or edit. Keep the editor open; closing connection details
+does not disconnect ([session rules](shared/session.md)). HTTP fallback needs
+the user's explicit choice and is not MCP acceptance.
