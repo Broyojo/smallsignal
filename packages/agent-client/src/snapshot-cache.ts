@@ -133,6 +133,9 @@ function documentCollections(
       JSON.stringify(o.object),
     ]),
   );
+  const inductorCouplings = new Map(
+    (document.inductorCouplings ?? []).map((c) => [c.id, JSON.stringify(c)]),
+  );
   const collection = (map: Map<string, string>): ObjectCollection => ({
     ids: [...map.keys()],
     identity: (id: string) => map.get(id) ?? "",
@@ -145,6 +148,7 @@ function documentCollections(
     annotations: collection(annotations),
     noConnects: collection(noConnects),
     drafting: collection(drafting),
+    inductorCouplings: collection(inductorCouplings),
   };
 }
 

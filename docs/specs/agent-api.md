@@ -68,8 +68,9 @@ containers and their operations use Folder identity, with no parallel Setup writ
 An incompatible client receives the existing version diagnostic rather than
 accepting an incompatible Snapshot. Project file loading
 remains independently backward-compatible. Additive Snapshot fields
-include Instance `styleOverride` and `signalFlowParameters`, Cell interfaces
-and bulk defaults, and Project external definitions. Local and production
+include Instance `styleOverride` and `signalFlowParameters`, Cell interfaces,
+bulk defaults and inductor couplings (each only when the Cell has them), and
+Project external definitions. Local and production
 codecs now reference one schema rather than independently maintained copies.
 
 `transact.command` is a mutually exclusive alternative for Model switching,

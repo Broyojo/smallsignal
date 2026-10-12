@@ -19,9 +19,15 @@ import {
   validateDeviceParameters,
 } from "@icm/devices";
 import {
+  couplableInductorPins,
+  couplesInstances,
+  nextInductorCouplingName,
+} from "@icm/derived";
+import {
   InstancePlacementRequestSchema,
   reflectOrientation,
   SignalFlowParametersSchema,
+  type InductorCoupling,
   type Orientation,
   type RichTextDocument,
 } from "@icm/model";
@@ -248,6 +254,8 @@ interface ResolvedDocument {
     endpoint: { instanceId: string; pinName: string };
   }[];
   drafting: { object: Record<string, unknown>; id: string }[];
+  /** Kept current as the list's couple-inductors and deletes compile. */
+  inductorCouplings: InductorCoupling[];
 }
 
 function resolvedDocument(snapshot: AgentSessionSnapshot): ResolvedDocument {
@@ -330,6 +338,22 @@ function resolvedDocument(snapshot: AgentSessionSnapshot): ResolvedDocument {
       object: entry.object as unknown as Record<string, unknown>,
       id: entry.object.id,
     })),
+    inductorCouplings: (document.inductorCouplings ?? []).map((coupling) => ({
+      id: coupling.id,
+      name: coupling.name,
+      members: [
+        {
+          instanceId: coupling.members[0].instanceId,
+          dotPin: coupling.members[0].dotPin,
+        },
+        {
+          instanceId: coupling.members[1].instanceId,
+          dotPin: coupling.members[1].dotPin,
+        },
+      ],
+      k: coupling.k,
+      ...(coupling.arrow === false ? { arrow: false as const } : {}),
+    })),
   };
 }
 
@@ -342,6 +366,7 @@ function existingIds(document: ResolvedDocument): Set<string> {
     ...document.annotations.map((a) => String(a.id)),
     ...document.noConnects.map((n) => n.id),
     ...document.drafting.map((d) => d.id),
+    ...document.inductorCouplings.map((c) => c.id),
   ]);
 }
 
@@ -1083,8 +1108,17 @@ export function compileActions(
             : {}),
         });
         break;
+      case "couple-inductors":
+        compileCoupleInductors(index, action, document, pushEdit, allocateId);
+        break;
       case "delete":
-        pushDelete(resolveDeletion(index, action, document));
+        // A coupling is not on the canvas selection: its own edit removes it.
+        if (action.target.kind === "inductor-coupling")
+          pushEdit(index, action.kind, {
+            kind: "remove_inductor_coupling",
+            couplingId: resolveInductorCoupling(index, action, document).id,
+          });
+        else pushDelete(resolveDeletion(index, action, document));
         break;
       default: {
         // Every action compiles to something: a kind left out here was once
@@ -1109,7 +1143,11 @@ export function compileActions(
       if (
         transaction.form === "edits" &&
         transaction.actionKinds.every((kind) => kind === "delete") &&
-        transaction.edits?.length
+        transaction.edits?.length &&
+        // Uncoupling is an edit of its own, never a canvas selection.
+        transaction.edits.every(
+          (edit) => edit.kind !== "remove_inductor_coupling",
+        )
       ) {
         const selection = {
           instanceIds: [] as string[],
@@ -1948,6 +1986,12 @@ function resolveDeletion(
           ).id,
         ],
       };
+    case "inductor-coupling":
+      throw new ActionCompileError(
+        index,
+        action.kind,
+        "an inductor coupling is removed by its own edit, not a selection",
+      );
     case "no-connect":
       return {
         noConnectIds: [
@@ -1961,4 +2005,118 @@ function resolveDeletion(
         ],
       };
   }
+}
+
+/** The coupling a delete names, by ID or by name compared without case. */
+function resolveInductorCoupling(
+  index: number,
+  action: ActionOfKind<"delete">,
+  document: ResolvedDocument,
+): InductorCoupling {
+  const target = action.target as { id?: string; name?: string };
+  const found = document.inductorCouplings.find((coupling) =>
+    target.id !== undefined
+      ? coupling.id === target.id
+      : coupling.name.toLowerCase() === target.name?.toLowerCase(),
+  );
+  if (!found)
+    throw new ActionCompileError(
+      index,
+      action.kind,
+      `no inductor coupling matches ${target.id !== undefined ? `id "${target.id}"` : `"${target.name}"`}${
+        document.inductorCouplings.length
+          ? `; couplings: ${document.inductorCouplings.map((coupling) => coupling.name).join(", ")}`
+          : "; this Cell has none"
+      }`,
+    );
+  document.inductorCouplings = document.inductorCouplings.filter(
+    (coupling) => coupling !== found,
+  );
+  return found;
+}
+
+/**
+ * Couple two inductors, or change the coupling the pair already has, as the
+ * canvas menu's Couple inductors and an inductor's Properties do (#1648).
+ * A new one takes the next free TFn, k 1 and the arrow shown, each inductor
+ * dotted where its other couplings dot it, else at its first pin; given
+ * fields replace those of a pair already coupled.
+ */
+function compileCoupleInductors(
+  index: number,
+  action: ActionOfKind<"couple-inductors">,
+  document: ResolvedDocument,
+  pushEdit: PushEdit,
+  allocateId: AllocateId,
+): void {
+  const fail = (message: string): never => {
+    throw new ActionCompileError(index, action.kind, message);
+  };
+  const parts = action.inductors.map((ref) =>
+    resolveInstance(document, index, action.kind, ref),
+  ) as [SnapshotInstance, SnapshotInstance];
+  const name = (part: SnapshotInstance) => part.reference ?? part.id;
+  const pins = parts.map((part) => {
+    const found = couplableInductorPins(part.symbolId);
+    if (!found)
+      fail(
+        `${name(part)} is ${part.symbolId}; only an inductor, inductor-compact or variable-inductor can be coupled`,
+      );
+    return found!;
+  });
+  if (parts[0].id === parts[1].id)
+    fail(
+      `a coupling needs two different inductors; both name ${name(parts[0])}`,
+    );
+  action.dots?.forEach((dot, at) => {
+    if (dot !== null && !pins[at]!.includes(dot))
+      fail(
+        `${name(parts[at]!)} has no pin "${dot}"; its pins are ${pins[at]!.join(" and ")}`,
+      );
+  });
+  const couplings = document.inductorCouplings;
+  const existing = couplings.find((coupling) =>
+    couplesInstances(coupling, parts[0].id, parts[1].id),
+  );
+  const others = couplings.filter((coupling) => coupling !== existing);
+  const couplingName =
+    action.name ??
+    existing?.name ??
+    nextInductorCouplingName(couplings.map((coupling) => coupling.name));
+  const clash = others.find(
+    (coupling) => coupling.name.toLowerCase() === couplingName.toLowerCase(),
+  );
+  if (clash)
+    fail(
+      `another coupling is already named ${clash.name}; choose another name`,
+    );
+  const member = (at: 0 | 1) => {
+    const part = parts[at];
+    const kept =
+      existing?.members.find((item) => item.instanceId === part.id)?.dotPin ??
+      others
+        .flatMap((coupling) => coupling.members)
+        .find((item) => item.instanceId === part.id)?.dotPin ??
+      pins[at]![0];
+    return { instanceId: part.id, dotPin: action.dots?.[at] ?? kept };
+  };
+  const members = [member(0), member(1)] as const;
+  const arrow = action.arrow ?? existing?.arrow !== false;
+  const coupling: InductorCoupling = {
+    id: existing?.id ?? allocateId("inductor-coupling"),
+    name: couplingName,
+    // A pair already coupled keeps its member order.
+    members:
+      existing && existing.members[0].instanceId !== parts[0].id
+        ? [members[1], members[0]]
+        : [members[0], members[1]],
+    k: action.k ?? existing?.k ?? "1",
+    ...(arrow ? {} : { arrow: false as const }),
+  };
+  // Asking again for what is already there changes nothing.
+  if (existing && JSON.stringify(existing) === JSON.stringify(coupling)) return;
+  pushEdit(index, action.kind, { kind: "set_inductor_coupling", coupling });
+  document.inductorCouplings = existing
+    ? couplings.map((item) => (item === existing ? coupling : item))
+    : [...couplings, coupling];
 }

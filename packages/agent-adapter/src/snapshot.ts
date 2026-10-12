@@ -741,6 +741,9 @@ function documentSnapshot(
     ...(document.mosBulkDefaults
       ? { mosBulkDefaults: structuredClone(document.mosBulkDefaults) }
       : {}),
+    ...(document.inductorCouplings?.length
+      ? { inductorCouplings: inductorCouplingSnapshot(document) }
+      : {}),
     presentation: structuredClone(document.presentation),
     cellInterface: document.netlist
       ? {
@@ -820,6 +823,36 @@ function documentSnapshot(
       .map((constraint) => structuredClone(constraint)),
     diagnostics: diagnosticSnapshot(options.project, document, resolver),
   };
+}
+
+/** The Document's couplings, in its order, each member named by Reference. */
+function inductorCouplingSnapshot(
+  document: SchematicDocument,
+): NonNullable<AgentSnapshotDocument["inductorCouplings"]> {
+  const references = new Map(
+    document.instances.map((instance) => [
+      instance.id,
+      instance.reference ?? null,
+    ]),
+  );
+  return (document.inductorCouplings ?? []).map((coupling) => ({
+    id: coupling.id,
+    name: coupling.name,
+    members: [
+      {
+        instanceId: coupling.members[0].instanceId,
+        reference: references.get(coupling.members[0].instanceId) ?? null,
+        dotPin: coupling.members[0].dotPin,
+      },
+      {
+        instanceId: coupling.members[1].instanceId,
+        reference: references.get(coupling.members[1].instanceId) ?? null,
+        dotPin: coupling.members[1].dotPin,
+      },
+    ],
+    k: coupling.k,
+    ...(coupling.arrow === false ? { arrow: false as const } : {}),
+  }));
 }
 
 /**

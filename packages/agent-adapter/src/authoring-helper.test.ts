@@ -1628,3 +1628,222 @@ describe("one mirror vocabulary (#1231)", () => {
     );
   });
 });
+
+describe("coupled inductors by reference (#1648)", () => {
+  /** The fixture with inductors L1, L2 and L3 beside its resistor. */
+  function withInductors(
+    couplings: NonNullable<
+      AgentSessionSnapshot["document"]["inductorCouplings"]
+    > = [],
+  ): AgentSessionSnapshot {
+    const snapshot = testSnapshot();
+    const r1 = snapshot.document.instances.find(
+      (instance) => instance.reference === "R1",
+    )!;
+    for (const [id, symbolId] of [
+      ["L1", "inductor"],
+      ["L2", "inductor-compact"],
+      ["L3", "variable-inductor"],
+    ] as const)
+      snapshot.document.instances.push({
+        ...structuredClone(r1),
+        id,
+        reference: id,
+        symbolId,
+        pins: r1.pins.map((pin, index) => ({
+          ...pin,
+          name: symbolId === "variable-inductor" ? `P${index + 1}` : pin.name,
+        })),
+      });
+    if (couplings.length) snapshot.document.inductorCouplings = couplings;
+    return snapshot;
+  }
+  const ref = (reference: string) => ({ kind: "instance", reference });
+  const member = (instanceId: string, dotPin: string) => ({
+    instanceId,
+    reference: instanceId,
+    dotPin,
+  });
+
+  it("couples two inductors as the canvas menu does", () => {
+    const [transaction] = compile(
+      [{ kind: "couple-inductors", inductors: [ref("L1"), ref("L3")] }],
+      withInductors(),
+    );
+    expect(transaction?.edits).toEqual([
+      {
+        kind: "set_inductor_coupling",
+        coupling: {
+          id: expect.stringMatching(/^inductor-coupling-/),
+          name: "TF1",
+          members: [
+            { instanceId: "L1", dotPin: "1" },
+            { instanceId: "L3", dotPin: "P1" },
+          ],
+          k: "1",
+        },
+      },
+    ]);
+    // An inductor already coupled keeps its dotted end; the next name is free.
+    const [second] = compile(
+      [
+        {
+          kind: "couple-inductors",
+          inductors: [ref("L2"), ref("L1")],
+          k: "0.8",
+          arrow: false,
+        },
+      ],
+      withInductors([
+        {
+          id: "c13",
+          name: "TF1",
+          members: [member("L1", "2"), member("L3", "P1")],
+          k: "0.5",
+        },
+      ]),
+    );
+    expect(second?.edits?.[0]).toMatchObject({
+      coupling: {
+        name: "TF2",
+        members: [
+          { instanceId: "L2", dotPin: "1" },
+          { instanceId: "L1", dotPin: "2" },
+        ],
+        k: "0.8",
+        arrow: false,
+      },
+    });
+  });
+
+  it("changes only the given fields of a pair already coupled", () => {
+    const snapshot = withInductors([
+      {
+        id: "c12",
+        name: "TF1",
+        members: [member("L2", "2"), member("L1", "1")],
+        k: "0.5",
+        arrow: false,
+      },
+    ]);
+    const [transaction] = compile(
+      [
+        {
+          kind: "couple-inductors",
+          inductors: [ref("L1"), ref("L2")],
+          k: "0.9",
+          dots: [null, "1"],
+          name: "K12",
+        },
+      ],
+      snapshot,
+    );
+    expect(transaction?.edits).toEqual([
+      {
+        kind: "set_inductor_coupling",
+        coupling: {
+          id: "c12",
+          name: "K12",
+          members: [
+            { instanceId: "L2", dotPin: "1" },
+            { instanceId: "L1", dotPin: "1" },
+          ],
+          k: "0.9",
+          arrow: false,
+        },
+      },
+    ]);
+    // Asking for what is already there sends nothing.
+    expect(
+      compile(
+        [
+          {
+            kind: "couple-inductors",
+            inductors: [ref("L2"), ref("L1")],
+            k: "0.5",
+          },
+        ],
+        snapshot,
+      ),
+    ).toEqual([]);
+  });
+
+  it("refuses what cannot be coupled, with the reason", () => {
+    const snapshot = withInductors([
+      {
+        id: "c12",
+        name: "TF1",
+        members: [member("L1", "1"), member("L2", "1")],
+        k: "0.5",
+      },
+    ]);
+    const couple = (extra: Record<string, unknown>) => [
+      { kind: "couple-inductors", inductors: [ref("L1"), ref("L3")], ...extra },
+    ];
+    expectCompileError(
+      [{ kind: "couple-inductors", inductors: [ref("L1"), ref("R1")] }],
+      "R1 is resistor; only an inductor",
+      snapshot,
+    );
+    expectCompileError(
+      [{ kind: "couple-inductors", inductors: [ref("L1"), ref("L1")] }],
+      "two different inductors",
+      snapshot,
+    );
+    expectCompileError(
+      couple({ dots: ["1", "1"] }),
+      'L3 has no pin "1"; its pins are P1 and P2',
+      snapshot,
+    );
+    expectCompileError(couple({ name: "tf1" }), "already named TF1", snapshot);
+    expectCompileError(
+      [{ kind: "couple-inductors", inductors: [ref("L1"), ref("L9")] }],
+      'no instance matches Reference or id "L9"',
+      snapshot,
+    );
+    expect(AuthoringActionSchema.safeParse(couple({ k: " " })[0]).success).toBe(
+      false,
+    );
+  });
+
+  it("uncouples by name or id with delete", () => {
+    const snapshot = withInductors([
+      {
+        id: "c12",
+        name: "TF1",
+        members: [member("L1", "1"), member("L2", "1")],
+        k: "0.5",
+      },
+    ]);
+    const uncouple = (target: Record<string, string>) =>
+      compile(
+        [{ kind: "delete", target: { kind: "inductor-coupling", ...target } }],
+        snapshot,
+      );
+    expect(uncouple({ name: "tf1" })).toMatchObject([
+      {
+        form: "edits",
+        edits: [{ kind: "remove_inductor_coupling", couplingId: "c12" }],
+      },
+    ]);
+    expect(uncouple({ id: "c12" })[0]?.edits).toEqual([
+      { kind: "remove_inductor_coupling", couplingId: "c12" },
+    ]);
+    expectCompileError(
+      [{ kind: "delete", target: { kind: "inductor-coupling", name: "TF2" } }],
+      'no inductor coupling matches "TF2"; couplings: TF1',
+      snapshot,
+    );
+    // Later actions of the list see it gone: the pair couples afresh.
+    const [, again] = compile(
+      [
+        { kind: "delete", target: { kind: "inductor-coupling", name: "TF1" } },
+        { kind: "couple-inductors", inductors: [ref("L1"), ref("L2")] },
+      ],
+      snapshot,
+    );
+    expect(again?.edits?.[0]).toMatchObject({
+      coupling: { name: "TF1", k: "1" },
+    });
+  });
+});

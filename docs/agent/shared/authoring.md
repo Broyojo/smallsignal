@@ -395,6 +395,27 @@ switch, never an inverted one. Draw the inverter if the circuit makes
 Free text beside a switch is drawing only and clocks nothing. A Ctrl SW
 (`externally-controlled-switch`) takes its control from its CTRL pin instead.
 
+### Coupled inductors
+
+Two drawn inductors (`inductor`, `inductor-compact`, `variable-inductor`) of
+one Cell couple as a mutual inductance, however far apart they are drawn, with
+`circuit_selection` `couple-inductors`:
+`{kind:"couple-inductors",inductors:[{kind:"instance",reference:"L1"},{kind:"instance",reference:"L2"}],k:"0.9"}`.
+A new coupling is what the canvas menu's Couple inductors makes: the next free
+name `TFn`, `k` `"1"`, each inductor dotted where its other couplings dot it
+(else at its first pin) and the curved arrow shown. `name`, `k` (SPICE text,
+-1 to 1), `dots` (each inductor's dotted pin, in `inductors` order; `null`
+keeps one) and `arrow` set those instead. Asked again for a pair already
+coupled, it changes only the fields given. The netlist prints
+`KTF1 L1 L2 0.9` after the Cell's parts (a name already starting with K is
+kept), each inductor's card starting at its dotted pin; Spectre prints
+`mutual_inductor`. The Snapshot lists the Cell's couplings in
+`document.inductorCouplings` (absent when none): `id`, `name`, both `members`
+(`instanceId`, `reference`, `dotPin`), `k`, and `arrow:false` when hidden.
+Uncouple with `apply_actions` `delete` and
+`target:{kind:"inductor-coupling",name:"TF1"}`; deleting either inductor
+removes its couplings too. A SPICE `K` card imports as a coupling.
+
 Multiple placements, wires, labels, model assignments and annotation moves have
 existing atomic batch paths. Failure commits nothing; success has one undo.
 One transaction takes at most 64 expanded edits. A placed part expands to about

@@ -80,4 +80,26 @@ describe("snapshot cache", () => {
     expect(changed).toContain("vout-net");
     expect(changed).not.toContain("instance-1");
   });
+
+  it("diffs a coupling of two inductors as its own object (#1648)", () => {
+    const before = testSnapshot();
+    const after = testSnapshot();
+    const coupling: NonNullable<
+      (typeof after)["document"]["inductorCouplings"]
+    >[number] = {
+      id: "coupling-1",
+      name: "TF1",
+      members: [
+        { instanceId: "instance-1", reference: "M1", dotPin: "D" },
+        { instanceId: "instance-2", reference: "R1", dotPin: "1" },
+      ],
+      k: "0.9",
+    };
+    after.document.inductorCouplings = [structuredClone(coupling)];
+    expect(changedObjectIds(before, after)).toEqual(["coupling-1"]);
+    before.document.inductorCouplings = [{ ...coupling, k: "0.5" }];
+    expect(changedObjectIds(before, after)).toEqual(["coupling-1"]);
+    before.document.inductorCouplings = [structuredClone(coupling)];
+    expect(changedObjectIds(before, after)).toEqual([]);
+  });
 });
