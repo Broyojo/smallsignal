@@ -11,6 +11,12 @@
       "@icm/agent-adapter/authoring": [
         "./packages/agent-adapter/src/authoring.ts"
       ],
+      "@icm/agent-adapter/component-resource": [
+        "./packages/agent-adapter/src/component-resource.ts"
+      ],
+      "@icm/agent-adapter/session-scope": [
+        "./packages/agent-adapter/src/session-scope.ts"
+      ],
       "@icm/agent-client": ["./packages/agent-client/src/index.ts"],
       "@icm/mcp-server": ["./apps/mcp-server/src/index.ts"],
       "@icm/agent-routing": ["./packages/agent-routing/src/index.ts"],

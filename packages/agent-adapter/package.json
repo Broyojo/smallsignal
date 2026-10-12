@@ -23,6 +23,16 @@
       "development": "./src/authoring.ts",
       "types": "./dist/authoring.d.ts",
       "default": "./dist/authoring.js"
+    },
+    "./component-resource": {
+      "development": "./src/component-resource.ts",
+      "types": "./dist/component-resource.d.ts",
+      "default": "./dist/component-resource.js"
+    },
+    "./session-scope": {
+      "development": "./src/session-scope.ts",
+      "types": "./dist/session-scope.d.ts",
+      "default": "./dist/session-scope.js"
     }
   },
   "scripts": {
