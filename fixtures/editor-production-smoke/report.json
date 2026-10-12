@@ -21,5 +21,6 @@
     "Metropolis-BoldItalic.schematic.woff2 link",
     "Metropolis-Regular.schematic.woff2 link",
     "Metropolis-RegularItalic.schematic.woff2 link"
-  ]
+  ],
+  "serviceWorkerNavigationPreload": true
 }
