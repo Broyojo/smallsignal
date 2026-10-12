@@ -613,6 +613,113 @@ function importedMosBulkDefaults(
   return defaults.nmosNetId || defaults.pmosNetId ? defaults : undefined;
 }
 
+function isMutualInductor(instance: CircuitInstanceIR): boolean {
+  return (
+    instance.target.kind === "primitive" &&
+    instance.target.family === "mutual-inductor"
+  );
+}
+
+/**
+ * Each `K` card of the Cell as a coupling of the two inductors it names, by
+ * the card's own name and coupling text. SPICE dots an inductor at its first
+ * node, so each member is dotted at the pin that node landed on. A card that
+ * cannot be one coupling of two of the Cell's inductors is left out with a
+ * warning saying why, as a part without a Symbol is.
+ */
+function importedInductorCouplings(
+  cell: CircuitCellIR,
+  documentId: string,
+  importedInstanceById: ReadonlyMap<string, Instance>,
+  diagnostics: SpiceDiagnostic[],
+): NonNullable<SchematicDocument["inductorCouplings"]> {
+  const couplings: NonNullable<SchematicDocument["inductorCouplings"]> = [];
+  for (const card of cell.instances.filter(isMutualInductor)) {
+    const skip = (reason: string) => {
+      diagnostics.push(
+        diagnostic(
+          "SPICE_IMPORT_COUPLING_SKIPPED",
+          "warning",
+          "import",
+          `${card.name} is not imported: ${reason}`,
+          card.sourceRef,
+        ),
+      );
+    };
+    const names = (card.parameters.inductors?.rawText ?? "")
+      .split(/\s+/u)
+      .filter(Boolean);
+    const k = card.parameters.coupling?.rawText.trim();
+    if (names.length !== 2) {
+      skip(
+        `it couples ${names.length} inductors, and a coupling joins exactly two`,
+      );
+      continue;
+    }
+    if (!k) {
+      skip("it has no coupling value");
+      continue;
+    }
+    const members = names.map((name) => {
+      const source = cell.instances.find(
+        (candidate) => candidate.name.toLowerCase() === name.toLowerCase(),
+      );
+      const imported = source && importedInstanceById.get(source.id);
+      const dotPin = imported?.importProvenance?.terminalMapping?.find(
+        (terminal) => terminal.sourcePosition === 0,
+      )?.pinName;
+      return source?.target.kind === "primitive" &&
+        source.target.family === "inductor" &&
+        imported &&
+        dotPin
+        ? { name, member: { instanceId: imported.id, dotPin } }
+        : { name, member: null };
+    });
+    const missing = members.find((entry) => !entry.member);
+    if (missing) {
+      skip(`${missing.name} is not an inductor of ${cell.name}`);
+      continue;
+    }
+    const [first, second] = members.map((entry) => entry.member!) as [
+      { instanceId: string; dotPin: string },
+      { instanceId: string; dotPin: string },
+    ];
+    if (first.instanceId === second.instanceId) {
+      skip(`it couples ${names[0]} with itself`);
+      continue;
+    }
+    const pair = couplings.find((coupling) =>
+      coupling.members.every(
+        (member) =>
+          member.instanceId === first.instanceId ||
+          member.instanceId === second.instanceId,
+      ),
+    );
+    if (pair) {
+      skip(`${pair.name} already couples ${names[0]} and ${names[1]}`);
+      continue;
+    }
+    const named = couplings.find(
+      (coupling) => coupling.name.toLowerCase() === card.name.toLowerCase(),
+    );
+    if (named || card.name.length > 64 || k.length > 256) {
+      skip(
+        named
+          ? `another coupling is already named ${named.name}`
+          : "its name or coupling value is too long",
+      );
+      continue;
+    }
+    couplings.push({
+      id: deriveStableId("inductor-coupling", documentId, card.id),
+      name: card.name,
+      members: [first, second],
+      k,
+    });
+  }
+  return couplings;
+}
+
 function importDocument(
   cell: CircuitCellIR,
   diagnostics: SpiceDiagnostic[],
@@ -624,6 +731,8 @@ function importDocument(
   const documentId = deriveStableId("document", cell.name.toLowerCase());
   const visibleInstances = cell.instances.filter((instance) => {
     if (instance.terminals.length > 0) return true;
+    // A K card becomes a coupling of the inductors it names, below.
+    if (isMutualInductor(instance)) return false;
     diagnostics.push(
       diagnostic(
         "SPICE_IMPORT_NON_VISUAL_INSTANCE",
@@ -730,6 +839,12 @@ function importDocument(
     };
   });
   const mosBulkDefaults = importedMosBulkDefaults(instances, nets);
+  const inductorCouplings = importedInductorCouplings(
+    cell,
+    documentId,
+    importedInstanceById,
+    diagnostics,
+  );
   return {
     id: documentId,
     name: cell.name,
@@ -781,6 +896,7 @@ function importDocument(
     ),
     nets,
     ...(mosBulkDefaults ? { mosBulkDefaults } : {}),
+    ...(inductorCouplings.length ? { inductorCouplings } : {}),
     connectivityEvidence: cell.nets.flatMap((net) => {
       const importedName = importedNetName(net.name, net.scope, namingProfile);
       return [

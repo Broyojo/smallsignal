@@ -73,6 +73,55 @@ describe("Agent Document Snapshot", () => {
       JSON.stringify(full).length / 2,
     );
   });
+  it("lists coupled inductors with their References only when there are some (#1648)", () => {
+    const project = fixtureProject();
+    const document = project.documents[0]!;
+    const plain = buildAgentSessionSnapshot({ project, document, resolver });
+    expect(plain.document).not.toHaveProperty("inductorCouplings");
+    // An empty list is no couplings: the Snapshot stays as it was.
+    document.inductorCouplings = [];
+    expect(
+      JSON.stringify(
+        buildAgentSessionSnapshot({ project, document, resolver }),
+      ),
+    ).toBe(JSON.stringify(plain));
+
+    for (const id of ["L1", "L2"])
+      document.instances.push({
+        id: `inductor-${id}`,
+        symbolId: "inductor",
+        reference: id,
+        placement: null,
+        netlist: { parameters: { value: "1u" } },
+      });
+    document.inductorCouplings = [
+      {
+        id: "coupling-1",
+        name: "TF1",
+        members: [
+          { instanceId: "inductor-L1", dotPin: "2" },
+          { instanceId: "inductor-L2", dotPin: "1" },
+        ],
+        k: "0.9",
+        arrow: false,
+      },
+    ];
+    const coupled = buildAgentSessionSnapshot({ project, document, resolver });
+    expect(AgentSessionSnapshotSchema.parse(coupled)).toEqual(coupled);
+    expect(coupled.document.inductorCouplings).toEqual([
+      {
+        id: "coupling-1",
+        name: "TF1",
+        members: [
+          { instanceId: "inductor-L1", reference: "L1", dotPin: "2" },
+          { instanceId: "inductor-L2", reference: "L2", dotPin: "1" },
+        ],
+        k: "0.9",
+        arrow: false,
+      },
+    ]);
+  });
+
   it("bounds an adder round the sign marks it draws (#1324)", () => {
     const bounds = (signB: "+" | "-") => {
       const document = createEmptyDocument("doc", "Adder");

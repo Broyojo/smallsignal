@@ -197,17 +197,25 @@ jobs:
           # The single slot, asked of the running container rather than only
           # of the harness in unit tests: a second request during a run is
           # refused with Retry-After, not queued behind it.
+          # The slow run must hold the slot for certain (#1662): a bare `.tran`
+          # with no `.print` is refused by batch ngspice ("no simulations
+          # run") within milliseconds, so the slot was seen only by luck. This
+          # loop computes in constant memory until its own deadline ends it.
           node -e '
             const deck = [
-              "* a run long enough to still be running",
+              "* a run that holds the slot until its deadline",
               "V1 in 0 DC 1",
               "R1 in out 1k",
-              "C1 out 0 1u",
-              ".tran 1n 200m",
+              ".control",
+              "let i = 0",
+              "while i < 1e12",
+              "  let i = i + 1",
+              "end",
+              ".endc",
               ".end",
               "",
             ].join("\n");
-            process.stdout.write(JSON.stringify({ deck, timeoutMs: 30000 }));
+            process.stdout.write(JSON.stringify({ deck, timeoutMs: 10000 }));
           ' > /tmp/slow-request.json
           curl --silent --show-error --max-time 90 -o /tmp/slow-result.json \
             -H 'content-type: application/json' --data @/tmp/slow-request.json \
@@ -225,6 +233,7 @@ jobs:
           if [ -z "$active" ]; then
             echo "The container never reported an active run; the guard cannot be observed."
             wait "$slow" || true
+            cat /tmp/slow-result.json || true; echo
             exit 1
           fi
           second="$(curl --silent --max-time 20 -o /tmp/second.json -D /tmp/second.head \
@@ -232,6 +241,13 @@ jobs:
             -H 'content-type: application/json' --data @/tmp/run-request.json \
             http://127.0.0.1:8080/run)"
           wait "$slow" || true
+          # The slot was held by the deck itself, not by a lucky poll.
+          node -e '
+            const slow = require("/tmp/slow-result.json");
+            if (slow.timedOut !== true) {
+              throw new Error(`the slow run ended before its deadline: ${JSON.stringify(slow).slice(0, 400)}`);
+            }
+          '
           cat /tmp/second.json; echo
           if [ "$second" != "503" ]; then
             echo "A second concurrent run must be refused with 503, got $second"
@@ -278,8 +294,9 @@ jobs:
           done
           ready || { echo "The recovery container never became ready."; exit 1; }
 
-          # One millisecond is intentionally impossible for this transient
-          # analysis. The process timeout starts termination; the one
+          # One millisecond is intentionally impossible for any run: the
+          # deadline passes before ngspice has started, whatever the deck
+          # asks for. The process timeout starts termination; the one
           # millisecond lifecycle grace then proves that a lease which cannot
           # settle makes PID 1 exit instead of remaining busy forever.
           node -e '

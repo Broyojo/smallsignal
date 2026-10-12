@@ -578,9 +578,34 @@ const AgentSnapshotJunctionSchema = z.strictObject({
 
 const AgentSnapshotNoConnectSchema = NoConnectSchema;
 
+// The Document's record with each member's Reference beside its ID, so an
+// Agent reads which parts are coupled without looking the IDs up.
+const AgentSnapshotInductorCouplingMemberSchema = z.strictObject({
+  instanceId: StableIdSchema,
+  reference: z.string().min(1).nullable(),
+  dotPin: z.string().min(1),
+});
+const AgentSnapshotInductorCouplingSchema = z.strictObject({
+  id: StableIdSchema,
+  name: z.string().min(1),
+  members: z.tuple([
+    AgentSnapshotInductorCouplingMemberSchema,
+    AgentSnapshotInductorCouplingMemberSchema,
+  ]),
+  k: z.string().min(1),
+  arrow: z.literal(false).optional(),
+});
+
 export const AgentSnapshotDocumentSchema = z.strictObject({
   netlist: CellNetlistInterfaceSchema.optional(),
   mosBulkDefaults: MosBulkDefaultsSchema.optional(),
+  inductorCouplings: z
+    .array(AgentSnapshotInductorCouplingSchema)
+    .min(1)
+    .optional()
+    .describe(
+      "Coupled inductor pairs (SPICE K), absent when none: each member's dotPin is its dotted end; arrow:false hides the curved arrow. Change with couple-inductors, remove with delete {kind:'inductor-coupling'}.",
+    ),
   id: StableIdSchema,
   name: z.string().min(1),
   revision: z.number().int().nonnegative(),

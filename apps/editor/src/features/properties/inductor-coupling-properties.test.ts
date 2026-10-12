@@ -9,7 +9,10 @@ import {
   parseComponentPropertyCode,
   type ComponentPropertyCodeContext,
 } from "./component-property-code";
-import { propertyCodeSpans } from "./component-property-code-assists";
+import {
+  propertyCodeChanges,
+  propertyCodeSpans,
+} from "./component-property-code-assists";
 import { planComponentPropertyCodeEdits } from "./component-property-code-edits";
 import {
   inductorCouplingPropertyContext,
@@ -237,5 +240,37 @@ describe("coupled inductor Properties", () => {
     expect(
       parseComponentPropertyCode(JSON.stringify(code), context(document, "L1")),
     ).toMatchObject({ ok: false, message: expect.stringMatching(/dot/u) });
+  });
+
+  it("lets an entry typed into the draft pick its partner and arrow before Apply", () => {
+    const document = apply(inductors(), [
+      planCoupleInductors(inductors(), ["L1", "L2"])!,
+    ]);
+    const code = JSON.parse(
+      formatComponentPropertyCode(context(document, "L1")),
+    );
+    code.coupling.TF2 = { with: "", k: "0.5", arrow: true };
+    const source = JSON.stringify(code, null, 2);
+    const pick = (values: Record<string, unknown>) => {
+      let next = source;
+      for (const change of [
+        ...propertyCodeChanges(source, context(document, "L1"), values),
+      ].reverse())
+        next =
+          next.slice(0, change.from) + change.insert + next.slice(change.to);
+      return next === source ? null : JSON.parse(next).coupling.TF2;
+    };
+    expect(pick({ "coupling.TF2.with": "L3" })).toEqual({
+      with: "L3",
+      k: "0.5",
+      arrow: true,
+    });
+    expect(pick({ "coupling.TF2.arrow": false })).toMatchObject({
+      arrow: false,
+    });
+    // Only the choices the control offers.
+    expect(pick({ "coupling.TF2.with": "R1" })).toBeNull();
+    // A committed field is still checked against the committed record.
+    expect(pick({ "coupling.TF1.with": "R1" })).toBeNull();
   });
 });

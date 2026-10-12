@@ -119,7 +119,8 @@ export const FOCUSED_TOOLS = [
   {
     name: "circuit_selection",
     source: "apply_actions",
-    operations: ["transform", "copy", "align"],
+    // Two inductors are coupled from the canvas menu of their selection.
+    operations: ["transform", "copy", "align", "couple-inductors"],
   },
   {
     // The view a person watching sees: fit, select, highlight (#1444). Its own

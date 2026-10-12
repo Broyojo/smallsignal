@@ -59,6 +59,7 @@ const NamedObjectRefSchema = z
       "annotation",
       "drafting",
       "no-connect",
+      "inductor-coupling",
     ]),
     id: z.string().min(1).optional(),
     name: z.string().min(1).optional(),
@@ -457,6 +458,38 @@ export const AuthoringActionSchema = z.discriminatedUnion("kind", [
     axis: z.enum(["x", "y"]),
     coordinate: z.number().int().optional(),
   }),
+  z
+    .strictObject({
+      kind: z.literal("couple-inductors"),
+      inductors: z.tuple([InstanceRefSchema, InstanceRefSchema]),
+      name: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe("New: the next free TFn. SPICE prints it as K<name>."),
+      k: z
+        .string()
+        .trim()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe('Coefficient as SPICE text, -1 to 1; new: "1".'),
+      dots: z
+        .tuple([z.string().min(1).nullable(), z.string().min(1).nullable()])
+        .optional()
+        .describe(
+          "Each inductor's dotted pin, in inductors order; null keeps it (new: the end its other couplings dot, else its first pin).",
+        ),
+      arrow: z
+        .boolean()
+        .optional()
+        .describe("Show the curved arrow and name; new: true."),
+    })
+    .describe(
+      "Couple two drawn inductors (inductor, inductor-compact, variable-inductor) as a mutual inductance, as the canvas menu's Couple inductors does. A pair already coupled changes only the fields given. Uncouple with delete {kind:'inductor-coupling', name}.",
+    ),
   z.strictObject({
     kind: z.literal("delete"),
     target: ObjectRefSchema,

@@ -6,6 +6,8 @@ import {
   type InductorCoupling,
 } from "@icm/model";
 
+import { importSpiceSources } from "@icm/spice";
+
 import { createDesignNetlistExport } from "./export.js";
 import { analyzeDesignNetlist } from "./extract.js";
 import { printVacaskWithLocations } from "./vacask-printer.js";
@@ -216,5 +218,30 @@ describe("inductor couplings", () => {
     expect(printed.text).toContain(
       'KTF1 () __icm_mutual k=0.4 ind1="L1" ind2="L2"',
     );
+  });
+
+  it("prints an imported K card back as it was read", async () => {
+    const source = [
+      "Coupled",
+      ".subckt tf a b c d",
+      "L1 a b 1u",
+      "L2 d c 4u",
+      "K1 L1 L2 0.9",
+      ".ends tf",
+      ".end",
+      "",
+    ].join("\n");
+    const imported = await importSpiceSources(
+      [{ path: "tf.spi", bytes: new TextEncoder().encode(source) }],
+      "tf.spi",
+    );
+    expect(imported.successful, JSON.stringify(imported.diagnostics)).toBe(
+      true,
+    );
+    const text = exported(imported.project!, "spice");
+    // Each card still starts at the node SPICE dots, so K reads the same.
+    expect(text).toMatch(/^L1 a b 1u$/mu);
+    expect(text).toMatch(/^L2 d c 4u$/mu);
+    expect(text).toMatch(/^K1 L1 L2 0\.9$/mu);
   });
 });
