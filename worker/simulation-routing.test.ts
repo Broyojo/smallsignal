@@ -6,7 +6,9 @@ import {
 } from "./simulation";
 import ngspiceProfile from "../containers/ngspice/hosted-sky130-profile.json";
 import { CAPABILITIES_ACCEPT_CELL_LIBRARIES } from "@icm/simulation-service";
+import vacaskEnvironment from "../config/vacask-preview-environment.json";
 import {
+  nativeCapabilities,
   nativeEnvironment,
   nativeHealth,
   nativeInput,
@@ -155,6 +157,70 @@ describe("dual-engine Profile routing", () => {
       (await routeSimulationRequest(post(nativeInput()), env))!.status,
     ).toBe(503);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("environment names (#1679)", () => {
+  // The accepted VACASK Profile, as Production registers it.
+  const accepted = {
+    ...nativeHealth,
+    environment: vacaskEnvironment,
+    capabilities: {
+      ...nativeCapabilities,
+      profiles: [
+        { ...nativeCapabilities.profiles[0]!, id: vacaskEnvironment.profileId },
+      ],
+    },
+  };
+  const production: SimulationEnv = {
+    ...env,
+    VACASK_PROFILE_ID: vacaskEnvironment.profileId,
+  };
+  const labels = async (
+    body: unknown,
+    health: unknown,
+    routed = production,
+  ) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(health)),
+    );
+    const caps = (await (await routeSimulationRequest(
+      post(body),
+      routed,
+    ))!.json()) as { profiles: { id: string; label?: string }[] };
+    return caps.profiles.map(({ id, label }) => ({ id, label }));
+  };
+
+  it("names the accepted VACASK Profile from its pinned release, and keeps its id", async () => {
+    expect(vacaskEnvironment.simulator.version).toBe("0.3.4-icm-hard-switch2");
+    expect(await labels({ operation: "capabilities" }, accepted)).toEqual([
+      { id: ngspiceProfile.id, label: "SKY130 qualified devices · ngspice 46" },
+      {
+        id: "vacask-sky130-candidate",
+        label: "SKY130 · VACASK 0.3.4 (preview)",
+      },
+    ]);
+    expect(
+      await labels(
+        {
+          operation: "capabilities",
+          environment: { profileId: "vacask-sky130-candidate" },
+        },
+        accepted,
+      ),
+    ).toEqual([
+      {
+        id: "vacask-sky130-candidate",
+        label: "SKY130 · VACASK 0.3.4 (preview)",
+      },
+    ]);
+  });
+
+  it("gives no other VACASK Profile that name", async () => {
+    expect(
+      (await labels({ operation: "capabilities" }, nativeHealth, env))[1],
+    ).toEqual({ id: nativeEnvironment.profileId, label: undefined });
   });
 });
 

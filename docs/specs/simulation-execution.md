@@ -80,6 +80,9 @@ executor's `/health` supplies its measured environment and capabilities. The
 Worker requires a verified pinned VACASK identity and matching Profile, with
 `inputs: ["source"]` and `rawfileCollection: "native-multi-ascii"`. It maintains
 no independent model-library path, corner list or analysis interpretation.
+Capabilities name the accepted Profile `SKY130 · VACASK <release> (preview)`,
+the release taken from the pinned `config/vacask-preview-environment.json`
+simulator version, unless the executor declares its own label (#1679).
 
 The native operator-host target uses its own explicit HTTPS origin and private
 gateway credentials (`VACASK_UPSTREAM_URL` and `VACASK_UPSTREAM_TOKEN` when

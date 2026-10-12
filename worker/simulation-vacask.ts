@@ -16,6 +16,7 @@ import {
   createSimulationInputMetadata,
   verifySimulationEnvironmentMetadata,
 } from "@icm/spice-run";
+import acceptedEnvironment from "../config/vacask-preview-environment.json";
 
 export interface SimulationRunner {
   fetch(input: string, init?: RequestInit): Promise<Response>;
@@ -66,6 +67,16 @@ const unavailable = {
   cancel: false,
 };
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
+/** The accepted VACASK Profile's human-facing name (#1679), as the ngspice
+ * Profile's comes from its `displayName`. Its release is the pinned
+ * environment's simulator version without the local build suffix. */
+const ACCEPTED_PROFILE = {
+  id: acceptedEnvironment.profileId,
+  label: `SKY130 · VACASK ${
+    /^\d+(?:\.\d+)*/u.exec(acceptedEnvironment.simulator.version)?.[0] ??
+    acceptedEnvironment.simulator.version
+  } (preview)`,
+};
 type RuntimeFacts = { expiresAt: number; health: Record<string, unknown> };
 const boundFacts = new WeakMap<object, Map<string, RuntimeFacts>>();
 const remoteFacts = new Map<string, RuntimeFacts>();
@@ -375,7 +386,15 @@ export async function routeVacaskSimulationRequest(
       facts.entries.delete(facts.entries.keys().next().value!);
     facts.entries.set(facts.key, { expiresAt: Date.now() + 30_000, health });
   }
-  if (body.operation === "capabilities") return json(caps);
+  if (body.operation === "capabilities")
+    return json({
+      ...caps,
+      profiles: caps.profiles.map((profile) =>
+        profile.id === ACCEPTED_PROFILE.id
+          ? { label: ACCEPTED_PROFILE.label, ...profile }
+          : profile,
+      ),
+    });
   const profile = caps.profiles[0]!;
   if (
     body.environment?.corner !== undefined &&

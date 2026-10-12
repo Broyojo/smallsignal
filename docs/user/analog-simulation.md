@@ -66,7 +66,9 @@ covered by the Project's browser recovery, not a cloud backup. **File → Save**
 the signed-in cloud account.
 
 Available environments come from the configured executor. Production offers
-ngspice and VACASK Profiles; each uses its own native source language.
+ngspice and VACASK Profiles, each listed by its name and simulator release;
+each uses its own native source language. Projects and the Agent select a
+Profile by its id.
 Their internal `experiment.json` is hidden from Source and file tabs, but
 retained in Project backups. Legacy or damaged configurations and pending
 configuration drafts stay visible for compatibility and repair; they are not a
