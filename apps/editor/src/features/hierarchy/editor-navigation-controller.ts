@@ -23,10 +23,9 @@ import { buildSvgScene } from "@icm/render-svg";
 import type { SymbolResolver } from "@icm/symbols";
 
 import {
-  fitCameraToBounds,
-  fitCameraToVisibleBounds,
+  fitViewCamera,
   type CameraRectInput,
-  type CanvasInsets,
+  type CanvasView,
 } from "../../canvas/fit-view";
 import { referencedDocumentId } from "../../document/editor-session";
 import { endpointNetId } from "../wiring/route-interaction-geometry";
@@ -53,10 +52,7 @@ export interface EditorNavigationControllerDependencies {
    * The canvas element's size and how much of it floating panels cover.
    * Absent when the canvas is not mounted, which leaves fit to the element.
    */
-  measureCanvasView?: () => {
-    viewport: { width: number; height: number };
-    insets: CanvasInsets;
-  } | null;
+  measureCanvasView?: () => CanvasView | null;
   openDocument: (documentId: string) => SchematicDocument | null | undefined;
   resetInteractionState: () => void;
   selectOnly: (kind: SelectionKind, ids: readonly string[]) => void;
@@ -108,13 +104,14 @@ export function createEditorNavigationController({
   selectedInstance,
   setStatus,
 }: EditorNavigationControllerDependencies) {
-  const switchDocument = (nextDocumentId: string): void => {
-    if (nextDocumentId === document.id) return;
+  /** Show another Cell at its remembered view; true when it was opened. */
+  const switchDocument = (nextDocumentId: string): boolean => {
+    if (nextDocumentId === document.id) return false;
     documentViewBoxes.current.set(document.id, viewBox);
     const nextDocument = openDocument(nextDocumentId);
     if (!nextDocument) {
       setStatus(`Document not found: ${nextDocumentId}`);
-      return;
+      return false;
     }
     setViewBox(
       documentViewBoxes.current.get(nextDocument.id) ?? defaultViewBox,
@@ -122,6 +119,13 @@ export function createEditorNavigationController({
     );
     resetInteractionState();
     setStatus(`Opened Cell ${nextDocument.name}`);
+    return true;
+  };
+
+  // Descending into a block or leaving it shows the whole Cell, as F does,
+  // instead of whatever view that Cell last had (#1686).
+  const switchDocumentAndFit = (nextDocumentId: string): void => {
+    if (switchDocument(nextDocumentId)) fitDocument(nextDocumentId);
   };
 
   const selectDocumentFromHierarchy = (nextDocumentId: string): void => {
@@ -318,20 +322,36 @@ export function createEditorNavigationController({
         statusMessage,
       );
     }
-    const bounds = buildSvgScene(target, resolver).viewBox;
+    // A Cell whose scene cannot be built fits the default view, as F does
+    // on a degraded scene; the navigation that asked for the fit completes.
+    let bounds: CameraRectInput = defaultViewBox;
+    try {
+      bounds = buildSvgScene(target, resolver).viewBox;
+    } catch {
+      // Keep the default view.
+    }
     const grid = target.presentation.grid;
-    const measured = measureCanvasView?.() ?? null;
     setViewBox(
-      measured
-        ? fitCameraToVisibleBounds(
-            bounds,
-            grid,
-            measured.viewport,
-            measured.insets,
-          )
-        : fitCameraToBounds(bounds, grid),
+      fitViewCamera(bounds, grid, measureCanvasView?.() ?? null),
       grid,
     );
+  };
+
+  // The Cell Manager tree descends into one concrete block occurrence.
+  const openCellOccurrence = (
+    documentId: string,
+    hierarchyPath: readonly HierarchyFrame[],
+  ): void => {
+    navigateToLocator(
+      {
+        documentId,
+        hierarchyPath: [...hierarchyPath],
+        kind: "document",
+        objectId: documentId,
+      },
+      "Opened Cell occurrence",
+    );
+    fitDocument(documentId);
   };
 
   const enterHierarchy = (instanceId: string): void => {
@@ -351,7 +371,7 @@ export function createEditorNavigationController({
         childDocumentId: targetId,
       },
     ]);
-    switchDocument(targetId);
+    switchDocumentAndFit(targetId);
   };
 
   const enterSelectedHierarchy = (): void => {
@@ -377,14 +397,14 @@ export function createEditorNavigationController({
       return;
     }
     setDocumentStack((current) => current.slice(0, -1));
-    switchDocument(frame.parentDocumentId);
+    switchDocumentAndFit(frame.parentDocumentId);
     if (parent?.instances.some((instance) => instance.id === frame.instanceId))
       selectOnly("instance", [frame.instanceId]);
   };
 
   const returnToTopDocument = (): void => {
     setDocumentStack([]);
-    switchDocument(project.topDocumentId);
+    switchDocumentAndFit(project.topDocumentId);
   };
 
   const selectSearchResult = (result: SearchResult): void => {
@@ -469,6 +489,7 @@ export function createEditorNavigationController({
     navigateToLocator,
     navigateToNetlistDiagnostic,
     fitDocument,
+    openCellOccurrence,
     enterHierarchy,
     enterSelectedHierarchy,
     returnToParentDocument,

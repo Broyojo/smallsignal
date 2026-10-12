@@ -41,7 +41,7 @@ import {
   cameraAnchorFromScreen,
   cameraDeltaFromScreen,
   fitCameraToBounds,
-  fitCameraToVisibleBounds,
+  fitViewCamera,
   panCameraByScreenPixels,
   zoomCameraAtAnchor,
   type CameraPanDirection,
@@ -298,17 +298,7 @@ export function createCanvasGestureController({
     // Below the layout's narrow breakpoint the Properties dock stops being a
     // column and floats over the canvas, so fitting to the element put part
     // of the drawing underneath it.
-    const measured = measureCanvasView?.() ?? null;
-    setViewBox(
-      measured
-        ? fitCameraToVisibleBounds(
-            bounds,
-            grid,
-            measured.viewport,
-            measured.insets,
-          )
-        : fitCameraToBounds(bounds, grid),
-    );
+    setViewBox(fitViewCamera(bounds, grid, measureCanvasView?.() ?? null));
     if (options.announce !== false) setStatus("Fit Document");
   };
 

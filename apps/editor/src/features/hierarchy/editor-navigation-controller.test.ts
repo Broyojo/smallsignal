@@ -5,9 +5,11 @@ import {
   createEmptyDocument,
   createRoutePath,
 } from "@icm/model";
+import { buildSvgScene } from "@icm/render-svg";
 import { builtInSymbols, createProjectSymbolResolver } from "@icm/symbols";
 import { describe, expect, it, vi } from "vitest";
 
+import { fitCameraToVisibleBounds } from "../../canvas/fit-view";
 import {
   createEditorNavigationController,
   type EditorNavigationControllerDependencies,
@@ -158,6 +160,7 @@ describe("editor navigation controller", () => {
       id: "X1",
       symbolId: "unresolved-block",
       placement: null,
+      reference: "X1",
       netlist: {
         parameters: {},
         binding: { kind: "subcircuit", childDocumentId: child.id },
@@ -311,5 +314,160 @@ describe("editor navigation controller", () => {
     controller.fitDocument(other.id, "Agent fit Cell other");
     expect(input.resetInteractionState).toHaveBeenCalled();
     expect(vi.mocked(input.setViewBox).mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe("entering or leaving a Cell fits the view (#1686)", () => {
+  const measured = {
+    viewport: { width: 1200, height: 800 },
+    insets: { top: 0, right: 320, bottom: 0, left: 0 },
+  };
+
+  function hierarchy() {
+    const input = dependencies();
+    input.measureCanvasView = () => measured;
+    const parent = input.document;
+    const child = createEmptyDocument("child", "Child");
+    child.instances.push({
+      id: "R9",
+      symbolId: "resistor",
+      placement: { position: { x: 900, y: 700 }, rotation: 0, mirror: "none" },
+      reference: "R9",
+    });
+    input.project.documents.push(child);
+    parent.instances.push({
+      id: "R2",
+      symbolId: "resistor",
+      placement: { position: { x: 200, y: 100 }, rotation: 0, mirror: "none" },
+      reference: "R2",
+    });
+    parent.instances.push({
+      id: "X1",
+      symbolId: "unresolved-block",
+      placement: null,
+      reference: "X1",
+      netlist: {
+        parameters: {},
+        binding: { kind: "subcircuit", childDocumentId: child.id },
+      },
+    });
+    // Both Cells remember an old view that shows none of their drawing.
+    input.documentViewBoxes.current.set(parent.id, {
+      x: -5000,
+      y: -5000,
+      width: 100,
+      height: 100,
+    });
+    input.documentViewBoxes.current.set(child.id, {
+      x: -5000,
+      y: -5000,
+      width: 100,
+      height: 100,
+    });
+    const fitted = (cell: typeof child) =>
+      fitCameraToVisibleBounds(
+        buildSvgScene(cell, input.resolver).viewBox,
+        cell.presentation.grid,
+        measured.viewport,
+        measured.insets,
+      );
+    const path = [
+      {
+        parentDocumentId: parent.id,
+        instanceId: "X1",
+        childDocumentId: child.id,
+      },
+    ];
+    return { input, parent, child, fitted, path };
+  }
+
+  it("fits the child Cell after E enters a block", () => {
+    const { input, parent, child, fitted } = hierarchy();
+    createEditorNavigationController({
+      ...input,
+      selectedInstance: parent.instances.find((item) => item.id === "X1"),
+    }).enterSelectedHierarchy();
+    expect(input.setStatus).toHaveBeenCalledWith("Opened Cell Child");
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitted(child),
+      child.presentation.grid,
+    );
+  });
+
+  it("fits the parent Cell on return and keeps the block selected", () => {
+    const { input, parent, child, fitted, path } = hierarchy();
+    createEditorNavigationController({
+      ...input,
+      document: child,
+      documentStack: path,
+    }).returnToParentDocument();
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitted(parent),
+      parent.presentation.grid,
+    );
+    expect(input.selectOnly).toHaveBeenLastCalledWith("instance", ["X1"]);
+  });
+
+  it("fits the top Cell on return to the top", () => {
+    const { input, parent, child, fitted, path } = hierarchy();
+    createEditorNavigationController({
+      ...input,
+      document: child,
+      documentStack: path,
+    }).returnToTopDocument();
+    expect(input.setDocumentStack).toHaveBeenLastCalledWith([]);
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitted(parent),
+      parent.presentation.grid,
+    );
+  });
+
+  it("fits a Cell opened from the Cell Manager's occurrence tree", () => {
+    const { input, child, fitted, path } = hierarchy();
+    createEditorNavigationController(input).openCellOccurrence(child.id, path);
+    expect(input.setDocumentStack).toHaveBeenLastCalledWith(path);
+    expect(input.setStatus).toHaveBeenLastCalledWith("Opened Cell occurrence");
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitted(child),
+      child.presentation.grid,
+    );
+  });
+
+  it("completes a return whose Cell cannot be drawn, fitting the default view as F does", () => {
+    const { input, parent, child, path } = hierarchy();
+    // A symbol the resolver does not know makes the parent's scene throw.
+    parent.instances.push({
+      id: "U1",
+      symbolId: "missing-symbol",
+      reference: "U1",
+      placement: { position: { x: 0, y: 0 }, rotation: 0, mirror: "none" },
+    });
+    expect(() => buildSvgScene(parent, input.resolver)).toThrow();
+    createEditorNavigationController({
+      ...input,
+      document: child,
+      documentStack: path,
+    }).returnToParentDocument();
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitCameraToVisibleBounds(
+        input.defaultViewBox,
+        parent.presentation.grid,
+        measured.viewport,
+        measured.insets,
+      ),
+      parent.presentation.grid,
+    );
+    expect(input.selectOnly).toHaveBeenLastCalledWith("instance", ["X1"]);
+  });
+
+  it("keeps a remembered view when a Cell is opened by definition", () => {
+    const { input, child } = hierarchy();
+    createEditorNavigationController(input).selectDocumentFromHierarchy(
+      child.id,
+    );
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      { x: -5000, y: -5000, width: 100, height: 100 },
+      child.presentation.grid,
+    );
   });
 });

@@ -1395,3 +1395,53 @@ test("same-name Cell Pins stay independent while the final interface groups them
     ["P2"],
   ]);
 });
+
+test("entering a Cell with E, and leaving it, lands on the F fit (#1686)", async ({
+  page,
+}) => {
+  const project = createEmptyProject("fit-on-enter", "Fit on enter");
+  const top = project.documents[0]!;
+  const child = createEmptyDocument("far", "Far");
+  child.instances.push({
+    ...placedInstance("R1", "resistor", 2400, 1800),
+    reference: "R1",
+  });
+  top.instances.push({
+    ...placedInstance("X1", hierarchicalSymbolId("Far"), 200, 120),
+    reference: "X1",
+    netlist: {
+      binding: { kind: "subcircuit", childDocumentId: child.id },
+      parameters: {},
+    },
+  });
+  project.documents.push(child);
+  await openProject(page, project, "fit-on-enter.icproj.json");
+  const canvas = page.getByTestId("schematic-canvas");
+  // Move the camera off the fit, so a remembered view would show.
+  const nudge = async () => {
+    const before = await canvas.getAttribute("viewBox");
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 400);
+    await expect(canvas).not.toHaveAttribute("viewBox", before!);
+  };
+  // The view the navigation landed on is the one F gives.
+  const expectFitted = async () => {
+    const landed = await canvas.getAttribute("viewBox");
+    await page.keyboard.press("f");
+    await expectStatus(page, "Fit Document");
+    await expect(canvas).toHaveAttribute("viewBox", landed!);
+  };
+
+  await page.getByTestId("hit-X1").click();
+  await nudge();
+  await page.keyboard.press("e");
+  await expectStatus(page, "Opened Cell Far");
+  await expect(page.getByTestId("hit-R1")).toBeInViewport();
+  await expectFitted();
+
+  await nudge();
+  await page.keyboard.press("Shift+E");
+  await expect(page.getByTestId("hit-X1")).toBeInViewport();
+  await expectFitted();
+});

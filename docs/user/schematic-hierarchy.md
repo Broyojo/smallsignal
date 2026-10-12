@@ -33,6 +33,8 @@ component (`R`, mirror, `Esc`). It shows the Cell name; its `Xn` instance name
 is the netlist identity. **Enter Cell** (`E`) opens a selected instance's
 child, **Shift+E** returns to the caller along the actual path, **Top** jumps
 to the root. Self-instantiation and cycles are refused with a reason.
+Entering or leaving a Cell this way lands fitted, as **F** does; a Cell opened
+from the **Cells** selector or Manager's definition list keeps its last view.
 
 ## Cell Pins
 
