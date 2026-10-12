@@ -179,7 +179,7 @@ export function EditorDialogs({
   recentSymbolIds,
   switchDocument,
   jumpToCaller,
-  navigateToLocator,
+  openCellOccurrence,
   navigateToNetlistDiagnostic,
   selectSearchResult,
   jumpToProjectDiagnostic,
@@ -293,7 +293,7 @@ export function EditorDialogs({
   recentSymbolIds: ComponentPlacement["recentSymbolIds"];
   switchDocument: NavigationController["switchDocument"];
   jumpToCaller: NavigationController["jumpToCaller"];
-  navigateToLocator: NavigationController["navigateToLocator"];
+  openCellOccurrence: NavigationController["openCellOccurrence"];
   navigateToNetlistDiagnostic: NavigationController["navigateToNetlistDiagnostic"];
   selectSearchResult: NavigationController["selectSearchResult"];
   jumpToProjectDiagnostic: NavigationController["jumpToProjectDiagnostic"];
@@ -433,15 +433,7 @@ export function EditorDialogs({
               project,
               hierarchyCalls: projectConnectivityIndex.hierarchy.calls,
               onOpenOccurrence: (documentId, hierarchyPath) => {
-                navigateToLocator(
-                  {
-                    documentId,
-                    hierarchyPath: [...hierarchyPath],
-                    kind: "document",
-                    objectId: documentId,
-                  },
-                  "Opened Cell occurrence",
-                );
+                openCellOccurrence(documentId, hierarchyPath);
                 setCellManagerOpen(false);
               },
               activeDocumentId: document.id,

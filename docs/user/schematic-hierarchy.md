@@ -182,6 +182,7 @@ the root. Opening a Cell from Manager's definition list always opens the
 definition without caller context, even when it has only one caller. **Shift+E** is
 disabled in that context. Enter an instance or use the hierarchy tree to carry
 a concrete path; **Shift+E** then returns to and selects the original caller.
+Entering or leaving a Cell this way lands fitted, as **F** does; a Cell opened from the **Cells** selector or Manager's definition list keeps its last view.
 
 In the Netlist panel, **Entry** chooses a Cell for this export only. **Default
 Top** follows the saved default; another selection drives the preview, structural

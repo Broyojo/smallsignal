@@ -422,6 +422,44 @@ describe("entering or leaving a Cell fits the view (#1686)", () => {
     );
   });
 
+  it("fits a Cell opened from the Cell Manager's occurrence tree", () => {
+    const { input, child, fitted, path } = hierarchy();
+    createEditorNavigationController(input).openCellOccurrence(child.id, path);
+    expect(input.setDocumentStack).toHaveBeenLastCalledWith(path);
+    expect(input.setStatus).toHaveBeenLastCalledWith("Opened Cell occurrence");
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitted(child),
+      child.presentation.grid,
+    );
+  });
+
+  it("completes a return whose Cell cannot be drawn, fitting the default view as F does", () => {
+    const { input, parent, child, path } = hierarchy();
+    // A symbol the resolver does not know makes the parent's scene throw.
+    parent.instances.push({
+      id: "U1",
+      symbolId: "missing-symbol",
+      reference: "U1",
+      placement: { position: { x: 0, y: 0 }, rotation: 0, mirror: "none" },
+    });
+    expect(() => buildSvgScene(parent, input.resolver)).toThrow();
+    createEditorNavigationController({
+      ...input,
+      document: child,
+      documentStack: path,
+    }).returnToParentDocument();
+    expect(input.setViewBox).toHaveBeenLastCalledWith(
+      fitCameraToVisibleBounds(
+        input.defaultViewBox,
+        parent.presentation.grid,
+        measured.viewport,
+        measured.insets,
+      ),
+      parent.presentation.grid,
+    );
+    expect(input.selectOnly).toHaveBeenLastCalledWith("instance", ["X1"]);
+  });
+
   it("keeps a remembered view when a Cell is opened by definition", () => {
     const { input, child } = hierarchy();
     createEditorNavigationController(input).selectDocumentFromHierarchy(

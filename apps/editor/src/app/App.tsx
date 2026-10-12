@@ -3615,6 +3615,7 @@ function WorkspaceEditor({
     navigateToLocator,
     navigateToNetlistDiagnostic,
     fitDocument,
+    openCellOccurrence,
     enterHierarchy,
     enterSelectedHierarchy,
     returnToParentDocument,
@@ -5163,7 +5164,7 @@ function WorkspaceEditor({
         recentSymbolIds={recentSymbolIds}
         switchDocument={switchDocument}
         jumpToCaller={jumpToCaller}
-        navigateToLocator={navigateToLocator}
+        openCellOccurrence={openCellOccurrence}
         navigateToNetlistDiagnostic={navigateToNetlistDiagnostic}
         selectSearchResult={selectSearchResult}
         jumpToProjectDiagnostic={jumpToProjectDiagnostic}

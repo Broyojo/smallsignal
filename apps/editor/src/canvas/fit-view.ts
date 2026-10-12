@@ -351,3 +351,23 @@ export function zoomCameraAtAnchor(
     height,
   };
 }
+
+/** The canvas element's size and how far floating docks reach over it. */
+export interface CanvasView {
+  viewport: { width: number; height: number };
+  insets: CanvasInsets;
+}
+
+/**
+ * The camera F lands on: the bounds fitted into the visible part of the
+ * measured canvas, or into the element when it could not be measured.
+ */
+export function fitViewCamera(
+  bounds: DerivedRect,
+  grid: number,
+  measured: CanvasView | null,
+): GridRect {
+  return measured
+    ? fitCameraToVisibleBounds(bounds, grid, measured.viewport, measured.insets)
+    : fitCameraToBounds(bounds, grid);
+}

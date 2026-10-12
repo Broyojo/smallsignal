@@ -23,10 +23,9 @@ import { buildSvgScene } from "@icm/render-svg";
 import type { SymbolResolver } from "@icm/symbols";
 
 import {
-  fitCameraToBounds,
-  fitCameraToVisibleBounds,
+  fitViewCamera,
   type CameraRectInput,
-  type CanvasInsets,
+  type CanvasView,
 } from "../../canvas/fit-view";
 import { referencedDocumentId } from "../../document/editor-session";
 import { endpointNetId } from "../wiring/route-interaction-geometry";
@@ -53,10 +52,7 @@ export interface EditorNavigationControllerDependencies {
    * The canvas element's size and how much of it floating panels cover.
    * Absent when the canvas is not mounted, which leaves fit to the element.
    */
-  measureCanvasView?: () => {
-    viewport: { width: number; height: number };
-    insets: CanvasInsets;
-  } | null;
+  measureCanvasView?: () => CanvasView | null;
   openDocument: (documentId: string) => SchematicDocument | null | undefined;
   resetInteractionState: () => void;
   selectOnly: (kind: SelectionKind, ids: readonly string[]) => void;
@@ -326,20 +322,36 @@ export function createEditorNavigationController({
         statusMessage,
       );
     }
-    const bounds = buildSvgScene(target, resolver).viewBox;
+    // A Cell whose scene cannot be built fits the default view, as F does
+    // on a degraded scene; the navigation that asked for the fit completes.
+    let bounds: CameraRectInput = defaultViewBox;
+    try {
+      bounds = buildSvgScene(target, resolver).viewBox;
+    } catch {
+      // Keep the default view.
+    }
     const grid = target.presentation.grid;
-    const measured = measureCanvasView?.() ?? null;
     setViewBox(
-      measured
-        ? fitCameraToVisibleBounds(
-            bounds,
-            grid,
-            measured.viewport,
-            measured.insets,
-          )
-        : fitCameraToBounds(bounds, grid),
+      fitViewCamera(bounds, grid, measureCanvasView?.() ?? null),
       grid,
     );
+  };
+
+  // The Cell Manager tree descends into one concrete block occurrence.
+  const openCellOccurrence = (
+    documentId: string,
+    hierarchyPath: readonly HierarchyFrame[],
+  ): void => {
+    navigateToLocator(
+      {
+        documentId,
+        hierarchyPath: [...hierarchyPath],
+        kind: "document",
+        objectId: documentId,
+      },
+      "Opened Cell occurrence",
+    );
+    fitDocument(documentId);
   };
 
   const enterHierarchy = (instanceId: string): void => {
@@ -477,6 +489,7 @@ export function createEditorNavigationController({
     navigateToLocator,
     navigateToNetlistDiagnostic,
     fitDocument,
+    openCellOccurrence,
     enterHierarchy,
     enterSelectedHierarchy,
     returnToParentDocument,
