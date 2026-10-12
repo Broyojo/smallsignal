@@ -1,80 +1,51 @@
 # Normative Specifications
 
-Specifications define stable contracts that multiple modules implement
-against. They describe required behavior and invariants, not task history.
+Specs hold the rules and contracts several modules, tests or other repos rely
+on. Each topic has one owner spec; others link to it.
 
-## Specifications
+| Specification                                                      | Covers                                                                 |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| [`project-file-format.md`](project-file-format.md)                 | Project JSON, compatibility floor, canonical save/load                 |
+| [`schematic-model.md`](schematic-model.md)                         | Instances, Nets, Routes, Cell Pins, annotations (sole owner)           |
+| [`edit-engine.md`](edit-engine.md)                                 | Typed edits, transactions, revisions, Undo (sole owner)                |
+| [`circuit-ir.md`](circuit-ir.md)                                   | Transient dialect-neutral import IR                                    |
+| [`symbol-dsl.md`](symbol-dsl.md)                                   | Symbol pins, variants, source-backed artwork, User Components          |
+| [`component-publication.md`](component-publication.md)             | User Component identity, exact content, destination, write recovery   |
+| [`spice-frontend.md`](spice-frontend.md)                           | Lossless SPICE syntax, includes, dialect profiles, elaboration         |
+| [`simulation.md`](simulation.md)                                   | Source folders, configuration, compilation                             |
+| [`simulation-execution.md`](simulation-execution.md)               | Profiles, preparation, execution, artifacts                            |
+| [`simulation-results.md`](simulation-results.md)                   | Rawfile reading, numeric result data, CSV                              |
+| [`simulation-evidence-storage.md`](simulation-evidence-storage.md) | Evidence admission, reclamation, leased Agent downloads                |
+| [`connectivity-and-routing.md`](connectivity-and-routing.md)       | Physical/Logical Nets, contacts, cuts (sole owner)                     |
+| [`visual-language.md`](visual-language.md)                         | Formal scene, text/formulas, overlays, diagnostics (sole owner)        |
+| [`razavi-visual-contract.md`](razavi-visual-contract.md)           | Razavi authority, construction, exposure, pixel fidelity (sole owner)  |
+| [`names-and-labels.md`](names-and-labels.md)                       | Electrical names vs label display, standard looks, renames             |
+| [`agent-api.md`](agent-api.md)                                     | Agent API 3.0 Circuit operations and sibling resources                 |
+| [`web-agent-session.md`](web-agent-session.md)                     | Agent relay: pairing, credentials, transport, scopes                   |
+| [`persistence-and-recovery.md`](persistence-and-recovery.md)       | Cloud Save, browser recovery, workspace, desktop files                 |
+| [`export.md`](export.md)                                           | Formal SVG/PNG/PDF                                                     |
+| [`netlist-export.md`](netlist-export.md)                           | Extraction, SPICE/Spectre printing, refusals (sole owner)              |
+| [`netlist-conversion.md`](netlist-conversion.md)                   | SPICE/SCS conversion protocol and import boundary                      |
+| [`performance.md`](performance.md)                                 | Benchmark workloads and release budgets                                |
+| [`editor-interaction.md`](editor-interaction.md)                   | Gestures, selection, previews, controls (sole owner)                   |
+| [`community-gallery.md`](community-gallery.md)                     | Gallery feed, accounts, moderation                                     |
+| [`analog-arena.md`](analog-arena.md)                               | Contract with the AnalogArena Worker (cross-repo)                      |
 
-[User Component publication](component-publication.md) owns library identity,
-exact content comparison, destination, provenance and write recovery (`accepted`).
+All are `accepted`. Project file format and persistence stay separate
+contracts, as do simulation source, execution and results.
 
-| Specification                                                | Status   | Covers                                                                                      |
-| ------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------- |
-| [`project-file-format.md`](project-file-format.md)           | accepted | Project JSON, source manifest, symbol lock, canonical save/load                             |
-| [`schematic-model.md`](schematic-model.md)                   | accepted | Document, instance, net, route, junction, annotation, presentation                          |
-| [`edit-engine.md`](edit-engine.md)                           | accepted | Typed edits, transactions, revision, undo/redo, atomicity                                   |
-| [`circuit-ir.md`](circuit-ir.md)                             | accepted | Transient dialect-neutral import boundary                                                   |
-| [`symbol-dsl.md`](symbol-dsl.md)                             | accepted | Geometry, electrical/visual pins, variants, validation                                      |
-| [`spice-frontend.md`](spice-frontend.md)                     | accepted | Lossless syntax, dialects, includes, expressions, elaboration                               |
-| [`simulation.md`](simulation.md)                             | accepted | Source folders, native/legacy configuration, mapped edits, compilation and Code interaction |
-| [`simulation-execution.md`](simulation-execution.md)         | accepted | Profiles, preparation, execution, retention, File artifacts, and qualification              |
-| [`simulation-results.md`](simulation-results.md)             | accepted | Numeric evidence, rawfiles, units, measurements, and CSV                                    |
-| [`simulation-evidence-storage.md`](simulation-evidence-storage.md) | accepted | Evidence admission, cache reclamation, lossless storage and leased Agent downloads |
-| [`connectivity-and-routing.md`](connectivity-and-routing.md) | accepted | Physical/Logical Nets, Route graph, contacts, guidance, cuts, and locks                     |
-| [`visual-language.md`](visual-language.md)                   | accepted | Razavi visual tokens, annotations, overlays, golden output                                  |
-| [`names-and-labels.md`](names-and-labels.md)                 | accepted | Electrical names versus label display, standard looks, rename and editing rules             |
-| [`razavi-visual-contract.md`](razavi-visual-contract.md)     | accepted | Razavi authority, construction, interface-symbol semantics, exposure, and pixel fidelity    |
-| [`agent-api.md`](agent-api.md)                               | accepted | API 3.0 Snapshot, typed edits, render, permissions, and sibling resources                   |
-| [`persistence-and-recovery.md`](persistence-and-recovery.md) | accepted | Cloud Project save, browser recovery records, unsaved state, recovery migration             |
-| [`export.md`](export.md)                                     | accepted | Formal SVG source and derived PNG/PDF contracts                                             |
-| [`netlist-export.md`](netlist-export.md)                     | accepted | Deterministic structural SPICE/Spectre export and diagnostics                               |
-| [`netlist-conversion.md`](netlist-conversion.md)             | accepted | SPICE/SCS structural conversion, HTTP protocol and import rejection boundaries              |
-| [`performance.md`](performance.md)                           | accepted | Representative workloads and release budgets                                                |
-| [`editor-interaction.md`](editor-interaction.md)             | accepted | Direct manipulation, manual authoring, gestures, and automation boundary                    |
-| [`web-agent-session.md`](web-agent-session.md)               | accepted | Browser-authoritative relay: scopes, transport, events, errors, threat                      |
-| [`community-gallery.md`](community-gallery.md)               | accepted | Public feed, advisory quality checks, accounts, moderation, re-serialization                |
-| [`analog-arena.md`](analog-arena.md)                         | accepted | Contracts with the AnalogArena Worker: forwarded identity, routing and sign-in return       |
+## Writing a spec
 
-Create a specification when a stable cross-module contract is needed; do not
-create empty files only to mirror this table. Start from
-[`spec.template.md`](spec.template.md).
+Start from [`spec.template.md`](spec.template.md); add one only for a stable
+cross-module contract.
 
-## Contract ownership
-
-| Boundary                                               | Sole owner                                  | Other consumers                                                       |
-| ------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------- |
-| Persisted electrical objects and formal declarations   | [Schematic model](schematic-model.md)       | Connectivity, editing and export reference these facts                |
-| Logical equivalence, contacts, cut and owner lifecycle | [Connectivity](connectivity-and-routing.md) | Model, transactions and netlist extraction consume the same semantics |
-| Atomic mutation, revisions, failure and Undo           | [Edit Engine](edit-engine.md)               | GUI and Agent supply typed intent                                     |
-| Extraction, dialect printing and export refusal        | [Netlist export](netlist-export.md)         | Does not redefine saved objects or electrical equivalence             |
-| Formal scene, text/formulas and overlays               | [Visual language](visual-language.md)       | Canvas and exporters share composition                                |
-| Reviewed artwork, style and fidelity                   | [Razavi](razavi-visual-contract.md)         | Exact values live in linked executable configuration                  |
-| Gestures, selection, previews and controls             | [Editor interaction](editor-interaction.md) | References model/engine semantics rather than owning them             |
-
-Project file format and persistence/recovery remain separate protocol and
-lifecycle boundaries. Simulation source, execution and numeric results likewise
-remain separate contracts, including their currently supported compatibility.
-
-## Specification Rules
-
-Follow the [documentation policy](../README.md). A topic owns its contract once;
-other specs, guides and ADRs link to that owner instead of redefining it.
-
-- State status, accountable module and scope. Use a version only when the
-  contract has an independent version.
-- Describe invariants, ownership, meaningful transitions and failure behavior.
-  Distinguish persisted, transient and derived facts where relevant.
-- Link canonical schemas and focused tests instead of copying full interfaces
-  or validation commands. Add small examples only when they clarify a boundary.
-- Include short design reasons beside the rule. A separate ADR is optional
-  and must pass its [retention test](../adr/README.md#retention-test).
-- Review compatibility when changing an accepted contract; describe the current
-  supported boundary, not the history of every migration.
-- Omit irrelevant template sections. Keep unresolved product decisions in the
-  roadmap rather than calling them accepted behavior.
-- Package-internal experiments stay with their local README and tests until
-  adopted as product contracts.
-
-When code disagrees, inspect behavior and consequences before choosing which
-side to correct. Neither existing code nor an accepted status proves a rule
-is reasonable.
+- State status (`accepted`/`proposed`), owner and scope (checked by
+  `pnpm docs:check`). A `Version:` line only for an independently versioned
+  protocol.
+- Keep only what constrains code: rules, invariants, failure behavior and
+  contracts others rely on (wire formats, ids, error codes, limits), with a
+  short reason where a rule looks arbitrary.
+- Link schemas and tests instead of copying them; no history, walkthroughs or
+  UI copy. Unresolved decisions belong in the roadmap.
+- Changing an accepted contract reviews compatibility. When code disagrees,
+  check behavior and consequences before choosing which side to fix.

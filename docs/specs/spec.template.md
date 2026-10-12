@@ -4,23 +4,20 @@ Status: `proposed`
 
 Primary owner: `<module>`
 
-## Scope
+One or two sentences: what this contract covers, who consumes it, what it
+leaves to other specs (link them).
 
-Identify the contract, its consumers and what remains outside it.
+## Rules
+
+- Short, testable bullets: ownership, invariants, transitions, failure
+  behavior. One reason clause only where a rule looks arbitrary.
 
 ## Contract
 
-State ownership, invariants and relevant transitions, including failure behavior.
-Distinguish persisted and derived facts where needed. Link canonical schemas
-for exact shapes; use a small example only to clarify a meaningful boundary.
+Wire formats, ids, error codes and limits other code or repos rely on. Link
+the canonical schema instead of copying it. Omit if none.
 
-## Design rationale
+## Acceptance
 
-Explain a non-obvious choice briefly, or link an optional ADR if it needs a
-separate treatment. Omit this section when it adds no useful information.
-
-## Evidence
-
-Link focused executable contracts that demonstrate the behavior. Describe any
-current compatibility limitation where relevant, not a migration chronology.
-Link unresolved decisions to their roadmap owner.
+Link the focused tests that pin these rules. No history, walkthroughs or
+command lists.
