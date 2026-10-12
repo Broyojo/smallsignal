@@ -125,7 +125,8 @@ experiment definitions; the shared Project source owns them thereafter.
 An interface edit updates all callers atomically. Reorder retains pin identity;
 rename/removal of a connected pin needs an explicit migration selection. Choosing
 disconnect keeps the wire as a stub. Apply errors preserve the previous model.
-**Save draft** retains unfinished text across Manager close and Project Save;
+**Save draft** retains unfinished text across Manager close and Project Save
+and never changes an existing block's name, pins or parameters;
 Run/Copy use the clearly identified applied version. If no implementation was
 applied, the block is visibly unimplemented and cannot simulate. **Create
 placeholder…** is a secondary interface-only path. Apply checks declarations;
