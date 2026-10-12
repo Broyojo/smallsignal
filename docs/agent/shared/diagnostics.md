@@ -1,44 +1,39 @@
 # Diagnostic decisions
 
-Use diagnostics from the current revision. Read `category`, `confidence` and
-`gateEligible` as well as severity. Structural findings can block under the
-applicable quality policy; visual observations with `gateEligible:false` do not
-become blockers merely because their severity says warning.
+Use current-revision diagnostics and read `category`, `confidence` and
+`gateEligible` beside severity: structural findings can block under the quality
+policy; observations with `gateEligible:false` never block.
 
 | Finding | Inspect or repair |
 | --- | --- |
-| Unresolved symbol / unplaced instance | Resolve supported mapping or placement before routing that object; never guess pins |
+| Unresolved symbol / unplaced instance | Resolve mapping or placement before routing it; never guess pins |
 | Ambiguous Junction | Compare exact Nets and geometry; remove misleading branch placement without changing intended connectivity |
-| Constraint violation | Preserve locks and adjust the responsible unlocked area |
-| Symbol/label overlap | Compare visible strokes/text in the render; compact placement can be intentional. Parts that meet pin to pin, such as a supply T or a coil placed on a transistor's source, are not an overlap. Free text drawn over a label, or struck through by a wire (`VISUAL_LABEL_CLEARANCE` naming the text first), is reported as a label is; move the text. Text over a part's outline is not reported. Text is measured in the served Metropolis face with DejaVu fallback for Greek/math, each weight and slant using its own advances and side bearings, as the editor and its PNG renders draw |
-| Labels that run on (`VISUAL_LABEL_RUN_ON`) | Two parts' names or values on one row, less than a figure apart, read as one string, so a reader pairs a name with the wrong value; information only. Move one label off the row or further along it. One part's own labels are not reported |
-| Wire through symbol | Check actual strokes and endpoints; bounding-box overlap alone is not proof of a bad wire. A wire running back across the part it starts from is reported as information; route it out of the pin first |
-| Route overlap | Same-Net collinear spans may be an intentional shared trunk; remove only redundant/confusing geometry |
-| Overlapping Nets (`ERC_OVERLAPPING_NETS`) | Two Nets drawn along one line read as shorted; reroute one wire off the named span, never add a Junction or merge the Nets |
-| Undriven gate Net (`ERC_UNDRIVEN_GATE_NET`) | Every pin on the Net only senses a voltage (MOS gates, bulks, block inputs), so nothing sets it. Wire it to the bias, source or Cell Pin the figure means to drive it; a local label alone is not a driver. Never add a part only to silence the warning |
-| Terminal departure | Reported where a wire leaves a pin backward, against the pin's direction, or leaves a port, supply or ground from the side with no other wire there; turn the symbol or approach the pin along its direction. A bend at the end of a part's lead, or a trunk running past a pin it taps, is ordinary drafting and is not reported |
-| Short segment / outside page | Review readability and intended bounds, not just a threshold |
-| Flightline | Route/label the intended relation or disclose a deliberately incomplete view |
+| Constraint violation | Keep locks; adjust the responsible unlocked area |
+| Symbol/label overlap | Compare strokes and text in the render. Parts meeting pin to pin (a supply T, a coil on a source) are not overlap. Free text over a label or struck by a wire is reported (`VISUAL_LABEL_CLEARANCE`, text first): move the text. Text over an outline is not reported. Text is measured in the served Metropolis face (DejaVu for Greek/math), as the editor and PNG draw it |
+| `VISUAL_LABEL_RUN_ON` | Two parts' labels on one row less than a figure apart read as one string; move one. Information only; one part's own labels are exempt |
+| Wire through symbol | Check strokes and endpoints; box overlap is not proof. A wire running back across its own part is information: route it out of the pin first |
+| Route overlap | Same-Net collinear spans may be a shared trunk; remove only redundant geometry |
+| `ERC_OVERLAPPING_NETS` | Two Nets along one line read as shorted; reroute one off the span, never add a Junction or merge Nets |
+| `ERC_UNDRIVEN_GATE_NET` | Every pin only senses voltage (gates, bulks, block inputs). Wire it to the bias, source or Cell Pin meant to drive it; a label is not a driver; never add a part just to silence it |
+| Terminal departure | A wire leaves a pin backward, or a port/supply/ground from the side with no other wire there; turn the symbol or approach along the pin. A bend at a lead's end, or a trunk past a tapped pin, is not reported |
+| Short segment / outside page | Review readability and intended bounds |
+| Flightline | Route or label the relation, or disclose a deliberately incomplete view |
 
-Repair the smallest area responsible for a real defect. Preserve clear
-crossings; adding a Junction solely to silence a warning changes topology.
-Zero findings does not prove readability. Review relevant visual changes in
-formal render and report unresolved issues that affect the requested result.
+Repair the smallest responsible area. Keep clear crossings; a Junction added
+to silence a warning changes topology. Zero findings does not prove
+readability: review visual changes in a formal render and report issues that
+affect the result.
 
 ## Response contract
 
-Every Agent operation answers so that the next call needs no guessing, no
-blind retry and no source reading (#1525). New actions keep the same three
-rules:
+Every operation answers so the next call needs no guessing, blind retry or
+source reading; new actions keep these rules:
 
-- **A refusal** names the cause, the object in the way, and a concrete next
-  step: the field or action to change, or the part that fits. For example,
-  `LIMIT_EXCEEDED` says how many placements fit in one call, and an
-  ambiguous name lists the ids it could mean.
-- **A success** returns what the next call needs: created ids, resolved
-  references, label annotation ids and pin landings, where the action makes
-  them.
-- **A success that changed nothing** says so and why. A command whose plan
-  leaves the drawing as it was answers `applied:false` with an information
-  finding, `NOTHING_CHANGED` unless the command gave its own reason (such as
-  `LABELS_LEFT_IN_PLACE`); it never answers a bare `ok`.
+- **A refusal** names the cause, the object in the way and a concrete next
+  step (the field or action to change, or the part that fits, e.g.
+  `LIMIT_EXCEEDED` fitting counts, ambiguous names' candidate IDs).
+- **A success** returns what the next call needs: created IDs, resolved
+  references, label annotation IDs and pin landings.
+- **A success that changed nothing** answers `applied:false` with an
+  information finding, `NOTHING_CHANGED` unless the command gives its own
+  reason (`LABELS_LEFT_IN_PLACE`); never a bare `ok`.

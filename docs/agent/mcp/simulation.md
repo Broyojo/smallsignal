@@ -1,100 +1,64 @@
 # MCP simulation tools
 
+Use the focused tools' displayed arguments; query `describe_tool` only for an
+unfamiliar field. Engine and capture rules: [shared workflow](../shared/simulation.md).
+
 ## Normal task
 
-Use the focused tool's displayed arguments directly. Query `describe_tool` for
-an unfamiliar field only; no full-contract or authoring-help prerequisite.
+1. Discover `simulation_run` capabilities once when you need a non-default
+   Profile (VACASK, say) or engine facts; `profileId` gives detailed model
+   facts. For a drawn DUT read `netlist_code` or the Cell interface, not the
+   whole drawing. Switch clock phases the DUT does not drive are its last pins
+   (`EN EN_bar`, `PHI1 PHI2`): give each a clock source, a complementary pair
+   opposite pulses with dead time when they must not overlap. Profile-managed
+   models need no duplicate `.lib`.
+2. Create a `simulation_folder` or reuse the current one. With
+   `rootDocumentId`, a Cell with pins becomes the DUT of a `testbench.spice`
+   shell (`XDUT`, ports in order) where you write the sources; a Cell without
+   pins is a drawn testbench and runs as the deck's top; `dut` wraps either; no
+   root Cell gives a graphless experiment. Without `profileId`, create takes the
+   one Profile whose listed qualified devices include every reviewed PDK device
+   the root Cell and its sub-Cells use (SKY130 16 V/20 V DMOS count for SKY130
+   ngspice; a Profile listing none, as VACASK, is never the default). The
+   receipt's `folder` names the Profile and engine; with several or none,
+   create refuses `SIMULATION_PROFILE_REQUIRED` with `error.candidates`.
+   Edit native code with `simulation_edit`; `simulation_source` read
+   `detail:"text"` reads it, `detail:"mapped"` adds parameter mappings. Reuse
+   update revisions/digests without rereading.
+3. `simulation_run` `request:{operation:"run",source}` with optional outer
+   `waitMs` (0–20000): `source:{kind:"project-folder",folderId,expectedStructureRevision}`
+   from the latest source update, or `{kind:"workspace",workspaceId,expectedRevision}`.
+   It captures input before waiting, prepares and submits once; the wait never
+   starts another run. Continue a running result with `read` and the same run
+   ID. Retry an uncertain submission with the same request ID and payload.
+   One hosted slot: start sequentially or use `simulation_batch`.
+4. Graph: `simulation_plot` `prepare-plot` with `runId`, a new `name` and
+   `panels:[{analysisIndex:0,signals:[{signal:"v(out)"}]}]` or a preset; pick
+   indices from `run.details.analyses`. Axis labels omit units. It fetches its
+   tables itself (**no sync needed**). Check Python ≥3.10 and matplotlib once
+   per environment, run the returned argument vector, inspect the image.
+   `dataStatus`, `scriptStatus`, `imageStatus` separate data, code and
+   rendering; nothing installs or executes automatically.
+5. Custom analysis: `simulation_data` `sync`, e.g. `analysisIndex` and
+   `roles:["table"]`; omit selectors for a complete archive; `fileIds:[]`
+   updates only the directory. Local files are reused; the receipt keeps
+   counts and up to 16 paths (`filesOmitted`; outer `detail:"full"` lists all).
+   `simulation_results` `catalog` is the explicit full directory, not a
+   required step. Read data locally rather than paging previews. Evidence
+   retries never rerun a solver; on storage or download failure see
+   [evidence recovery](../simulation-evidence-storage.md).
 
-1. Discover `simulation_run` capabilities once when you need another Profile
-   than the default (VACASK, say) or its engine's facts. Read
-   `netlist_code`/the relevant Cell interface for a drawn DUT,
-   not the entire drawing. Switch clock phases the DUT does not drive are its
-   last pins (`EN EN_bar`, `PHI1 PHI2`); give each a clock source, a pair such
-   as `EN`/`EN_bar` opposite pulses, with dead time when the phases must
-   not overlap. Profile-managed model loads need no duplicate `.lib`.
-   Full capabilities (optionally `profileId`) are for detailed model facts.
-2. Create a saved `simulation_folder`, or reuse the current folder.
-   With `rootDocumentId`, a Cell with drawn pins becomes the DUT of a
-   `testbench.spice` shell (`XDUT`, ports in order) where you write the
-   sources. A Cell without pins is a drawn testbench and runs as the deck's
-   top. `dut` wraps either.
-   Without `profileId`, create takes the one Profile whose listed qualified
-   devices include every reviewed PDK device the root Cell uses. SKY130's
-   high-voltage DMOS devices (16 V, 20 V) count for SKY130 ngspice, which runs
-   them though it does not list them. A folder without a Cell uses no PDK
-   device. A Profile that
-   lists none, as VACASK, is never the default. The receipt names the Profile
-   and its engine; without exactly one, create refuses with
-   `SIMULATION_PROFILE_REQUIRED` and `error.candidates`.
-   Creation returns its source owner, revision and paths. Use `simulation_edit`
-   for native code; `simulation_source` read `detail:"text"` reads code without
-   generated parameter mappings. Use `detail:"mapped"` for mapped Circuit edits.
-   Reuse successful update revisions/digests without a confirmation reread.
-3. Normally call `simulation_run` with `request:{operation:"run",source:...}`
-   and optional outer `waitMs:20000`. Use a project-folder source with `folderId`
-   and `expectedStructureRevision` from the latest source update (or a workspace
-   source with `workspaceId` and `expectedRevision`). This captures input before
-   network waits, prepares and submits once. Keep the same request ID and payload
-   on uncertain retries. Explicit `prepare` → `start` remains optional when you
-   want to inspect or reuse a frozen input; it is not a normal prerequisite.
-   The normal path holds the run submission within one bounded Agent relay
-   request; a still-running receipt can be continued with a bounded read.
-   This wait never starts another run.
-   Continue a running result with `read` and the same run ID, never another start.
-   Preserve an uncertain start's request ID. One hosted slot means sequential
-   starts or `simulation_batch`.
-4. For a graph, call `simulation_plot` `prepare-plot` directly with `runId`,
-   a new `name`, and `panels:[{analysisIndex:0,signals:[{signal:"v(out)"}]}]`
-   or a DC/AC/TRAN/Noise preset. Choose indices from `run.details.analyses`;
-   full signal/file mappings remain in the catalog when needed. Axis labels
-   omit units (the template appends them). It fetches selected tables itself:
-   **no preceding sync is needed**. Check Python >=3.10 and matplotlib once per
-   local environment, execute the returned argument vector, and inspect the image.
-   `dataStatus`, `scriptStatus`, `imageStatus` distinguish downloaded data,
-   prepared code and actual rendering. Nothing installs or executes automatically.
-5. For custom analysis use `simulation_data` `sync`, selecting `analysisIndex`
-   and `roles:["table"]` if appropriate. Omit selectors when a complete evidence
-   archive is requested; `fileIds:[]` updates only the directory. Local files are reused.
-   The default receipt keeps current-task counts and up to 16 file paths/timings;
-   larger selections use `filesOmitted` and the local index. Outer `detail:"full"`
-   retains every file and history. Explicit `workspace` lists local runs.
-   Transfers are on demand. The helper negotiates download leases and ACKs only
-   after verified local publication. `simulation` / `resource-usage` distinguishes
-   browser evidence from Worker replicas; see [evidence recovery](../simulation-evidence-storage.md)
-   when storage or download capacity fails. Retrying evidence never reruns a solver.
-   Full identities, units and dataset mapping remain in the returned local index.
-   `simulation_results` `catalog` is the explicit full remote directory, not
-   a mandatory extra step. Read data locally rather than paging waveform previews.
+Iterate edit → run → plot or selected sync, without repeating connection,
+discovery, folder creation, environment checks or full downloads whose inputs
+did not change. For styling, edit and rerun the local plot script.
 
-Iteration: edit → run/wait → plot or selected sync. Do not repeat
-connection, discovery, folder creation, environment checks or full archive
-downloads when their inputs have not changed. Select the final files needed
-for the requested handoff; a complete archive is optional.
-For styling-only iterations, edit and execute the existing local plot script;
-no connection, sync or new plot preparation is needed.
+## Results
 
-## Results and freshness
-
-Check execution, collection, per-analysis diagnostics and requested measurements
-independently; completion does not prove every analysis produced data.
-`run.details` summarizes collection/Specs and separates executor wait, result
-materialization and catalog-save time. Managed runs additionally report server
-queue/execution, result fetch and client polling. Simulator-only time remains
-`result.durationMs`; do not treat it as end-to-end latency. Registered files hold
-complete evidence.
-Run summaries reference the catalog instead of repeating its file list; outer
-`detail:"full"` retains the complete run metadata response.
-`export` retries failed evidence saving on the same run without executing again.
-
-History deletion/retention, cache freshness and transfer details are in
-[detailed contracts](simulation-reference.md); they are not steps in an ordinary run.
-
-Prepare's default summary points to complete `preparation.json`; outer
-`detail:"full"` exposes it inline. OP mappings describe available vectors, not
-captured values; explicitly save needed device parameters (`save all` is not
-every parameter). Native source remains authoritative.
-
-Read [detailed contracts](simulation-reference.md) only for native Noise capture,
-OP mappings, patch semantics, Batch, plot units/cursors or recovery.
-`simulation` and `simulation_files` remain compatible broad entries sharing
-the same implementation. There is no new protocol or permission gate.
+Check execution, collection, per-analysis diagnostics and measurements
+separately ([shared workflow](../shared/simulation.md)). `run.details` times
+executor wait, materialization and catalog save (managed runs add server queue,
+execution, fetch, polling); `result.durationMs` is simulator time only. Outer
+`detail:"full"` returns complete metadata and inline `preparation.json`.
+[Detailed contracts](simulation-reference.md) cover file editing, OP mapping,
+Batch, history, caches, Noise and plot options; `simulation` and
+`simulation_files` are compatible broad entries.

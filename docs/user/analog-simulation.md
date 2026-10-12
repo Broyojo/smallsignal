@@ -1,85 +1,44 @@
 # Analog simulation — Code workspace
 
-Use the top **Simulation** button to open Code beside the ordinary Canvas.
-Opening the Editor alone does not load the code editor or start ngspice. This
-workspace is separate from the development-only Digital tool.
+The top **Simulation** button opens Code beside the canvas. Before setup it
+shows a three-step Agent guide (connect your Agent, describe your goal, review
+results); **Connect Agent** opens the same panel as the header's **Agent**
+button. **Set up manually** creates the starter yourself and **Explore
+examples** lists example projects. Save, Run and file operations work without
+an Agent.
 
-Before setup, Simulation shows a three-step Agent guide: connect your Agent,
-describe your goal, and review the results. A prominent status card shows the
-connection state and next action. **Connect Agent** opens the same connection
-panel as the editor's **Agent** button; connected sessions offer **Connection details**.
-State changes never open dialogs or start work by themselves. After setup,
-the Agent entry stays compact in the toolbar, including when maximized.
-**Set up manually** creates the same source starter yourself, and
-**Explore examples** expands the optional example projects.
-Save, Run and file operations remain usable without an Agent.
+## Experiments and files
 
-## Circuit, source and files
+**Explorer** shows each experiment's files, a **Run** row (tagged `tmp`) with
+**Results** and **Logs**, and a context menu to create, clone, rename or
+delete experiments. Several experiments may share one testbench.
 
-Sim Code and Properties occupy independent right-side panes and remember their widths.
-**Explorer** opens a narrow project tree beside the code. Code files appear
-directly under each experiment, without an extra Source directory. On opening a
-Project, only the active experiment is expanded; the others start collapsed.
-The **Run** row, tagged `tmp`, is collapsed by default and
-contains expandable **Results** (raw/CSV) and **Logs** groups. Preparation
-snapshots and internal evidence are not shown in the everyday file tree.
-Source paths also form expandable directories. Choose an experiment there, or
-create, clone, rename or delete one. Multiple experiments can use the same drawn
-Testbench; a different topology is an ordinary separate Cell.
+**New experiment** asks for a Name, a Cell and an Environment and starts with
+an OP analysis:
 
-A generated Circuit file is marked with a diamond. Its topology and device
-identity belong to Canvas. You can edit mapped numeric parameters, but changing
-nodes or adding/removing devices must happen on the schematic. A structural
-paste is rejected in full. Properties and mapped code changes use the same
-undoable Instance edit.
+- **A Cell with pins** is the circuit under test: the experiment gets a
+  `testbench.spice` calling it (`XDUT …`, ports in order) where you add
+  sources, loads and clocks.
+- **A Cell without pins** is a testbench you drew and runs as it is.
 
-Other SPICE files are authored source. You or an authorized Agent can edit
-them directly, use completion/hover help, or insert a template. The entry file
-is the Run target even while viewing another file. Invalid SPICE or JSON can
-be saved; preparation reports what needs repair rather than losing the draft.
+The Environment defaults to the one Profile qualified for every PDK device the
+Cell uses, marked "(automatic)" (SKY130 ngspice on the hosted site);
+**Change** picks another, such as VACASK. When none fits uniquely, choose one
+before **Create**. Each Environment uses its own native language.
 
-**New experiment** asks for a Name, a Cell and an Environment, the fields of
-an Agent's `simulation_folder` create, and starts with an OP analysis. A
-simulation always runs a testbench, and the form shows which one:
+The generated Circuit file (diamond icon) belongs to the canvas: edit mapped
+numeric parameters there, but change nodes or devices on the schematic.
+Other files are yours to edit, with completion, hover help and **Helper**
+templates. The entry file is what runs. Invalid code can be saved; preparing
+the run reports what to fix.
 
-- **A Cell with pins** is the circuit under test. The experiment gets a
-  `testbench.spice` that calls it (`XDUT …`, the ports already in order),
-  where you or the Agent add sources, loads and clocks.
-- **A Cell without pins** is a testbench you drew, with its own sources. It
-  runs as it is.
+**Save source** (or `Ctrl+S` in the editor) applies pending files to the
+Project without a cloud request; **File → Save** saves the whole Project to
+your account. Run and Export apply pending source first. A conflicting edit
+from another writer keeps your draft visible.
 
-The
-environment is chosen as the Agent's is: the one Profile qualified for every
-PDK device the Cell uses is shown as "(automatic)" (SKY130 ngspice on
-Production); **Change** picks another, such as VACASK. When no single Profile
-fits, the Environment list asks for one and **Create** waits until you choose.
-Helper offers analysis commands and argument hints without adding
-text to the saved file until you explicitly insert or type it.
-
-The compact Save and Run icons share the toolbar with Explorer. **Save source**
-applies pending files in the current simulation folder to the current Project,
-without signing in or making a cloud request. Ctrl+S inside the code editor does
-the same. Its icon and tooltip distinguish pending, applying, applied and failed
-states; a failed apply retains the draft for repair and retry. Applied source is
-covered by the Project's browser recovery, not a cloud backup. **File → Save**
-(or the project-level shortcut outside code) still saves the entire Project to
-the signed-in cloud account.
-
-Available environments come from the configured executor. Production offers
-ngspice and VACASK Profiles, each listed by its name and simulator release;
-each uses its own native source language. Projects and the Agent select a
-Profile by its id.
-Their internal `experiment.json` is hidden from Source and file tabs, but
-retained in Project backups. Legacy or damaged configurations and pending
-configuration drafts stay visible for compatibility and repair; they are not a
-new environment picker.
-Hover a folder to see its bound Cell without adding text to the file row.
-Use file/folder context menus to copy, download or create files. Right-click a
-file tab (or press Shift+F10 while it is focused) to close it, close other tabs,
-or close all tabs. Closing tabs retains files and pending drafts. Native analyses,
-acquisition, measurements and nominal temperature belong in SPICE. Older
-experiments retain their legacy configuration until explicitly migrated through
-Helper. This example runs OP and AC and retains both plots:
+Analyses, saves, measurements and temperature belong in the native source.
+For ngspice, `write` captures the current plot into one literal path:
 
 ```spice
 .control
@@ -93,155 +52,65 @@ write out.raw
 .end
 ```
 
-An existing entry already has its own control/end block: edit that block rather
-than pasting a second complete program. Native `write` captures the current
-plot only. Noise templates capture density and integrated plots explicitly.
-New templates use `out.raw`. Current source-native experiments collect the
-single literal path declared by native `write` commands; dynamic or multiple
-paths need repair. Legacy configurations retain their explicit collection path.
-The selected executor must support the declared capture contract.
+Edit an entry's existing control block rather than pasting a second one.
 
-Code has local Undo while typing. Save commits through the Project edit path;
-Project Undo/Redo owns committed changes. Switching files retains local text
-history, caret, selection and scroll. Run/Prepare and File Save/Export flush
-pending source first. **Check and Save** checks and saves that same captured
-snapshot. Another writer's conflicting edit keeps your draft visible and asks
-for repair; it is not silently overwritten.
+## Testbench from a drawing
 
-## DUT and Testbench
+1. Draw the DUT Cell with its Cell Pins.
+2. In **Cell Manager…**, **New Cell** for the testbench, then **Place Cell**
+   to place the DUT in it.
+3. Draw sources and loads and create an experiment for the testbench.
 
-1. Define the DUT Cell's formal ports on its canvas. Its generated Symbol is
-   ready for placement without a separate review step.
-2. Open **Cell Manager…** (**Circuit** → **Hierarchy**) and use **New Cell** to create an ordinary Testbench Cell,
-   then use **Place Cell** in the hierarchy toolbar to place the DUT there. The
-   Project top remains unchanged.
-3. Draw sources and loads, then create an experiment for that Testbench. Its
-   generated binding prints the drawn topology; source text owns the analyses.
-4. Alternatively, use a generated subcircuit binding and write the DUT call,
-   sources and loads in authored text. Fully textual experiments need no Canvas.
+Independent V/I sources keep DC, AC and transient settings on the instance.
+VDD/GND markers are not sources. **Pick Net on Canvas** and **Pick current on
+Canvas** add outputs from the actual Net or pin (current is positive into the
+pin).
 
-Independent V/I sources keep DC, AC and transient parameters on their Instance.
-PULSE/SIN/PWL and AC can coexist because they apply to different analyses.
-VDD/GND markers are not voltage sources. Current output direction is positive
-entering the selected terminal; **Pick current on Canvas** uses the actual pin
-endpoint. **Pick Net on Canvas** adds a voltage output with its concrete
-hierarchy occurrence.
-Ambiguous occurrences are reported instead of guessed. New experiments save
-acquisitions in native source (`save`/`.probe`); model-specific current and
-operating-point vectors require a supported mapping. Older experiments may
-retain advanced output bindings in their legacy configuration.
+## Example: five-transistor OTA
 
-Authorized Cloud Project Cell reuse still uses **Import Cell** and the common
-Cell-closure planner; Agents use `project_cells`. Imports are independent
-Project-local copies, not live remote references.
+`/editor?example=five-transistor-ota-sky130` (or import
+`apps/editor/src/examples/five-transistor-ota-sky130.icproj.json`) opens a
+SKY130 OTA with OP/DC/AC/TRAN/Noise, corner and waveform experiments written
+for the "SKY130 · VACASK (preview)" environment. For ngspice, use
+`netlists/ngspice-ota-qualification/source.icproj.json`; changing the Profile
+alone does not translate source.
 
-## Try the existing OTA
+## Run
 
-The bundled five-transistor SKY130 example contains ordinary DUT/Testbench
-Cells and saved OP/DC/AC/TRAN/Noise, bias-detail, corner and waveform experiments.
-They are authored native VACASK source for the "SKY130 · VACASK (preview)"
-environment (`vacask-sky130-candidate`) offered by the hosted service. A local editor without that Profile
-can still open/edit the example but cannot execute it there.
+**Run** captures the source and starts a run; the hosted site requires sign-in.
+**Preview input netlist…** (experiment menu) compiles without running.
+**Cancel run** stops it; closing or minimizing a panel or tab does not. Input
+errors affect only that run. Older version-1 configurations keep their saved
+sweep plans; new experiments write loops in native source, and Agents can run
+corner, temperature or parameter batches without changing it.
 
-Open the repository's
-`apps/editor/src/examples/five-transistor-ota-sky130.icproj.json` with
-**File → Import Project File…**, or visit
-`/editor?example=five-transistor-ota-sky130`. For ngspice, use the separate
-`netlists/ngspice-ota-qualification/source.icproj.json` acceptance Project;
-changing only a Profile ID does not translate native source between engines.
-Reference results apply to their declared circuit, models and environment,
-not automatically to a modified example or another simulator.
+## Results
 
-## Prepare, run and recover
-
-**Preview input netlist…**, in the active experiment's context menu, compiles
-without executing and opens the prepared input read-only.
-**Run** captures source and starts the
-ordinary run. The hosted site runs simulations for signed-in accounts; signed
-out, Run asks you to sign in. A legacy configuration's saved Run Plan can instead start its
-sequential sweep batch. **Cancel run**
-requests cancellation; closing/minimizing a presentation is not cancel.
-Input errors affect that operation, not the Project or Agent session. Correct
-the code and run again. A missing local executor is a configuration issue;
-it does not block editing or saving.
-
-Legacy version-1 configurations retain saved `runPlan` sweeps over corner,
-temperature, named variable or exact Instance parameter axes; preview shows
-combinations before execution. New version-2 experiments can author loops in
-native SPICE. Agents can also request execution-only corner, temperature,
-unambiguous source-parameter or exact Instance points through the same Batch
-service without changing the saved source. Multi-experiment batch selection,
-cancel/retry and ordinary per-item results reuse the same Run service.
-
-The current qualified analysis/corner set comes from capabilities/Profile.
-Point-count estimates warn about likely output limits without rejecting an
-Agent merely for a large estimate. An actual safety/capacity limit can still
-refuse a run with a repairable explanation.
-
-## Results, history and exports
-
-**View executed netlist…** opens the actual deck captured for the selected run,
-not a newly compiled version of the current source. **Export diagnostic bundle…**
-exports that run's complete evidence, including preparation snapshots, source
-maps, environment/result metadata and execution artifacts. These commands are
-available from the active folder/Run context menus.
-Before any run, the diagnostic export uses the latest prepared input instead.
-Ordinary file-tree downloads contain only the selected visible source/output
-files; hiding diagnostics does not delete them or remove Agent access.
-
-Specs and Console share the row below Code. Specs shows **Spec / Sim result /
-Expected / Judgment**, evaluated by the shared service from the captured run
-input. There are no built-in Plot, Compare or OP presentation views. Native OP,
-AC, DC, TRAN and Noise execution and complete raw/CSV remain available.
-
-Write uniquely named native measurements and ordinary comment annotations:
+**Specs** and **Console** share the row below Code. Write uniquely named
+native measurements with Spec comments:
 
 ```spice
 meas tran peak MAX v(out)
 * @spec peak <= 1.8 unit=V
 ```
 
-These comments are ICM acceptance rules, not SPICE commands. Helper can insert
-an editable example; Agent or manual authoring uses identical files. See the
-[Spec protocol](../agent/simulation-specs.md) for range/target rules and units.
-Missing measurements and invalid rules are Not evaluated, never fabricated
-zeros or Failed. Measured values without a rule have no judgment. Editing input
-marks the previous report stale; it is never reevaluated against live edits.
+The [Spec protocol](../agent/simulation-specs.md) gives conditions and units.
+The table shows **Spec / Sim result / Expected / Judgment**, acceptance rules
+and problems first, measurements without a rule under a collapsed **Other
+measurements** section, and groups in declaration order. Values use
+engineering prefixes for base units (`36.27 MΩ`); hover shows the exact value
+and unit; clicking a name opens its source (a report-only measurement opens
+Console). Missing measurements and invalid rules are **Not evaluated**, never
+zero or Failed. Editing the input marks the report stale; it is never
+re-evaluated against live edits.
 
-Explorer contains source files and a run directory. Ctrl/Cmd-select or Shift
-select files, right-click Download, or download a directory with its descendants.
-Raw, full analysis CSV and specs.csv are visible for external plotting and
-analysis. The machine report specs.json remains available through File Resource
-and diagnostic exports, not as an everyday tree item. The Agent reads the same
-report and artifacts without opening a panel.
-The legacy simulation-plot export returns SIMULATION_PLOT_RETIRED.
+Explorer lists source files and runs; select files or a folder and choose
+Download. Raw files, per-analysis CSV and `specs.csv` are there for external
+plotting. **View executed netlist…** shows the deck a run actually used, and
+**Export diagnostic bundle…** its complete evidence. Completed runs are kept in
+this browser (not in the Project or Cloud): open a saved result without
+rerunning, **Archive current run**, **Download complete run**, or for an opened
+archive **Download project + results**.
 
-Run history is in Explorer. Completed runs are retained in this browser, not
-embedded in the Project or Cloud-synchronized. Open a saved result without
-rerunning it; the Run/folder context menu offers Archive current run, Download
-complete run, and (for an opened archive) Download project + results. Diagnostic
-exports retain the captured netlist, source maps and other evidence without
-showing internal directories in the ordinary tree.
-
-Sim Code is an independent right workspace alongside Library/Gallery and
-Properties. Its minimize, resize and full-window maximize do not close Properties
-or discard editor state. Maximize results temporarily uses the workspace;
-Restore returns to the editor. Completion updates compact status without moving
-keyboard focus or opening a dialog. Use Cancel to stop a run.
-
-Closing a tab is not reliable cancellation of an admitted hosted run. Use Cancel.
-Replacing the Project ends its presentation scope; revoking an Agent affects its
-own scope, not a human run.
-
-## Agent parity and acceptance
-
-The same File Resource reads/updates authored files and mapped numeric spans;
-simulation helpers produce source/config edits rather than a private deck.
-Agents can create an unbound experiment, author files, recover from an error,
-prepare, start/read/cancel, run a batch and export artifacts without a special
-GUI-only setup step.
-
-Browser regression tests use a controlled executor to verify interaction.
-They do not certify numerical correctness. Real GUI and public MCP journeys
-must identify the tested commit/Profile and actual results; deployment smoke
-checks alone do not establish that every interaction was tested.
+The Code workspace can be resized, minimized or maximized without closing
+Properties; completion updates the status without moving focus.

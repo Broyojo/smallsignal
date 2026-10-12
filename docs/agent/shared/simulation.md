@@ -1,72 +1,58 @@
 # Shared simulation workflow
 
-Read [Spec and raw-output rules](../simulation-specs.md) for engine-specific
-measurements, acceptance annotations, verdicts and canonical result files.
+[Spec and raw-output rules](../simulation-specs.md) own measurements,
+acceptance annotations, verdicts and result files;
+[result handoff](../simulation-result-handoff.md) owns browser visibility,
+retention and export. Never claim a result was saved merely because a run
+started or the source Project was exported.
 
 ## Select the actual engine
 
 Read the returned Profile and source language; config version alone does not
-identify a simulator. VACASK owns native `parameters`, analyses, saves and Python
-postprocessing. Use `simulation` / `authoring-help` (especially `embed` and
-`postprocess`) for the shared current helper text. Compute scalar metrics in
-authored Python and emit them with the supplied `report_measurement` helper.
-Do not insert ngspice `.param`, `.temp`, `meas`, `let` or ASCII/appendwrite
-snippets into VACASK. Conversely, historical ngspice runs use their own SPICE
-source, measurement commands and rawfile collection. Do not silently convert.
+identify a simulator. VACASK owns native `parameters`, analyses, saves and
+Python postprocessing: get current helper text from `simulation` /
+`authoring-help` (especially `embed` and `postprocess`) and emit scalars with
+`report_measurement`. Never put ngspice `.param`, `.temp`, `meas`, `let` or
+rawfile snippets into VACASK; ngspice uses its own SPICE source, measurement
+commands and rawfile collection. Never convert silently.
 
-For results the human should inspect in the Project, use a `project-folder`
-source, not a private session workspace. Create a canonical folder with
-`upsert_simulation_folder` inside `transact.structureEdits` (MCP
-`simulation_folder`), using the current Project structure revision and the
-published folder schema. Save setup v4 source/config files through File Resource
-`simulation-input` / `update` with a `project-folder` owner (MCP
-`simulation_files`). Read the actual input revision before writing.
+For config version 2, author analysis, saving and measurement in the native
+language; collection does not replace authored output. Version 1's JSON
+output/measurement/device-OP helpers are legacy-only; read the returned config
+version and schema before choosing a helper. Helpers are optional, never an
+execution prerequisite or a limit on authorized native edits.
 
-Use the sibling Simulation resource: discover `capabilities` as needed, submit
-`run` with the folder and current structure revision, then `read` to completion.
-Explicit `prepare`/`start` remains available for input inspection or frozen-input
-reuse, not a mandatory extra round trip. Preserve returned IDs; do not invent
-profiles, analysis records, output IDs or revisions. Preparation is not execution,
-and a started run is not a successful result. Read diagnostics and outputs, then
-perform the requested measurements. For code-authoritative experiment config
-version 2, author analysis, saving and measurement logic in the selected native
-language; collection is not a substitute for authored output. Config version 1's JSON output/measurement/
-device-OP helpers are legacy-only, not the version 2 authoring path. Read the
-returned config version and schema before choosing a helper.
+## Folders, runs and results
 
-Read concurrency from `capabilities`; the current hosted service advertises one
-active run per session. Serialize independent starts or use a sequential Batch.
+Results the human should see need a `project-folder` source: create it with
+`upsert_simulation_folder` in `transact.structureEdits` (MCP
+`simulation_folder`) and save setup v4 files through File `simulation-input`
+`update` with a `project-folder` owner (MCP `simulation_files`), each at the
+current structure revision. Submit `run`, then `read` to completion;
+`prepare`/`start` is for inspecting or reusing frozen input. Never invent
+Profiles, analyses, output IDs or revisions. Preparation is not execution and
+a started run is not a result. The hosted service allows one active run per
+session (see `capabilities`): serialize starts or use a sequential Batch.
+
 Treat analyses independently: one failed analysis or measurement does not
-invalidate completed analysis data, and a failed run-level outcome does not mean
-the result is empty. Inspect per-analysis data and diagnostics before reporting.
+invalidate completed data, and a failed run outcome does not mean empty
+results. Run reads are sample-free: `resultPreview` means file-backed details;
+`run.details` gives execution, collection, Spec and diagnostic counts when
+known (missing counts on a restored run mean unknown). Complete diagnostics
+and samples are in registered files; real truncation is reported separately.
+`catalog` lists datasets, units and representations; page a large one with
+`section:"files"|"datasets"`, `offset`/`limit` until `page.nextOffset` is null
+(a section page omits other sections and signalTargets). `capabilities` takes
+`detail:"summary"` and `profileId`; `discovery.fullRequest` gets complete model
+facts (HTTP defaults to full, MCP to summary). `export` retries evidence
+publication after a storage failure and never reruns.
 
-For browser visibility, archival limits and source/result export, follow
-[result handoff](../simulation-result-handoff.md). Never claim a result was saved
-merely because a run started or source Project was exported.
+## Native ngspice capture
 
-## Native capture and external analysis
-
-Helpers are optional authoring assistance, never an execution prerequisite or a
-restriction on authorized native source edits. A successful prepare can go straight
-to start. Run reads always return sample-free receipts; `resultPreview` means
-file-backed details regardless of result size. `run.details` gives execution,
-collection, Spec counts and diagnostic counts when known; missing counts on a
-restored historical run mean unknown, not zero. Complete diagnostics and samples
-are in the registered files. Actual file truncation is reported separately.
-`catalog` lists datasets, units and representations. Use `section:"files"` or
-`section:"datasets"` with `offset`/`limit` for a large directory; follow
-`page.nextOffset` to null. A section page omits other sections and signalTargets;
-the unfiltered catalog remains complete. Download chosen files for local analysis.
-`capabilities` accepts `detail:"summary"` and optional `profileId`; its
-`discovery.fullRequest` retrieves complete model facts. Default HTTP capabilities
-remain full for existing clients; MCP requests summary automatically.
-`export` is an optional inventory lookup and retries retained evidence publication
-after a storage failure. It never starts another simulation.
-
-For ngspice, `save` selects vectors, `print` produces log text, and `write`
-creates the rawfile consumed by the existing JSON/CSV pipeline. A DC device
-parameter sweep must save parameters before analysis to obtain one value per
-sweep point. Adapt this native control fragment to verified source/vector names:
+`save` selects vectors, `print` writes log text, `write` creates the rawfile the
+collector reads. Save device parameters explicitly before an OP or DC sweep to
+get one value per point; `save all` does not include internal device
+parameters. Adapt to verified names (`V1` is an example):
 
 ```spice
 .control
@@ -79,17 +65,13 @@ write out.raw all
 .endc
 ```
 
-`V1` is an example source, not a discovered Project identity. `save all` alone
-does not request every internal device parameter. Add resolved device expressions
-explicitly for OP as well as sweeps. A preparation's device/vector mapping is
-discovery, not proof of acquisition; the collected dataset's signals show what
-was actually saved. Write after each analysis that should be collected; the current
-ngspice collector supports one literal relative path, with appendwrite for
-multiple plots. No write is valid for a log-only task. The executor does not
-silently insert capture commands. This fragment is not VACASK syntax.
+Write after each analysis to collect; the collector takes one literal relative
+path, with appendwrite for several plots. A log-only task needs no write. The
+executor inserts no capture commands. A preparation's device/vector mapping is
+discovery; the collected signals show what was saved. This is not VACASK
+syntax.
 
-Compute derived metrics in authored native code or external scripts. Declare the
-formula, units and validity conditions: VGS minus model VTH is not vgsteff;
-gm/(2*pi*Cgg) is a quasi-static fT estimate whose meaning depends on the model's
-Cgg definition. Do not silently take absolute values, drop invalid points or
-merge different axes by row index. Plotting remains the consumer's choice.
+Compute derived metrics in native code or scripts and state formula, units and
+validity: VGS − VTH is not vgsteff; gm/(2π·Cgg) is a quasi-static fT estimate
+that depends on the model's Cgg. Never silently take absolute values, drop
+points or merge axes by row index.

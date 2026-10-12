@@ -1,63 +1,43 @@
 # Agent documentation: consumers and distribution
 
-All hand-authored Agent operating guidance is maintained here. Different
-transports share electrical and result-handoff rules, not their connection
-procedures. The [registry](distribution.json) declares consumers, tasks,
-dependencies and destinations. The generated [report](distribution.generated.json)
-records source and output hashes; it is evidence, not another editable registry.
-
-## Consumer × task × document
-
-An entry is the starting point, not a requirement to read every linked
-reference. Choose task guidance only when the work calls for it; the registry's
-`load` field records the distribution role, not an authorization gate.
+All hand-authored Agent guidance lives here. The [registry](distribution.json)
+declares each document's consumers, task, reading load, required dependencies
+and destinations; the generated [report](distribution.generated.json) records
+source and output hashes as evidence, not a second registry. Edit and release
+rules: [maintenance](maintenance.md).
 
 | Consumer | Task | Entry | Task-selected guidance | Delivery |
 | --- | --- | --- | --- | --- |
-| Setup Agent | Install and verify callable MCP | [Connection message](entrypoints/connect.md) | [Installation](mcp-install.md) and host manifest when setup is needed | Browser copied message |
-| MCP circuit Agent | Inspect, author and render | [Quickstart](mcp-quickstart.md) | [Authoring](shared/authoring.md) for circuit edits; [MCP tools](mcp/tools.md) for less common calls; workflow, recovery and knowledge as needed | MCP resources and tool descriptions |
-| MCP simulation Agent | Save, run, measure, hand off | [Quickstart](mcp-quickstart.md) | [Simulation calls](mcp/simulation.md) for runs; [detailed contracts](mcp/simulation-reference.md), [Specs](simulation-specs.md) and [handoff](simulation-result-handoff.md) when needed; authoring for circuit edits | MCP resources |
-| Raw HTTP Agent / integrator | Claim, resume, request and retry | [Kit README](http-kit/README.md) | [Boundary](http-kit/AGENTS.md), [API lifecycle](api-usage.md) and published OpenAPI for requests; [examples](examples.md) as needed | `GET /api/agent/kit` |
-| Shared-client CLI Agent / script | Invoke tools without MCP host | [CLI lifecycle](http-cli.md) | Authoring, `--http list-tools` and `--http resource` as needed | Same package and operation registry as MCP |
-| Internal batch Agent / script | Draw with no browser, one Project file per job | [Local workspace](local-workspace.md) | MCP or CLI guidance as above, without pairing or simulation | Repository only; same package, `--local` |
-| Product maintainer | Change, verify and release guidance | [Maintenance](maintenance.md) | Root working rules, code contracts and release docs | Repository only |
+| Setup Agent | Install and verify callable MCP | [Connection message](entrypoints/connect.md) | [Installation](mcp-install.md), host manifest | Browser copied message |
+| MCP circuit Agent | Inspect, author, render | [Quickstart](mcp-quickstart.md) | [Authoring](shared/authoring.md); [MCP tools](mcp/tools.md); workflow, recovery, knowledge | MCP resources and tool descriptions |
+| MCP simulation Agent | Save, run, measure, hand off | [Quickstart](mcp-quickstart.md) | [Simulation calls](mcp/simulation.md); [details](mcp/simulation-reference.md), [Specs](simulation-specs.md), [handoff](simulation-result-handoff.md) | MCP resources |
+| Raw HTTP Agent / integrator | Claim, resume, request, retry | [Kit README](http-kit/README.md) | [Boundary](http-kit/AGENTS.md), [API usage](api-usage.md), OpenAPI, [examples](examples.md) | `GET /api/agent/kit` |
+| Shared-client CLI Agent / script | Call tools without an MCP host | [CLI](http-cli.md) | Authoring, `--http list-tools`, `--http resource` | Same package and registry as MCP |
+| Internal batch Agent / script | Draw without a browser | [Local workspace](local-workspace.md), [batch drawing](batch-drawing.md) | MCP or CLI guidance, no pairing or simulation | Repository only (`--local`) |
+| Product maintainer | Change, verify, release guidance | [Maintenance](maintenance.md) | Root rules, code contracts, release docs | Repository only |
 
-MCP is the default. Configuration success is not proof of callable tools. If a
+An entry is a starting point; `load` (`entry`, `required`, `on-demand`) is a
+distribution role, never a permission gate.
+
+MCP is the default. Configuration success is not proof of callable tools; if a
 host cannot load the adapter, explain the failed stage and possible restart
-once; do not restart it or silently switch protocols. Raw HTTP and CLI are
-explicit user choices. CLI shares MCP's client but has per-process obligations;
-raw HTTP requires the caller to implement lifecycle.
+once, without restarting it or switching protocols. Raw HTTP and CLI are
+explicit user choices; CLI shares MCP's client, raw HTTP implements its own
+lifecycle.
 
-## Authority and coordination
+## Authority
 
-- `distribution.json` is the only distribution registry. No channel is generated
-  by reading another channel's generated bundle.
-- Shared authoring, session, Specs and handoff are topic authorities. Channel
-  guides map these rules to calls rather than redefining policy.
-- Tool schemas, edit validation and symbol facts remain code-owned. The
-  generator consumes the canonical catalog; prose cannot redefine pins.
-- HTTP operation help comes from `http-kit/api-help.json` into OpenAPI;
-  MCP selection help comes from `mcp/tool-help.json`. They describe different
-  calling surfaces, not interchangeable envelopes.
-- Reading load is `entry`, `required` or `on-demand`, never a permission gate.
-- Knowledge cards are evidence aids, not automatic classifiers. Drawing review
-  cannot establish electrical correctness without suitable simulation evidence.
-
-Run `pnpm agent-docs:generate` after edits. `pnpm agent-docs:check` checks all
-destinations without writing. See maintenance for validation and release scope.
-
-## On-demand knowledge
-
-Circuit reading, hierarchy and model/symbol binding remain separate cards.
-[Layout lookup](circuit-style-knowledge.md) owns the short structure, layout and
-wiring tables plus a two-stage amplifier example. The old patterns/routing
-resource URIs and Kit paths serve that same source, not extra required reading.
-Its canonical registry entry precedes the aliases so generated links resolve
-to `reference/razavi-style`. Shared workflow owns human collaboration; shared
-diagnostics owns finding/repair policy. The optional
-[RouteGraph library reference](routegraph.md) is repository-only, and so,
-while they are internal tools, are [drawing in a local workspace](local-workspace.md)
-and [batch drawing](batch-drawing.md): headless workspaces, an Agent per task
-and a name-insensitive netlist grade.
-Runtime guides cannot link to an undistributed local document: generation fails
-instead of silently sending an installed Agent to the repository's latest branch.
+- `distribution.json` is the only registry; no channel is generated from
+  another channel's bundle.
+- Shared authoring, session, Specs and handoff are topic authorities; channel
+  guides map them to calls without redefining policy.
+- Tool schemas, edit validation and symbol facts are code-owned; prose cannot
+  redefine pins.
+- Knowledge cards are evidence aids, not classifiers. Drawing review cannot
+  establish electrical correctness without simulation evidence.
+- [Layout lookup](circuit-style-knowledge.md) is served at
+  `reference/razavi-style` and at the older patterns/routing URIs and Kit
+  paths; its canonical entry precedes the aliases so links resolve to it.
+- [RouteGraph](routegraph.md), [local workspaces](local-workspace.md) and
+  [batch drawing](batch-drawing.md) are repository-only. Runtime guides cannot
+  link to undistributed documents: generation fails instead.

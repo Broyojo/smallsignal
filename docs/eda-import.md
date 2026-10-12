@@ -1,100 +1,52 @@
 # Canvas EDA Tools
 
-The flat `eda/` directory owns Canvas export and orchestration. `aether.py`
-contains PyAether operations; `virtuoso.py` reuses the existing Bridge manifest
-importer, not another SKILL or SSH implementation. Hosts, credentials, libraries,
-and PDK installation paths are external configuration.
+`eda/` exports Canvas circuits and imports them into Aether (`aether.py`, the
+vendor PyAether API) or Virtuoso (`virtuoso.py`, reusing the
+[virtuoso-bridge-lite](https://github.com/Arcadia-1/virtuoso-bridge-lite)
+manifest importer). Hosts, credentials, libraries and PDK paths are external
+configuration; neither backend supplies EDA binaries, licenses or PDKs, and the
+editor needs neither. Options are in each script's `--help`.
 
-## Dependencies
+Scripts: `snapshot.mjs` (gallery snapshot export through real Canvas code),
+`select_circuits.py` (optional HES eligibility, not proof of Virtuoso
+compatibility), `export.py` (offline preparation), `import_one.py` /
+`import_batch.py` (import and read back one circuit, or serially all, stopping
+on failure), `capture.py` / `report.py` (Aether screenshots and reports).
 
-```text
-Canvas eda/ (export, select, import one, serial batch)
-  aether.py   -> vendor PyAether API -> installed Aether + target PDK
-  virtuoso.py -> virtuoso-bridge-lite -> installed Virtuoso + target PDK
-```
+## Setup
 
-Install only the backend being used. Aether does not depend on Bridge; PyAether
-comes with the supported Aether installation and runs in its Python Console.
-The Virtuoso backend requires the separate
-[Bridge repository](https://github.com/Arcadia-1/virtuoso-bridge-lite) in the
-same Python environment as the Canvas CLI, plus a configured Bridge connection
-to the licensed Virtuoso session. Use current Bridge source containing native
-database-grid alignment and display-only power-rail support; older packages
-may not contain those fixes. For a source installation:
+Aether needs only PyAether, run in its Python Console. Virtuoso needs current
+Bridge source in the CLI's Python environment
+(`python -m pip install -e /work/virtuoso-bridge-lite`), a configured Bridge
+connection, and the target library created with its technology.
 
-```sh
-python -m pip install -e /work/virtuoso-bridge-lite
-```
+## Offline export
 
-Neither backend supplies EDA binaries, licenses or PDKs. The normal Canvas
-editor does not require either backend. Native libraries and process maps must
-be configured for the chosen server; for Virtuoso, create the target library
-with its intended technology before importing.
-
-## Entry Points
-
-- `snapshot.mjs`: export an existing public-gallery JSON snapshot through real Canvas code.
-- `select_circuits.py`: optional HES eligibility and component-count selection, not import.
-- `export.py`: prepare selected circuits offline for an explicit target.
-- `import_one.py`: import and read back exactly one circuit.
-- `import_batch.py`: call that same operation serially, retain progress, stop on failure.
-- `capture.py` and `report.py`: Aether full-interface screenshots and comparison reports.
-
-Geometry, PDK parameters, ports, and native readback have named modules.
-`common.py` holds small JSON, number, and manifest helpers. CLI options are in
-`--help`; there is no `eda/README.md`. The selector is HES-specific; its result
-is a list of `[galleryId, cellName]` pairs, not proof of Virtuoso compatibility.
-
-## Offline Export
-
-Use Linux, a Canvas checkout, and a Node runtime containing esbuild and Canvas
-dependencies. No EDA session is contacted.
+Linux, a Canvas checkout and a Node runtime with esbuild and Canvas
+dependencies; no EDA session is contacted.
 
 ```sh
-python eda/export.py --help
 python eda/export.py \
   --canvas-source /work/Analog-Canvas --runtime /work/node-runtime \
   --snapshot /work/gallery-snapshot --circuit gallery-id:ota \
   --backend aether --library canvas_demo --output /work/ota-bundle
 ```
 
-Use `--selection /work/selection.json` instead of `--circuit` for many circuits.
-Aether retains HES mapping, source topology, native PDK labels and default 1.5
-spacing. `--expand-inverters` explicitly expands supported inverter primitives.
-`--minimum-dimensions` explicitly adjusts out-of-range MOS dimensions to HES
-minima and records changes; this does not establish electrical equivalence.
+Use `--selection <file>` for many circuits. `--minimum-dimensions` raises
+out-of-range MOS sizes to HES minima and records the changes (not electrical
+equivalence). Keep the bundle outside the new native library directory.
 
-The bundle contains original projects/netlists, `aether_hes_import_spec.json`,
-preflight results and standalone import scripts. Keep it outside the new native
-library directory.
+Virtuoso uses `--backend virtuoso --process-map <file> --process <pdk>` instead
+of `--library`. It writes `source.json` plus Bridge `schematic.json`; the process map
+supplies masters, pin offsets and parameter mappings. Internal supply markers,
+expanded inverters, unmapped parameters and resizing overrides are rejected,
+never dropped.
 
-For Virtuoso, install `virtuoso-bridge-lite` with
-`virtuoso_bridge.virtuoso.schematic.manifest` in the Python environment:
+## Native import
 
-```sh
-python eda/export.py \
-  --canvas-source /work/Analog-Canvas --runtime /work/node-runtime \
-  --snapshot /work/gallery-snapshot --selection /work/selection.json \
-  --backend virtuoso --process-map /work/process-map.json --process target_pdk \
-  --output /work/virtuoso-bundle
-```
-
-Outputs include target-independent `source.json` and Bridge-compatible
-`schematic.json`. The process map supplies native masters, pin offsets and
-parameter mappings. HES size/spacing policies are not applied. Internal supply
-markers and expanded inverter endpoints are rejected because Bridge cannot yet
-preserve that geometry unambiguously. Inverter expansion remains supported for
-Aether. Unmapped parameters and process-map resizing overrides are rejected;
-nothing is silently dropped.
-
-## Native Import
-
-Aether runs in an existing PyAether Python Console. Transfer the bundle to the
-chosen server/session first; these tools do not create sessions or choose hosts.
-Before running, confirm in Design Manager that the new library name is not
-already registered elsewhere. The local path check cannot establish that.
-Use only one import/GUI operation at a time in a session; output markers are not
-session-wide locks.
+Aether runs inside an existing PyAether Console after the bundle is copied to
+that server. Confirm in Design Manager that the new library name is unused, and
+run one import/GUI operation at a time per session.
 
 ```python
 import runpy
@@ -108,12 +60,6 @@ runpy.run_path('/work/ota-bundle/import_one.py', run_name='__main__',
     ]})
 ```
 
-For a batch, use `import_batch.py` and omit `--cell`. An existing target library
-is refused. A bundle directory may contain export artifacts but must not contain
-an earlier `import-attempt.json`. Use a new library for a separate attempt.
-
-Virtuoso uses separately configured Bridge connections and an optional profile:
-
 ```sh
 python eda/import_one.py --backend virtuoso \
   --input /work/virtuoso-bundle/schematic.json --cell ota \
@@ -121,27 +67,15 @@ python eda/import_one.py --backend virtuoso \
   --env /secure/bridge.env --profile lab_a --output /work/import-results
 ```
 
-Use `import_batch.py` without `--cell` for all cells. Live master offsets are
-audited before import. Bridge's staged check/save/readback transaction and
-no-overwrite behavior remain intact.
+For a batch, use `import_batch.py` without `--cell`. Each attempt needs a new
+library and a bundle without an earlier `import-attempt.json`; that marker
+blocks replay after interruption, so inspect the native outcome instead of
+deleting it. Results: `execution-status.json`, `import-journal.jsonl`,
+`import-result.json`.
 
-Both entries produce `execution-status.json`, `import-journal.jsonl`, and
-`import-result.json`. A persistent attempt marker prevents accidental replay
-after interruption/failure. Inspect the native outcome before another attempt;
-do not delete the marker to force a retry.
+## Validation
 
-## Aether Reports
-
-Native report artifact names remain compatible with the existing 200-circuit
-workflow. Keep the manifest and reports together. Use `capture.py --help` and
-`report.py --help` for options. Captures retain the whole Aether interface,
-external Canvas/Aether headings and two circuit pairs per printed page. Native
-PDK annotations remain; no manual W/L overlay is added.
-
-## Validation Boundary
-
-Run tests on Linux with the real Bridge package installed:
-The report tests also require Pillow in that Python environment.
+On Linux with the real Bridge package (and Pillow for report tests):
 
 ```sh
 PYTHONPATH=eda python -m unittest discover -s eda/tests
@@ -150,19 +84,6 @@ python eda/tests/integration.py --canvas-source /work/Analog-Canvas \
   --runtime /work/node-runtime
 ```
 
-Integration uses real Canvas examples and the Bridge offline planner. External
-native-session substitutes are used only in boundary tests, never as Canvas
-domain replacements. Offline preflight, native database readback, EDA netlist
-export and electrical equivalence are distinct checks. On Linux, the refactored
-Aether CLI was exercised in the existing native session: one single-cell import
-and a two-cell batch passed saved-database readback, including MOS, RLC, sources
-and inverter expansion. All three used new libraries; the historical 200 cells
-were not modified. The Virtuoso adapter was also exercised on a Linux Cadence
-session with a real PDK: a five-transistor OTA, six-transistor SRAM and CMFB
-cell passed native import and database readback (19 devices total), with zero
-check errors or warnings after the Bridge fixes. Native placements are aligned
-to the technology database grid. Eligible decorative supply-rail tails remain
-visible as annotations without creating dangling electrical wires; connectivity
-and device parameters were checked unchanged. This is three-cell native
-acceptance, not 200-cell coverage or simulation-equivalence certification.
-Full application merge/deployment gates remain separate.
+Offline preflight, native readback, EDA netlist export and electrical
+equivalence are distinct checks; native acceptance so far covers a few cells
+per backend, not simulation equivalence.

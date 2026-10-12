@@ -27,8 +27,23 @@ invocation policies, human checkpoints, dependencies and review separation.
 
 ## Complete the requested scope
 
-Record intent, validation, test impact and known limitations with the change.
-Local implementation ends at the validated and reviewed commit; normal product
-delivery ends after the required merge checks and deployed behavior pass.
-Honor an explicit local-only or trial-branch scope. Resolve failed checks and
-report remaining work; preserve unresolved review findings.
+Record intent, validation, test impact and known limitations in the commit or
+PR. Local implementation ends at the validated and reviewed commit; normal
+product delivery ends after the required merge checks and deployed behavior
+pass. Honor an explicit local-only or trial-branch scope. Resolve failed checks
+and report remaining work; preserve unresolved review findings.
+
+## Documentation
+
+The single rule for repository docs; other documents point here.
+
+- Change docs/ only when a contract changes (a rule, interface, limit,
+  user-facing behavior or cross-repo agreement), an ADR records a decision, or
+  a roadmap outcome or open question is added or resolved. Implementation notes,
+  validation logs, measurements and history belong in the commit or PR.
+- Write contracts as short rules in the shape of docs/specs/spec.template.md.
+  Replace obsolete text in place; a change that adds doc text deletes what it
+  makes obsolete.
+- Follow .agents/skills/writing-for-agents/SKILL.md: current state only, each
+  fact in one place with links elsewhere, rules over narrative, the
+  environment over restated config or scripts.

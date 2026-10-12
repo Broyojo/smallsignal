@@ -1,67 +1,16 @@
 # Persistence and Compatibility
 
 Status: `accepted`
-
 Owners: `packages/project-protocol`, `apps/editor`, `apps/desktop`, `apps/local-host`, `worker`
 
-## Decision
+Cloud Save, portable files and local recovery are separate
+([persistence and recovery](../specs/persistence-and-recovery.md)); runtime code
+sees one current shape behind a contiguous reader upgrade chain
+([file format](../specs/project-file-format.md)).
 
-Separate private Cloud Save, portable files and local recovery under
-[persistence and recovery](../specs/persistence-and-recovery.md). Use one
-current runtime shape and a contiguous reader upgrade chain under
-[Project file format](../specs/project-file-format.md).
-[Deployment](../deployment.md) owns the portable host boundary.
-
-## Context
-
-Saving, downloading a backup and recovering unsaved work have different
-durability and identity guarantees. Rapid schema evolution must not make an
-absent user's saved circuit unreadable.
-
-## Rationale
-
-Updating a stable Cloud Project avoids consuming a new resource on every save.
-Acknowledged revisions protect against overwriting another writer; identical
-retries need not create another revision. Check findings are independent evidence,
-not a reason to withhold saving unfinished work.
-
-Portable Project identity is not account storage identity. Recovery belongs to
-the browser origin and cannot promise Cloud durability. A loopback PWA reuses the
-same editor without requiring a second desktop runtime, but cannot pretend to
-supply the hosted account service.
-
-A fixed-width version window ties file lifetime to development velocity.
-Keeping adapters at the file boundary preserves durability while runtime code
-still sees one shape. This costs maintained adapters and focused tests, rather
-than scattered legacy branches. Ambiguous electrical data must be refused with
-a located explanation, not silently converted into guessed connectivity.
-
-## Internal desktop preview decision (2026-09-26)
-
-### Desktop completion (2026-10-11)
-
-The [accepted completion plan](../roadmap/desktop-fork/06-desktop-completion-plan.md)
-adds a default user-owned project library, independent Save As, three previous
-save versions and checked workspace/preview recovery. Canonical project files
-remain authoritative instead of introducing a second content database; opaque
-main-process grants isolate file authority from renderer display paths. Stable
-user data survives ZIP replacement, and an opt-in `.icproj` filename association
-avoids taking over every `.json` file. Web Save remains Cloud-backed. The older
-paragraphs below record the preview's successive, smaller boundaries.
-
-The minimum desktop follow-up extends the preview to file-bound Save/Save As,
-recent Projects and all-tab close protection, using the same Project protocol
-and upstream save coordination. Main-process grants own paths and acknowledged
-bytes; the renderer cannot supply write authority. See the desktop file ownership
-section in [persistence and recovery](../specs/persistence-and-recovery.md).
-Web Cloud Save is unchanged. Palette/grid/Visio/schema fork migrations and formal
-installer/update work are deferred after this minimum version. The paragraph
-below records the original export-only preview boundary.
-
-Add an isolated Electron preview alongside the Web/loopback products to test
-bundled rendering and canonical file roundtrips. It uses an application origin,
-no listening socket, and blocked external navigation/network. It does not
-change the Web Save contract or introduce a second Project schema. Its first
-file workflow is explicit export/import, not native file binding; see the
-[preview contract](../specs/persistence-and-recovery.md#internal-desktop-preview).
-The full D-A native file lifecycle remains separate from this preview.
+- Saves update a stable Cloud Project with acknowledged revisions, so writers
+  never overwrite each other; recovery promises no Cloud durability.
+- Upgrade adapters at the file boundary keep old files readable without legacy
+  runtime branches; ambiguous electrical data is refused with a location.
+- The offline desktop keeps canonical project files as the authority, behind
+  opaque main-process grants.
