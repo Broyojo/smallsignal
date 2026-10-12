@@ -385,9 +385,8 @@ describe("lazy formula glyph files", () => {
       ["arrows"],
       "89e54fe116f53366",
     ],
-    [String.raw`\digamma`, ["greek"], "363bfec1e32eba50"],
-    [String.raw`\yen`, ["symbols-b-i"], "2836f6b5ab4b1ab3"],
-    ["é+ü+Å+ß+µ+‰", ["sans-serif-b", "sans-serif-ex"], "c9b6295baf1c4baf"],
+    [String.raw`x\perp y\triangleq z`, ["math"], "e3fbd92644a2ec53"],
+    [String.raw`\flat\sharp\natural`, ["shapes"], "55595ad8e98fcfcb"],
   ] as const)(
     "loads the glyph files %s needs on first use",
     async (latex, files, digest) => {
@@ -399,6 +398,39 @@ describe("lazy formula glyph files", () => {
         const result = await typesetter.typeset({ ...baseRequest, latex });
         expect(resultDigest(result)).toBe(digest);
         expect([...loaded].sort()).toEqual(files);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    },
+  );
+
+  it.each([
+    [String.raw`\digamma`, "greek"],
+    [String.raw`\yen`, "symbols-b-i"],
+    ["é+‰", "sans-serif-b"],
+  ])(
+    "refuses %s, whose glyph file formulas leave out, the same way every time",
+    async (latex, file) => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        const typesetter = createFormulaTypesetter();
+        const refusal = {
+          ok: false,
+          diagnostic: {
+            code: "FORMULA_RENDER_ERROR",
+            message: `The formula uses characters the formula font does not include (MathJax ${file} glyphs).`,
+          },
+        };
+        expect(await typesetter.typeset({ ...baseRequest, latex })).toEqual(
+          refusal,
+        );
+        expect(await typesetter.typeset({ ...baseRequest, latex })).toEqual(
+          refusal,
+        );
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(unhandled).toEqual([]);
       } finally {

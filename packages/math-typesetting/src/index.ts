@@ -117,80 +117,30 @@ function extractSvg(
   };
 }
 
-// Every glyph file of the font except sans-serif, which every formula uses.
-// Static import() paths let bundlers emit each file as its own chunk, loaded
-// the first time a formula reaches one of its glyphs, and keep worker bundles
-// self-contained: MathJax's own loader would fetch a URL instead.
+// The glyph files a formula loads the first time it reaches one of their
+// glyphs: the five alphabets (\mathbb, \mathcal, \mathscr, \mathfrak,
+// \mathtt and their bold and Unicode forms) and the files behind common
+// operators and symbols: math (\perp, \lll, \ggg, \triangleq, ...), shapes
+// (\checkmark, \sharp, \bigstar, ...) and arrows (\leadsto,
+// \rightsquigarrow, ...). Sans-serif is bundled, since every formula is set
+// in it. The remaining newcm files (other scripts, \digamma, \yen, accented
+// Latin letters) are left out to keep the Worker bundle small; a formula that
+// needs one is refused. Static import() paths let bundlers emit each file as
+// its own chunk and keep worker bundles self-contained: MathJax's own loader
+// would fetch a URL instead.
 const fontFileModules = {
-  latin: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin.js"),
-  "latin-b": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin-b.js"),
-  "latin-i": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin-i.js"),
-  "latin-bi": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/latin-bi.js"),
   "double-struck": () =>
     import("@mathjax/mathjax-newcm-font/js/svg/dynamic/double-struck.js"),
-  fraktur: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/fraktur.js"),
-  script: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/script.js"),
-  "sans-serif-r": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-r.js"),
-  "sans-serif-b": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-b.js"),
-  "sans-serif-i": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-i.js"),
-  "sans-serif-bi": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-bi.js"),
-  "sans-serif-ex": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif-ex.js"),
-  monospace: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace.js"),
-  "monospace-l": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace-l.js"),
-  "monospace-ex": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace-ex.js"),
   calligraphic: () =>
     import("@mathjax/mathjax-newcm-font/js/svg/dynamic/calligraphic.js"),
+  script: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/script.js"),
+  fraktur: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/fraktur.js"),
+  monospace: () =>
+    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/monospace.js"),
   math: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/math.js"),
-  symbols: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/symbols.js"),
-  "symbols-b-i": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/symbols-b-i.js"),
-  greek: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/greek.js"),
-  "greek-ss": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/greek-ss.js"),
-  cyrillic: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/cyrillic.js"),
-  "cyrillic-ss": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/cyrillic-ss.js"),
-  phonetics: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/phonetics.js"),
-  "phonetics-ss": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/phonetics-ss.js"),
-  hebrew: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/hebrew.js"),
-  devanagari: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/devanagari.js"),
-  cherokee: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/cherokee.js"),
-  arabic: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/arabic.js"),
-  "braille-d": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/braille-d.js"),
-  braille: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/braille.js"),
-  arrows: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/arrows.js"),
-  marrows: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/marrows.js"),
-  accents: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/accents.js"),
-  "accents-b-i": () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/accents-b-i.js"),
   shapes: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/shapes.js"),
-  mshapes: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/mshapes.js"),
-  variants: () =>
-    import("@mathjax/mathjax-newcm-font/js/svg/dynamic/variants.js"),
-  PUA: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/PUA.js"),
+  arrows: () => import("@mathjax/mathjax-newcm-font/js/svg/dynamic/arrows.js"),
 } satisfies Record<string, () => Promise<unknown>>;
 
 /** A MathJax glyph file that loads only when a formula reaches one of its glyphs. */
@@ -240,18 +190,24 @@ class SchematicFormulaFont extends MathJaxNewcmFont {
     if (existing) return existing;
     const load = (
       isFormulaFontFile(file)
-        ? this.loadFontFile(file)
-        : Promise.reject(new Error(`Unknown formula font file ${file}.`))
+        ? this.loadFontFile(file).catch((error: unknown) => {
+            throw new FontFileUnavailableError(
+              error instanceof Error ? error.message : String(error),
+            );
+          })
+        : Promise.reject(
+            new Error(
+              `The formula uses characters the formula font does not include (MathJax ${file} glyphs).`,
+            ),
+          )
     ).then(
       () => dynamic.setup(this),
       (error: unknown) => {
-        // Restore the placeholders so the next conversion loads the file
+        // Restore the placeholders so the next conversion reaches the file
         // again rather than drawing those glyphs as missing.
         this.fontFileLoads.delete(file);
         this.defineDynamicCharacters({ [file]: dynamic });
-        throw new FontFileUnavailableError(
-          error instanceof Error ? error.message : String(error),
-        );
+        throw error;
       },
     );
     this.fontFileLoads.set(file, load);
