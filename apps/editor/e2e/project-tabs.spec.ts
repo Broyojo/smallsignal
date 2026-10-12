@@ -594,6 +594,12 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
       },
     });
   });
+  // Chip Arena's animated Battle, stubbed: no test reaches chip-arena.com.
+  let previews = 0;
+  await context.route("https://chip-arena.com/**", (route) => {
+    previews++;
+    return route.fulfill({ contentType: "text/html", body: "<p>Battle</p>" });
+  });
   // Arena's own window, wherever it opens.
   await context.route(/\/schematic\?/u, (route) =>
     route.fulfill({ contentType: "text/html", body: "<title>Arena</title>" }),
@@ -614,10 +620,17 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await page.keyboard.press("ControlOrMeta+s");
   await expect(gate).toBeVisible();
   expect(revision).toBe(1);
-  await expect(gate).toContainText(
-    "Vote in 5 Schematic Arena battles to continue",
+  await expect(gate).toContainText("Vote on 5 Battles to continue");
+  // Five dots, none filled; readers hear the count.
+  await expect(count.locator("[aria-hidden]")).toHaveCount(5);
+  await expect(count.locator("[data-filled]")).toHaveCount(0);
+  await expect(count).toHaveText("Voted 0 of 5");
+  // Chip Arena's animated Battle, framed from chip-arena.com itself.
+  await expect(gate.locator("iframe")).toHaveAttribute(
+    "src",
+    "https://chip-arena.com/schematic/preview",
   );
-  await expect(count).toHaveText("Voted 0 / 5");
+  await expect.poll(() => previews).toBeGreaterThan(0);
   await expect(close).toHaveAttribute("aria-disabled", "true");
   await expect
     .poll(() =>
@@ -637,7 +650,7 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   // The battle page opens in a window of its own, marked as the gate's.
   const [arena] = await Promise.all([
     context.waitForEvent("page"),
-    gate.getByRole("link", { name: "Open the battle page" }).click(),
+    gate.getByRole("link", { name: "Start voting →" }).click(),
   ]);
   expect(new URL(arena.url()).pathname + new URL(arena.url()).search).toBe(
     "/schematic?from=canvas-gate",
@@ -647,7 +660,8 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
     votes.unshift({ id: `new-${vote}`, castAt: new Date().toISOString() });
   await arena.close();
   await page.bringToFront();
-  await expect(count).toHaveText("Voted 5 / 5", { timeout: 10_000 });
+  await expect(count).toHaveText("Voted 5 of 5", { timeout: 10_000 });
+  await expect(count.locator("[data-filled]")).toHaveCount(5);
   await expect(close).toHaveAttribute("aria-disabled", "false");
   await page.keyboard.press("Escape");
   await expect(gate).toHaveCount(0);
@@ -657,13 +671,12 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   battlesLeft = 3;
   const shelf = page.getByLabel("Open Shelf project in tab", { exact: true });
   await shelf.click();
-  await expect(gate).toContainText(
-    "Vote in 3 Schematic Arena battles to continue",
-  );
-  await expect(count).toHaveText("Voted 0 / 3");
+  await expect(gate).toContainText("Vote on 3 Battles to continue");
+  await expect(count).toHaveText("Voted 0 of 3");
+  await expect(count.locator("[aria-hidden]")).toHaveCount(3);
   battlesLeft = 0;
   await expect(gate).toContainText(
-    "Arena has no more battles for you right now, so you can close this.",
+    "Arena has no more Battles for you right now.",
     { timeout: 10_000 },
   );
   await page.keyboard.press("Escape");
@@ -681,9 +694,7 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await placeComponentAt(page, "resistor", { x: 400, y: 240 });
   arenaUp = false;
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(gate).toContainText(
-    "Arena can't be reached right now, so you can close this.",
-  );
+  await expect(gate).toContainText("Arena can't be reached right now.");
   await expect(gate.getByRole("link")).toHaveCount(0);
   await close.click();
   await expect(gate).toHaveCount(0);
@@ -709,6 +720,9 @@ test("only the person's own opening of the Cloud shelf opens the Arena gate, so 
   await page.addInitScript(() => {
     Object.assign(window, { __icmLocalGalleryReplica: true });
   });
+  await page.route("https://chip-arena.com/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<p>Battle</p>" }),
+  );
   await signIn(page, author);
   await page.route("**/api/projects", (route) =>
     route.fulfill({ json: { projects: [] } }),

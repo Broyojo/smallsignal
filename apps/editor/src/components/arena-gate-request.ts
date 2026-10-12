@@ -5,13 +5,17 @@
 
 let gate: "idle" | "deciding" | "shown" = "idle";
 
-/** Opens the Arena gate over whatever page is showing. */
-function requestArenaGate(): void {
+/**
+ * Opens the Arena gate over whatever page is showing, after a Cloud Save or
+ * as the Cloud shelf opens.
+ */
+function requestArenaGate(after: "save" | "shelf"): void {
   if (gate !== "idle" || typeof document === "undefined") return;
   gate = "deciding";
   void import("./arena-gate-panel")
     .then((panel) =>
       panel.mountArenaGate({
+        saved: after === "save",
         shown: () => {
           gate = "shown";
         },
@@ -40,7 +44,7 @@ export function arenaGateShown(): boolean {
  */
 export function gateAfterManualCloudSave<Outcome extends { status: string }>(
   outcome: Outcome,
-  openGate: () => void = requestArenaGate,
+  openGate: () => void = () => requestArenaGate("save"),
 ): Outcome {
   if (outcome.status === "saved") openGate();
   return outcome;
@@ -53,5 +57,5 @@ export function gateAfterManualCloudSave<Outcome extends { status: string }>(
  * call this, so a reload always ends a gate.
  */
 export function cloudShelfOpened(): void {
-  requestArenaGate();
+  requestArenaGate("shelf");
 }

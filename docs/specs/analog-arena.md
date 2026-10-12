@@ -126,6 +126,13 @@ the shelf, as on a reload, opens no gate. The person votes in Arena's own
 window on AnalogArena's host; Analog Canvas only counts. Arena's pages never
 run on Analog Canvas's origin.
 
+The panel shows Chip Arena's animated Battle by framing
+`https://chip-arena.com/schematic/preview` (cascode-ai/analog-canvas#1683),
+the page Chip Arena's front page frames: a fixed Battle that reads and
+records nothing. It is framed from AnalogArena's own host, sandboxed to its
+own scripts and origin, with no referrer, and takes no pointer or focus; the
+panel works without it.
+
 ### Vote source
 
 The panel's "Open the battle page" link opens `/schematic?from=canvas-gate`
