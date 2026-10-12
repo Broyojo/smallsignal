@@ -14,6 +14,11 @@
       "types": "./dist/profile-engine.d.ts",
       "default": "./dist/profile-engine.js"
     },
+    "./artifact-bytes": {
+      "development": "./src/artifact-bytes.ts",
+      "types": "./dist/artifact-bytes.d.ts",
+      "default": "./dist/artifact-bytes.js"
+    },
     "./files": {
       "development": "./src/files.ts",
       "types": "./dist/files.d.ts",

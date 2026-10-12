@@ -1,3 +1,4 @@
+import { MAX_ARTIFACT_BYTES } from "./artifact-bytes.js";
 import { sha256 } from "./content-digest.js";
 import {
   planSimulationSourceChanges,
@@ -49,7 +50,7 @@ export class ArtifactCapacityError extends Error {
     super("ARTIFACT_CAPACITY");
   }
 }
-export const MAX_ARTIFACT_BYTES = 256 * 1024 * 1024;
+export { MAX_ARTIFACT_BYTES };
 export const MAX_ARTIFACT_STORE_BYTES = 1024 * 1024 * 1024;
 // Preserve headroom for older protected evidence while generated runs rotate.
 export const MAX_ARTIFACT_FILES = 4096;

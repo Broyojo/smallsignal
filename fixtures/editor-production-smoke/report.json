@@ -22,5 +22,6 @@
     "Metropolis-Regular.schematic.woff2 link",
     "Metropolis-RegularItalic.schematic.woff2 link"
   ],
-  "serviceWorkerNavigationPreload": true
+  "serviceWorkerNavigationPreload": true,
+  "artifactCodecWorkerBundlesModel": false
 }

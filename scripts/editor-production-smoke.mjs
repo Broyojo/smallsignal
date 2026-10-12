@@ -386,6 +386,17 @@ async function main() {
   const routePreloadBeforeStylesheets =
     routePreload !== -1 &&
     (firstStylesheet === -1 || routePreload < firstStylesheet);
+  // The artifact codec worker only compresses and digests files; the
+  // circuit model's schema (its "structureRevision" field) has no place in
+  // it (#1673).
+  const codecWorkers = (await readdir(resolve(editorDist, "assets"))).filter(
+    (name) => /^artifact-codec\.worker-.*\.js$/u.test(name),
+  );
+  if (codecWorkers.length !== 1)
+    throw new Error("The build has no single artifact codec worker");
+  const artifactCodecWorkerBundlesModel = (
+    await readFile(resolve(editorDist, "assets", codecWorkers[0]), "utf8")
+  ).includes("structureRevision");
   // The JSON grammar behind the property code views' inline controls loads
   // with those views (#1673). "JsonText" is its top node's name.
   const editorFirstLoadJsonParser = await routePreloadContains(
@@ -411,6 +422,7 @@ async function main() {
     editorFirstLoadJsonParser,
     editorSchematicFonts,
     serviceWorkerNavigationPreload,
+    artifactCodecWorkerBundlesModel,
   };
 
   if (check) {
@@ -470,6 +482,9 @@ async function main() {
   }
   if (report.serviceWorkerNavigationPreload !== true) {
     throw new Error("The service worker does not use navigation preload");
+  }
+  if (report.artifactCodecWorkerBundlesModel) {
+    throw new Error("The artifact codec worker bundles the circuit model");
   }
   if (report.consoleErrors.length > 0) {
     throw new Error(
