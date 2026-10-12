@@ -1,8 +1,8 @@
 # Remaining Product Work
 
 Unfinished outcomes and their acceptance boundaries only. Current behavior is
-in [specifications](../specs/README.md); progress and evidence go in commits
-and PRs. An unresolved requirement is resolved, explicitly deferred, or kept
+in [specifications](../specs/README.md); see AGENTS.md "Documentation" for what
+belongs here. An unresolved requirement is resolved, explicitly deferred, or kept
 here with its acceptance boundary.
 
 | Outcome                           | Remaining boundary                                                                                                                            | Acceptance owner                                                                      |

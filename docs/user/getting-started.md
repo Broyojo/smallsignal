@@ -273,7 +273,7 @@ under `profiles`.
 **Netlist → Instances…** edits every instance's `reference`, model `target`
 and `parameters` as one JSON document, applied together with one undo.
 
-**Netlist → Check and Save** checks the Project (ERC and visual issues) and
+**File → Check and Save** checks the Project (ERC and visual issues) and
 saves it; findings appear in **Issues** and on the canvas until you edit
 again. **Straighten angled wires in this Cell** fixes non-45° segments.
 

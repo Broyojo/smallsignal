@@ -37,8 +37,9 @@ and report remaining work; preserve unresolved review findings.
 
 The single rule for repository docs; other documents point here.
 
-- Change docs/ only when a contract changes: a rule, interface, limit,
-  user-facing behavior or cross-repo agreement. Implementation notes,
+- Change docs/ only when a contract changes (a rule, interface, limit,
+  user-facing behavior or cross-repo agreement), an ADR records a decision, or
+  a roadmap outcome or open question is added or resolved. Implementation notes,
   validation logs, measurements and history belong in the commit or PR.
 - Write contracts as short rules in the shape of docs/specs/spec.template.md.
   Replace obsolete text in place; a change that adds doc text deletes what it

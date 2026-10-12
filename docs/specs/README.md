@@ -34,7 +34,7 @@ on. Each topic has one owner spec; others link to it.
 ## Writing a spec
 
 All specs are `accepted`. Add one only for a stable cross-module contract, from
-[`spec.template.md`](spec.template.md): status (`accepted`/`proposed`), owner
-and scope are checked by `pnpm docs:check`; `Version:` only for an
+[`spec.template.md`](spec.template.md): `pnpm docs:check` checks status
+(`accepted`/`proposed`), owner and that `Version:` appears only for an
 independently versioned protocol. When code disagrees with a spec, check
 behavior and consequences before choosing which side to fix.

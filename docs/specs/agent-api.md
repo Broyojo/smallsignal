@@ -17,9 +17,9 @@ contract; transport, pairing and scopes are in
 `apiVersion: "3.0"`, a stable `requestId` and the `sessionId` from claim
 redemption; the bearer goes only in `Authorization`. No versioned URL aliases,
 query operations, dynamic catalog snapshots or compatibility readers. Project
-structural writes are a form of `transact`, never a fifth operation; so are
-`snapshot.traceNet` (read-only trace from the GUI's Project Connectivity
-Index) and the session status read. The public Agent Kit's static catalog is
+structural writes are a form of `transact`; `snapshot.traceNet` (read-only
+trace from the GUI's Project Connectivity Index) is a `snapshot` option; the
+session status read is not a Circuit operation. None is a fifth operation. The public Agent Kit's static catalog is
 not Document state or an operation.
 
 - `capabilities` reports operations, permissions, edit kinds,

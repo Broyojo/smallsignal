@@ -242,6 +242,7 @@ describe("mcp resources single-source projection", () => {
     expect(withoutLinkTargets(resource.text)).toBe(
       withoutLinkTargets(source.content),
     );
+    expect(resource.text).not.toContain("Retry-After");
   });
   it("serves compact per-edit schemas from the canonical contract", () => {
     const resource = readResourceContent(

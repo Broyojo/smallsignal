@@ -236,7 +236,7 @@ Diagnostics carry code, severity, Document ID and object IDs. Any error means no
 IR and no partial netlist for Copy or export.
 
 - Errors include invalid identifiers, mismatched formal mappings, unconnected
-  terminals without `NoConnect` (including MOS B), unnamed globals, duplicate
+  terminals without `NoConnect`, unnamed globals, duplicate
   names, multiply assigned terminals, missing definition/pin/Reference/target/
   parameter (no netlist record reads as empty), wrong prefix, unresolved child,
   cycles, unsupported dialect/device and resource limits.
@@ -255,7 +255,8 @@ parameters or renumbers first.
 - Netlist configuration stores `format`, the process and device templates for
   Abstract, SKY130 (starting process), IHP SG13G2, TSMC 28, TSMC 180 and Custom.
   Process selection is one undoable transaction writing ordinary bindings;
-  Simulation Profiles never rewrite them. Opening a Project never edits it.
+  Simulation Profiles never rewrite them. Opening the panel never edits the
+  Project or refills deliberately missing parameters.
 - Placing a native device under a process binds its model in the same
   transaction (GUI and Agent share the plan); SKY130 transistors, PNP and NPN
   arrive as reviewed `X` wrappers. Reviewed BJT wrappers take `m`.
@@ -311,11 +312,12 @@ parameters or renumbers first.
 
 #### Implicit supplies and MOS bodies
 
-- Extraction keeps B wiring, Cell defaults and `NoConnect`; an unresolved body
-  (including imports without a fourth node) takes conventional NMOS ground or
-  PMOS VDD. A read-only projection adds missing VDD and ground as Cell ports
-  propagated through callers; the deck root keeps `0`; nothing is written back.
-  Missing D/G/S is an error.
+- Extraction keeps B wiring, Cell defaults and `NoConnect`. An unresolved body
+  (an import without a fourth node takes the Cell default first) takes the one
+  drawn supply of its domain, else the one Net named `VDD` (PMOS) or `VSS`
+  (NMOS), else a new `VDD` pin or ground. This read-only projection propagates
+  added ports through callers; the deck root keeps `0`; nothing is written back.
+  So B never fails `MISSING_PIN_NET`; missing D/G/S is an error.
 - A supply that becomes a new Pin reports information `MOS_BODY_DEFAULT_SUPPLY`
   once per supply on the Cell whose bodies took it (Check Report, Agent reads,
   MCP `verify`; gates nothing).
@@ -331,9 +333,9 @@ parameters or renumbers first.
   analyzer default keeps `0`.
 - Block `VDD`/`VSS` are hidden property terminals. An explicit binding
   (Properties or Agent `circuit_properties` `set-block-supply {target, supply,
-  net}`, `net: null` for Auto) wins; Auto takes the one drawn Net of the domain,
-  else the MOS body default (owner decision); competition blocks with
-  `MISSING_BLOCK_SUPPLY`. Imported VDD hints are not supplies.
+  net}`, `net: null` for Auto) wins; Auto takes the one drawn Net of the domain;
+  with none drawn, the one Net named `VDD`/`VSS`, else a new `VDD` pin plus
+  ground (owner decision); competition blocks with `MISSING_BLOCK_SUPPLY`. Imported VDD hints are not supplies.
 - Bodies that never read supplies (ideal amplifiers, adder; SPICE multiplier and
   numeric comparator) tie unbound ports to `0` and never block; the op-amp takes
   no default supply; a `VDD` comparator takes VDD but no ground. Export never

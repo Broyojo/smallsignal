@@ -315,8 +315,9 @@ call, in order (placements apart from their wires; a `focus` with the last).
 
 ## Move, delete and reset
 
-Clean up with move/mirror/group transforms and route edits; moves do not
-snap-connect. An unturned, unmirrored `move` carries grounds, supply markers
+Clean up with move/mirror/group transforms and route edits. Geometry moves do
+not perform GUI drag-to-connect snapping; a moved part joins only a pin it
+lands on. An unturned, unmirrored `move` carries grounds, supply markers
 and Cell Pins standing unwired on the part's pins (`MARKERS_MOVED_ALONG`);
 wired, shared or locked ones stay, joined by a wire. A selection `transform`
 mirror without a center reflects the whole selection about its own axis as the
@@ -353,9 +354,9 @@ means deleting the Cell.
   removes its claim, not wires. Name nodes that scripts reference.
 - `annotate` is for independent notes, with GUI Text defaults. `annotate` and
   `edit-text` take plain text (keeps existing spans) or RichText (replaces
-  formatting; needed for fractions/formulas). `edit-text` on a bound Pin,
-  Reference, Net or Value label only restyles the same characters; change the
-  owner to change them.
+  formatting; needed for fractions/formulas). `edit-text` is the GUI text commit:
+  on a bound label new text renames the part or Net or sets the value, the same
+  characters in RichText only restyle, and a Cell Pin label is refused.
 - `arrange-labels {instanceIds}` compacts default label slots and moves crowded
   labels to nearby clear spots in one undo, so no label reads as another
   part's. `side` (`left|right|top|bottom`) tries that side first; `"outside"`

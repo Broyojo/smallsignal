@@ -60,9 +60,9 @@ same way for Gallery [simulation checks](community-gallery.md#simulation-checks)
   and X calls within the owned closure (ordered ports, scalar formals). Native
   Spectre passes strict SPICE conversion first and never runs as Spectre. SPICE
   names keep case-insensitive identity in VACASK.
-- Refused before execution with a source-owner diagnostic: opaque/B sources,
-  model cards, `.param`, `.global`, functions, conditionals, external library
-  loads, undeclared helper calls, formal `m` without forwarding, placeholders.
+- The VACASK projection refuses before execution with a source-owner
+  diagnostic: opaque/B sources, model cards, `.param`, `.global`, functions,
+  conditionals, external library loads, undeclared helper calls, formal `m` without forwarding, placeholders.
   Static Apply stays less strict than execution.
 - DC/AC/PULSE/SIN/PWL clauses enter the canonical waveform contract; an
   explicit DC bias differing from the waveform's initial value refuses.

@@ -90,8 +90,8 @@ cross-Document edits use one Project transaction guarded by
 resolves from explicit membership, then a configured cell-default Net, then
 the one wired supply marker of its domain in the Cell (`ground` for NMOS,
 `vdd-port` for PMOS) as read-only `supply-default`, never written. None or
-several markers leave B unresolved: export reports `MISSING_PIN_NET` unless an
-explicit NoConnect applies; nothing is guessed from polarity or Net spelling.
+several markers leave B unresolved; export then places it as
+[netlist export](netlist-export.md#implicit-supplies-and-mos-bodies) states.
 Persisted `supply-default` bindings stay readable. Cross-Document copy turns
 an effective `cell-default` into `instance-override`. Imported MOS without a
 fourth node stay unresolved; when all imported MOS of one polarity in a Cell

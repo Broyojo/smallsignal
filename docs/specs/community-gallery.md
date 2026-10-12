@@ -296,8 +296,10 @@ tokens and codes are stored.
 
 - GitHub OAuth (`GH_OAUTH_CLIENT_ID`/`GH_OAUTH_CLIENT_SECRET`, since Actions
   forbids `GITHUB_`) and Google OAuth (`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`)
-  store only verified email. OAuth `state` is double-submitted via a short-lived
-  cookie; failures redirect to `/?auth=failed`. Providers are distinct accounts.
+  store only verified email: `GET /api/auth/<github|google>/start|callback`,
+  callback URL `<origin>/api/auth/<provider>/callback`. OAuth `state` is
+  double-submitted via a short-lived cookie; failures redirect to
+  `/?auth=failed`. Providers are distinct accounts.
 - Email codes via Resend (`RESEND_API_KEY`, optional `AUTH_EMAIL_FROM`):
   `POST /api/auth/email/start` `{email}`, `/verify` `{email, code}`; six digits,
   single use, 10 minutes, 5 wrong guesses, 5 sends per address per UTC day.
@@ -305,7 +307,8 @@ tokens and codes are stored.
   `role`, per-request `isAdmin`, AI `seat`, `switchedFrom`, `isOwner`.
 - `POST /api/auth/profile` (1–40 chars) and `/logout` are same-origin.
 - `POST /api/auth/account/delete` `{confirm: "delete-account"}` (same-origin):
-  GalleryDO deletes the account's circuits, versions, likes and Cloud Projects;
+  an AI seat gets 409 `ai-account`. GalleryDO deletes the account's circuits,
+  versions, likes, daily-open records and Cloud Projects;
   ComponentLibraryDO its components; AnalogArena unlinks its Voter
   ([Account deletion](analog-arena.md#account-deletion)); AuthDO last removes
   sessions, codes, counters and the row. A failing step answers 503 leaving the
@@ -356,10 +359,10 @@ else 401.
   ruleVersion, remaining}`) re-answers marks behind `NETLIST_MARK_RULE_VERSION`
   (bump it whenever stored answers can go stale); unreadable Projects keep their
   mark and are stamped; it also runs from `triggers.crons`.
-- `POST …/label-looks` (same-origin, ≤20 ids, `table` entries or versions)
-  brings labels to [names and labels](names-and-labels.md) standards. Dry runs
-  report labels, Project SHA-256 and electrical/netlist invariance; `apply`
-  needs the SHA-256 (`stale`), refuses electrical change, and compare-and-sets
+- `POST …/label-looks` (same-origin, ≤20 ids; fields below) brings labels to
+  [names and labels](names-and-labels.md) standards. Dry runs report labels,
+  Project SHA-256 and electrical/netlist invariance; `apply` needs the SHA-256
+  (`stale`), refuses electrical change, and compare-and-sets
   only Project Code and preview. `nudges` move standard-look labels ≤16 × 12
   units; `keep` exempts labels; colliding labels keep their look
   (`clearanceKept`); `legacyLooks` applies only to content saved before
@@ -371,6 +374,18 @@ else 401.
 - `GET /api/gallery/owner-data` (Owner accounts; 401 signed out or credential,
   403 otherwise): public per-author counts, average parts, AI and netlist marks,
   likes and newest time; `author=<key>` lists that author's circuits.
+
+`label-looks` fields (body, then each of the reply's `results`):
+
+| Field                                    | Meaning                                                                       |
+| ---------------------------------------- | ----------------------------------------------------------------------------- |
+| `ids`, `table`                           | entry ids (`galleryEntries`, default) or version ids (`galleryEntryVersions`) |
+| `apply`, `expected`                      | `apply: true` writes; `expected` maps each id to its dry-run `sha`            |
+| `nudges`, `keep`, `legacyLooks`          | `{id: [{label, dx, dy}]}`, `{id: [label]}`, `true`                            |
+| `id`, `status`, `savedAt`, `entryId`     | the row read (`entryId` for versions)                                         |
+| `sha`, `labels`, `clearanceKept`, `kept` | Project SHA-256 and the restyled, colliding and kept labels                   |
+| `legacyWithheld`                         | `legacyLooks` asked, but the content is not older than the cutoff             |
+| `changed`, `applied`, `skipped`          | outcome; `skipped` names why (`stale`, `electrical-change`, …)                |
 
 ## Retention and privacy
 

@@ -2,7 +2,7 @@
  * Compiling a structured `SimulationFolderInput` into one simulation request.
  *
  * A folder names a Testbench root, the analyses to run, and the outputs to
- * record (`docs/specs/simulation.md`, "Inputs and root"). This turns that into
+ * record (`docs/specs/simulation.md`, "Canvas compilation"). This turns that into
  * the two texts `/api/simulate` already consumes -- the design netlist of
  * everything the root reaches, and the root itself as a top-level deck -- plus
  * the one thing a rawfile reader cannot recover on its own: which ngspice
@@ -848,7 +848,7 @@ export function buildSimulationPlan(
   const diagnostics: NetlistDiagnostic[] = [];
   const rootCards = printSpiceCellInstances(rootCell);
   // "A deck that only defines `.subckt`s and instantiates nothing is not a
-  // run" (docs/specs/simulation.md, "Inputs and root"). Net markers are
+  // run" (docs/specs/simulation.md, "Canvas compilation"). Net markers are
   // electrical facts that print no card, so an emptiness test has to be about
   // the cards, not about how many objects the author drew.
   if (rootCards.length === 0) {

@@ -20,5 +20,4 @@ the canonical schema instead of copying it. Omit if none.
 ## Acceptance criteria
 
 Observable conditions that prove the rules, linking the tests that pin them.
-Implementation notes, validation logs, measurements and history belong in the
-commit or PR.
+What else belongs here: AGENTS.md "Documentation".

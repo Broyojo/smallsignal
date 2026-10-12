@@ -119,15 +119,12 @@ Primary owners: `packages/model`, `packages/edit-engine`, `packages/derived`
   from authored evidence (`ground`/`vdd-port` marker, rail or supply Pin claim),
   never spelling, polarity or proximity. None or several (VDD beside AVDD)
   leaves it unresolved; unwired markers do not count.
-- With two supplies in a domain the netlist asks `MOS_BODY_OTHER_SUPPLY`
-  ([netlist export](netlist-export.md#one-electrical-extraction-authority)) for
-  a body whose source is on the other supply; an unresolved body exports to
-  conventional VDD/ground with the same question.
 - Pasting a supply marker sets a missing default like placing one. A body alone
   on a Net its own policy binding named (no geometry, claim or terminal) is
   residue: it resolves through the order above and the next edit reconciles it.
-- Extraction uses actual membership and the same order; `MISSING_PIN_NET` only
-  when nothing answers and B is not `NoConnect`.
+- Extraction uses actual membership and the same order; an unresolved body
+  exports as [netlist export](netlist-export.md#implicit-supplies-and-mos-bodies)
+  states, with `MOS_BODY_OTHER_SUPPLY` asking about a body off its source's supply.
 - A `bulk-dashed` route from B (GUI or Agent `connect`/`route-net`) treats the
   default as unowned and clears the binding. Deleting it reconciles only an
   explicit default. Source-bound MOS keep fourth-node evidence; a split imported

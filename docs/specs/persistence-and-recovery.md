@@ -165,7 +165,10 @@ fixed product URLs, sending no content, paths or credentials. App data is
 - The main process owns the library (`%USERPROFILE%\Analog Canvas\Projects`,
   one directory per Project with `project.icproj.json`; files are the source)
   and native grants. Renderers hold opaque binding IDs and acknowledged
-  revisions; displayed paths authorize nothing.
+  revisions; displayed paths authorize nothing. Changing the library root keeps
+  previous roots and moves no files.
+- Delete moves the Project directory to the recycle area; delete and permanent
+  purge each ask for native confirmation.
 - Save As is an independent identity, rebinding only on success; Export never
   rebinds or marks saved. Overwriting another saved Project archives it to the
   recoverable recycle area; overwriting the source or another open tab is
