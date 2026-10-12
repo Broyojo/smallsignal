@@ -3,8 +3,10 @@ import { expect, test } from "@playwright/test";
 import {
   awaitEditorReady,
   chooseComponent,
+  expectStatus,
   openCellManager,
   placeResistors,
+  openEditor,
 } from "./editor-fixtures.js";
 
 /** The App module as the dev server serves it, or its chunk in the built editor. */
@@ -17,8 +19,7 @@ test.describe.configure({ mode: "default" });
 test("a render crash shows the recovery screen instead of a blank page", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
 
   // Arm the DEV-only render crash probe and force one more App render.
   page.on("pageerror", (error) => console.log("PAGEERROR:", error.message));
@@ -128,21 +129,16 @@ test("a failed dialog chunk degrades to a scoped notice, not the crash screen", 
   await openCellManager(page);
   const navigated = page.waitForEvent("framenavigated");
   await page.unroute("**/cell-manager-dialog*");
-  await page
-    .getByTestId("dialog-chunk-load-fallback")
-    .getByRole("button", { name: "Refresh app" })
-    .click();
+  await fallback.getByRole("button", { name: "Refresh app" }).click();
   await navigated;
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   // Whole-window recovery now restores the project tab, so the old
   // single-document recovery toast is no longer the recovery contract.
   // Check the actual restored revision and that the editor remains usable.
   await expect(page.getByTestId("revision")).toHaveText("1");
-  await openCellManager(page);
-  await expect(page.getByTestId("dialog-chunk-load-fallback")).toHaveCount(0);
-  await expect(
-    page.getByRole("dialog", { name: "Cell Manager" }),
-  ).toBeVisible();
+  const manager = await openCellManager(page);
+  await expect(fallback).toHaveCount(0);
+  await expect(manager).toBeVisible();
 });
 
 test("a scene build failure degrades to the last good view and recovers", async ({
@@ -152,6 +148,8 @@ test("a scene build failure degrades to the last good view and recovers", async 
   await placeResistors(page, [360]);
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   await expect(page.getByTestId("revision")).toHaveText("1");
+  const painted = (id: string) =>
+    page.locator(`[data-layer="symbols"] [data-object-id="${id}"]`);
 
   // Break formal scene building: further commits must not crash the page,
   // the canvas keeps showing the last good scene, and the model still edits.
@@ -165,16 +163,12 @@ test("a scene build failure degrades to the last good view and recovers", async 
   await expect(page.getByTestId("revision")).toHaveText("2");
   // The degraded status fires on the commit itself; assert it before the
   // closing Escape overwrites the status line.
-  await expect(page.getByTestId("status")).toContainText(
-    "Scene rendering failed",
-  );
+  await expectStatus(page, "Scene rendering failed");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   // Hit targets are React-rendered, but the formal scene stays at the last
   // good view, so R2's painted symbol must be absent from it.
-  await expect(
-    page.locator('[data-layer="symbols"] [data-object-id="R2"]'),
-  ).toHaveCount(0);
+  await expect(painted("R2")).toHaveCount(0);
 
   // Once scene building works again, the next commit renders fresh content.
   await page.evaluate(() => {
@@ -183,10 +177,6 @@ test("a scene build failure degrades to the last good view and recovers", async 
   await placeResistors(page, [640]);
   await expect(page.getByTestId("revision")).toHaveText("3");
   await expect(page.getByTestId("hit-R3")).toBeVisible();
-  await expect(
-    page.locator('[data-layer="symbols"] [data-object-id="R2"]'),
-  ).toBeVisible();
-  await expect(
-    page.locator('[data-layer="symbols"] [data-object-id="R3"]'),
-  ).toBeVisible();
+  await expect(painted("R2")).toBeVisible();
+  await expect(painted("R3")).toBeVisible();
 });

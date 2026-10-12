@@ -1,17 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import {
-  createEmptyProject,
-  createRoutePath,
-  type SchematicDocument,
-} from "@icm/model";
+import { createEmptyProject, type SchematicDocument } from "@icm/model";
 import { builtInSymbols } from "@icm/symbols";
 
 import {
-  awaitEditorReady,
   clickDrawTool,
   downloadBytes,
+  expectStatus,
+  openProject,
 } from "./editor-fixtures";
+import { addStraightWire, onScreen, placedInstance } from "./canvas-fixtures";
 
 async function importInstances(
   page: Page,
@@ -21,26 +19,8 @@ async function importInstances(
   const project = createEmptyProject("analog-hit-bounds", "Analog hit bounds");
   project.documents[0]!.instances = instances;
   configureDocument?.(project.documents[0]!);
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "analog-hit-bounds.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "analog-hit-bounds.icproj.json");
   await expect(page.getByTestId(`hit-${instances[0]!.id}`)).toBeVisible();
-}
-
-async function screenPoint(page: Page, x: number, y: number) {
-  return page.getByTestId("schematic-canvas").evaluate(
-    (element, point) => {
-      const screen = new DOMPoint(point.x, point.y).matrixTransform(
-        (element as SVGSVGElement).getScreenCTM()!,
-      );
-      return { x: screen.x, y: screen.y };
-    },
-    { x, y },
-  );
 }
 
 test("Analog Block hit boxes closely enclose browser-rendered artwork", async ({
@@ -54,18 +34,13 @@ test("Analog Block hit boxes closely enclose browser-rendered artwork", async ({
   );
   expect(blocks).toHaveLength(35);
   const instances: SchematicDocument["instances"] = blocks.map(
-    (symbol, index) => ({
-      id: `U${index + 1}`,
-      symbolId: symbol.id,
-      placement: {
-        position: {
-          x: 100 + (index % 6) * 140,
-          y: 100 + Math.floor(index / 6) * 120,
-        },
-        rotation: 0,
-        mirror: "none",
-      },
-    }),
+    (symbol, index) =>
+      placedInstance(
+        `U${index + 1}`,
+        symbol.id,
+        100 + (index % 6) * 140,
+        100 + Math.floor(index / 6) * 120,
+      ),
   );
   // A rotated and a mirrored copy, numbered after the catalogue above.
   instances.push(
@@ -133,53 +108,34 @@ test("FD Amp blank space does not capture clicks, body and pins remain usable, a
   await importInstances(
     page,
     [
-      {
-        id: "U1",
-        symbolId: "opamp-differential",
-        placement: {
-          position: { x: 200, y: 200 },
-          rotation: 0,
-          mirror: "none",
-        },
-      },
-      {
-        id: "R1",
-        symbolId: "resistor",
-        placement: { position: { x: 60, y: 320 }, rotation: 0, mirror: "none" },
-      },
+      placedInstance("U1", "opamp-differential", 200, 200),
+      placedInstance("R1", "resistor", 60, 320),
     ],
     // A deliberate crossing, independent of the router's symbol avoidance.
-    (document) => {
-      document.nets.push({ id: "crossing-net", terminals: [] });
-      document.junctions.push(
+    (document) =>
+      addStraightWire(
+        document,
+        "crossing-route",
         { id: "cross-a", netId: "crossing-net", position: { x: 20, y: 330 } },
         { id: "cross-b", netId: "crossing-net", position: { x: 100, y: 330 } },
-      );
-      document.routes.push(
-        createRoutePath({
-          id: "crossing-route",
-          netId: "crossing-net",
-          start: { kind: "junction", junctionId: "cross-a" },
-          end: { kind: "junction", junctionId: "cross-b" },
-          bends: [],
-          modes: ["manual"],
-        }),
-      );
-    },
+      ),
   );
   // A one-symbol import auto-fits tightly. Leave room for the whole drag so
   // this checks object movement rather than edge-triggered canvas scrolling.
   for (let step = 0; step < 3; step += 1)
     await page.getByRole("button", { name: "Zoom out" }).click();
   const hit = page.getByTestId("hit-U1");
+  const canvas = page.getByTestId("schematic-canvas");
   const drag = async (
     fromX: number,
     fromY: number,
     toX: number,
     toY: number,
   ) => {
-    const from = await screenPoint(page, fromX, fromY);
-    const to = await screenPoint(page, toX, toY);
+    const [from, to] = await onScreen(canvas, [
+      { x: fromX, y: fromY },
+      { x: toX, y: toY },
+    ]);
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps: 8 });
@@ -187,7 +143,7 @@ test("FD Amp blank space does not capture clicks, body and pins remain usable, a
   };
   // A deliberate click on visible wire selects the wire even where the
   // symbol's blank hit rectangle overlaps it; the body stays selectable.
-  const overlap = await screenPoint(page, 67, 330);
+  const [overlap] = await onScreen(canvas, [{ x: 67, y: 330 }]);
   expect(
     await page.evaluate(
       ({ x, y }) =>
@@ -198,15 +154,15 @@ test("FD Amp blank space does not capture clicks, body and pins remain usable, a
     ),
   ).toEqual(expect.arrayContaining(["route", "instance"]));
   await page.mouse.click(overlap.x, overlap.y);
-  await expect(page.getByTestId("status")).toContainText("Selected route");
+  await expectStatus(page, "Selected route");
   await page.keyboard.press("Escape");
-  const body = await screenPoint(page, 60, 318);
+  const [body] = await onScreen(canvas, [{ x: 60, y: 318 }]);
   await page.mouse.click(body.x, body.y);
   await expect(page.getByTestId("hit-R1")).toHaveClass(/selected/);
 
   // This point is inside the old rectangular hit box but well above the
   // triangle edge and output leads.
-  const blank = await screenPoint(page, 215, 175);
+  const [blank] = await onScreen(canvas, [{ x: 215, y: 175 }]);
   await page.mouse.click(blank.x, blank.y);
   await expect(hit).not.toHaveClass(/selected/);
 
@@ -225,7 +181,7 @@ test("FD Amp blank space does not capture clicks, body and pins remain usable, a
   await page.keyboard.press("Escape");
   await clickDrawTool(page, "wire");
   await page.getByTestId("terminal-U1-IN+").click();
-  const end = await screenPoint(page, 100, 190);
+  const [end] = await onScreen(canvas, [{ x: 100, y: 190 }]);
   await page.mouse.dblclick(end.x, end.y);
   await page.keyboard.press("Escape");
   // The crossing wire, and the new wire from IN+.
@@ -242,18 +198,14 @@ test("enlarged Analog Block triangles leave clear space around internal letters 
       "opamp-differential-lettered",
       "opamp-differential-crossed-lettered-inputs-swapped",
       "voltage-amplifier-lettered",
-    ].map((symbolId, index) => ({
-      id: `U${index + 1}`,
-      symbolId,
-      placement: {
-        position: {
-          x: 150 + (index % 2) * 200,
-          y: 150 + Math.floor(index / 2) * 160,
-        },
-        rotation: 0,
-        mirror: "none",
-      },
-    })),
+    ].map((symbolId, index) =>
+      placedInstance(
+        `U${index + 1}`,
+        symbolId,
+        150 + (index % 2) * 200,
+        150 + Math.floor(index / 2) * 160,
+      ),
+    ),
   );
   const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
     "utf8",

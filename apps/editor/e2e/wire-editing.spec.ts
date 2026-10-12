@@ -1,6 +1,6 @@
 // Editing drawn Wires: re-pointed ends and imported Route guidance.
 
-import { exportedProject, openProject } from "./editor-fixtures";
+import { expectStatus, exportedProject, openProject } from "./editor-fixtures";
 import {
   createEmptyProject,
   createRoutePath,
@@ -9,7 +9,13 @@ import {
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { createRoutingDemoProject } from "../src/demos/routing-demo.js";
-import { clickRoute } from "./canvas-fixtures.js";
+import {
+  clickRoute,
+  junctionRoute,
+  placedInstance,
+  routeAnchor,
+  onScreen,
+} from "./canvas-fixtures.js";
 import { openSelectionShelf } from "./manual-editor-fixtures.js";
 
 async function dragHandleToPoint(
@@ -20,24 +26,19 @@ async function dragHandleToPoint(
 ): Promise<void> {
   const box = await handle.boundingBox();
   if (!box) throw new Error("Drag target is not measurable");
-  const target = await page
-    .locator(`[data-layer="routes"] [data-object-id="${routeIdForFrame}"]`)
-    .evaluate((element, wanted) => {
-      const matrix = (element as SVGGraphicsElement).getScreenCTM();
-      if (!matrix) return null;
-      const screen = new DOMPoint(wanted.x, wanted.y).matrixTransform(matrix);
-      return { x: screen.x, y: screen.y };
-    }, point);
-  if (!target) throw new Error(`Point is not measurable in ${routeIdForFrame}`);
+  const [target] = await onScreen(
+    page.locator(`[data-layer="routes"] [data-object-id="${routeIdForFrame}"]`),
+    [point],
+  );
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(target.x, target.y, { steps: 4 });
   await page.mouse.up();
 }
 
-function markRoutingDemoNetsImported(
-  project: ReturnType<typeof createRoutingDemoProject>,
-): void {
+/** The routing demo, its Nets marked imported from a bound SPICE source. */
+function importedRoutingDemo() {
+  const project = createRoutingDemoProject();
   // These Port symbols stand in for device endpoints in routing tests, not
   // same-name formal interfaces (which legitimately need no extra wire).
   for (const terminal of project.documents[0]!.netlist!.terminals)
@@ -59,6 +60,15 @@ function markRoutingDemoNetsImported(
       sourceNetId: net.id,
     });
   }
+  project.documents[0]!.sourceBinding = {
+    cellName: "routing_demo",
+    sourceRef: {
+      fileId: "source-routing-demo",
+      start: { offset: 0, line: 1, column: 1 },
+      end: { offset: 1, line: 1, column: 2 },
+    },
+  };
+  return project;
 }
 
 test("re-points a Wire end that is anchored to a pin", async ({ page }) => {
@@ -67,44 +77,18 @@ test("re-points a Wire end that is anchored to a pin", async ({ page }) => {
   // new one.
   const project = createEmptyProject("endpoint-repoint", "Endpoint Repoint");
   const document = project.documents[0]!;
-  document.instances.push({
-    id: "VDD1",
-    symbolId: "vdd-port",
-    placement: { position: { x: 300, y: 120 }, rotation: 0, mirror: "none" },
-  } as (typeof document)["instances"][number]);
+  document.instances.push(placedInstance("VDD1", "vdd-port", 300, 120));
   document.nets.push(
     { id: "net-a", terminals: [] },
     { id: "net-supply", terminals: [{ instanceId: "VDD1", pinName: "P" }] },
   );
   document.junctions.push(
-    {
-      id: "A1",
-      netId: "net-a",
-      position: { x: 200, y: 260 },
-      role: "route-anchor",
-    },
-    {
-      id: "A2",
-      netId: "net-a",
-      position: { x: 420, y: 260 },
-      role: "route-anchor",
-    },
-    {
-      id: "S2",
-      netId: "net-supply",
-      position: { x: 300, y: 190 },
-      role: "route-anchor",
-    },
+    routeAnchor("A1", "net-a", 200, 260),
+    routeAnchor("A2", "net-a", 420, 260),
+    routeAnchor("S2", "net-supply", 300, 190),
   );
   document.routes.push(
-    createRoutePath({
-      id: "route-a",
-      netId: "net-a",
-      start: { kind: "junction", junctionId: "A1" },
-      end: { kind: "junction", junctionId: "A2" },
-      bends: [],
-      modes: ["manual"],
-    }),
+    junctionRoute("route-a", "net-a", "A1", "A2"),
     createRoutePath({
       id: "route-supply",
       netId: "net-supply",
@@ -139,17 +123,8 @@ test("re-points a Wire end that is anchored to a pin", async ({ page }) => {
 test("highlighting suppresses only that Net's imported guidance, and cutting an imported Route never reconnects through it", async ({
   page,
 }) => {
-  const project = createRoutingDemoProject();
+  const project = importedRoutingDemo();
   const document = project.documents[0]!;
-  markRoutingDemoNetsImported(project);
-  document.sourceBinding = {
-    cellName: "routing_demo",
-    sourceRef: {
-      fileId: "source-routing-demo",
-      start: { offset: 0, line: 1, column: 1 },
-      end: { offset: 1, line: 1, column: 2 },
-    },
-  };
   document.routes = [
     createRoutePath({
       id: "route-imported-partial",
@@ -182,9 +157,7 @@ test("highlighting suppresses only that Net's imported guidance, and cutting an 
   await clickRoute(page, "route-imported-partial");
   await page.keyboard.press("Delete");
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(0);
-  await expect(page.getByTestId("status")).toContainText(
-    "Deleted wire route-imported-partial",
-  );
+  await expectStatus(page, "Deleted wire route-imported-partial");
 
   await expect(page.getByTestId("source-status")).toHaveText(
     "connectivity-modified",
@@ -195,25 +168,14 @@ test("highlighting suppresses only that Net's imported guidance, and cutting an 
 test("keeps remaining imported flightlines after routing one guided connection", async ({
   page,
 }) => {
-  const project = createRoutingDemoProject();
-  markRoutingDemoNetsImported(project);
-  project.documents[0]!.sourceBinding = {
-    cellName: "routing_demo",
-    sourceRef: {
-      fileId: "source-routing-demo",
-      start: { offset: 0, line: 1, column: 1 },
-      end: { offset: 1, line: 1, column: 2 },
-    },
-  };
+  const project = importedRoutingDemo();
   await openProject(page, project);
 
   await expect(page.getByTestId("flightline")).toHaveCount(3);
   const hint = page.getByTestId("flightline-hit").first();
   await hint.click({ force: true });
   await expect(page.getByTestId("active-tool")).toHaveText("wire");
-  await expect(page.getByTestId("status")).toContainText(
-    "Wire source: flightline on",
-  );
+  await expectStatus(page, "Wire source: flightline on");
 
   await hint.click({ force: true });
   await expect(page.getByTestId("active-tool")).toHaveText("wire");

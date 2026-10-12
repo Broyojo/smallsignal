@@ -5,35 +5,17 @@ import {
   exportedProject,
   awaitEditorReady,
   clickDrawTool,
+  expectStatus,
   setComponentCodeField,
-  recoveryProjectTexts,
+  expectRecovered,
 } from "./editor-fixtures";
 import type { SchematicDocument } from "@icm/model";
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
 import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
-import { copySelectionAt } from "./canvas-fixtures.js";
-
-/** Ctrl/Cmd+C then V: the clipboard path, which keeps authored label text. */
-async function pasteSelectionAt(
-  page: Page,
-  position: { x: number; y: number },
-): Promise<void> {
-  const canvas = page.getByTestId("schematic-canvas");
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error("Canvas is not measurable");
-  await page.keyboard.press("ControlOrMeta+c");
-  await page.keyboard.press("v");
-  await page.mouse.move(box.x + position.x, box.y + position.y);
-  await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
-  await canvas.click({ position });
-  await expect(page.getByTestId("copy-placement-preview")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("copy-placement-preview")).toHaveCount(0);
-}
+import { centre, copySelectionAt, drawWire } from "./canvas-fixtures.js";
 
 test("connects copied multi-pin groups through a manually bent wire", async ({
   page,
@@ -41,10 +23,7 @@ test("connects copied multi-pin groups through a manually bent wire", async ({
   await page.goto("/editor");
   await placeComponent(page, "nmos", { x: 320, y: 180 });
   await placeComponent(page, "nmos", { x: 320, y: 360 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-M1-S").click();
-  await page.getByTestId("terminal-M2-D").click();
-  await page.keyboard.press("Escape");
+  await drawWire(page, "M1-S", "M2-D");
 
   await page.keyboard.press("Control+a");
   await copySelectionAt(page, { x: 560, y: 300 });
@@ -54,9 +33,7 @@ test("connects copied multi-pin groups through a manually bent wire", async ({
   // the debounce window cannot carry the last edit: the browser aborts
   // uncommitted IndexedDB transactions while the page unloads.
   const revision = await page.getByTestId("revision").textContent();
-  await expect
-    .poll(() => recoveryProjectTexts(page))
-    .toContain(`"revision": ${revision}`);
+  await expectRecovered(page, `"revision": ${revision}`);
   await page.reload();
   // Refresh restores this window's workspace without a second manual restore.
   await awaitEditorReady(page);
@@ -69,7 +46,7 @@ test("connects copied multi-pin groups through a manually bent wire", async ({
     .click({ position: { x: 460, y: 500 } });
   await page.getByTestId("terminal-M2_2-S").click();
 
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(3);
   await expect(page.getByTestId("active-tool")).toHaveText("wire");
 });
@@ -90,7 +67,7 @@ test("C/V copies as fresh: a unique new reference and the label as drawn", async
     .fill("Old_alias");
   await page.getByRole("button", { name: "Apply text changes" }).click();
   await page.getByTestId("hit-R1").click();
-  await pasteSelectionAt(page, { x: 560, y: 420 });
+  await copySelectionAt(page, { x: 560, y: 420 }, ["ControlOrMeta+c", "v"]);
   await expect(page.getByTestId("instance-count")).toHaveText("3");
   const document = (await exportedProject(page))
     .documents[0] as SchematicDocument;
@@ -152,9 +129,7 @@ test("C alone previews before clipboard permission resolves and Escape cancels w
   await expect(page.getByTestId("copy-placement-preview")).toHaveCount(0);
   await expect(page.getByTestId("instance-count")).toHaveText("1");
   await expect(page.getByTestId("revision")).toHaveText("1");
-  await expect(page.getByTestId("status")).toContainText(
-    "Copy placement cancelled",
-  );
+  await expectStatus(page, "Copy placement cancelled");
 });
 
 test("the copy ghost follows the pointer, turns with R, and keeps placing over existing geometry until Escape", async ({
@@ -179,10 +154,7 @@ test("the copy ghost follows the pointer, turns with R, and keeps placing over e
   const previewSymbol = ghost.locator("[data-object-id] > g").first();
   await expect(previewSymbol).toHaveAttribute("transform", /rotate\(0\)/);
   const first = await ghost.boundingBox();
-  await page.mouse.move(
-    target.x + target.width / 2,
-    target.y + target.height / 2,
-  );
+  await page.mouse.move(centre(target).x, centre(target).y);
   const second = await ghost.boundingBox();
   expect(first).not.toBeNull();
   expect(second).not.toBeNull();
@@ -191,10 +163,7 @@ test("the copy ghost follows the pointer, turns with R, and keeps placing over e
 
   // The copy capture plane owns this click even though an existing Instance
   // is directly under it, and placement stays armed for the next one.
-  await page.mouse.click(
-    target.x + target.width / 2,
-    target.y + target.height / 2,
-  );
+  await page.mouse.click(centre(target).x, centre(target).y);
   await expect(page.getByTestId("instance-count")).toHaveText("3");
   await expect(ghost).toBeVisible();
 

@@ -2,10 +2,11 @@ import { expect, test } from "@playwright/test";
 import { createEmptyProject, createRoutePath } from "@icm/model";
 
 import {
-  awaitEditorReady,
-  chooseComponent,
   clickNetlistWorkflowCommand,
-  openProjectFile,
+  expectStatus,
+  placeComponentAt,
+  openEditor,
+  openProject,
 } from "./editor-fixtures";
 
 /**
@@ -17,8 +18,7 @@ import {
 test("Check and Save surfaces findings in the existing workbench and canvas", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
 
   // A fresh document rests at a quiet, still-clickable entry point.
   const badge = page.getByTestId("statusbar-issues");
@@ -26,11 +26,7 @@ test("Check and Save surfaces findings in the existing workbench and canvas", as
   await expect(badge).toHaveText("Not checked");
 
   // Unfinished drawing produces neither diagnostic counts nor markers.
-  await chooseComponent(page, "resistor");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 400, y: 240 } });
-  await page.keyboard.press("Escape");
+  await placeComponentAt(page, "resistor", { x: 400, y: 240 });
   await expect(badge).toHaveText("Not checked");
   await expect(page.locator(".diagnostic-marker")).toHaveCount(0);
   await clickNetlistWorkflowCommand(page, "check-and-save");
@@ -57,7 +53,7 @@ test("Check and Save surfaces findings in the existing workbench and canvas", as
 
   // A finding navigates: the status line reports the ERC jump.
   await findings.first().click();
-  await expect(page.getByTestId("status")).toContainText("ERC");
+  await expectStatus(page, "ERC");
 
   // A marker ring navigates the same way from the canvas side. The hit is
   // the ring band only — the centre stays click-through for the pin — so
@@ -70,7 +66,7 @@ test("Check and Save surfaces findings in the existing workbench and canvas", as
     ringBox.x + ringBox.width / 2,
     ringBox.y + ringBox.height * 0.15,
   );
-  await expect(page.getByTestId("status")).toContainText("ERC_UNCONNECTED_PIN");
+  await expectStatus(page, "ERC_UNCONNECTED_PIN");
 });
 
 test("signed-out Save does not suppress ERC or visual check results", async ({
@@ -87,13 +83,11 @@ test("signed-out Save does not suppress ERC or visual check results", async ({
     { x: 400, y: 240 },
     { x: 620, y: 350 },
   ]) {
-    await chooseComponent(page, "resistor");
-    await page.getByTestId("schematic-canvas").click({ position });
-    await page.keyboard.press("Escape");
+    await placeComponentAt(page, "resistor", position);
   }
   await expect(page.getByTestId("statusbar-issues")).toHaveText("Not checked");
   await clickNetlistWorkflowCommand(page, "check-and-save");
-  await expect(page.getByTestId("status")).toContainText("Sign in to save");
+  await expectStatus(page, "Sign in to save");
   await expect(page.getByTestId("project-diagnostics")).toContainText(
     "ERC_UNCONNECTED_PIN",
   );
@@ -128,9 +122,7 @@ test("accepts free angles and optionally straightens them in one undoable action
       modes: ["manual"],
     }),
   );
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await openProjectFile(page, project, "angled-wires.icproj.json");
+  await openProject(page, project, "angled-wires.icproj.json");
   const route = page.locator('polyline[data-object-id="route-bad"]');
   await expect(route).toHaveAttribute("points", "200,200 260,230");
 
@@ -139,9 +131,7 @@ test("accepts free angles and optionally straightens them in one undoable action
     page.getByText("VISUAL_NON_STANDARD_WIRE_ANGLE", { exact: false }),
   ).toHaveCount(0);
   await page.getByTestId("repair-angled-wires").click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Straightened 1 non-standard angled wire segment",
-  );
+  await expectStatus(page, "Straightened 1 non-standard angled wire segment");
   await expect(route).toHaveAttribute("points", "200,200 260,200 260,230");
   await page.keyboard.press("Control+z");
   await expect(route).toHaveAttribute("points", "200,200 260,230");

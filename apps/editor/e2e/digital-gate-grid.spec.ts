@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import { createEmptyProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
-import { awaitEditorReady } from "./editor-fixtures.js";
+import { expectStatus, openProject } from "./editor-fixtures.js";
+import { placedInstance, onScreen } from "./canvas-fixtures.js";
 
 const gateIds = [
   "xnor-gate",
@@ -24,50 +25,39 @@ test("digital gates fit their hit boxes to the painted body, not the empty strip
 }) => {
   await page.setViewportSize({ width: 1100, height: 820 });
   const project = createEmptyProject("digital-grid", "Digital grid");
-  project.documents[0]!.instances = gateIds.map((symbolId, index) => ({
-    id: `U${index + 1}`,
-    symbolId,
-    placement: {
-      position: { x: 200, y: 80 + index * 60 },
-      rotation: 0,
-      mirror: "none",
-    },
-  }));
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "digital-grid.icproj.json",
-    mimeType: "application/json",
+  project.documents[0]!.instances = gateIds.map((symbolId, index) =>
+    placedInstance(`U${index + 1}`, symbolId, 200, 80 + index * 60),
+  );
+  await openProject(
+    page,
     // Written as a current Project file, so the editor opens it instead of
     // announcing a schema upgrade.
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened digital-grid.icproj.json",
+    serializeProject(project),
+    "digital-grid.icproj.json",
   );
+  await expectStatus(page, "Opened digital-grid.icproj.json");
 
-  const margins = await page
-    .getByTestId("schematic-canvas")
-    .evaluate((canvas) =>
-      [
-        ...canvas.querySelectorAll<SVGGElement>(
-          '[data-layer="symbols"] [data-object-id]',
-        ),
-      ].flatMap((group) => {
-        const box = group.getBBox();
-        const hit = canvas
-          .querySelector<SVGGraphicsElement>(
-            `[data-testid="hit-${group.dataset.objectId}"]`,
-          )!
-          .getBBox();
-        return [
-          box.x - hit.x,
-          box.y - hit.y,
-          hit.x + hit.width - box.x - box.width,
-          hit.y + hit.height - box.y - box.height,
-        ];
-      }),
-    );
+  const canvas = page.getByTestId("schematic-canvas");
+  const margins = await canvas.evaluate((canvas) =>
+    [
+      ...canvas.querySelectorAll<SVGGElement>(
+        '[data-layer="symbols"] [data-object-id]',
+      ),
+    ].flatMap((group) => {
+      const box = group.getBBox();
+      const hit = canvas
+        .querySelector<SVGGraphicsElement>(
+          `[data-testid="hit-${group.dataset.objectId}"]`,
+        )!
+        .getBBox();
+      return [
+        box.x - hit.x,
+        box.y - hit.y,
+        hit.x + hit.width - box.x - box.width,
+        hit.y + hit.height - box.y - box.height,
+      ];
+    }),
+  );
   expect(margins).toHaveLength(32);
   for (const margin of margins) {
     expect(margin).toBeGreaterThanOrEqual(-0.01);
@@ -77,13 +67,7 @@ test("digital gates fit their hit boxes to the painted body, not the empty strip
   }
 
   // The old source viewBox used to capture clicks in this empty left strip.
-  const blank = await page
-    .getByTestId("schematic-canvas")
-    .evaluate((element) =>
-      new DOMPoint(160, 320).matrixTransform(
-        (element as SVGSVGElement).getScreenCTM()!,
-      ),
-    );
+  const [blank] = await onScreen(canvas, [{ x: 160, y: 320 }]);
   await page.mouse.click(blank.x, blank.y);
   await expect(page.getByTestId("hit-U5")).not.toHaveClass(/selected/);
 });

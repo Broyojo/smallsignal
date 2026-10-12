@@ -1,22 +1,27 @@
 // Placing, moving and editing labels: instance and Net labels, the L shortcut,
 // free text and the canvas text editor.
 
-import { parseSavedProject } from "./editor-fixtures";
 import { createRoutePath } from "@icm/model";
 import { expect, test } from "@playwright/test";
 import { createRoutingDemoProject } from "../src/demos/routing-demo.js";
 import {
   revealPropertiesShelf,
-  clickDrawTool,
-  downloadBytes,
   editComponentPropertyCode,
+  expectStatus,
+  exportedProject,
+  openProject,
   readComponentPropertyCode,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
-import { clickRoute, selectRichTextOffsets } from "./canvas-fixtures.js";
+import {
+  clickRoute,
+  selectRichTextOffsets,
+  segmentPoint,
+  drawWire,
+} from "./canvas-fixtures.js";
 
 test("Alt selects an attached label without its host, and the label then drags alone", async ({
   page,
@@ -53,10 +58,7 @@ test("L labels a selected wire or snaps near an unselectable wire", async ({
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 280, y: 180 });
   await placeComponent(page, "resistor", { x: 480, y: 180 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
+  await drawWire(page, "R1-2", "R2-1");
 
   // The selection-first flow opens the same rich editor used after creation,
   // then remains a one-step commit after Apply.
@@ -121,21 +123,10 @@ test("L labels a selected wire or snaps near an unselectable wire", async ({
   await richEditor.fill("VREF");
   await editor.getByRole("button", { name: "Apply text changes" }).click();
   await expect(preview).toContainText("VREF");
-  const routePoint = await page
-    .getByTestId("route-hit-route-ui-1")
-    .evaluate((element) => {
-      const polyline = element as SVGPolylineElement;
-      const first = polyline.points.getItem(0);
-      const second = polyline.points.getItem(1);
-      const matrix = polyline.getScreenCTM();
-      if (!first || !second || !matrix) return null;
-      const point = new DOMPoint(
-        first.x + (second.x - first.x) * 0.25,
-        first.y + (second.y - first.y) * 0.25,
-      ).matrixTransform(matrix);
-      return { x: point.x, y: point.y };
-    });
-  if (!routePoint) throw new Error("Route is not measurable");
+  const routePoint = await segmentPoint(
+    page.getByTestId("route-hit-route-ui-1"),
+    0.25,
+  );
   await page.mouse.move(routePoint.x, routePoint.y + 9);
   // An SVG line has zero CSS width/height, so assert its rendered presence
   // rather than Playwright's box-based visibility heuristic.
@@ -161,9 +152,7 @@ test("L labels a selected wire or snaps near an unselectable wire", async ({
   await richEditor.fill("");
   await editor.getByRole("button", { name: "Apply text changes" }).click();
   await expect(editor).toBeVisible();
-  await expect(page.getByTestId("status")).toContainText(
-    "name cannot be empty",
-  );
+  await expectStatus(page, "name cannot be empty");
   await richEditor.press("Escape");
 });
 
@@ -173,25 +162,24 @@ test("canvas text editor cancels explicitly and commits on Escape or outside cli
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 420, y: 280 });
   const rendered = page.locator('[data-object-id="instance-label-R1"]');
+  const retype = async (text: string) => {
+    await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type(text);
+  };
 
-  await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.type("RA");
+  await retype("RA");
   await page.getByRole("button", { name: "Cancel text changes" }).click();
   await expect(rendered).toContainText("R1");
   await expect(page.getByTestId("canvas-text-editor")).toHaveCount(0);
   await expect(page.getByTestId("revision")).toHaveText("1");
 
-  await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.type("RA");
+  await retype("RA");
   await page.keyboard.press("Escape");
   await expect(rendered).toContainText("RA");
   await expect(page.getByTestId("revision")).toHaveText("2");
 
-  await page.getByTestId("annotation-hit-instance-label-R1").dblclick();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.type("RB");
+  await retype("RB");
   await page
     .getByTestId("schematic-canvas")
     .click({ position: { x: 60, y: 60 } });
@@ -265,12 +253,7 @@ test("deletes imported Net Labels with non-editor ids", async ({ page }) => {
     rotation: 0,
     locked: false,
   });
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "legacy-net-label.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "legacy-net-label.icproj.json");
 
   const importedLabel = page.getByTestId(
     "annotation-hit-imported-label-horizontal",
@@ -297,18 +280,10 @@ test("deletes imported Net Labels with non-editor ids", async ({ page }) => {
   // the following atomic Wire deletion or leave a hidden electrical name.
   await page.keyboard.press("Delete");
   await expect(page.getByTestId("route-hit-route-imported-h")).toHaveCount(0);
-  await expect(page.getByTestId("status")).toContainText(
-    "Deleted wire route-imported-h",
-  );
+  await expectStatus(page, "Deleted wire route-imported-h");
   await page.keyboard.press("Control+z");
 
-  const savedWithoutLabel = await downloadBytes(
-    page,
-    "File",
-    "Export Project File…",
-  );
-  const savedDocument = parseSavedProject(savedWithoutLabel.toString("utf8"))
-    .documents[0];
+  const savedDocument = (await exportedProject(page)).documents[0];
   expect(savedDocument.annotations).toHaveLength(0);
   expect(savedDocument.connectivityEvidence).not.toContainEqual(
     expect.objectContaining({ kind: "name-claim", netId: "net-h" }),

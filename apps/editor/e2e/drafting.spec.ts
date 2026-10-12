@@ -1,15 +1,13 @@
 import { inflateSync } from "node:zlib";
 
-import { parseSavedProject } from "./editor-fixtures";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-import { createEmptyProject } from "@icm/model";
+import { createEmptyProject, type Point } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
 
 import {
   revealPropertiesShelf,
-  awaitEditorReady,
   editComponentPropertyCode,
   editDocumentStyleCode,
   readComponentPropertyCode,
@@ -18,7 +16,54 @@ import {
   clickDrawTool,
   placeText,
   downloadBytes,
+  expectStatus,
+  exportedProject,
+  openProjectFile,
+  parseSavedProject,
+  openEditor,
+  awaitTwoFrames,
+  openProject,
 } from "./editor-fixtures.js";
+import {
+  placedInstance,
+  screenPoints,
+  segmentPoint,
+} from "./canvas-fixtures.js";
+import { readComponentCode } from "./manual-editor-fixtures.js";
+
+/** The exported Project's first text drafting object. */
+async function exportedTextObject(page: Page): Promise<any> {
+  return (await exportedProject(page)).documents[0].drafting.objects.find(
+    (object: { kind: string }) => object.kind === "text",
+  );
+}
+
+async function exportedSvg(page: Page): Promise<string> {
+  return (await downloadBytes(page, "File", "Export SVG")).toString("utf8");
+}
+
+/** Type LaTeX into the open Formula dialog and press its Insert. */
+async function submitFormula(page: Page, latex: string): Promise<void> {
+  await page.getByRole("textbox", { name: "Formula LaTeX source" }).fill(latex);
+  await page
+    .getByRole("dialog", { name: "Formula" })
+    .getByRole("button", { name: "Insert", exact: true })
+    .click();
+}
+
+/** A free, start-aligned, unrotated text note at x 100. */
+function freeText(id: string, zIndex: number, value: string, y: number) {
+  return {
+    id,
+    kind: "text" as const,
+    locked: false,
+    zIndex,
+    content: { runs: [{ kind: "text" as const, value }] },
+    anchor: { kind: "free" as const, position: { x: 100, y } },
+    alignment: "start" as const,
+    rotation: 0 as const,
+  };
+}
 
 function pdfUnicodeMaps(bytes: Buffer): string[] {
   const pdf = bytes.toString("latin1");
@@ -40,46 +85,12 @@ test("schematic text uses the pinned textbook face with measured advances and PD
   const project = createEmptyProject("textbook-font", "Textbook font");
   project.documents[0]!.drafting = {
     objects: [
-      {
-        id: "value",
-        kind: "text",
-        locked: false,
-        zIndex: 0,
-        content: { runs: [{ kind: "text", value: "1.33pF" }] },
-        anchor: { kind: "free", position: { x: 100, y: 100 } },
-        alignment: "start",
-        rotation: 0,
-      },
-      {
-        id: "initial",
-        kind: "text",
-        locked: false,
-        zIndex: 1,
-        content: { runs: [{ kind: "text", value: "R" }] },
-        anchor: { kind: "free", position: { x: 100, y: 150 } },
-        alignment: "start",
-        rotation: 0,
-        styleOverride: { italic: true },
-      },
-      {
-        id: "symbols",
-        kind: "text",
-        locked: false,
-        zIndex: 2,
-        content: { runs: [{ kind: "text", value: "Ω∮β" }] },
-        anchor: { kind: "free", position: { x: 100, y: 200 } },
-        alignment: "start",
-        rotation: 0,
-      },
+      freeText("value", 0, "1.33pF", 100),
+      { ...freeText("initial", 1, "R", 150), styleOverride: { italic: true } },
+      freeText("symbols", 2, "Ω∮β", 200),
     ],
   };
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "font.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProject(page, serializeProject(project), "font.icproj.json");
   const value = page.locator('text[data-object-id="value"]');
   await expect(value).toBeVisible();
   await page.evaluate(async () => {
@@ -123,20 +134,17 @@ test("schematic text uses the pinned textbook face with measured advances and PD
 test("drawing tools keep a visible locator before the first point and clear queued hover on leave and Escape", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const project = createEmptyProject("pointer-feedback", "Pointer feedback");
   project.documents[0]!.instances.push({
-    id: "R1",
+    ...placedInstance("R1", "resistor", 250, 200),
     reference: "R1",
-    symbolId: "resistor",
-    placement: { position: { x: 250, y: 200 }, rotation: 0, mirror: "none" },
   });
-  await page.getByTestId("project-file").setInputFiles({
-    name: "pointer-feedback.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProjectFile(
+    page,
+    serializeProject(project),
+    "pointer-feedback.icproj.json",
+  );
   const canvas = page.getByTestId("schematic-canvas");
   await expect(page.getByTestId("hit-R1")).toBeVisible();
   for (const name of ["line", "rectangle", "circle", "polyline", "arrow"]) {
@@ -152,12 +160,7 @@ test("drawing tools keep a visible locator before the first point and clear queu
     await page.mouse.move(box.x + box.width * 0.66, box.y + box.height * 0.66);
     await page.mouse.move(1, 1);
     await expect(page.getByTestId("drawing-position-marker")).toHaveCount(0);
-    await canvas.evaluate(
-      () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        ),
-    );
+    await awaitTwoFrames(page);
     await expect(page.getByTestId("drawing-position-marker")).toHaveCount(0);
     await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.65);
     await page.keyboard.press("Escape");
@@ -233,6 +236,17 @@ async function expectForeignObjectContentsContained(
     };
   });
   expect(containment).toEqual({ contentFits: true, contained: true });
+}
+
+/** Every point of an SVG polyline or polygon. */
+function svgPoints(locator: Locator) {
+  return locator.evaluate((element) => {
+    const { points } = element as SVGPolylineElement;
+    return Array.from({ length: points.numberOfItems }, (_, index) => {
+      const point = points.getItem(index);
+      return { x: point.x, y: point.y };
+    });
+  });
 }
 
 async function controlTop(locator: Locator): Promise<number> {
@@ -351,14 +365,7 @@ test("adds formatted drafting text and undo/redo restores it", async ({
   );
   await expect(page.getByTestId("revision")).toHaveText("2");
 
-  const project = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  const textObject = project.documents[0].drafting.objects.find(
-    (object: { kind: string }) => object.kind === "text",
-  );
+  const textObject = await exportedTextObject(page);
   expect(textObject.typographyToken).toBe("label");
   expect(textObject.styleOverride?.sizeScale).toBe(1.1);
   const runs = textObject.content.runs.map((run: { kind: string }) => run.kind);
@@ -382,8 +389,7 @@ test("adds formatted drafting text and undo/redo restores it", async ({
 test("authors one validated formula through the canonical text editor", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await placeText(page);
 
   const latexButton = page.getByRole("button", { name: "Insert formula" });
@@ -509,12 +515,7 @@ test("authors one validated formula through the canonical text editor", async ({
   // MathLive publishes palette edits through its input event. Let that event
   // and the controlled-value render settle before the source textarea becomes
   // authoritative, otherwise an old palette edit can overwrite a fast fill.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  await awaitTwoFrames(page);
   await source.fill(normalizedDifferential);
   await expect(source).toHaveValue(normalizedDifferential);
   await page.getByRole("button", { name: "Display" }).click();
@@ -536,14 +537,7 @@ test("authors one validated formula through the canonical text editor", async ({
   await expect(formula.locator("text", { hasText: "∫" })).toHaveCount(1);
   await expect(page.locator("foreignObject", { has: formula })).toHaveCount(0);
 
-  const project = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  const text = project.documents[0].drafting.objects.find(
-    (object: { kind: string }) => object.kind === "text",
-  );
+  const text = await exportedTextObject(page);
   expect(text.content).toEqual({
     runs: [
       {
@@ -554,9 +548,7 @@ test("authors one validated formula through the canonical text editor", async ({
     ],
   });
 
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
+  const svg = await exportedSvg(page);
   expect(svg).toContain('data-role="formula"');
   expect(svg).toContain('data-formula-typography="label-v5"');
   expect(svg).not.toContain("<foreignObject");
@@ -565,8 +557,7 @@ test("authors one validated formula through the canonical text editor", async ({
 test("edits an unrestricted device formula in the same visual annotation", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await chooseComponent(page, "resistor");
   await page
     .getByTestId("schematic-canvas")
@@ -576,11 +567,7 @@ test("edits an unrestricted device formula in the same visual annotation", async
   await page.getByRole("checkbox", { name: "Use display alias" }).check();
   await page.getByRole("button", { name: "Insert formula" }).click();
   const latex = String.raw`R_1=\frac{-1}{g_m\omega}`;
-  await page.getByRole("textbox", { name: "Formula LaTeX source" }).fill(latex);
-  await page
-    .getByRole("dialog", { name: "Formula" })
-    .getByRole("button", { name: "Insert", exact: true })
-    .click();
+  await submitFormula(page, latex);
   await expect(page.getByRole("dialog", { name: "Formula" })).toHaveCount(0);
   await expect(page.getByTestId("formula-conversion-confirmation")).toHaveCount(
     0,
@@ -594,11 +581,7 @@ test("edits an unrestricted device formula in the same visual annotation", async
     "data-formula-typography",
     "label-v5",
   );
-  const project = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const project = await exportedProject(page);
   expect(project.documents[0].instances[0].reference).toBe("R1");
   const labels = project.documents[0].annotations.filter(
     (annotation: { kind: string }) => annotation.kind === "instance-label",
@@ -618,17 +601,10 @@ test("edits an unrestricted device formula in the same visual annotation", async
 });
 
 test("keeps unsafe formula source out of the Project", async ({ page }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await placeText(page);
   await page.getByRole("button", { name: "Insert formula" }).click();
-  await page
-    .getByRole("textbox", { name: "Formula LaTeX source" })
-    .fill(String.raw`\href{https://example.com}{V}`);
-  await page
-    .getByRole("dialog", { name: "Formula" })
-    .getByRole("button", { name: "Insert", exact: true })
-    .click();
+  await submitFormula(page, String.raw`\href{https://example.com}{V}`);
 
   await expect(page.getByRole("alert")).toContainText(
     "command is not available",
@@ -638,13 +614,7 @@ test("keeps unsafe formula source out of the Project", async ({ page }) => {
 
   // LaTeX that label type cannot set is refused by name, not drawn some
   // other way.
-  await page
-    .getByRole("textbox", { name: "Formula LaTeX source" })
-    .fill(String.raw`\boxed{V}`);
-  await page
-    .getByRole("dialog", { name: "Formula" })
-    .getByRole("button", { name: "Insert", exact: true })
-    .click();
+  await submitFormula(page, String.raw`\boxed{V}`);
   await expect(page.getByRole("alert")).toContainText(
     String.raw`\boxed is not supported in formulas`,
   );
@@ -658,8 +628,7 @@ test("keeps the text editor clear of a docked panel and a long formula inside it
   page,
 }) => {
   await page.setViewportSize({ width: 720, height: 720 });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const netlist = page.getByRole("button", {
     name: "Netlist",
     exact: true,
@@ -816,8 +785,7 @@ async function snappedCanvasPoint(
 test("T writes Text first, places it at its preview on the stored annotation pitch after zoom and pan, and undoes it in one step", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   // The annotation pitch is an editor preference that survives a reload.
   expect(
     JSON.parse(await readDocumentStyleCode(page)).canvas.annotationGrid,
@@ -849,6 +817,8 @@ test("T writes Text first, places it at its preview on the stored annotation pit
   const editor = page.getByTestId("text-draft-editor");
   const draft = editor.getByRole("textbox", { name: "Canvas text editor" });
   const preview = page.getByTestId("text-placement-preview");
+  const expectPreviewAt = (at: { x: number; y: number }) =>
+    expect(preview).toHaveAttribute("transform", `translate(${at.x} ${at.y})`);
   await expect(draft).toBeVisible();
   await expect(preview).toHaveCount(0);
   await page.keyboard.press("Escape");
@@ -867,10 +837,7 @@ test("T writes Text first, places it at its preview on the stored annotation pit
     1,
   );
   await expect(preview).toHaveText("Vout");
-  await expect(preview).toHaveAttribute(
-    "transform",
-    `translate(${moved.x} ${moved.y})`,
-  );
+  await expectPreviewAt(moved);
   await expect(preview).toHaveCSS("pointer-events", "none");
   await page.keyboard.press("Escape");
   await expect(preview).toHaveCount(0);
@@ -881,15 +848,9 @@ test("T writes Text first, places it at its preview on the stored annotation pit
   await draft.pressSequentially("Custom text");
   await draft.press("Enter");
   await page.mouse.move(point.x, point.y);
-  await expect(preview).toHaveAttribute(
-    "transform",
-    `translate(${expected.x} ${expected.y})`,
-  );
+  await expectPreviewAt(expected);
   await page.keyboard.press("r");
-  await expect(preview).toHaveAttribute(
-    "transform",
-    `translate(${expected.x} ${expected.y})`,
-  );
+  await expectPreviewAt(expected);
   await expect(preview.locator("text")).toHaveAttribute("font-weight", "bold");
   const previewBounds = await preview.locator("text").boundingBox();
   await page.mouse.click(point.x, point.y);
@@ -910,19 +871,10 @@ test("T writes Text first, places it at its preview on the stored annotation pit
   ).toHaveCount(0);
   await expect(texts).toHaveText("Custom text");
 
-  const project = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  const textObject = project.documents[0].drafting.objects.find(
-    (object: { kind: string }) => object.kind === "text",
-  );
+  const textObject = await exportedTextObject(page);
   expect(textObject.anchor).toEqual({ kind: "free", position: expected });
   expect(textObject.rotation).toBe(90);
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
+  const svg = await exportedSvg(page);
   expect(svg).toContain("Custom text");
   expect(svg).not.toContain(`rotate(90 ${expected.x} ${expected.y})`);
   expect(svg).not.toContain("text-placement-preview");
@@ -1055,38 +1007,22 @@ test("Escape cancels a text drag and a component drag, with its Smart Snap guide
 test("line arrow clicks add bends and snap through to an arbitrary rectangle edge", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   // The arrow is drawn from the Library and the annotation menu only.
   await expect(page.getByTestId("draw-tool-arrow")).toHaveCount(0);
   await clickDrawTool(page, "rectangle");
   await clickCreate(page, { x: 430, y: 220 }, { x: 650, y: 400 });
   const rectangle = page.locator('[data-kind="draft-rectangle"]');
-  const target = await rectangle.evaluate((element) => {
-    const polygon = element as SVGPolygonElement;
-    const matrix = polygon.getScreenCTM();
-    if (!matrix || polygon.points.numberOfItems < 2) return null;
-    const from = polygon.points.getItem(0);
-    const to = polygon.points.getItem(1);
-    const logical = {
-      x: from.x + (to.x - from.x) * 0.37,
-      y: from.y + (to.y - from.y) * 0.37,
-    };
-    const screen = new DOMPoint(logical.x, logical.y).matrixTransform(matrix);
-    const screenFrom = new DOMPoint(from.x, from.y).matrixTransform(matrix);
-    const screenTo = new DOMPoint(to.x, to.y).matrixTransform(matrix);
-    const dx = screenTo.x - screenFrom.x;
-    const dy = screenTo.y - screenFrom.y;
-    const length = Math.hypot(dx, dy) || 1;
-    return {
-      exact: { x: screen.x, y: screen.y },
-      near: {
-        x: screen.x + (-dy / length) * 2,
-        y: screen.y + (dx / length) * 2,
-      },
-    };
-  });
-  if (!target) throw new Error("Rectangle edge is not measurable");
+  const [from, to] = await screenPoints(rectangle);
+  if (!from || !to) throw new Error("Rectangle edge is not measurable");
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const exact = { x: from.x + dx * 0.37, y: from.y + dy * 0.37 };
+  const target = {
+    exact,
+    near: { x: exact.x + (-dy / length) * 2, y: exact.y + (dx / length) * 2 },
+  };
 
   await clickDrawTool(page, "arrow");
   await page.mouse.click(target.exact.x - 110, target.exact.y - 80);
@@ -1103,32 +1039,14 @@ test("line arrow clicks add bends and snap through to an arbitrary rectangle edg
   );
   await expect(line).toHaveCount(1);
   const geometry = await Promise.all([
-    line.evaluate((element) => {
-      const polyline = element as SVGPolylineElement;
-      return Array.from(
-        { length: polyline.points.numberOfItems },
-        (_, index) => {
-          const point = polyline.points.getItem(index);
-          return { x: point.x, y: point.y };
-        },
-      );
-    }),
+    svgPoints(line),
     rectangle.evaluate((element) => {
       const polygon = element as SVGPolygonElement;
       return [polygon.points.getItem(0), polygon.points.getItem(1)].map(
         (point) => ({ x: point.x, y: point.y }),
       );
     }),
-    head.evaluate((element) => {
-      const polygon = element as SVGPolygonElement;
-      return Array.from(
-        { length: polygon.points.numberOfItems },
-        (_, index) => {
-          const point = polygon.points.getItem(index);
-          return { x: point.x, y: point.y };
-        },
-      );
-    }),
+    svgPoints(head),
   ]);
   expect(geometry[0]).toHaveLength(3);
   const edge = geometry[1];
@@ -1175,8 +1093,7 @@ test("construction line hits by its stroke and inserts a vertex on double-click"
 test("a drawn rectangle selects by its outline, passes interior clicks through and resizes by its corner", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await clickDrawTool(page, "rectangle");
   await clickCreate(page, { x: 220, y: 220 }, { x: 380, y: 320 });
   await expect(page.getByTestId("revision")).toHaveText("1");
@@ -1188,23 +1105,12 @@ test("a drawn rectangle selects by its outline, passes interior clicks through a
   const hit = page.getByTestId(/^drafting-hit-rectangle-/);
   await expect(hit).toHaveCSS("pointer-events", "stroke");
   await expect(hit).toHaveCSS("fill", "none");
-  const center = await hit.evaluate((element) => {
-    const polygon = element as SVGPolygonElement;
-    const matrix = polygon.getScreenCTM();
-    if (!matrix || polygon.points.numberOfItems !== 4) return null;
-    const logicalCenter = Array.from({ length: 4 }, (_, index) =>
-      polygon.points.getItem(index),
-    ).reduce(
-      (sum, point) => ({ x: sum.x + point.x / 4, y: sum.y + point.y / 4 }),
-      { x: 0, y: 0 },
-    );
-    const screenCenter = new DOMPoint(
-      logicalCenter.x,
-      logicalCenter.y,
-    ).matrixTransform(matrix);
-    return { x: screenCenter.x, y: screenCenter.y };
-  });
-  if (!center) throw new Error("rectangle center is not measurable");
+  const corners = await screenPoints(hit);
+  if (corners.length !== 4) throw new Error("rectangle is not measurable");
+  const center = corners.reduce(
+    (sum, point) => ({ x: sum.x + point.x / 4, y: sum.y + point.y / 4 }),
+    { x: 0, y: 0 },
+  );
 
   // A marquee wholly inside the empty rectangle must not select its outline.
   await page.mouse.move(center.x - 12, center.y - 12);
@@ -1222,19 +1128,7 @@ test("a drawn rectangle selects by its outline, passes interior clicks through a
   await expect(page.getByTestId("hit-M1")).toHaveCount(1);
   await expect(page.getByTestId("revision")).toHaveText("2");
 
-  const edge = await hit.evaluate((element) => {
-    const polygon = element as SVGPolygonElement;
-    const matrix = polygon.getScreenCTM();
-    if (!matrix || polygon.points.numberOfItems < 2) return null;
-    const first = polygon.points.getItem(0);
-    const second = polygon.points.getItem(1);
-    const midpoint = new DOMPoint(
-      (first.x + second.x) / 2,
-      (first.y + second.y) / 2,
-    ).matrixTransform(matrix);
-    return { x: midpoint.x, y: midpoint.y };
-  });
-  if (!edge) throw new Error("rectangle hit target is not measurable");
+  const edge = await segmentPoint(hit);
   await page.mouse.click(edge.x, edge.y);
   await expect(
     page.locator('[data-testid^="draft-handle-corner-"]'),
@@ -1256,8 +1150,7 @@ test("a drawn rectangle selects by its outline, passes interior clicks through a
 test("double-click inside a rectangle writes a centered, anchored label", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await clickDrawTool(page, "rectangle");
   await clickCreate(page, { x: 220, y: 220 }, { x: 380, y: 320 });
   await expect(page.getByTestId("revision")).toHaveText("1");
@@ -1405,24 +1298,14 @@ test("authors inline fractions alongside styled text and preserves them through 
   await expect(page.getByTestId("revision")).toHaveText(revision!);
 
   expect(await note.getAttribute("transform")).toBeNull();
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
+  const svg = await exportedSvg(page);
   expect(svg).toContain('data-role="fraction-bar"');
   expect(svg).toContain('data-text-run="subscript"');
   expect(svg).toContain(" + R");
   expect(svg).not.toContain("data-rich-text-fraction");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "fractions.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
+  await openProjectFile(page, saved, "fractions.icproj.json");
   await expect(note.locator('[data-role="fraction-bar"]')).toHaveCount(1);
-  const reopened = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
+  const reopened = await exportedProject(page);
   expect(reopened.documents[0].drafting.objects[0].content).toEqual(content);
 });
 
@@ -1540,11 +1423,7 @@ test("centers fraction parts on a content-sized bar and defaults notes to bold",
   expect(await check(note)).toBeLessThan(initialWidth);
 
   const saved = await downloadBytes(page, "File", "Export Project File…");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "fraction-layout.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
+  await openProjectFile(page, saved, "fraction-layout.icproj.json");
   await check(note);
 });
 
@@ -1569,12 +1448,7 @@ test("rectangle annotation code commits paint and stacking atomically and surviv
       },
     ],
   };
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "annotation.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
+  await openProject(page, serializeProject(project), "annotation.icproj.json");
   const hit = page.getByTestId("drafting-hit-shape");
   const edgePoint = () =>
     hit.evaluate((element) => {
@@ -1597,7 +1471,7 @@ test("rectangle annotation code commits paint and stacking atomically and surviv
   const background = page.locator(
     '[data-drafting-layer="background"] [data-object-id="shape"]',
   );
-  const before = JSON.parse(await readComponentPropertyCode(page));
+  const before = await readComponentCode(page);
   expect(before.stacking).toEqual({ layer: "front" });
   const lineStyle = page.getByRole("combobox", {
     name: "Line style options",
@@ -1625,7 +1499,7 @@ test("rectangle annotation code commits paint and stacking atomically and surviv
   await expect(shape).toHaveAttribute("fill", "#e1eeff");
   await expect(background).toHaveCount(1);
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  expect(JSON.parse(await readComponentPropertyCode(page))).toEqual(before);
+  expect(await readComponentCode(page)).toEqual(before);
   await expect(shape).toHaveAttribute("fill", "none");
   await page.getByRole("button", { name: "Redo", exact: true }).click();
   // An invalid draft changes nothing and is discarded without a revision.
@@ -1640,33 +1514,21 @@ test("rectangle annotation code commits paint and stacking atomically and surviv
   await expect(shape).toHaveAttribute("fill", "#e1eeff");
   const lastRevision = await page.getByTestId("revision").textContent();
   await page.getByRole("button", { name: "Discard draft" }).click();
-  expect(JSON.parse(await readComponentPropertyCode(page))).toEqual(
-    JSON.parse(valid),
-  );
+  expect(await readComponentCode(page)).toEqual(JSON.parse(valid));
   await expect(page.getByTestId("revision")).toHaveText(lastRevision!);
   const saved = await downloadBytes(page, "File", "Export Project File…");
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
+  const svg = await exportedSvg(page);
   expect(svg).toContain('fill="#e1eeff"');
   expect(svg).toContain('stroke="#0c2238"');
-  await page.getByTestId("project-file").setInputFiles({
-    name: "reopen.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened reopen.icproj.json",
-  );
+  await openProjectFile(page, saved, "reopen.icproj.json");
+  await expectStatus(page, "Opened reopen.icproj.json");
   // The context menu opens the same Properties code.
   const reopenedEdge = await edgePoint();
   await page.mouse.click(reopenedEdge.x, reopenedEdge.y, { button: "right" });
   await page
     .getByRole("menuitem", { name: "Properties (Q)", exact: true })
     .click();
-  expect(JSON.parse(await readComponentPropertyCode(page))).toEqual(
-    JSON.parse(valid),
-  );
+  expect(await readComponentCode(page)).toEqual(JSON.parse(valid));
   await page.getByRole("button", { name: "Edit fill color" }).click();
   await page.getByRole("button", { name: "Reset fill color" }).click();
   await expect(shape).toHaveAttribute("fill", "none");
@@ -1691,25 +1553,10 @@ test("arrow endpoints keep independent styles through rotation, history, file ex
       },
     ],
   };
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "ends.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(serializeProject(project)),
-  });
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened ends.icproj.json",
-  );
+  await openProject(page, serializeProject(project), "ends.icproj.json");
+  await expectStatus(page, "Opened ends.icproj.json");
   const hit = page.getByTestId("drafting-hit-arrow-ends");
-  const edge = await hit.evaluate((element) => {
-    const path = element as SVGPolygonElement;
-    const first = path.points.getItem(0);
-    const p = new DOMPoint(first.x, first.y).matrixTransform(
-      path.getScreenCTM()!,
-    );
-    return { x: p.x, y: p.y };
-  });
+  const [edge] = (await screenPoints(hit)) as [Point];
   await page.mouse.click(edge.x, edge.y);
   await page.keyboard.press("q");
   const start = page.getByRole("combobox", {
@@ -1751,21 +1598,13 @@ test("arrow endpoints keep independent styles through rotation, history, file ex
     parseSavedProject(saved.toString("utf8")).documents[0].drafting.objects[0]
       .styleOverride,
   ).toMatchObject({ arrowStart: "dot", arrowEnd: "large-arrow" });
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
+  const svg = await exportedSvg(page);
   expect(svg).toContain(`points="${polygon}"`);
   expect(svg).toContain(
     `<circle cx="${circle.cx}" cy="${circle.cy}" r="${circle.r}"`,
   );
-  await page.getByTestId("project-file").setInputFiles({
-    name: "reopened-ends.icproj.json",
-    mimeType: "application/json",
-    buffer: saved,
-  });
-  await expect(page.getByTestId("status")).toContainText(
-    "Opened reopened-ends.icproj.json",
-  );
+  await openProjectFile(page, saved, "reopened-ends.icproj.json");
+  await expectStatus(page, "Opened reopened-ends.icproj.json");
   await expect(art.locator("polygon")).toHaveAttribute("points", polygon);
   // Click the visible dot away from the shaft and endpoint handle. It must
   // select the arrow even outside the original path's geometry.
@@ -1797,18 +1636,10 @@ async function polylinePoints(page: Page): Promise<number[][]> {
 }
 
 async function selectPolyline(page: Page): Promise<void> {
-  const point = await page
-    .getByTestId(/^drafting-hit-arrow-/)
-    .evaluate((element) => {
-      const line = element as SVGPolylineElement;
-      const a = line.points.getItem(0),
-        b = line.points.getItem(1);
-      const p = new DOMPoint(
-        a.x + (b.x - a.x) * 0.25,
-        a.y + (b.y - a.y) * 0.25,
-      ).matrixTransform(line.getScreenCTM()!);
-      return { x: p.x, y: p.y };
-    });
+  const point = await segmentPoint(
+    page.getByTestId(/^drafting-hit-arrow-/),
+    0.25,
+  );
   await page.mouse.click(point.x, point.y);
 }
 
@@ -1832,8 +1663,7 @@ async function drawPolyline(page: Page): Promise<void> {
 test("Polyline annotation draws a right angle, edits vertices, stretches and preserves both endpoint styles", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await drawPolyline(page);
   const original = await polylinePoints(page);
   expect(original).toHaveLength(3);
@@ -1907,9 +1737,7 @@ test("Polyline annotation draws a right angle, edits vertices, stretches and pre
     buffer: exported,
   });
   await expect.poll(() => polylinePoints(page)).toEqual(stretched);
-  const svg = (await downloadBytes(page, "File", "Export SVG")).toString(
-    "utf8",
-  );
+  const svg = await exportedSvg(page);
   expect(svg).toContain('data-kind="draft-arrow"');
   const artwork = await page.evaluate((source) => {
     const root = new DOMParser().parseFromString(source, "image/svg+xml");

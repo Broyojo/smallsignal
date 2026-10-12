@@ -1,24 +1,11 @@
-import { exportedProject, chooseComponent } from "./editor-fixtures";
+import {
+  exportedProject,
+  expectStatus,
+  placeComponentAt,
+} from "./editor-fixtures";
 import { expect, test, type Page } from "@playwright/test";
 import type { SchematicDocument } from "@icm/model";
-
-async function placeComponent(
-  page: Page,
-  symbolId: string,
-  position: { x: number; y: number },
-): Promise<void> {
-  await chooseComponent(page, symbolId);
-  await page.getByTestId("schematic-canvas").click({ position });
-  await page.keyboard.press("Escape");
-}
-
-async function instanceIds(page: Page): Promise<string[]> {
-  return page
-    .locator('[data-canvas-hit-kind="instance"]')
-    .evaluateAll((elements) =>
-      elements.map((element) => element.getAttribute("data-canvas-hit-id")!),
-    );
-}
+import { centre, instanceIds, wirePins } from "./canvas-fixtures";
 
 function routePoints(page: Page) {
   return page
@@ -103,24 +90,22 @@ async function wiredPair(page: Page): Promise<{
   wireBefore: (string | null)[];
 }> {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 300, y: 180 });
-  await placeComponent(page, "resistor", { x: 300, y: 400 });
+  await placeComponentAt(page, "resistor", { x: 300, y: 180 });
+  await placeComponentAt(page, "resistor", { x: 300, y: 400 });
   const ids = await instanceIds(page);
 
   await page.keyboard.press("w");
-  await page.getByTestId(`terminal-${ids[0]}-2`).click();
-  await page.getByTestId(`terminal-${ids[1]}-1`).click();
-  await page.keyboard.press("Escape");
+  await wirePins(page, `${ids[0]}-2`, `${ids[1]}-1`);
   await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(1);
-  // Deselect so a drag targets exactly the pointed-at part.
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 620, y: 420 },
-  });
+  await deselect(page);
   return { ids, wireBefore: await routePoints(page) };
 }
 
-function centre(box: { x: number; y: number; width: number; height: number }) {
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+/** Click bare canvas, so a drag targets exactly the pointed-at part. */
+async function deselect(page: Page): Promise<void> {
+  await page.getByTestId("schematic-canvas").click({
+    position: { x: 620, y: 420 },
+  });
 }
 
 test("Ctrl+drag moves only the part, and a still Ctrl+click toggles selection", async ({
@@ -135,9 +120,7 @@ test("Ctrl+drag moves only the part, and a still Ctrl+click toggles selection", 
   await ctrlDrag(page, centre(still), centre(still));
   await expect(bottom).toHaveClass(/selected/);
   expect(Math.abs((await bottom.boundingBox())!.x - still.x)).toBeLessThan(2);
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 620, y: 420 },
-  });
+  await deselect(page);
 
   const before = (await top.boundingBox())!;
   const from = centre(before);
@@ -146,7 +129,7 @@ test("Ctrl+drag moves only the part, and a still Ctrl+click toggles selection", 
   // The part moved; the now-open wire kept its exact authored geometry.
   expect((await top.boundingBox())!.x).toBeGreaterThan(before.x + 100);
   expect(await routePoints(page)).toEqual(wireBefore);
-  await expect(page.getByTestId("status")).toContainText("without its wires");
+  await expectStatus(page, "without its wires");
 });
 
 // Issue #485: Virtuoso's Shift+M. The same detachment Ctrl+drag performs,
@@ -160,9 +143,7 @@ test("Shift+M arms for the next click and carries a whole selection off its wire
   const bottom = page.getByTestId(`hit-${ids[1]}`);
 
   await page.keyboard.press("Shift+M");
-  await expect(page.getByTestId("status")).toContainText(
-    "Move without wires: click",
-  );
+  await expectStatus(page, "Move without wires: click");
   const armed = (await top.boundingBox())!;
   await page.mouse.click(centre(armed).x, centre(armed).y);
   await page.mouse.move(armed.x + 200, centre(armed).y);
@@ -181,7 +162,7 @@ test("Shift+M arms for the next click and carries a whole selection off its wire
   const topBefore = (await top.boundingBox())!;
   const bottomBefore = (await bottom.boundingBox())!;
   await page.keyboard.press("Shift+M");
-  await expect(page.getByTestId("status")).toContainText("without wires");
+  await expectStatus(page, "without wires");
   const target = { x: topBefore.x + 200, y: centre(topBefore).y };
   await page.mouse.move(target.x, target.y);
   await page.mouse.click(target.x, target.y);
@@ -196,12 +177,10 @@ test("Shift+M arms for the next click and carries a whole selection off its wire
   expect(await routePoints(page)).toEqual(wireBefore);
   // Both selected parts are electrically open, not just visually adrift.
   const terminals = await exportedTerminals(page);
-  expect(terminals).not.toContainEqual(
-    expect.objectContaining({ instanceId: ids[0] }),
-  );
-  expect(terminals).not.toContainEqual(
-    expect.objectContaining({ instanceId: ids[1] }),
-  );
+  for (const id of ids)
+    expect(terminals).not.toContainEqual(
+      expect.objectContaining({ instanceId: id }),
+    );
 });
 
 // Virtuoso's pairing for the two modified drags: Ctrl/Cmd moves a part off its
@@ -220,9 +199,7 @@ test("Shift+drag drops a copy, and a still Shift+click adds to the selection", a
   await expect(top).toHaveClass(/selected/);
   await expect(bottom).toHaveClass(/selected/);
   expect(Math.abs((await bottom.boundingBox())!.x - still.x)).toBeLessThan(2);
-  await page.getByTestId("schematic-canvas").click({
-    position: { x: 620, y: 420 },
-  });
+  await deselect(page);
 
   const before = (await top.boundingBox())!;
   const from = centre(before);
@@ -236,10 +213,8 @@ test("Shift+drag drops a copy, and a still Shift+click adds to the selection", a
   // Duplicating never disturbs the wiring the originals already had.
   expect(await routePoints(page)).toEqual(wireBefore);
   const terminals = await exportedTerminals(page);
-  expect(terminals).toContainEqual(
-    expect.objectContaining({ instanceId: ids[0] }),
-  );
-  expect(terminals).toContainEqual(
-    expect.objectContaining({ instanceId: ids[1] }),
-  );
+  for (const id of ids)
+    expect(terminals).toContainEqual(
+      expect.objectContaining({ instanceId: id }),
+    );
 });

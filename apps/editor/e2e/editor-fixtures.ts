@@ -1,9 +1,33 @@
+import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 import { expect, type Locator, type Page } from "@playwright/test";
 
 /** Wait until the route-split editor shell is ready to receive shortcuts. */
 export async function awaitEditorReady(page: Page): Promise<void> {
   await page.getByTestId("schematic-canvas").waitFor();
+}
+
+/** Let the page paint two frames, so a render and its effects settle. */
+export async function awaitTwoFrames(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+}
+
+/** Load the editor at this address and wait until it takes input. */
+export async function openEditor(page: Page, path = "/editor"): Promise<void> {
+  await page.goto(path);
+  await awaitEditorReady(page);
+}
+
+/** A Project the editor ships among its examples. */
+export function exampleProject(file: string) {
+  return parseProject(
+    readFileSync(new URL(`../src/examples/${file}`, import.meta.url), "utf8"),
+  );
 }
 
 /**
@@ -57,13 +81,40 @@ export async function openMenu(page: Page, name: string): Promise<Locator> {
   return menu.getByRole("group", { name, exact: true });
 }
 
-/** Open the Cell Manager from the header's menu. */
-export async function openCellManager(page: Page): Promise<void> {
+/** Open the Cell Manager from the header's menu and return the dialog. */
+export async function openCellManager(page: Page): Promise<Locator> {
   await (
     await openMenu(page, "Hierarchy")
   )
     .getByTestId("hierarchy-entry")
     .click();
+  return page.getByRole("dialog", { name: "Cell Manager", exact: true });
+}
+
+/** Open the Cell Manager on one of its tabs and return the dialog. */
+export async function openCellManagerTab(
+  page: Page,
+  tab: string,
+): Promise<Locator> {
+  const manager = await openCellManager(page);
+  await manager.getByRole("tab", { name: tab, exact: true }).click();
+  return manager;
+}
+
+/** Assert that the status line reports this text. */
+export async function expectStatus(
+  page: Page,
+  text: string | RegExp,
+): Promise<void> {
+  await expect(page.getByTestId("status")).toContainText(text);
+}
+
+/** Show the Live netlist panel if its toggle is off, and return the panel. */
+export async function showNetlistPanel(page: Page): Promise<Locator> {
+  const toggle = page.getByTestId("netlist-panel-toggle");
+  if ((await toggle.getAttribute("aria-pressed")) !== "true")
+    await toggle.click();
+  return page.getByRole("region", { name: "Live netlist", exact: true });
 }
 
 export async function clickCommand(
@@ -104,6 +155,29 @@ export async function renameProject(page: Page, name: string): Promise<void> {
   await field.fill(name);
   await field.press("Enter");
   await expect(field).toBeHidden();
+}
+
+/** Rename a Shelf project with the Shelf's own Rename control. */
+export async function renameShelfProject(
+  page: Page,
+  from: string,
+  to: string,
+): Promise<void> {
+  await page.getByLabel("Open Shelf project in tab", { exact: true }).click();
+  const shelf = page.locator(".project-tabs-shelf");
+  await shelf.getByRole("button", { name: from, exact: true }).hover();
+  await shelf
+    .getByRole("button", { name: `Rename ${from}`, exact: true })
+    .click();
+  const field = shelf.getByRole("textbox", {
+    name: "Shelf project name",
+    exact: true,
+  });
+  await field.fill(to);
+  await field.press("Enter");
+  await expect(
+    shelf.getByRole("button", { name: to, exact: true }),
+  ).toBeVisible();
 }
 
 /** Run one workflow command from the Netlist menu. */
@@ -193,20 +267,27 @@ export async function chooseComponent(
   await dialog.getByTestId(`insert-component-${symbolId}`).click();
 }
 
-/** Edit the selected component's strict JSON; valid changes update live. */
+/** Place one component at a canvas position, leaving no tool armed. */
+export async function placeComponentAt(
+  page: Page,
+  symbolId: string,
+  position: { x: number; y: number },
+): Promise<void> {
+  await chooseComponent(page, symbolId);
+  await page.getByTestId("schematic-canvas").click({ position });
+  await page.keyboard.press("Escape");
+}
+
 /** Place one resistor at each x on row y, leaving no tool armed. */
 export async function placeResistors(
   page: Page,
   xs: number[],
   y = 230,
 ): Promise<void> {
-  for (const x of xs) {
-    await chooseComponent(page, "resistor");
-    await page.getByTestId("schematic-canvas").click({ position: { x, y } });
-    await page.keyboard.press("Escape");
-  }
+  for (const x of xs) await placeComponentAt(page, "resistor", { x, y });
 }
 
+/** Edit the selected component's strict JSON; valid changes update live. */
 export async function editComponentPropertyCode(
   page: Page,
   update: (value: Record<string, any>) => void,
@@ -311,17 +392,25 @@ export async function expectComponentCodeField(
     .toEqual(expected);
 }
 
-export async function downloadBytes(
+/** The bytes of the file that `action` makes the page download. */
+export async function downloaded(
+  page: Page,
+  action: () => Promise<void>,
+): Promise<Buffer> {
+  const download = page.waitForEvent("download");
+  await action();
+  const chunks: Buffer[] = [];
+  for await (const chunk of await (await download).createReadStream())
+    chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+export function downloadBytes(
   page: Page,
   menu: string,
   buttonName: string,
 ): Promise<Buffer> {
-  const downloadPromise = page.waitForEvent("download");
-  await clickCommand(page, menu, buttonName);
-  const stream = await (await downloadPromise).createReadStream();
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks);
+  return downloaded(page, () => clickCommand(page, menu, buttonName));
 }
 
 export interface RecoveryRecordView {
@@ -385,6 +474,11 @@ export async function readRecoveryRecords(
 export async function recoveryProjectTexts(page: Page): Promise<string> {
   const records = await readRecoveryRecords(page);
   return records.map((record) => record.projectText).join("\n");
+}
+
+/** Wait until a browser recovery copy holds this text. */
+export async function expectRecovered(page: Page, text: string): Promise<void> {
+  await expect.poll(() => recoveryProjectTexts(page)).toContain(text);
 }
 
 /** Copy through the real clipboard and prove its content matches the live sidebar. */
@@ -468,9 +562,9 @@ export async function exportedProject(page: Page): Promise<any> {
 /** Open the editor on a Project a test built. */
 export async function openProject(
   page: Page,
-  project: object,
+  project: object | string,
   name?: string,
 ): Promise<void> {
-  await page.goto("/editor");
+  await openEditor(page);
   await openProjectFile(page, project, name);
 }

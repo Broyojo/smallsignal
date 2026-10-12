@@ -6,7 +6,7 @@ import { basename, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { preview, type PreviewServer } from "vite";
 
-import { awaitEditorReady } from "./editor-fixtures.js";
+import { awaitEditorReady, openProjectFile } from "./editor-fixtures.js";
 import {
   BROWSER_PERFORMANCE_COUNTS,
   createBrowserPerformanceProject,
@@ -150,11 +150,11 @@ async function openProject(page: Page, name: string, bytes: Buffer) {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.addInitScript(recordFrames);
   await page.goto(`${origin}editor`);
-  await page.getByTestId("project-file").setInputFiles({
-    name: projectPath ? basename(projectPath) : name,
-    mimeType: "application/json",
-    buffer: bytes,
-  });
+  await openProjectFile(
+    page,
+    bytes,
+    projectPath ? basename(projectPath) : name,
+  );
   await awaitEditorReady(page);
   const netlist = page.getByTestId("netlist-panel-toggle");
   if ((await netlist.getAttribute("aria-pressed")) === "true")

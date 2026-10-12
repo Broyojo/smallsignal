@@ -1,38 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  createEmptyProject,
-  createRoutePath,
-  routeBends,
-  type CircuitProject,
-} from "@icm/model";
+import { createEmptyProject, createRoutePath, routeBends } from "@icm/model";
 
-import { exportedProject, openProject } from "./editor-fixtures";
-
-async function open(page: Page, project: CircuitProject): Promise<void> {
-  await openProject(page, project, "group-mirror.icproj.json");
-  await expect(page.getByTestId("status")).toContainText(
-    "group-mirror.icproj.json",
-  );
-}
-
-async function savedDocument(page: Page) {
-  return (await exportedProject(page)).documents[0];
-}
+import { expectStatus, openProject } from "./editor-fixtures";
+import { exportedDocument } from "./manual-editor-fixtures.js";
+import { placedInstance, segmentPoint } from "./canvas-fixtures.js";
 
 /** The on-screen midpoint of one wire leg; a thin polyline's CSS box misses. */
 async function wireLegPoint(page: Page, routeId: string, leg: number) {
   const route = page.getByTestId(`route-hit-${routeId}`);
   await expect(route).toBeAttached();
-  return route.evaluate((element, index) => {
-    const line = element as SVGPolylineElement;
-    const first = line.points.getItem(index);
-    const second = line.points.getItem(index + 1);
-    const screen = new DOMPoint(
-      (first.x + second.x) / 2,
-      (first.y + second.y) / 2,
-    ).matrixTransform(line.getScreenCTM()!);
-    return { x: screen.x, y: screen.y };
-  }, leg);
+  return segmentPoint(route, 0.5, leg);
 }
 
 test("a free wire mirrors from its context menu; one held by an unselected part says why it stays", async ({
@@ -41,11 +18,9 @@ test("a free wire mirrors from its context menu; one held by an unselected part 
   const project = createEmptyProject("wire-mirror", "Wire mirror");
   const document = project.documents[0]!;
   document.instances.push({
-    id: "R1",
-    symbolId: "resistor",
+    ...placedInstance("R1", "resistor", 200, 460),
     reference: "R1",
     netlist: { parameters: { value: "1k" } },
-    placement: { position: { x: 200, y: 460 }, rotation: 0, mirror: "none" },
   });
   document.nets.push(
     { id: "net-w", terminals: [] },
@@ -76,8 +51,9 @@ test("a free wire mirrors from its context menu; one held by an unselected part 
       modes: ["manual", "manual"],
     }),
   );
-  await open(page, project);
-  const initial = await savedDocument(page);
+  await openProject(page, project, "group-mirror.icproj.json");
+  await expectStatus(page, "group-mirror.icproj.json");
+  const initial = await exportedDocument(page);
   const mirrorFromMenu = async (routeId: string, leg: number) => {
     const point = await wireLegPoint(page, routeId, leg);
     await page.mouse.click(point.x, point.y, { button: "right" });
@@ -88,10 +64,8 @@ test("a free wire mirrors from its context menu; one held by an unselected part 
   };
 
   await mirrorFromMenu("wire", 0);
-  await expect(page.getByTestId("status")).toContainText(
-    "Flipped the selection left to right",
-  );
-  const mirrored = await savedDocument(page);
+  await expectStatus(page, "Flipped the selection left to right");
+  const mirrored = await exportedDocument(page);
   const position = (id: string) =>
     mirrored.junctions.find((junction: { id: string }) => junction.id === id)
       .position;
@@ -106,13 +80,11 @@ test("a free wire mirrors from its context menu; one held by an unselected part 
   expect(mirrored.nets).toEqual(initial.nets);
   // Mirroring again puts it back exactly.
   await page.keyboard.press("Shift+R");
-  expect((await savedDocument(page)).junctions).toEqual(initial.junctions);
+  expect((await exportedDocument(page)).junctions).toEqual(initial.junctions);
 
   await mirrorFromMenu("held", 1);
-  await expect(page.getByTestId("status")).toContainText(
-    "Nothing here can mirror",
-  );
-  const after = await savedDocument(page);
+  await expectStatus(page, "Nothing here can mirror");
+  const after = await exportedDocument(page);
   expect(after.routes).toEqual(initial.routes);
   expect(after.junctions).toEqual(initial.junctions);
 });

@@ -3,16 +3,19 @@
 
 import { expect, test } from "@playwright/test";
 import {
-  awaitEditorReady,
-  clickDrawTool,
   placeText,
   editComponentPropertyCode,
+  openEditor,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
   openSelectionShelf,
 } from "./manual-editor-fixtures.js";
-import { clickRoute, selectRichTextOffsets } from "./canvas-fixtures.js";
+import {
+  clickRoute,
+  selectRichTextOffsets,
+  drawWire,
+} from "./canvas-fixtures.js";
 
 // The looks themselves are label-typography's and rich-text's; this is the
 // toolbar reading and writing them through a real selection.
@@ -22,10 +25,7 @@ test("draws a new subscript upright, lights the looks it has, and slants it only
   await page.goto("/editor");
   await placeComponent(page, "resistor", { x: 280, y: 180 });
   await placeComponent(page, "resistor", { x: 480, y: 180 });
-  await clickDrawTool(page, "wire");
-  await page.getByTestId("terminal-R1-2").click();
-  await page.getByTestId("terminal-R2-1").click();
-  await page.keyboard.press("Escape");
+  await drawWire(page, "R1-2", "R2-1");
   await clickRoute(page, "route-ui-1", 0.5, 0);
   await openSelectionShelf(page);
   await editComponentPropertyCode(page, (code) => {
@@ -100,8 +100,7 @@ test("draws a new subscript upright, lights the looks it has, and slants it only
 test("a bar over a Pin's V_LO names its complement and draws V̄_LO, keeping the author's look", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const canvas = page.getByTestId("schematic-canvas");
   await page.keyboard.press("p");
   await canvas.hover({ position: { x: 320, y: 180 } });
@@ -161,12 +160,11 @@ test("keeps an overbar from widening a narrow glyph", async ({ page }) => {
   await page.goto("/editor");
 
   await placeText(page, { x: 360, y: 300 });
-  let editor = page.getByRole("textbox", { name: "Canvas text editor" });
+  const editor = page.getByRole("textbox", { name: "Canvas text editor" });
   await editor.fill("f");
   await page.getByRole("button", { name: "Apply text changes" }).click();
 
   await placeText(page, { x: 560, y: 300 });
-  editor = page.getByRole("textbox", { name: "Canvas text editor" });
   await editor.fill("f");
   await editor.press("ControlOrMeta+A");
   await page.getByRole("button", { name: "Overbar" }).click();

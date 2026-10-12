@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 import { chooseComponent } from "./editor-fixtures.js";
+import { sessionUser, signIn } from "./gallery-fixtures.js";
+
+/** Each element's left, right and top edge in the viewport. */
+const edges = (elements: Element[]) =>
+  elements.map((element) => {
+    const box = element.getBoundingClientRect();
+    return { left: box.left, right: box.right, top: box.top };
+  });
 
 test("keeps editor chrome typography from suppressing SVG italics", async ({
   page,
@@ -48,12 +56,7 @@ test("keeps Gallery Library Netlist and Project Code together on the left at ful
   ]);
   for (const width of [1440, 720]) {
     await page.setViewportSize({ width, height: 900 });
-    const bounds = await panels.getByRole("button").evaluateAll((buttons) =>
-      buttons.map((button) => {
-        const box = button.getBoundingClientRect();
-        return { left: box.left, right: box.right, top: box.top };
-      }),
-    );
+    const bounds = await panels.getByRole("button").evaluateAll(edges);
     expect(bounds[0]!.left).toBeLessThan(24);
     for (let index = 1; index < bounds.length; index++) {
       expect(bounds[index]!.top).toBe(bounds[0]!.top);
@@ -91,18 +94,13 @@ test("compacts the editor header at half width and keeps the account role in its
   await page.route("**/api/auth/providers", (route) =>
     route.fulfill({ json: { github: true, google: false, email: false } }),
   );
-  await page.route("**/api/auth/me", (route) =>
-    route.fulfill({
-      json: {
-        user: {
-          id: "owner-1",
-          displayName: "A Very Long Display Name",
-          email: "owner@example.com",
-          provider: "github",
-          role: "user",
-          isAdmin: true,
-        },
-      },
+  await signIn(
+    page,
+    sessionUser({
+      id: "owner-1",
+      displayName: "A Very Long Display Name",
+      email: "owner@example.com",
+      isAdmin: true,
     }),
   );
   await page.setViewportSize({ width: 720, height: 900 });
@@ -122,13 +120,8 @@ test("compacts the editor header at half width and keeps the account role in its
     const leftControls = page.locator(
       ".app-brand > :is(.gallery-home-link, .header-gallery-link, .project-menu, .command-menu)",
     );
-    const leftBounds = await leftControls.evaluateAll((elements) =>
-      elements
-        .map((element) => {
-          const box = element.getBoundingClientRect();
-          return { left: box.left, right: box.right, top: box.top };
-        })
-        .filter(({ right, left }) => right > left),
+    const leftBounds = (await leftControls.evaluateAll(edges)).filter(
+      ({ right, left }) => right > left,
     );
     expect(leftBounds.length).toBeGreaterThanOrEqual(4);
     expect(leftBounds[0]!.left).toBeLessThan(24);
@@ -151,12 +144,7 @@ test("compacts the editor header at half width and keeps the account role in its
       .locator(
         '[data-testid="open-analog-simulation"], [data-testid="open-agent"], [data-testid="publish-gallery-button"]',
       )
-      .evaluateAll((elements) =>
-        elements.map((element) => {
-          const box = element.getBoundingClientRect();
-          return { left: box.left, right: box.right, top: box.top };
-        }),
-      );
+      .evaluateAll(edges);
     expect(actionBounds).toHaveLength(3);
     for (let index = 1; index < actionBounds.length; index++) {
       expect(actionBounds[index]!.left).toBeGreaterThanOrEqual(

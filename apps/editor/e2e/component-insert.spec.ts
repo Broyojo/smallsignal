@@ -1,5 +1,4 @@
-import { parseSavedProject } from "./editor-fixtures";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createEmptyProject, createRoutePath } from "@icm/model";
 
 import { EDITOR_SHORTCUT_REFERENCE } from "../src/interaction/editor-shortcut-reference";
@@ -12,14 +11,25 @@ import {
   editComponentPropertyCode,
   setComponentCodeField,
   expectComponentCodeField,
+  expectStatus,
+  openProject,
+  openProjectFile,
+  parseSavedProject,
+  placeComponentAt,
+  placeResistors,
   readComponentPropertyCode,
   readDocumentStyleCode,
   readRecoveryRecords,
+  openEditor,
+  awaitTwoFrames,
 } from "./editor-fixtures.js";
 import {
+  exportedDocument,
+  openPlacedProperties,
   openSelectionShelf,
-  placeComponent,
+  readComponentCode,
 } from "./manual-editor-fixtures.js";
+import { placedInstance, onScreen } from "./canvas-fixtures.js";
 
 // These tests assert device behavior against decoded content, independently
 // of the current portable field spelling and structural shorthand.
@@ -32,16 +42,16 @@ async function recoveryProjectTexts(page: import("@playwright/test").Page) {
     .join("\n");
 }
 
+const storedItem = (page: Page, key: string) =>
+  page.evaluate((key) => localStorage.getItem(key), key);
+
 // The plainest gate. component-property-code-edits.test.ts covers all six
 // configurable gates, shrinking after a disconnect and the shrink refusals.
 test("a gate's input count changes drawn pins and black-box target together", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "and-gate", { x: 360, y: 230 });
-  await page.getByTestId("hit-X1").click();
-  await openSelectionShelf(page);
-  expect(JSON.parse(await readComponentPropertyCode(page)).inputs).toBe(2);
+  await openPlacedProperties(page, "and-gate", { x: 360, y: 230 }, "hit-X1");
+  expect((await readComponentCode(page)).inputs).toBe(2);
   await editComponentPropertyCode(page, (code) => {
     code.inputs = 4;
   });
@@ -60,57 +70,35 @@ test("C copy shows alignment guides, commits the preview and clears guides on Es
 }) => {
   const project = createEmptyProject("copy-guides", "Copy guides");
   project.documents[0]!.instances = [
-    {
-      id: "R1",
-      symbolId: "resistor",
-      placement: { position: { x: 300, y: 200 }, rotation: 0, mirror: "none" },
-    },
+    placedInstance("R1", "resistor", 300, 200),
   ];
-  await page.goto("/editor");
-  await page.getByTestId("project-file").setInputFiles({
-    name: "copy-guides.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "copy-guides.icproj.json");
   // Import fits this single part tightly; leave room for both copy destinations.
   for (let step = 0; step < 7; step += 1)
     await page.getByRole("button", { name: "Zoom out", exact: true }).click();
   const canvas = page.getByTestId("schematic-canvas");
-  const screenPoint = (x: number, y: number) =>
-    canvas.evaluate(
-      (element, point) => {
-        const matrix = (element as SVGSVGElement).getScreenCTM()!;
-        const screen = new DOMPoint(point.x, point.y).matrixTransform(matrix);
-        return { x: screen.x, y: screen.y };
-      },
-      { x, y },
-    );
+  const screenPoint = async (x: number, y: number) =>
+    (await onScreen(canvas, [{ x, y }]))[0];
   await page.getByTestId("hit-R1").click();
   await page.keyboard.press("c");
   const horizontal = await screenPoint(500, 202);
   await page.mouse.move(horizontal.x, horizontal.y);
   const ghost = page.getByTestId("copy-placement-preview");
+  const guideY = page.getByTestId("snap-guide-y");
   await expect(ghost).toHaveAttribute("transform", "translate(200 0)");
-  await expect(page.getByTestId("snap-guide-y")).toHaveCount(1);
-  expect(
-    Number(await page.getByTestId("snap-guide-y").getAttribute("x2")),
-  ).toBeGreaterThan(500);
+  await expect(guideY).toHaveCount(1);
+  expect(Number(await guideY.getAttribute("x2"))).toBeGreaterThan(500);
   await expect(page.getByTestId("revision")).toHaveText("0");
 
-  const beforeRotation = await page
-    .getByTestId("snap-guide-y")
-    .getAttribute("y1");
+  const beforeRotation = await guideY.getAttribute("y1");
   await page.keyboard.press("r");
   // A turn under a stationary pointer must refresh the pin/edge guides too.
-  await expect(page.getByTestId("snap-guide-y")).not.toHaveAttribute(
-    "y1",
-    beforeRotation!,
-  );
+  await expect(guideY).not.toHaveAttribute("y1", beforeRotation!);
   await expect(
     ghost.locator('[data-object-id="R1_2"] > g').first(),
   ).toHaveAttribute("transform", /rotate\(90\)/);
   await page.keyboard.press("Shift+r");
-  await expect(page.getByTestId("snap-guide-y")).toHaveCount(1);
+  await expect(guideY).toHaveCount(1);
   // Both mirror chords turn the copy preview before it commits.
   const copied = ghost.locator('[data-object-id="R1_2"] > g').first();
   await expect(copied).toHaveAttribute("transform", /scale\(-1 1\)/u);
@@ -130,13 +118,8 @@ test("C copy shows alignment guides, commits the preview and clears guides on Es
   expect(
     Number(await page.getByTestId("snap-guide-x").getAttribute("y2")),
   ).toBeGreaterThan(400);
-  const screenOrigin = (locator: typeof ghost) =>
-    locator.first().evaluate((element) => {
-      const p = new DOMPoint().matrixTransform(
-        (element as SVGGElement).getScreenCTM()!,
-      );
-      return { x: p.x, y: p.y };
-    });
+  const screenOrigin = async (locator: typeof ghost) =>
+    (await onScreen(locator.first(), [{ x: 0, y: 0 }]))[0];
   const preview = await screenOrigin(copied);
   await page.mouse.click(vertical.x, vertical.y);
   const placed = await screenOrigin(
@@ -148,12 +131,12 @@ test("C copy shows alignment guides, commits the preview and clears guides on Es
   // Repeated placement aligns to the newly stamped part as well as its source.
   const next = await screenPoint(500, 402);
   await page.mouse.move(next.x, next.y);
-  await expect(page.getByTestId("snap-guide-y")).toHaveCount(1);
+  await expect(guideY).toHaveCount(1);
   await page.mouse.move(100, 60);
   await expect(ghost).toHaveCount(0);
   await expect(page.locator(".smart-snap-guide")).toHaveCount(0);
   await page.mouse.move(next.x, next.y);
-  await expect(page.getByTestId("snap-guide-y")).toHaveCount(1);
+  await expect(guideY).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(ghost).toHaveCount(0);
   await expect(page.locator(".smart-snap-guide")).toHaveCount(0);
@@ -164,8 +147,12 @@ test("C copy shows alignment guides, commits the preview and clears guides on Es
 test("blocks destructive browser refresh shortcuts while work is unsaved", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
+  const canvas = page.getByTestId("schematic-canvas");
+  const status = page.getByTestId("status");
+  const blocked = "Refresh blocked to protect the current circuit";
+  const expectGuardAlive = () =>
+    expect(page.locator("body")).toHaveAttribute("data-refresh-guard", "alive");
   await expect(page.locator(".canvas-grid-dot").first()).toHaveCSS(
     "fill",
     "rgb(196, 199, 201)",
@@ -174,45 +161,27 @@ test("blocks destructive browser refresh shortcuts while work is unsaved", async
   // the refresh shortcut (a real browser would reload here; synthetic keys
   // cannot drive the browser accelerator, so assert the guard stays silent).
   await page.keyboard.press("Control+r");
-  await expect(page.getByTestId("status")).not.toHaveText(
-    "Refresh blocked to protect the current circuit",
-  );
+  await expect(status).not.toHaveText(blocked);
 
   // With meaningful content (three objects) the guard takes over. Clear the
   // selection first: Ctrl+R on a mirrorable selection means mirror, not
   // refresh.
-  for (const x of [220, 320, 420]) {
-    await chooseComponent(page, "resistor");
-    await page
-      .getByTestId("schematic-canvas")
-      .click({ position: { x, y: 220 } });
-    await page.keyboard.press("Escape");
-  }
+  await placeResistors(page, [220, 320, 420], 220);
   await page.keyboard.press("Escape");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 60, y: 60 } });
+  await canvas.click({ position: { x: 60, y: 60 } });
   await page.evaluate(() => {
     document.body.dataset.refreshGuard = "alive";
   });
   await page.keyboard.press("Control+r");
-  await expect(page.getByTestId("status")).toHaveText(
-    "Refresh blocked to protect the current circuit",
-  );
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-refresh-guard",
-    "alive",
-  );
+  await expect(status).toHaveText(blocked);
+  await expectGuardAlive();
 
   await page.keyboard.press("i");
   const dialog = page.getByRole("dialog", { name: "Insert Component" });
   await dialog.getByLabel("Component search").focus();
   await page.keyboard.press("F5");
   await expect(dialog).toBeVisible();
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-refresh-guard",
-    "alive",
-  );
+  await expectGuardAlive();
   await page.keyboard.press("Escape");
 
   // Once an equally safe copy exists — here the exported Project file, the
@@ -222,18 +191,11 @@ test("blocks destructive browser refresh shortcuts while work is unsaved", async
   const download = page.waitForEvent("download");
   await clickCommand(page, "File", "Export Project File…");
   await download;
-  await page
-    .getByTestId("status")
-    .click({ trial: true })
-    .catch(() => {});
+  await status.click({ trial: true }).catch(() => {});
   await page.keyboard.press("Escape");
-  await page
-    .getByTestId("schematic-canvas")
-    .click({ position: { x: 60, y: 60 } });
+  await canvas.click({ position: { x: 60, y: 60 } });
   await page.keyboard.press("Control+r");
-  await expect(page.getByTestId("status")).not.toHaveText(
-    "Refresh blocked to protect the current circuit",
-  );
+  await expect(status).not.toHaveText(blocked);
   await clickCommand(page, "File", "New Project");
   await expect(
     page.getByRole("dialog", { name: "Unsaved changes" }),
@@ -247,8 +209,7 @@ test("the status bar toggles the grid, labelled full-width and an icon half-widt
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const toggle = page.getByRole("button", { name: "Grid", exact: true });
   const label = toggle.locator(".statusbar-grid-label");
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -281,31 +242,20 @@ test("a part set down beside a pin is pulled onto it and connects", async ({
   // Placement reaches for a pin as far as a moved part or a wire end does.
   // With the quiet drawing radius a Pin put down a few pixels off a gate
   // landed a grid step away and stayed unconnected.
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await revealPropertiesShelf(page);
   const canvas = page.getByTestId("schematic-canvas");
-  await chooseComponent(page, "nmos");
-  await canvas.click({ position: { x: 420, y: 300 } });
-  await page.keyboard.press("Escape");
+  await placeComponentAt(page, "nmos", { x: 420, y: 300 });
   const [gate, box] = await Promise.all([
     page.getByTestId("terminal-M1-G").boundingBox(),
     canvas.boundingBox(),
   ]);
   if (!gate || !box) throw new Error("Gate is not measurable");
-  await chooseComponent(page, "port");
-  await canvas.click({
-    position: {
-      x: gate.x + gate.width / 2 - box.x,
-      y: gate.y + gate.height / 2 - box.y - 6,
-    },
+  await placeComponentAt(page, "port", {
+    x: gate.x + gate.width / 2 - box.x,
+    y: gate.y + gate.height / 2 - box.y - 6,
   });
-  await page.keyboard.press("Escape");
-  const document = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  ).documents[0];
+  const document = await exportedDocument(page);
   const port = document.instances.find(
     (instance: { symbolId: string }) => instance.symbolId === "port",
   );
@@ -328,8 +278,7 @@ test("new circuits open Library and Netlist, keep the saved preference, and mirr
     localStorage.setItem("icm.library-panel-open.v1", "false");
   });
 
-  await page.goto("/editor?new=1");
-  await awaitEditorReady(page);
+  await openEditor(page, "/editor?new=1");
 
   await expect(page.getByTestId("shapes-library-panel")).toHaveAttribute(
     "data-open",
@@ -342,28 +291,27 @@ test("new circuits open Library and Netlist, keep the saved preference, and mirr
       "true",
     );
   await expect
-    .poll(() =>
-      page.evaluate(() => localStorage.getItem("icm.library-panel-open.v1")),
-    )
+    .poll(() => storedItem(page, "icm.library-panel-open.v1"))
     .toBe("false");
-  const libraryEntries = await page
-    .getByTestId("shapes-category-annotations")
-    .getByRole("button")
-    .evaluateAll((buttons) =>
+  const labelsOf = (locator: Locator) =>
+    locator.evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute("aria-label")),
     );
+  const libraryEntries = await labelsOf(
+    page.getByTestId("shapes-category-annotations").getByRole("button"),
+  );
   await page.getByTestId("library-toggle").click();
   await page.getByTestId("netlist-panel-toggle").click();
   const menu = page.getByTestId("annotation-menu");
   const canvas = page.getByTestId("schematic-canvas");
+  const drafted = canvas.locator('[data-testid^="drafting-hit-"]');
+  const pickAnnotation = async (symbol: string) => {
+    await menu.locator("summary").click();
+    await menu.getByTestId(`annotation-shortcut-annotation-${symbol}`).click();
+    await expect(menu).not.toHaveAttribute("open");
+  };
   await menu.locator("summary").click();
-  expect(
-    await menu
-      .getByRole("button")
-      .evaluateAll((buttons) =>
-        buttons.map((button) => button.getAttribute("aria-label")),
-      ),
-  ).toEqual(libraryEntries);
+  expect(await labelsOf(menu.getByRole("button"))).toEqual(libraryEntries);
   await page.keyboard.press("Escape");
   const drawingTools = [
     ["arrow", "arrow"],
@@ -372,18 +320,14 @@ test("new circuits open Library and Netlist, keep the saved preference, and mirr
     ["circle", "circle"],
   ];
   for (const [index, [symbol, tool]] of drawingTools.entries()) {
-    await menu.locator("summary").click();
-    await menu.getByTestId(`annotation-shortcut-annotation-${symbol}`).click();
-    await expect(menu).not.toHaveAttribute("open");
+    await pickAnnotation(symbol!);
     await expect(page.getByTestId("active-tool")).toHaveText(tool!);
     await canvas.click({ position: { x: 160 + index * 150, y: 400 } });
     await canvas.click({ position: { x: 240 + index * 150, y: 470 } });
     if (symbol === "arrow" || symbol === "line")
       await page.keyboard.press("Enter");
     await page.keyboard.press("Escape");
-    await expect(canvas.locator('[data-testid^="drafting-hit-"]')).toHaveCount(
-      index + 1,
-    );
+    await expect(drafted).toHaveCount(index + 1);
   }
   for (const [index, symbol] of [
     "polarity-both",
@@ -391,9 +335,7 @@ test("new circuits open Library and Netlist, keep the saved preference, and mirr
     "text-minus",
     "ellipsis",
   ].entries()) {
-    await menu.locator("summary").click();
-    await menu.getByTestId(`annotation-shortcut-annotation-${symbol}`).click();
-    await expect(menu).not.toHaveAttribute("open");
+    await pickAnnotation(symbol);
     await canvas.hover({ position: { x: 160 + index * 150, y: 560 } });
     // A minus is a stroked horizontal line with a zero-height SVG geometry
     // box; Playwright's visibility heuristic excludes it despite the stroke.
@@ -403,9 +345,7 @@ test("new circuits open Library and Netlist, keep the saved preference, and mirr
       await page.getByRole("button", { name: "Apply text changes" }).click();
     }
     await page.keyboard.press("Escape");
-    await expect(canvas.locator('[data-testid^="drafting-hit-"]')).toHaveCount(
-      index + 5,
-    );
+    await expect(drafted).toHaveCount(index + 5);
   }
   await expect(canvas.locator('[data-polarity="both"]')).toBeVisible();
   await expect(canvas.locator('[data-polarity="positive"]')).toBeVisible();
@@ -540,8 +480,7 @@ test("keeps shortcuts hidden until the status-bar Hints control requests them", 
 test("category chips multi-select which kinds the quick pick shows", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.keyboard.press("i");
   const dialog = page.getByRole("dialog", { name: "Insert Component" });
   await expect(dialog.getByTestId("insert-component-nmos")).toBeVisible();
@@ -586,8 +525,7 @@ test("category chips multi-select which kinds the quick pick shows", async ({
 test("edits the polarity label's text without losing its marks", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const panel = page.getByTestId("shapes-library-panel");
   if ((await panel.getAttribute("data-open")) !== "true") {
     await page.getByTestId("library-toggle").click();
@@ -658,22 +596,17 @@ test("reopens I, starts Copy from retained selection without stacking modes, and
   page,
 }) => {
   await page.goto("/editor");
-  await chooseComponent(page, "resistor");
+  await placeComponentAt(page, "resistor", { x: 360, y: 230 });
   const canvas = page.getByTestId("schematic-canvas");
-  await canvas.click({ position: { x: 360, y: 230 } });
-  await page.keyboard.press("Escape");
   await page.getByTestId("hit-R1").click();
 
   await page.keyboard.press("i");
-  await expect(
-    page.getByRole("dialog", { name: "Insert Component" }),
-  ).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "Insert Component" });
+  await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   // Closing the dialog is a state update, so a keystroke sent in the same tick
   // still lands in its search field. Wait for it to leave before typing.
-  await expect(
-    page.getByRole("dialog", { name: "Insert Component" }),
-  ).toHaveCount(0);
+  await expect(dialog).toHaveCount(0);
   await page.keyboard.press("c");
   await page.keyboard.press("c");
   await canvas.hover({ position: { x: 560, y: 330 } });
@@ -682,7 +615,6 @@ test("reopens I, starts Copy from retained selection without stacking modes, and
   await expect(page.getByTestId("copy-placement-preview")).toHaveCount(0);
 
   await page.keyboard.press("i");
-  const dialog = page.getByRole("dialog", { name: "Insert Component" });
   await expect(dialog).toBeVisible();
   // The dialog claims focus a frame after it opens, so an Escape pressed in
   // that gap is delivered elsewhere: it must not stay stuck open.
@@ -735,16 +667,11 @@ test("publishes placement cancellation synchronously before rapid Copy", async (
 test("Enter confirms property code unchanged and Shift+Enter adds layout whitespace", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 360, y: 230 });
-  await page.getByTestId("hit-R1").click();
-  await openSelectionShelf(page);
+  await openPlacedProperties(page, "resistor", { x: 360, y: 230 }, "hit-R1");
   const propertyCode = page.getByLabel("Editable Canvas property code");
   // Enter confirms the current draft without changing its bytes. Shift+Enter
   // remains the explicit way to add layout whitespace inside the JSON.
-  const singleLine = JSON.stringify(
-    JSON.parse(await readComponentPropertyCode(page)),
-  );
+  const singleLine = JSON.stringify(await readComponentCode(page));
   await propertyCode.fill(singleLine);
   await propertyCode.press("ControlOrMeta+End");
   await propertyCode.press("ArrowLeft");
@@ -759,10 +686,7 @@ test("Enter confirms property code unchanged and Shift+Enter adds layout whitesp
 test("merges opamp body marks into one Library entry and property", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await placeComponent(page, "opamp", { x: 360, y: 230 });
-  await page.getByTestId("hit-X1").click();
-  await openSelectionShelf(page);
+  await openPlacedProperties(page, "opamp", { x: 360, y: 230 }, "hit-X1");
   const body = page.locator("[data-symbol-id]").first();
   await expect(page.getByLabel("Amplifier placement actions")).toHaveCount(0);
   await expectComponentCodeField(page, "appearance.internalMark", "none");
@@ -782,12 +706,8 @@ test("merges opamp body marks into one Library entry and property", async ({
   await expect(
     page.getByRole("button", { name: "Return component to Placement Tray" }),
   ).toHaveCount(0);
-  const saved = parseSavedProject(
-    (await downloadBytes(page, "File", "Export Project File…")).toString(
-      "utf8",
-    ),
-  );
-  expect(saved.documents[0].instances[0].symbolId).toBe("opamp-inputs-swapped");
+  const saved = await exportedDocument(page);
+  expect(saved.instances[0].symbolId).toBe("opamp-inputs-swapped");
 });
 
 test("edits independent input and output swaps with undo, named connections and saved state", async ({
@@ -799,10 +719,8 @@ test("edits independent input and output swaps with undo, named connections and 
   );
   const document = project.documents[0]!;
   document.instances.push({
-    id: "X1",
+    ...placedInstance("X1", "opamp-differential-lettered", 360, 230),
     reference: "X1",
-    symbolId: "opamp-differential-lettered",
-    placement: { position: { x: 360, y: 230 }, rotation: 0, mirror: "none" },
     signalFlowParameters: { formula: "G" },
   });
   for (const [pinName, x, y] of [
@@ -829,13 +747,7 @@ test("edits independent input and output swaps with undo, named connections and 
       }),
     );
   }
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await page.getByTestId("project-file").setInputFiles({
-    name: "polarity.icproj.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(project)),
-  });
+  await openProject(page, project, "polarity.icproj.json");
   await page.getByTestId("hit-X1").click();
   await openSelectionShelf(page);
   const inputs = page.getByRole("switch", { name: "Swap the + and - inputs" });
@@ -898,11 +810,7 @@ test("edits independent input and output swaps with undo, named connections and 
     signalFlowParameters: { formula: "G" },
     placement: { rotation: 90, mirror: "horizontal" },
   });
-  await page.getByTestId("project-file").setInputFiles({
-    name: "reopen.icproj.json",
-    mimeType: "application/json",
-    buffer: bytes,
-  });
+  await openProjectFile(page, bytes, "reopen.icproj.json");
   await page.getByTestId("hit-X1").click();
   await openSelectionShelf(page);
   await expect(inputs).toHaveAttribute("aria-checked", "true");
@@ -921,8 +829,7 @@ test("tiles the whole catalog into one flat quick-pick grid", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1100, height: 720 });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.keyboard.press("i");
 
   const dialog = page.getByRole("dialog", { name: "Insert Component" });
@@ -965,9 +872,7 @@ test("tiles the whole catalog into one flat quick-pick grid", async ({
   await page.keyboard.press("i");
   await dialog.getByTestId("insert-component-resistor").dblclick();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByTestId("status")).toContainText(
-    "Place Resistor on the canvas",
-  );
+  await expectStatus(page, "Place Resistor on the canvas");
   await page.keyboard.press("Escape");
 });
 
@@ -998,8 +903,7 @@ test("widens the Insert picker and adds columns with the editor viewport", async
   // A window snapped to half of a common desktop uses its complete available
   // width apart from the 20px modal gutter on each side.
   await page.setViewportSize({ width: 960, height: 800 });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   await page.keyboard.press("i");
   const halfScreen = await measurePicker();
   const rootFontSize = await page.evaluate(() =>
@@ -1034,12 +938,7 @@ test(`places a D flip-flop on the first click with slight pointer drift over its
     await expect(page.getByTestId("component-placement-preview")).toBeVisible();
     await page.mouse.down();
     await page.mouse.move(box.x + x + 1, box.y + 231);
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        ),
-    );
+    await awaitTwoFrames(page);
     await page.mouse.up();
     await expect(instances).toHaveCount(index + 1);
     await expect(page.getByTestId("revision")).toHaveText(String(index + 1));
@@ -1062,8 +961,7 @@ test("shows the complete foldable categorized Library, quick-places a device, an
   page,
 }) => {
   await page.setViewportSize({ width: 1024, height: 720 });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   const panel = page.getByTestId("shapes-library-panel");
   const canvas = page.getByTestId("schematic-canvas");
   const libraryChips = panel.locator('[data-testid^="shapes-chip-"]');
@@ -1181,21 +1079,14 @@ test("shows the complete foldable categorized Library, quick-places a device, an
   await page.getByTestId("library-toggle").click();
   await expect(panel).toHaveAttribute("data-open", "false");
   await expect
-    .poll(() =>
-      page.evaluate(() => localStorage.getItem("icm.library-panel-open.v1")),
-    )
+    .poll(() => storedItem(page, "icm.library-panel-open.v1"))
     .toBe("false");
 
   await page.reload();
   await awaitEditorReady(page);
-  await expect(page.getByTestId("shapes-library-panel")).toHaveAttribute(
-    "data-open",
-    "false",
-  );
+  await expect(panel).toHaveAttribute("data-open", "false");
   await expect
-    .poll(() =>
-      page.evaluate(() => localStorage.getItem("icm.recent-components.v1")),
-    )
+    .poll(() => storedItem(page, "icm.recent-components.v1"))
     .toContain("resistor");
 });
 
@@ -1203,13 +1094,13 @@ test("keeps a usable canvas while toggling Library at the narrow breakpoint", as
   page,
 }) => {
   await page.setViewportSize({ width: 720, height: 720 });
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
 
   const panel = page.getByTestId("shapes-library-panel");
   const canvas = page.getByTestId("schematic-canvas");
   await expect(panel).toHaveAttribute("data-open", "false");
-  const closedWidth = (await canvas.boundingBox())?.width ?? 0;
+  const canvasWidth = async () => (await canvas.boundingBox())?.width ?? 0;
+  const closedWidth = await canvasWidth();
   expect(closedWidth).toBeGreaterThan(600);
 
   await page.getByTestId("library-toggle").click();
@@ -1218,10 +1109,8 @@ test("keeps a usable canvas while toggling Library at the narrow breakpoint", as
   // The panel cannot take more than its share of the narrow window.
   const panelWidth = (await panel.boundingBox())?.width ?? 0;
   expect(panelWidth).toBeLessThanOrEqual(720 * 0.6);
-  await expect
-    .poll(async () => (await canvas.boundingBox())?.width ?? 0)
-    .toBeLessThan(closedWidth);
-  const openWidth = (await canvas.boundingBox())?.width ?? 0;
+  await expect.poll(canvasWidth).toBeLessThan(closedWidth);
+  const openWidth = await canvasWidth();
   expect(openWidth).toBeGreaterThan(450);
 
   await revealPropertiesShelf(page);
@@ -1231,9 +1120,7 @@ test("keeps a usable canvas while toggling Library at the narrow breakpoint", as
     "aria-expanded",
     "true",
   );
-  await expect
-    .poll(async () => (await canvas.boundingBox())?.width ?? 0)
-    .toBeCloseTo(closedWidth, 0);
+  await expect.poll(canvasWidth).toBeCloseTo(closedWidth, 0);
   expect(
     await page.evaluate(() => ({
       horizontal:

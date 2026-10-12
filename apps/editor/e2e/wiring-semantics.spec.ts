@@ -1,23 +1,24 @@
-import { createEmptyProject, createRoutePath, type Point } from "@icm/model";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { createEmptyProject, type Point } from "@icm/model";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
-  chooseComponent,
   clickDrawTool,
   closeProjectTools,
   clickNetlistWorkflowCommand,
+  expectStatus,
   openProject,
+  placeComponentAt,
 } from "./editor-fixtures";
-
-async function placeComponent(
-  page: Page,
-  symbolId: string,
-  position: { x: number; y: number },
-): Promise<void> {
-  await chooseComponent(page, symbolId);
-  await page.getByTestId("schematic-canvas").click({ position });
-  await page.keyboard.press("Escape");
-}
+import {
+  addStraightWire,
+  centre,
+  instanceIds,
+  onScreen,
+  placedInstance,
+  polylinePoints,
+  routeIdOf,
+  awaitCanvasSettled,
+} from "./canvas-fixtures";
 
 /**
  * The check found nothing but the loose wires' open ends. They are drawn
@@ -34,69 +35,6 @@ async function expectOnlyOpenWireEnds(page: Page, ends: number) {
   ).toHaveCount(ends);
 }
 
-async function instanceIds(page: Page): Promise<string[]> {
-  return page
-    .locator('[data-canvas-hit-kind="instance"]')
-    .evaluateAll((elements) =>
-      elements.map((element) => element.getAttribute("data-canvas-hit-id")!),
-    );
-}
-
-/**
- * Where document points are on screen, through the canvas's own screen CTM:
- * the transform the editor inverts to read every pointer. A rendered bounding
- * box would count the hit polylines' 14px non-scaling stroke.
- */
-async function onScreen(
-  canvas: Locator,
-  points: readonly { x: number; y: number }[],
-): Promise<{ x: number; y: number }[]> {
-  const screen = await canvas.evaluate((element, logical) => {
-    const matrix = (element as SVGSVGElement).getScreenCTM();
-    if (!matrix) return null;
-    return logical.map((point) => {
-      const mapped = new DOMPoint(point.x, point.y).matrixTransform(matrix);
-      return { x: mapped.x, y: mapped.y };
-    });
-  }, points);
-  if (!screen) throw new Error("Canvas geometry is not measurable");
-  return screen;
-}
-
-/**
- * Hold until the canvas has stopped moving under the pointer.
- *
- * Panel toggles animate the workspace grid, and the canvas keeps growing into
- * the freed column for the whole transition: the drawing slides sideways and
- * the document-to-pixel scale climbs as it goes. The aria attribute a toggle
- * flips is set on the click, not at the end of that animation, so a pixel-
- * exact gesture measured straight afterwards aims at where the drawing WAS.
- */
-async function awaitCanvasSettled(canvas: Locator): Promise<void> {
-  await canvas.evaluate(
-    (element) =>
-      new Promise<void>((resolve) => {
-        const svg = element as SVGSVGElement;
-        const read = () => {
-          const matrix = svg.getScreenCTM();
-          return matrix
-            ? `${matrix.a} ${matrix.d} ${matrix.e} ${matrix.f}`
-            : "";
-        };
-        let previous = read();
-        let stillFrames = 0;
-        const step = () => {
-          const current = read();
-          stillFrames = current === previous ? stillFrames + 1 : 0;
-          previous = current;
-          if (stillFrames >= 3) resolve();
-          else requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-      }),
-  );
-}
-
 // The smallest and the largest scale; the ones between add nothing new, and
 // each target kind is captured at one of them.
 for (const [scale, targetKind] of [
@@ -108,29 +46,12 @@ for (const [scale, targetKind] of [
   }) => {
     const project = createEmptyProject("wire-capture", "Wire capture");
     const document = project.documents[0]!;
-    document.instances.push({
-      id: "C1",
-      symbolId: "capacitor",
-      placement: {
-        position: { x: 300, y: 300 },
-        rotation: 0,
-        mirror: "none",
-      },
-    });
-    document.nets.push({ id: "bus", terminals: [] });
-    document.junctions.push(
+    document.instances.push(placedInstance("C1", "capacitor", 300, 300));
+    addStraightWire(
+      document,
+      "bus-route",
       { id: "left", netId: "bus", position: { x: 240, y: 400 } },
       { id: "right", netId: "bus", position: { x: 400, y: 400 } },
-    );
-    document.routes.push(
-      createRoutePath({
-        id: "bus-route",
-        netId: "bus",
-        start: { kind: "junction", junctionId: "left" },
-        end: { kind: "junction", junctionId: "right" },
-        bends: [],
-        modes: ["manual"],
-      }),
     );
     await openProject(page, project);
     const canvas = page.getByTestId("schematic-canvas");
@@ -177,16 +98,14 @@ for (const [scale, targetKind] of [
       target,
     ]);
     await page.mouse.click(start!.x, start!.y);
-    await expect(page.getByTestId("status")).toContainText(
-      "Wire source: free grid point",
-    );
+    await expectStatus(page, "Wire source: free grid point");
     // At high zoom this is beyond the old 7px circle AND the DOM hit band.
     // At low zoom it checks the minimum capture size on the same path.
     const offset = Math.min(24, Math.max(6, 7 * scale)) * 0.8;
     await page.mouse.move(destination!.x, destination!.y - offset);
     await expect(page.getByTestId("wire-snap-target")).toBeVisible();
     await page.mouse.click(destination!.x, destination!.y - offset);
-    await expect(page.getByTestId("status")).toContainText("Committed route");
+    await expectStatus(page, "Committed route");
     await expect(page.getByTestId("wire-preview")).toHaveCount(0);
     await expect(page.getByTestId("wire-snap-target")).toHaveCount(0);
     await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(
@@ -199,20 +118,20 @@ test("a click on the active pin fixes no step, Delete on a junction dot disconne
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 260, y: 200 });
-  await placeComponent(page, "resistor", { x: 260, y: 420 });
-  await placeComponent(page, "resistor", { x: 460, y: 310 });
-  await placeComponent(page, "resistor", { x: 80, y: 310 });
+  await placeComponentAt(page, "resistor", { x: 260, y: 200 });
+  await placeComponentAt(page, "resistor", { x: 260, y: 420 });
+  await placeComponentAt(page, "resistor", { x: 460, y: 310 });
+  await placeComponentAt(page, "resistor", { x: 80, y: 310 });
   const ids = await instanceIds(page);
   const routes = page.locator('[data-canvas-hit-kind="route"]');
   await clickDrawTool(page, "wire");
   await page.getByTestId(`terminal-${ids[0]}-2`).click();
   // Clicking the active pin again does not fix a zero-length wire step.
   await page.getByTestId(`terminal-${ids[0]}-2`).click();
-  await expect(page.getByTestId("status")).toContainText("Wire source:");
+  await expectStatus(page, "Wire source:");
   await expect(page.getByTestId("status")).not.toContainText("step fixed");
   await page.getByTestId(`terminal-${ids[1]}-1`).click();
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   await expect(routes).toHaveCount(1);
   const box = (await routes.first().boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -224,11 +143,7 @@ test("a click on the active pin fixes no step, Delete on a junction dot disconne
 
   // Click exactly on the visible dot: the junction's hit circle sits on the
   // same contact point, so the dot is clickable. Delete removes the tap.
-  const dotBox = (await dot.boundingBox())!;
-  const dotCentre = {
-    x: dotBox.x + dotBox.width / 2,
-    y: dotBox.y + dotBox.height / 2,
-  };
+  const dotCentre = centre((await dot.boundingBox())!);
   await page.mouse.click(dotCentre.x, dotCentre.y);
   await page.keyboard.press("Delete");
   await expect(dot).toHaveCount(0);
@@ -241,11 +156,9 @@ test("a click on the active pin fixes no step, Delete on a junction dot disconne
   // click is not an ambiguous crossing: it starts the wire at the junction.
   await clickDrawTool(page, "wire");
   await page.mouse.click(dotCentre.x, dotCentre.y);
-  await expect(page.getByTestId("status")).toContainText(
-    "Wire source: junction:",
-  );
+  await expectStatus(page, "Wire source: junction:");
   await page.getByTestId(`terminal-${ids[3]}-2`).click();
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   await expect(routes).toHaveCount(4);
   await expect(dot).toHaveCount(1);
 });
@@ -266,19 +179,13 @@ test("middle clicks reach 45 degrees after one corner flip from a fixed vertical
   await page.mouse.click(bend!.x, bend!.y);
   await page.mouse.move(end!.x, end!.y);
   const preview = page.getByTestId("wire-preview");
-  const points = () =>
-    preview.evaluate((element) =>
-      Array.from((element as SVGPolylineElement).points).map(({ x, y }) => ({
-        x,
-        y,
-      })),
-    );
+  const points = () => polylinePoints(preview);
   await expect(preview).toBeVisible();
   const original = await points();
   const middle = () => page.mouse.click(end!.x, end!.y, { button: "middle" });
 
   await middle();
-  await expect(page.getByTestId("status")).toContainText("horizontal first");
+  await expectStatus(page, "horizontal first");
   const flipped = await points();
   expect(flipped).not.toEqual(original);
   expect(
@@ -291,7 +198,7 @@ test("middle clicks reach 45 degrees after one corner flip from a fixed vertical
   ).toBe(true);
 
   await middle();
-  await expect(page.getByTestId("status")).toContainText("45° diagonal");
+  await expectStatus(page, "45° diagonal");
   const diagonal = await points();
   expect(
     diagonal.some((point, index) => {
@@ -302,9 +209,9 @@ test("middle clicks reach 45 degrees after one corner flip from a fixed vertical
     }),
   ).toBe(true);
   await middle();
-  await expect(page.getByTestId("status")).toContainText("any angle");
+  await expectStatus(page, "any angle");
   await middle();
-  await expect(page.getByTestId("status")).toContainText("auto");
+  await expectStatus(page, "auto");
   expect(await points()).toEqual(original);
   await expect(page.getByTestId("revision")).toHaveText("0");
   await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(0);
@@ -313,14 +220,9 @@ test("middle clicks reach 45 degrees after one corner flip from a fixed vertical
   await middle();
   await page.mouse.dblclick(end!.x, end!.y);
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(1);
-  const committed = await page
-    .locator('[data-layer="routes"] polyline')
-    .evaluate((element) =>
-      Array.from((element as SVGPolylineElement).points).map(({ x, y }) => ({
-        x,
-        y,
-      })),
-    );
+  const committed = await polylinePoints(
+    page.locator('[data-layer="routes"] polyline'),
+  );
   expect(committed).toEqual(diagonal);
 });
 
@@ -328,8 +230,8 @@ test("a middle press cycles the wire corner, even drifting under the hand, and n
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 260, y: 200 });
-  await placeComponent(page, "resistor", { x: 460, y: 420 });
+  await placeComponentAt(page, "resistor", { x: 260, y: 200 });
+  await placeComponentAt(page, "resistor", { x: 460, y: 420 });
   const ids = await instanceIds(page);
   await page.keyboard.press("w");
   await page.getByTestId(`terminal-${ids[0]}-2`).click();
@@ -341,7 +243,7 @@ test("a middle press cycles the wire corner, even drifting under the hand, and n
   await page.mouse.down({ button: "middle" });
   await page.mouse.move(366, 325);
   await page.mouse.up({ button: "middle" });
-  await expect(page.getByTestId("status")).toContainText("Wire corner:");
+  await expectStatus(page, "Wire corner:");
   await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(0);
 
   // Middle directly over the destination endpoint's snap circle is the
@@ -351,7 +253,7 @@ test("a middle press cycles the wire corner, even drifting under the hand, and n
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down({ button: "middle" });
   await page.mouse.up({ button: "middle" });
-  await expect(page.getByTestId("status")).toContainText("Wire corner:");
+  await expectStatus(page, "Wire corner:");
   await expect(page.locator('[data-canvas-hit-kind="route"]')).toHaveCount(0);
 
   // The primary button still commits.
@@ -378,9 +280,7 @@ test("Wire options and / choose the corner without a middle button, and Enter fi
   // The keyboard twin of a middle click continues the same cycle.
   await options.getByLabel("Route").blur();
   await page.keyboard.press("/");
-  await expect(page.getByTestId("status")).toContainText(
-    "Wire corner: any angle",
-  );
+  await expectStatus(page, "Wire corner: any angle");
   await expect(chip).toHaveText("Any angle · F3");
   await page.keyboard.press("/");
   await expect(chip).toHaveText("Orthogonal · F3");
@@ -426,20 +326,11 @@ test("dragging a wire's end onto another wire joins them into one net", async ({
     ["across", { x: 240, y: 320 }, { x: 480, y: 320 }],
     ["down", { x: 360, y: 160 }, { x: 360, y: 240 }],
   ] as const) {
-    document.nets.push({ id: net, terminals: [] });
-    document.junctions.push(
+    addStraightWire(
+      document,
+      `wire-${net}`,
       { id: `${net}-a`, netId: net, position: from, role: "route-anchor" },
       { id: `${net}-b`, netId: net, position: to, role: "route-anchor" },
-    );
-    document.routes.push(
-      createRoutePath({
-        id: `wire-${net}`,
-        netId: net,
-        start: { kind: "junction", junctionId: `${net}-a` },
-        end: { kind: "junction", junctionId: `${net}-b` },
-        bends: [],
-        modes: ["manual"],
-      }),
     );
   }
   await openProject(page, project);
@@ -477,8 +368,8 @@ test("a connected wire's segments drag with a live preview, a diagonal along the
   page,
 }) => {
   await page.goto("/editor");
-  await placeComponent(page, "resistor", { x: 260, y: 200 });
-  await placeComponent(page, "resistor", { x: 560, y: 420 });
+  await placeComponentAt(page, "resistor", { x: 260, y: 200 });
+  await placeComponentAt(page, "resistor", { x: 560, y: 420 });
   const ids = await instanceIds(page);
   await page.keyboard.press("w");
   await page.getByTestId(`terminal-${ids[0]}-2`).click();
@@ -490,26 +381,16 @@ test("a connected wire's segments drag with a live preview, a diagonal along the
     await page.mouse.down({ button: "middle" });
     await page.mouse.up({ button: "middle" });
   }
-  await expect(page.getByTestId("status")).toContainText("45° diagonal");
+  await expectStatus(page, "45° diagonal");
   await page.getByTestId(`terminal-${ids[1]}-1`).click();
   await page.keyboard.press("Escape");
   await awaitCanvasSettled(canvas);
 
   const wire = page.locator('[data-testid^="route-hit-"]');
-  const routeId = (await wire.getAttribute("data-testid"))!.replace(
-    "route-hit-",
-    "",
-  );
+  const routeId = await routeIdOf(wire);
   const drawn = page.locator(
     `[data-layer="routes"] [data-object-id="${routeId}"]`,
   );
-  const pointsOf = (line: Locator) =>
-    line.evaluate((element) =>
-      Array.from((element as SVGPolylineElement).points).map(({ x, y }) => ({
-        x,
-        y,
-      })),
-    );
   const revision = () => page.getByTestId("revision").textContent();
   const drag = async (
     path: readonly { x: number; y: number }[],
@@ -524,7 +405,11 @@ test("a connected wire's segments drag with a live preview, a diagonal along the
     await page.mouse.up();
   };
   // R1's pin, straight into the diagonal, then a leg across to R2's pin.
-  const [pin, corner, end] = (await pointsOf(wire)) as [Point, Point, Point];
+  const [pin, corner, end] = (await polylinePoints(wire)) as [
+    Point,
+    Point,
+    Point,
+  ];
   expect(corner.x - pin.x).toBe(corner.y - pin.y);
   expect(corner.y).toBe(end.y);
 
@@ -532,14 +417,14 @@ test("a connected wire's segments drag with a live preview, a diagonal along the
   // down and the diagonal slides along the leg to R2, keeping its angle.
   const grab = { x: pin.x + 130, y: pin.y + 130 };
   await drag([grab, { x: grab.x + 3, y: grab.y + 20 }]);
-  await expect(page.getByTestId("status")).toContainText("Moved route segment");
+  await expectStatus(page, "Moved route segment");
   const jogged = [
     pin,
     { x: pin.x, y: pin.y + 20 },
     { ...corner, x: corner.x - 20 },
     end,
   ];
-  expect(await pointsOf(wire)).toEqual(jogged);
+  expect(await polylinePoints(wire)).toEqual(jogged);
 
   // The connected leg to R2 drags too: both pins keep their ends, and the
   // live preview is the wire the release commits, with no slanted leg
@@ -547,10 +432,10 @@ test("a connected wire's segments drag with a live preview, a diagonal along the
   const legMiddle = { x: (corner.x - 20 + end.x) / 2, y: end.y };
   let preview: Point[] = [];
   await drag([legMiddle, { x: legMiddle.x, y: legMiddle.y + 40 }], async () => {
-    await expect.poll(() => pointsOf(drawn)).not.toEqual(jogged);
-    preview = await pointsOf(drawn);
+    await expect.poll(() => polylinePoints(drawn)).not.toEqual(jogged);
+    preview = await polylinePoints(drawn);
   });
-  const moved = await pointsOf(wire);
+  const moved = await polylinePoints(wire);
   expect(moved).toEqual(preview);
   expect(moved[0]).toEqual(pin);
   expect(moved.at(-1)).toEqual(end);
@@ -576,16 +461,14 @@ test("a connected wire's segments drag with a live preview, a diagonal along the
     y: (moved[diagonal]!.y + moved[diagonal - 1]!.y) / 2,
   };
   await drag([middle, { x: middle.x - 30, y: middle.y + 1 }, middle]);
-  await expect(page.getByTestId("status")).toContainText("unchanged");
+  await expectStatus(page, "unchanged");
   expect(await revision()).toBe(before);
-  expect(await pointsOf(wire)).toEqual(moved);
+  expect(await polylinePoints(wire)).toEqual(moved);
 
   // Deleting a connected part keeps its wires, now open where it was.
   await page.getByTestId(`hit-${ids[0]}`).click();
   await page.keyboard.press("Delete");
-  await expect(page.getByTestId("status")).toContainText(
-    "connected wires remain dangling",
-  );
+  await expectStatus(page, "connected wires remain dangling");
   await expect(wire).toHaveCount(1);
 });
 
@@ -600,21 +483,9 @@ test("the preview draws the wire the release commits, joining every compatible p
   const project = createEmptyProject("wire-preview-truth", "Wire preview");
   const document = project.documents[0]!;
   document.instances.push(
-    {
-      id: "C1",
-      symbolId: "capacitor",
-      placement: { position: { x: 80, y: 120 }, rotation: 0, mirror: "none" },
-    },
-    {
-      id: "R1",
-      symbolId: "resistor",
-      placement: { position: { x: 120, y: 120 }, rotation: 0, mirror: "none" },
-    },
-    {
-      id: "GND1",
-      symbolId: "ground",
-      placement: { position: { x: 160, y: 110 }, rotation: 0, mirror: "none" },
-    },
+    placedInstance("C1", "capacitor", 80, 120),
+    placedInstance("R1", "resistor", 120, 120),
+    placedInstance("GND1", "ground", 160, 110),
   );
   document.nets.push({
     id: "net-ground",
@@ -643,20 +514,13 @@ test("the preview draws the wire the release commits, joining every compatible p
   // Hover, do not release: this is the moment the author is looking at.
   await page.mouse.move(end!.x, end!.y);
 
-  const previewPoints = await page
-    .getByTestId("wire-preview")
-    .evaluate((element) =>
-      Array.from((element as SVGPolylineElement).points).map((point) => ({
-        x: point.x,
-        y: point.y,
-      })),
-    );
+  const previewPoints = await polylinePoints(page.getByTestId("wire-preview"));
   // Every compatible crossed pin, the Ground's too, is drawn as a contact, so
   // the run reads as joining them rather than passing over them.
   await expect(page.getByTestId("wire-preview-contact")).toHaveCount(3);
 
   await page.mouse.dblclick(end!.x, end!.y);
-  await expect(page.getByTestId("status")).toContainText("Committed route");
+  await expectStatus(page, "Committed route");
   // The commit splits at each of them: four pieces meeting at three contacts.
   await expect(page.locator('[data-layer="routes"] polyline')).toHaveCount(4);
   await expect(

@@ -4,10 +4,11 @@
 import { expect, test } from "@playwright/test";
 import {
   revealPropertiesShelf,
-  awaitEditorReady,
-  chooseComponent,
   clickDrawTool,
+  expectStatus,
+  placeComponentAt,
   setComponentCodeField,
+  openEditor,
 } from "./editor-fixtures.js";
 import {
   placeComponent,
@@ -70,12 +71,9 @@ test("constructs VDD as a drawn dotless power rail, cancelled before or after it
 test("a switch changes contact style in place, keeping its wires", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
-  await chooseComponent(page, "spdt-switch");
+  await openEditor(page);
   const canvas = page.getByTestId("schematic-canvas");
-  await canvas.click({ position: { x: 360, y: 220 } });
-  await page.keyboard.press("Escape");
+  await placeComponentAt(page, "spdt-switch", { x: 360, y: 220 });
 
   // Wire the common terminal, so the swap has something to lose.
   await clickDrawTool(page, "wire");
@@ -137,19 +135,17 @@ test("keeps a tapped VDD rail movable and stretchable as one supply bar", async 
       element.getAttribute("data-testid")!.replace(/^route-hit-/u, ""),
     ),
   );
-  const beforeMove = await Promise.all(
-    railIds.map((id) => readRoutePoints(page, id)),
-  );
+  const railPoints = () =>
+    Promise.all(railIds.map((id) => readRoutePoints(page, id)));
+  const beforeMove = await railPoints();
 
   await clickRoute(page, selectedRailId);
   await dragBy(page.getByTestId(`route-handle-${selectedRailId}`), {
     x: 30,
     y: 40,
   });
-  await expect(page.getByTestId("status")).toContainText("Moved Power Rail");
-  const afterMove = await Promise.all(
-    railIds.map((id) => readRoutePoints(page, id)),
-  );
+  await expectStatus(page, "Moved Power Rail");
+  const afterMove = await railPoints();
   expect(Math.min(...afterMove.flat().map((point) => point.y))).toBeGreaterThan(
     Math.min(...beforeMove.flat().map((point) => point.y)),
   );
@@ -161,10 +157,8 @@ test("keeps a tapped VDD rail movable and stretchable as one supply bar", async 
     x: 80,
     y: 0,
   });
-  await expect(page.getByTestId("status")).toContainText("Resized Power Rail");
-  const afterResize = await Promise.all(
-    railIds.map((id) => readRoutePoints(page, id)),
-  );
+  await expectStatus(page, "Resized Power Rail");
+  const afterResize = await railPoints();
   expect(
     Math.max(...afterResize.flat().map((point) => point.x)),
   ).toBeGreaterThan(beforeResizeRight);
@@ -178,8 +172,7 @@ test("keeps a tapped VDD rail movable and stretchable as one supply bar", async 
 test("authors components, connectivity and No Connect manually from an empty canvas", async ({
   page,
 }) => {
-  await page.goto("/editor");
-  await awaitEditorReady(page);
+  await openEditor(page);
   // A flat Project has no hierarchy to navigate, so that row stays hidden.
   await expect(page.getByTestId("cell-navigation")).toHaveCount(0);
   await expect(page.getByTestId("revision")).toHaveText("0");
@@ -221,15 +214,11 @@ test("authors components, connectivity and No Connect manually from an empty can
   // An unconnected endpoint is marked and cleared as No Connect.
   await page.getByTestId("terminal-R1-1").click({ button: "right" });
   await page.getByRole("button", { name: "Mark No Connect" }).click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Marked terminal-R1-1 No Connect",
-  );
+  await expectStatus(page, "Marked terminal-R1-1 No Connect");
   await expect(page.locator('[data-role="no-connect"]')).toHaveCount(1);
   await page.getByTestId("terminal-R1-1").click({ button: "right" });
   await page.getByRole("button", { name: "Clear No Connect" }).click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Cleared No Connect on terminal-R1-1",
-  );
+  await expectStatus(page, "Cleared No Connect on terminal-R1-1");
   await expect(page.locator('[data-role="no-connect"]')).toHaveCount(0);
 });
 
@@ -260,9 +249,7 @@ test("keeps Bulk status and its prominent draw action on one compact row", async
   expect(Math.abs(layout.headingY - layout.actionY)).toBeLessThan(2);
 
   await draw.click();
-  await expect(page.getByTestId("status")).toContainText(
-    "Drawing M1.B bulk connection",
-  );
+  await expectStatus(page, "Drawing M1.B bulk connection");
   await expect(page.getByTestId("terminal-M1-B")).toBeVisible();
 });
 
@@ -280,9 +267,7 @@ test("keeps DMOS bulk hidden until drawing an explicit bulk route", async ({
   await openSelectionShelf(page);
   await page.getByTestId("draw-bulk-connection").click();
 
-  await expect(page.getByTestId("status")).toContainText(
-    "Drawing M1.B bulk connection",
-  );
+  await expectStatus(page, "Drawing M1.B bulk connection");
   await expect(page.getByTestId("terminal-M1-B")).toBeVisible();
   await page.getByTestId("terminal-R1-1").click();
   await page.keyboard.press("Escape");
@@ -299,18 +284,7 @@ test("keeps DMOS bulk hidden until drawing an explicit bulk route", async ({
   await page
     .getByTestId("schematic-canvas")
     .click({ position: { x: 50, y: 50 } });
-  const bulkHit = page.getByTestId("route-hit-route-ui-1");
-  const bulkSegmentPoint = await bulkHit.evaluate((element) => {
-    const polyline = element as SVGPolylineElement;
-    const first = polyline.points.getItem(0);
-    const second = polyline.points.getItem(1);
-    const point = polyline.ownerSVGElement!.createSVGPoint();
-    point.x = (first.x + second.x) / 2;
-    point.y = (first.y + second.y) / 2;
-    const screen = point.matrixTransform(polyline.getScreenCTM()!);
-    return { x: screen.x, y: screen.y };
-  });
-  await page.mouse.click(bulkSegmentPoint.x, bulkSegmentPoint.y);
+  await clickRoute(page, "route-ui-1");
   await revealPropertiesShelf(page);
   await expect(page.getByTestId("selection-shelf")).toContainText("Bulk · M1");
   await expect(page.getByLabel("MOS bulk route actions")).toContainText(
