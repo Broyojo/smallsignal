@@ -5,7 +5,9 @@ import {
   ARENA_GATE_PAGE,
   createArenaGate,
   gateClosable,
+  startArenaGate,
   VOTES_REQUIRED,
+  type ArenaGate,
   type ArenaGateState,
 } from "./arena-gate";
 import "./arena-gate.css";
@@ -14,43 +16,61 @@ import "./arena-gate.css";
 const RECOUNT_MS = 4000;
 
 /**
- * Shows the gate over the page in a root of its own, so every page that
- * opens it (the editor, the Gallery's shelf, the account page) shows the
- * same panel. While it shows, the rest of the page is inert, so focus and
- * pointer stay in the panel. Nothing of it is kept: a reload ends it.
+ * Asks Arena first, and shows the gate over the page only when there is a
+ * panel to show, in a root of its own, so every page that opens it (the
+ * editor, the Gallery's shelf, the account page) shows the same panel.
+ * While it shows, the rest of the page is inert, so focus and pointer stay
+ * in the panel. Nothing of it is kept: a reload ends it.
  */
-export function mountArenaGate(onClosed: () => void): void {
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  const focused =
-    document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-  let madeInert: Element[] = [];
-  const shown = () => {
-    madeInert = [...document.body.children].filter(
+export async function mountArenaGate({
+  shown,
+  closed,
+}: {
+  shown(): void;
+  closed(): void;
+}): Promise<void> {
+  const gate = createArenaGate();
+  const showed = await startArenaGate(gate, (state) => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const focused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const madeInert = [...document.body.children].filter(
       (element) => element !== host && !element.hasAttribute("inert"),
     );
     for (const element of madeInert) element.setAttribute("inert", "");
-  };
-  const close = () => {
-    for (const element of madeInert) element.removeAttribute("inert");
-    root.unmount();
-    host.remove();
-    focused?.focus({ preventScroll: true });
-    onClosed();
-  };
-  root.render(<ArenaGatePanel onShown={shown} onClose={close} />);
+    const root = createRoot(host);
+    let closing = false;
+    const close = () => {
+      if (closing) return;
+      closing = true;
+      for (const element of madeInert) element.removeAttribute("inert");
+      // Never from inside the root's own render or effects.
+      queueMicrotask(() => {
+        root.unmount();
+        host.remove();
+        focused?.focus({ preventScroll: true });
+        closed();
+      });
+    };
+    root.render(<ArenaGatePanel gate={gate} first={state} onClose={close} />);
+    shown();
+  });
+  if (!showed) closed();
 }
 
 function statusLine(state: ArenaGateState): string {
   if (state.status === "free")
-    return state.reason === "no-battle"
-      ? "Arena has no battle to offer right now, so you can close this."
-      : state.reason === "signed-out"
-        ? "You're no longer signed in to Arena, so you can close this."
-        : "Arena can't be reached right now, so you can close this.";
+    return {
+      "no-battle":
+        "Arena has no battle to offer right now, so you can close this.",
+      "signed-out":
+        "You're no longer signed in to Arena, so you can close this.",
+      "ai-account": "AI accounts can't vote in Arena, so you can close this.",
+      unavailable: "Arena can't be reached right now, so you can close this.",
+    }[state.reason];
   if (state.status !== "voting") return "";
   const left = VOTES_REQUIRED - state.voted;
   return left > 0
@@ -59,40 +79,21 @@ function statusLine(state: ArenaGateState): string {
 }
 
 function ArenaGatePanel({
-  onShown,
+  gate,
+  first,
   onClose,
 }: {
-  onShown(): void;
+  gate: ArenaGate;
+  first: ArenaGateState;
   onClose(): void;
 }) {
-  const [gate] = useState(() => createArenaGate());
-  const [state, setState] = useState<ArenaGateState>(gate.state);
+  const [state, setState] = useState(first);
   const [nudged, setNudged] = useState(false);
   const dialogRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    void gate.start().then((next) => {
-      if (live) setState(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, [gate]);
-
-  const status = state.status;
-  const showing = status !== "checking" && status !== "closed";
-  useEffect(() => {
-    if (status === "closed") onClose();
-  }, [status, onClose]);
-  useEffect(() => {
-    if (!showing) return;
-    onShown();
-    dialogRef.current?.focus();
-  }, [showing, onShown]);
+  useEffect(() => dialogRef.current?.focus(), []);
 
   const closable = gateClosable(state);
-  const counting = status === "voting" && !closable;
+  const counting = state.status === "voting" && !closable;
   const recount = useCallback(
     (season = false) => {
       void gate.recount({ season }).then(setState);
@@ -118,20 +119,20 @@ function ArenaGatePanel({
       document.removeEventListener("visibilitychange", returned);
     };
   }, [counting, recount]);
-  // Once it may close, Escape closes it wherever focus is.
+  // Escape, wherever focus is, is the gate's: it waits while locked and
+  // closes once the gate may close. No page under it sees the key.
   useEffect(() => {
-    if (!showing || !closable) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      if (closable) onClose();
+      else setNudged(true);
     };
     window.addEventListener("keydown", escape, true);
     return () => window.removeEventListener("keydown", escape, true);
-  }, [showing, closable, onClose]);
+  }, [closable, onClose]);
 
-  if (!showing) return null;
   const tryClose = () => {
     if (closable) onClose();
     else setNudged(true);
@@ -156,13 +157,6 @@ function ArenaGatePanel({
         aria-describedby="arena-gate-status"
         tabIndex={-1}
         data-testid="arena-gate"
-        onKeyDown={(event) => {
-          // Locked, Escape stays; unlocked, the window's listener closes.
-          if (event.key === "Escape" && !closable) {
-            event.preventDefault();
-            setNudged(true);
-          }
-        }}
       >
         <h2 id="arena-gate-title">
           Vote in {VOTES_REQUIRED} Schematic Arena battles to continue

@@ -7,6 +7,7 @@ import {
 } from "@playwright/test";
 import {
   awaitEditorReady,
+  awaitTwoFrames,
   exportedProject,
   openMenu,
   openProjectFile,
@@ -562,32 +563,37 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await page.route("**/api/projects/cloud-gate", saveAnswer);
   // Arena behind Analog Canvas's Worker: the Voter's voted Battles, newest
   // first with when each was cast, answered with Arena's clock.
-  const castAt = [new Date(Date.now() - 3_600_000).toISOString()];
+  const votes = [
+    { id: "old", castAt: new Date(Date.now() - 3_600_000).toISOString() },
+  ];
   let arenaUp = true;
+  let aiAccount = false;
+  let pastReads = 0;
   let season: string | null = "s1";
   await page.route("**/api/arena/battles/past", (route) =>
-    arenaUp
-      ? route.fulfill({
-          headers: { date: new Date().toUTCString() },
-          json: {
-            battles: castAt.map((time, index) => ({
-              id: `b${index}`,
-              castAt: time,
-            })),
-            more: false,
-            total: castAt.length,
-          },
-        })
-      : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
+    ++pastReads && aiAccount
+      ? route.fulfill({ status: 403, json: { error: "ai-account" } })
+      : arenaUp
+        ? route.fulfill({
+            headers: { date: new Date().toUTCString() },
+            json: { battles: votes, more: false, total: votes.length },
+          })
+        : route.fulfill({ status: 503, json: { error: "arena-unavailable" } }),
   );
-  await page.route("**/api/arena/leaderboard", (route) =>
-    route.fulfill({ json: { season } }),
+  // Arena's example Battle is null exactly when no Season serves Battles.
+  await page.route("**/api/arena/example", (route) =>
+    route.fulfill({ json: { example: season && { task: { id: "T001" } } } }),
   );
   // Arena's own window, wherever it opens.
   await context.route(/\/schematic\?/u, (route) =>
     route.fulfill({ contentType: "text/html", body: "<title>Arena</title>" }),
   );
 
+  // Opening, closing and not showing the gate leave React nothing to say.
+  const unmountWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (/unmount/iu.test(message.text())) unmountWarnings.push(message.text());
+  });
   await page.goto("/editor?new=1");
   await awaitEditorReady(page);
   const gate = page.getByTestId("arena-gate");
@@ -627,7 +633,8 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
     "/schematic?from=canvas-gate",
   );
   // Five Votes there; the gate counts them on its next read.
-  for (let vote = 0; vote < 5; vote++) castAt.unshift(new Date().toISOString());
+  for (let vote = 1; vote <= 5; vote++)
+    votes.unshift({ id: `new-${vote}`, castAt: new Date().toISOString() });
   await arena.close();
   await page.bringToFront();
   await expect(count).toHaveText("Voted 5 / 5", { timeout: 10_000 });
@@ -657,6 +664,74 @@ test("the Arena gate opens after a manual Cloud Save and on every Shelf opening,
   await close.click();
   await expect(gate).toHaveCount(0);
   expect(revision).toBe(2);
+
+  // An AI account, which may not vote, saves without any panel.
+  await placeComponentAt(page, "resistor", { x: 500, y: 240 });
+  arenaUp = true;
+  aiAccount = true;
+  const readsBefore = pastReads;
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => pastReads).toBe(readsBefore + 1);
+  await expect.poll(() => revision).toBe(3);
+  await awaitTwoFrames(page);
+  await expect(gate).toHaveCount(0);
+  expect(unmountWarnings).toEqual([]);
+});
+
+test("only the person's own opening of the Cloud shelf opens the Arena gate, so a reload always ends one (#1681)", async ({
+  page,
+}) => {
+  // The hosted Gallery, as gallery-test.ts selects it, has My shelf.
+  await page.addInitScript(() => {
+    Object.assign(window, { __icmLocalGalleryReplica: true });
+  });
+  await signIn(page, author);
+  await page.route("**/api/projects", (route) =>
+    route.fulfill({ json: { projects: [] } }),
+  );
+  let reads = 0;
+  await page.route("**/api/arena/battles/past", (route) => {
+    reads++;
+    return route.fulfill({
+      headers: { date: new Date().toUTCString() },
+      json: { battles: [], more: false, total: 0 },
+    });
+  });
+  await page.route("**/api/arena/example", (route) =>
+    route.fulfill({ json: { example: { task: { id: "T001" } } } }),
+  );
+  const gate = page.getByTestId("arena-gate");
+  const shelfTab = page.getByTestId("gallery-view-shelf");
+
+  // The Gallery opening on My shelf, from its address, opens no gate.
+  await page.goto("/?view=shelf");
+  await expect(shelfTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("gallery-view-gallery")).toBeEnabled();
+  // Choosing My shelf does.
+  await page.getByTestId("gallery-view-gallery").click();
+  await shelfTab.click();
+  await expect(gate).toBeVisible();
+  expect(reads).toBe(1);
+  await page.keyboard.press("Escape");
+  await expect(gate).toBeVisible();
+  // A reload, still on My shelf, ends it and opens none.
+  await page.reload();
+  await expect(shelfTab).toHaveAttribute("aria-selected", "true");
+  await expect(gate).toHaveCount(0);
+
+  // So too the account page's Cloud Projects.
+  await page.goto("/account?tab=projects");
+  const projectsTab = page.getByTestId("account-tab-projects");
+  await expect(projectsTab).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("account-tab-circuits").click();
+  expect(reads).toBe(1);
+  await projectsTab.click();
+  await expect(gate).toBeVisible();
+  expect(reads).toBe(2);
+  await page.reload();
+  await expect(projectsTab).toHaveAttribute("aria-selected", "true");
+  await expect(gate).toHaveCount(0);
+  expect(reads).toBe(2);
 });
 
 test("plain C/V works between internal tabs when system clipboard permission is denied", async ({

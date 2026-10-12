@@ -1,5 +1,6 @@
 // The editor's keyboard shortcuts, and the outside press that closes open
 // menus and commits text being edited.
+import { arenaGateShown } from "../components/arena-gate-request";
 import {
   useEffect,
   useLayoutEffect,
@@ -309,6 +310,8 @@ function createEditorShortcutHandler({
   openNativeProject,
 }: EditorShortcutDependencies) {
   function onKeyDown(event: KeyboardEvent): void {
+    // The Arena gate over the editor owns every key, wherever focus is.
+    if (arenaGateShown()) return;
     if (versionHistoryOpen) return;
     // Project Info is modal: the canvas never handles its keys.
     // This router sees Escape first, so it closes the dialog here.
@@ -336,12 +339,11 @@ function createEditorShortcutHandler({
       if (event.key === "Escape") setUserComponentsOpen(false);
       return;
     }
-    // The source workbench owns its keyboard scope, including portalled
-    // menus, and so does the Arena gate over the editor.
+    // The source workbench owns its keyboard scope, including portalled menus.
     if (
       event.target instanceof Element &&
       event.target.closest(
-        ".simulation-code-workspace, [data-workspace-interaction], .inline-confirm, .arena-gate",
+        ".simulation-code-workspace, [data-workspace-interaction], .inline-confirm",
       )
     )
       return;

@@ -394,10 +394,9 @@ export function AccountDashboard({
     tabs.includes(initialTab) ? initialTab : "circuits",
   ]);
   const select = (next: AccountTab) => {
-    // Returning to Cloud Projects opens the shelf again, and with it the
-    // Arena gate; its first opening mounts the shelf, which opens the gate.
-    if (next === "projects" && tab !== next && visited.includes(next))
-      cloudShelfOpened();
+    // Opening Cloud Projects opens the shelf, and with it the Arena gate
+    // (#1681). A page loaded on that tab opens none, so a reload ends a gate.
+    if (next === "projects" && tab !== next) cloudShelfOpened();
     setVisited((current) =>
       current.includes(next) ? current : [...current, next],
     );

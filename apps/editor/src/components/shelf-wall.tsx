@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TilePreview } from "./tile-preview";
 import { InlineConfirm } from "./inline-confirm";
-import { cloudShelfOpened } from "./arena-gate-request";
 
 import {
   CLOUD_PROJECT_LIMIT,
@@ -252,19 +251,7 @@ export function ShelfWall() {
     };
   }, []);
 
-  // Each time the shelf opens (it mounts with it) the Arena gate opens too,
-  // once the shelf is shown to its signed-in owner (#1681).
-  useEffect(() => {
-    let cancelled = false;
-    void loadShelf().then((next) => {
-      if (cancelled) return;
-      setState(next);
-      if (next.status === "ready") cloudShelfOpened();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => refresh(), [refresh]);
 
   async function removeProject(project: CloudProjectSummary): Promise<void> {
     if (busyId) return;
