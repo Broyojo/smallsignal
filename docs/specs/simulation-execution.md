@@ -400,7 +400,7 @@ deadline.
 | Default deadline        | 30 s                         | applied when the caller names none                                                |
 | Maximum deadline        | 120 s                        | a longer request is clamped to it                                                 |
 | Lifecycle grace         | 10 s                         | hard lease watchdog after the run deadline                                        |
-| Identity probe          | 5 s                          | given up on, not waited for                                                       |
+| Identity / limits probe | 5 s                          | identity: given up on, not waited for; limits: not ready until read back          |
 | Processes               | 128 (`RLIMIT_NPROC`)         | image-set `ulimit` before `exec`; checked at startup, not ready without it        |
 | Written file size       | 256 MiB (`RLIMIT_FSIZE`)     | image-set `ulimit` before `exec`; checked at startup, not ready without it        |
 
@@ -408,8 +408,9 @@ The independent log cap is divided between the simulator's two streams, so a
 flood of printed values on one cannot push the single line that explains the
 run off the end of the other. The two kernel limits are set by the image
 rather than defaulted by the harness, because `RLIMIT_NPROC` counts every
-process the account owns and a number chosen for a container that runs one
-simulator is wrong anywhere else. A limit the image sets is a precondition:
+thread the account owns across the host, not only in this container (on the
+operator host the gateways and VACASK share the uid), and a number chosen for
+that host is wrong anywhere else. A limit the image sets is a precondition:
 the harness reads both back from a wrapped probe at startup and is not ready
 if either is missing, and a run whose shell cannot apply one is never started.
 

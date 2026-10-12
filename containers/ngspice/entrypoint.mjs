@@ -128,7 +128,10 @@ const MAX_PROCESSES = optionalPositiveEnv("SIMULATION_MAX_PROCESSES");
 /** `ulimit -f` counts 512-byte blocks in dash and 1 KiB blocks in bash. */
 const MAX_FILE_BLOCKS = optionalPositiveEnv("SIMULATION_MAX_FILE_BLOCKS");
 
-/** How long the startup identity probe may take before it is given up on. */
+/**
+ * How long each startup probe may take: the identity probe is then given up
+ * on, while a limits probe that times out leaves the harness not ready.
+ */
 const PROBE_TIMEOUT_MS = positiveEnv("SIMULATION_PROBE_TIMEOUT_MS", 5_000);
 
 /** The deck, and the only file this harness itself puts in the run directory. */

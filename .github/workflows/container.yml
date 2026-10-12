@@ -248,13 +248,16 @@ jobs:
             docker exec icm-ngspice-check sh -c '
               for pid in /proc/[0-9]*; do
                 [ "$(cat "$pid/comm" 2>/dev/null)" = ngspice ] || continue
-                grep -E "^Max (processes|file size) " "$pid/limits" && exit 0
+                grep -E "^Max (processes|file size) " "$pid/limits" &&
+                  grep "^Threads:" "$pid/status" && exit 0
               done
               exit 1
             ' > /tmp/run-limits.txt && break
             sleep 0.2
           done
           cat /tmp/run-limits.txt
+          [ -s /tmp/run-limits.txt ] \
+            || { echo "No running ngspice was found to read its limits from."; exit 1; }
           grep -Eq '^Max processes +128 +128 ' /tmp/run-limits.txt \
             || { echo "The run is not under the image's process limit."; exit 1; }
           grep -Eq '^Max file size +268435456 +268435456 ' /tmp/run-limits.txt \
