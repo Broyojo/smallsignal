@@ -31,21 +31,10 @@ on. Each topic has one owner spec; others link to it.
 | [`community-gallery.md`](community-gallery.md)                     | Gallery feed, accounts, moderation                                     |
 | [`analog-arena.md`](analog-arena.md)                               | Contract with the AnalogArena Worker (cross-repo)                      |
 
-All are `accepted`. Project file format and persistence stay separate
-contracts, as do simulation source, execution and results.
-
 ## Writing a spec
 
-Start from [`spec.template.md`](spec.template.md); add one only for a stable
-cross-module contract.
-
-- State status (`accepted`/`proposed`), owner and scope (checked by
-  `pnpm docs:check`). A `Version:` line only for an independently versioned
-  protocol.
-- Keep only what constrains code: rules, invariants, failure behavior and
-  contracts others rely on (wire formats, ids, error codes, limits), with a
-  short reason where a rule looks arbitrary.
-- Link schemas and tests instead of copying them; no history, walkthroughs or
-  UI copy. Unresolved decisions belong in the roadmap.
-- Changing an accepted contract reviews compatibility. When code disagrees,
-  check behavior and consequences before choosing which side to fix.
+All specs are `accepted`. Add one only for a stable cross-module contract, from
+[`spec.template.md`](spec.template.md): status (`accepted`/`proposed`), owner
+and scope are checked by `pnpm docs:check`; `Version:` only for an
+independently versioned protocol. When code disagrees with a spec, check
+behavior and consequences before choosing which side to fix.

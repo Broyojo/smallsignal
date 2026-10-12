@@ -17,7 +17,8 @@ leaves to other specs (link them).
 Wire formats, ids, error codes and limits other code or repos rely on. Link
 the canonical schema instead of copying it. Omit if none.
 
-## Acceptance
+## Acceptance criteria
 
-Link the focused tests that pin these rules. No history, walkthroughs or
-command lists.
+Observable conditions that prove the rules, linking the tests that pin them.
+Implementation notes, validation logs, measurements and history belong in the
+commit or PR.

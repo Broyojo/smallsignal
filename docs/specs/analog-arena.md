@@ -8,14 +8,13 @@ Primary owner: `worker/arena.ts` (hosts, forwarding, identity), with
 (sign-in handoff and return, account deletion) and `wrangler.jsonc` (hosts,
 binding)
 
-AnalogArena is the Worker `analog-arena` from the private repository
-Arcadia-1/chip-arena (shown to visitors as **Chip Arena**; the Worker keeps its
-name because its Durable Objects and the binding are keyed to it). It has no
-route of its own: only this Worker reaches it, on the host `chip-arena.com`,
-with Analog Canvas accounts. This spec owns the contract between the two
-sides; Arena keeps its half in its `docs/contracts.md`. A change starts here
-and each side tests its own half. What Arena does with a forwarded request is
-Arena's.
+AnalogArena (shown as **Chip Arena**) is the Worker `analog-arena` from the
+private repository Arcadia-1/chip-arena; its name stays because its Durable
+Objects and the binding are keyed to it. Only this Worker reaches it, on
+`chip-arena.com`, with Analog Canvas accounts. This spec owns the contract
+between the sides (Arena keeps its half in its `docs/contracts.md`); a change
+starts here and each side tests its own half. What Arena does with a
+forwarded request is Arena's.
 
 ## Hosts
 
@@ -147,26 +146,24 @@ reload bypass is accepted.
 
 Implemented and tested in the Arena repository:
 
-- Arena prepares the next Battle's two drawings while the current one is
-  judged, after that Battle is noted shown. Every Battle (the first included)
-  is shown and accepts a Vote only after both drawings load and decode.
-- Each drawing attempt has a 15 s limit; one automatic retry, then retry and
-  online recovery for the same Battle without marking it shown.
-- Finishing preparation while viewing a past Battle neither marks the
-  prepared Battle shown nor requests another until the Voter returns.
-- Arena may keep immutable SVG bytes in a named edge cache keyed by content
-  hash per data center. Signed-in requests still check forwarded identity and
-  Battle ownership (or live Submission membership) first. Only SVG bytes and
-  content headers are cached; never accounts, cookies, Battle metadata or
-  personalized responses. The cache key is not a public route.
+- The next Battle's two drawings are prepared while the current one is judged
+  (after it is noted shown); every Battle is shown and votable only after both
+  load and decode. Each attempt has 15 s and one automatic retry, then retry
+  and online recovery for the same Battle without marking it shown. Finishing
+  preparation while viewing a past Battle marks or requests nothing until the
+  Voter returns.
+- Arena may cache immutable SVG bytes and content headers in a named edge
+  cache keyed by content hash per data center, after checking identity and
+  Battle ownership (or live Submission membership); never accounts, cookies,
+  metadata or personalized responses; the key is no public route. Failures
+  fall back to private R2; failed or missing reads are never cached; writes
+  run after the response is ready. Server-Timing `arena_image` may say
+  `hit`/`miss`/`bypass` without naming the image.
 - Battle and Submission responses stay
-  `Cache-Control: private, max-age=31536000, immutable`; Battle addresses
-  expose no content hash or ETag. The signed-out example keeps its public
-  5-minute policy and resolves the active Season first. Server-Timing
-  `arena_image` may report `hit`/`miss`/`bypass` without identifying the
-  image. Cache failure falls back to the private R2 bucket; failed or missing
-  reads are never cached; cache writes run after the response is ready.
-- Analog Canvas adds no shared cache of authenticated responses.
+  `Cache-Control: private, max-age=31536000, immutable`, Battle addresses
+  expose no hash or ETag; the signed-out example keeps its public 5-minute
+  policy and resolves the active Season first. Analog Canvas adds no shared
+  cache of authenticated responses.
 
 ## Account deletion
 
@@ -232,8 +229,6 @@ takes no return.
 
 ## Evidence
 
-`worker/arena.test.ts` (real account store, stand-in Arena at the binding),
-`apps/editor/src/components/arena-gate*.test.ts(x)`,
-`apps/editor/src/components/privacy-page.test.tsx`, `worker/index.test.ts`
-(binding, Worker-first paths) and `worker/preview-config.test.ts` (Preview
-holds no binding).
+`worker/arena.test.ts` (real account store, stand-in Arena),
+`apps/editor/src/components/arena-gate*.test.ts(x)`, `privacy-page.test.tsx`,
+`worker/index.test.ts`, `worker/preview-config.test.ts`.

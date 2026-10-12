@@ -39,8 +39,6 @@ review; a faster machine is no reason to lower one. The same policy covers
   context (target names, interfaces, MOS body policy). Final placement
   normalizes against all target conductors and stays one Undo step.
 
-Browser target (not a CI threshold): on a representative medium circuit, at
-least 30 warm production-browser samples with viewport, browser and machine
-recorded; single-component copy and wire input-to-paint P95 below 100 ms.
-Dense copy correctness uses the 400-instance, 1,300-Route, 500-Junction
-fixture.
+Browser target (not a CI threshold): single-component copy and wire
+input-to-paint P95 below 100 ms over ≥ 30 warm production-browser samples on
+a representative medium circuit, with viewport, browser and machine recorded.

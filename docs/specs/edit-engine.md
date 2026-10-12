@@ -4,15 +4,12 @@ Status: `accepted`
 
 Primary owner: `packages/edit-engine`
 
-The only committed mutation path for GUI and Agent. [The edit
-schema](../../packages/edit-engine/src/edit-schema.ts) (`SchematicEditSchema`)
-owns the transaction envelope (transaction, Document, expected revision,
-actor, optional dry run, ordered edits) and the sole list of edit kinds; the
-Agent schema derives from it with scope restrictions. Changing or adding a
-kind needs coordinated model, Agent schema, permission, transaction and parity
-validation; there is no compatibility adapter and retired edit names are
-invalid. Rationale: [Net](../adr/net-connectivity.md),
-[routing](../adr/routing.md).
+The only committed mutation path for GUI and Agent.
+[`SchematicEditSchema`](../../packages/edit-engine/src/edit-schema.ts) owns the
+envelope and the sole list of edit kinds; the Agent schema derives from it.
+Changing or adding a kind needs coordinated model, Agent schema, permission,
+transaction and parity validation; retired names are invalid (no adapter).
+Rationale: [Net](../adr/net-connectivity.md), [routing](../adr/routing.md).
 
 ## Operations and state transitions
 
@@ -50,18 +47,15 @@ schema → document identity → revision → preflight → candidate apply
 
 ## Routing plans
 
-Routing gestures and planners cross one transient `RoutingOperationPlan`
-(source revision, typed edits, affected closure, stable-ID remap, explicit
-expected electrical effect); planners read the connectivity index as input
-and the engine re-validates everything. `evaluateRoutingOperationPlan()` runs
-the commit transaction and compares before/after electrical projections; its
-Document is the authoritative electrical preview. A gesture may project the
-plan's coordinate edits into a transient Document per pointer frame (no
-revision, normalization, persistence or electrical certification). Content,
-binding, identity and topology changes (separating a contact, snapping a
-connection) need the evaluated preview. Release validates the prepared
-proposal through the strict gate and commits atomically. NoConnect and
-drafting/presentation edits use ordinary transactions.
+Routing gestures cross one transient `RoutingOperationPlan` (source revision,
+typed edits, affected closure, ID remap, expected electrical effect); the
+engine re-validates it. `evaluateRoutingOperationPlan()` runs the commit
+transaction and compares electrical projections; its Document is the
+authoritative electrical preview. Per-frame previews may project coordinate
+edits into a transient Document (no revision, normalization or
+certification), but content, binding, identity and topology changes need the
+evaluated preview; release commits the prepared proposal through the strict
+gate.
 
 ## Edit rules
 
@@ -158,27 +152,23 @@ drafting/presentation edits use ordinary transactions.
 
 ## Planners
 
-Pure planners emit ordinary edits and never execute transactions or own UI
-state: `hierarchy-planner.ts` (subcircuit Instances, Cells, external
-definitions, block symbol), `cell-pin-planner.ts`,
-`cell-interface-change-planner.ts`, `device-model-target-planner.ts`, and
-`project-cell-import.ts` (cross-Project copy: source files, interfaces,
-Documents; deterministic remapping makes re-import idempotent, no live link).
-GUI and the Agent `project_cells` resource share the import planner. Read-only
-Cell/caller summaries belong to `@icm/derived`.
+Pure planners emit ordinary edits and never execute or own UI state:
+`hierarchy-planner.ts`, `cell-pin-planner.ts`,
+`cell-interface-change-planner.ts`, `device-model-target-planner.ts` and
+`project-cell-import.ts` (cross-Project copy, shared by GUI and the Agent
+`project_cells` resource; deterministic remapping makes re-import idempotent
+with no live link). Cell/caller summaries belong to `@icm/derived`.
 
 ## Session history
 
 [EditorDocumentController](../../apps/editor/src/document/document-controller.ts)
 keeps one chronological history per open Project working copy (Document and
-structural commits), at most 64 entries per stack. GUI Undo follows commit
-order across Cells, switching view only if the Cell disappeared. Agent Undo
-cannot skip a newer entry for another Cell (the rejection names it);
-structural Agent Undo checks `expectedStructureRevision`. Whole-Project
-replacement starts a new history; switching Cells or tabs does not. Restores
-create new increasing revisions; model definitions restore with the
-operation; revision high-water marks survive Cell deletion. A new commit
-clears redo; rejected, dry-run and no-op edits do not. Failures preserve
-history. [DocumentHistory](../../packages/edit-engine/src/history.ts)
-(default 64, configurable) serves standalone consumers only. History is never
-persisted ([deferred](../roadmap/README.md#deferred-contract-questions)).
+structural commits, ≤ 64 entries per stack). GUI Undo follows commit order
+across Cells; Agent Undo cannot skip a newer entry for another Cell (the
+rejection names it) and structural Agent Undo checks
+`expectedStructureRevision`. Whole-Project replacement starts a new history;
+Cell or tab switches do not. Restores create new increasing revisions and
+restore model definitions; a new commit clears redo, rejected, dry-run and
+no-op edits do not. [DocumentHistory](../../packages/edit-engine/src/history.ts)
+serves standalone consumers only. History is never persisted
+([deferred](../roadmap/README.md#deferred-contract-questions)).

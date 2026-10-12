@@ -51,10 +51,3 @@ and diagnostics never enter a formal artifact.
 - Browser PDF reopens with one page of the right bounds, no page-cover image
   XObject, rich-text runs with nonzero scaled fonts and displaced baselines,
   and a rendered page visually matching the SVG fixture.
-
-## Agent File Resource
-
-API-3.0 Agents download canonical Project JSON (`serializeProject()`
-byte-for-byte) or formal SVG/PNG/PDF only through the File Resource.
-Responses are bounded, hashed, Project/Document-revision bound and never
-persisted by the relay.

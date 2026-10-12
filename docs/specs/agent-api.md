@@ -60,22 +60,16 @@ appear only when present. Local and production codecs share one schema.
 - RichText uses the Project's one union: styled runs or one
   `{kind:"math", latex, display}` run. Generated SVG, glyph paths and formula
   metrics are never accepted as mutation data.
-- VDD is a named Net with Route/Junction rail geometry and a net-name-bound
-  annotation, never a symbol; local vs global scope is explicit. MOS use
-  `nmos`/`pmos` with default variant `textbook-3terminal`; bulk connectivity
-  is a terminal/Net fact.
+- VDD is a named Net with rail geometry and a bound annotation, never a
+  symbol; MOS bulk is a terminal/Net fact ([schematic model](schematic-model.md)).
 
 ## Transactions
 
-- Ordinary edits target one Document and one `expectedRevision`. Cell
-  add/remove and formal-interface work uses `structureEdits` with
-  `expectedStructureRevision`; nested Document changes keep their revisions
-  and the same typed edit union ([Edit Engine](edit-engine.md)). Structure
-  edits are only the Edit Engine's typed Project edits; a Snapshot or whole
-  Project is never a mutation payload.
-- All edits commit or none; a commit advances revision once. Dry-run is
-  optional, shares commit validation and does not advance history.
-- Reuse a `requestId` only for an exact-payload retry.
+- Edits follow the [Edit Engine](edit-engine.md): one Document per
+  `expectedRevision`; Cell and interface work in `structureEdits` with
+  `expectedStructureRevision`; all or nothing; optional dry run. A Snapshot or
+  whole Project is never a mutation payload. Reuse a `requestId` only for an
+  exact-payload retry.
 - `transact.command` (exclusive form): Model switching, Cell lifecycle, copy,
   alignment, selection transforms via the GUI planners; structural commands
   require `expectedStructureRevision`.
@@ -122,25 +116,23 @@ edits; it chooses no topology and yields no edits on conflict
   ([execution](simulation-execution.md)); saved setup changes are Project
   structure edits.
 - `/projects` (`resources.project`):
-  - `list-gallery`, `read-gallery-entry`, `read-gallery-entries`
-    (response-size bounded): cursor-paged public entries with Project Code and
-    optional SPICE/Spectre netlist. Simulation folders only for the caller's
-    own entries, an AI account's for an AI account, all for the Owner's
-    accounts ([testbench privacy](community-gallery.md#testbench-privacy)).
-    Each entry states `aiGenerated`. Adapters parse strictly and report an
-    unknown field with where to update (`/api/agent/mcp-manifest.json`); the
-    MCP release reading a new field ships before the Editor sends it.
+  - `list-gallery`, `read-gallery-entry`, `read-gallery-entries` (size
+    bounded): cursor-paged public entries with Project Code, optional netlist
+    and `aiGenerated`; simulation folders only per
+    [testbench privacy](community-gallery.md#testbench-privacy). Adapters
+    parse strictly and report unknown fields with where to update
+    (`/api/agent/mcp-manifest.json`); the MCP release reading a new field
+    ships before the Editor sends it.
   - `publish-gallery-entry` / `update-gallery-entry` publish the tab's working
-    copy through the Editor's Publish client (`name`, `description`, `tags`),
-    always with the AI mark (only the author changes it, in the Editor).
-    Update defaults to the entry the copy came from and keeps unnamed fields.
-    Both answer `galleryEntryId`, `url`, `previewRevision`. As an AI account,
-    `takeOver: true` republishes another AI account's entry under the caller
-    ([take-over](community-gallery.md)); never a person's.
-  - `list-gallery` with `scope: "ai-seats"` (AI accounts only) lists all AI
-    entries incl. rejected/withdrawn, with `status` and `rejectReason`;
-    `status` filters. A person gets `AI_ACCOUNT_REQUIRED`; `status` without
-    the scope is `GALLERY_STATUS_NEEDS_SCOPE`.
+    copy via the Editor's Publish client (`name`, `description`, `tags`),
+    always AI-marked (only the author unmarks, in the Editor); update defaults
+    to the copy's source entry and keeps unnamed fields; both answer
+    `galleryEntryId`, `url`, `previewRevision`. An AI account's
+    `takeOver: true` republishes another AI account's entry under its name
+    ([take-over](community-gallery.md)), never a person's.
+  - `list-gallery` `scope: "ai-seats"` lists every AI entry (incl. rejected,
+    withdrawn) with `status` and `rejectReason`, `status` filtering; a person
+    gets `AI_ACCOUNT_REQUIRED`; `status` alone is `GALLERY_STATUS_NEEDS_SCOPE`.
   - `read-project-code`/`replace-project-code`, `read-netlist`/
     `replace-netlist` use the Editor's planners with structure-revision guards.
     Netlist replacement is limited to device names, model targets and
@@ -167,7 +159,6 @@ authorize byte-reverse edits.
 
 ## Acceptance
 
-Generated JSON Schema/OpenAPI are checked against the runtime schemas.
-Contract tests cover auth, exact version rejection, capabilities closure,
-Snapshot topology, typed-edit parity, request-ID binding, revision conflict,
-bounded render and File Resource approval.
+Generated JSON Schema/OpenAPI match the runtime schemas; contract tests cover
+auth, version rejection, capabilities, topology, edit parity, request-ID
+binding, revision conflict, render bounds and File Resource approval.

@@ -20,8 +20,7 @@ consume.
   automatic artwork into an equivalent owner with a different baseline
   captures the artwork and its provenance as a local class; the destination
   baseline is unchanged.
-- Legacy Agent snapshots omit this metadata; `inspect` exposes the
-  association.
+- Legacy Agent snapshots omit it; `inspect` exposes the association.
 
 ## Destination
 
