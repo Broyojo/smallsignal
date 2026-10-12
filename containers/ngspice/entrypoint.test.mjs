@@ -75,10 +75,28 @@ async function simulator(name, body) {
   return path;
 }
 
-/** Start the harness on an ephemeral port and read the port back from it. */
-async function startHarness(binary, env = {}) {
+/**
+ * Start the harness on an ephemeral port and read the port back from it.
+ * `hardLimits` is shell `ulimit` flags the harness itself is started under,
+ * e.g. `-f 1000` (soft and hard): a ceiling an unprivileged harness cannot
+ * raise, so a run limit above it cannot be applied.
+ */
+async function startHarness(binary, env = {}, { hardLimits = null } = {}) {
   const runRoot = await realpath(await mkdtemp(join(tmpdir(), "icm-runs-")));
-  const child = spawn(process.execPath, [ENTRYPOINT], {
+  const [command, args] =
+    hardLimits === null
+      ? [process.execPath, [ENTRYPOINT]]
+      : [
+          "/bin/sh",
+          [
+            "-c",
+            `ulimit ${hardLimits} || exit 1; exec "$@"`,
+            "sh",
+            process.execPath,
+            ENTRYPOINT,
+          ],
+        ];
+  const child = spawn(command, args, {
     env: {
       PATH: process.env.PATH,
       PORT: "0",
@@ -89,7 +107,7 @@ async function startHarness(binary, env = {}) {
       // shell wrapper that applies it is the path being exercised. The
       // process ceiling is not: RLIMIT_NPROC counts every process this
       // developer's account owns, and a container-sized number would refuse
-      // to fork here. One test sets it deliberately.
+      // to fork here. The kernel-limit tests set it deliberately.
       SIMULATION_MAX_FILE_BLOCKS: "524288",
       ...env,
     },
@@ -778,19 +796,80 @@ describeHarness("a run root that cannot be written", () => {
 });
 
 describeHarness("the kernel limits", () => {
-  it("runs the deck under the limits the image sets", async () => {
+  // `ulimit -u` is bash's spelling of RLIMIT_NPROC; dash, the image's /bin/sh,
+  // spells it `-p` (#1665). The stand-in reads it the way either shell can.
+  const readProcessLimit = "ulimit -u 2>/dev/null || ulimit -p";
+
+  it("runs the deck under the limits the image sets, and reports them once verified", async () => {
     const { port } = await startHarness(
-      await simulator("limits.sh", "ulimit -f\necho ran\n"),
-      { SIMULATION_MAX_PROCESSES: "4096", SIMULATION_MAX_FILE_BLOCKS: "1024" },
+      await simulator(
+        "limits.sh",
+        `ulimit -f\n${readProcessLimit}\necho ran\n`,
+      ),
+      // Below macOS's silent clamp (`kern.maxprocperuid`) and above what a
+      // developer's account already runs.
+      { SIMULATION_MAX_PROCESSES: "2048", SIMULATION_MAX_FILE_BLOCKS: "1024" },
     );
+
+    const health = await (
+      await fetch(`http://127.0.0.1:${port}/health`)
+    ).json();
+    expect(health.status).toBe("ready");
+    expect(health.limits.maxProcesses).toBe(2048);
+    expect(health.limits.maxFileBlocks).toBe(1024);
 
     const { payload } = await json(
       await run(port, { deck: "* limited\n.end\n" }),
     );
 
-    expect(payload.log).toContain("ran");
-    expect(payload.log).toContain("1024");
+    expect(payload.stdout.split("\n")).toEqual(["1024", "2048", "ran", ""]);
     expect(payload.limits.maxFileBlocks).toBe(1024);
-    expect(payload.limits.maxProcesses).toBe(4096);
+    expect(payload.limits.maxProcesses).toBe(2048);
   });
+
+  // Each limit is configured just above a hard ceiling the harness was
+  // started under, so no shell can apply it. A limit the image asked for and
+  // the run would not have is a misconfigured image: it must never serve.
+  // Root may raise its own hard limits, so there is no ceiling to observe.
+  const unprivileged = process.getuid?.() !== 0;
+  it.runIf(unprivileged).each([
+    {
+      limit: "process",
+      // Above what a developer's account runs, so the harness can still fork.
+      hardLimits: "-u 1500 2>/dev/null || ulimit -p 1500",
+      env: { SIMULATION_MAX_PROCESSES: "2048" },
+    },
+    {
+      limit: "file size",
+      hardLimits: "-f 1000",
+      env: { SIMULATION_MAX_FILE_BLOCKS: "1024" },
+    },
+  ])(
+    "is not ready, and runs nothing, when the $limit limit cannot be applied",
+    async ({ limit, hardLimits, env }) => {
+      const ran = join(workspace, `ran-without-${limit.replace(" ", "-")}`);
+      await rm(ran, { force: true });
+      const { port } = await startHarness(
+        await simulator(
+          `unlimited-${limit.replace(" ", "-")}.sh`,
+          `touch "${ran}"\n`,
+        ),
+        env,
+        { hardLimits },
+      );
+
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      const payload = await health.json();
+      expect(health.status).toBe(503);
+      expect(payload.status).toBe("not-ready");
+      expect(payload.error).toContain(`${limit} limit`);
+      expect(payload.limits.maxProcesses).toBe(null);
+      expect(payload.limits.maxFileBlocks).toBe(null);
+
+      const refused = await json(await run(port, { deck: "* bomb\n.end\n" }));
+      expect(refused.status).toBe(503);
+      expect(refused.payload.error).toBe("simulator-not-ready");
+      expect(existsSync(ran)).toBe(false);
+    },
+  );
 });

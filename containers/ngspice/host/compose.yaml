@@ -7,6 +7,10 @@ services:
       context: ../../..
       dockerfile: containers/ngspice/Dockerfile
     container_name: analog-canvas-ngspice-executor
+    # An init as PID 1 reaps the orphans of a deck whose process group was
+    # killed; without it they stay zombies of this uid and count against the
+    # run's RLIMIT_NPROC until the container restarts (#1665).
+    init: true
     restart: unless-stopped
     read_only: true
     cap_drop:

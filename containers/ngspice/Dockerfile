@@ -104,12 +104,14 @@ RUN set -eu; \
 # Where the harness makes each run's private directory, and the two kernel
 # limits it starts the simulator under. The limits are set here rather than
 # defaulted in the harness because they only mean anything against a known
-# account: RLIMIT_NPROC counts every process this uid owns, and in this image
-# that is the harness and one simulator. 128 processes is far above anything
-# ngspice reaches — it does not fork — and far below a fork bomb. 524288
-# blocks is 256 MiB in dash's 512-byte units, a ceiling on what one `write`
-# can pour onto the scratch disk; no rawfile of a schematic-sized circuit
-# comes near it.
+# account: RLIMIT_NPROC counts every thread this uid owns on the host, and on
+# the operator host that is this harness, its gateway and the VACASK pair
+# (about 45 Node threads) plus one simulator. 128 processes is far above
+# anything ngspice reaches — it does not fork — and far below a fork bomb.
+# 524288 blocks is 256 MiB in dash's 512-byte units, a ceiling on what one
+# `write` can pour onto the scratch disk; no rawfile of a schematic-sized
+# circuit comes near it. The harness reads both back at startup, as this
+# account, and is not ready if a run would not be under them (#1665).
 #
 # RUN_ROOT is spelled once, above, and referred to from here on: an image that
 # prepared one directory while the harness looked in another would fail every
