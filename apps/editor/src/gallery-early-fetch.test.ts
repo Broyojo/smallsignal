@@ -13,7 +13,16 @@ import {
   galleryEarlyUrls,
 } from "./gallery-early-fetch";
 import { GALLERY_ORDER_KEY, type GalleryOrder } from "./gallery-order";
-import { GALLERY_FILTERS_KEY, resolveGalleryFilters } from "./gallery-filters";
+import {
+  GALLERY_FILTERS_KEY,
+  isPageReload,
+  resolveGalleryFilters,
+} from "./gallery-filters";
+
+/** Navigation Timing that says how the page was loaded. */
+const loadedBy = (type: string) => ({
+  getEntriesByType: (kind: string) => (kind === "navigation" ? [{ type }] : []),
+});
 
 /** The query the landing preload builds for an unfiltered wall. */
 const UNFILTERED = {
@@ -55,6 +64,7 @@ describe("the landing page's early Gallery requests (#1592)", () => {
     stored: string | null = null,
     order: string | null = null,
     hostname = "analog-canvas.tokenzhang.com",
+    timing = loadedBy("navigate"),
   ) => {
     const window: Record<string, unknown> = {};
     const fetch = vi.fn(() => Promise.resolve(new Response("{}")));
@@ -70,6 +80,8 @@ describe("the landing page's early Gallery requests (#1592)", () => {
               : null,
       },
       fetch,
+      performance: timing,
+      URLSearchParams,
     });
     return { window, fetch };
   };
@@ -136,6 +148,42 @@ describe("the landing page's early Gallery requests (#1592)", () => {
         galleryFeedQueryKey({ ...filters, q: "", source: null }),
         `${search} ${stored}`,
       ).toBe("");
+    }
+  });
+
+  it("start for a reloaded search, which the wall opens without (#1675)", () => {
+    const cases: [
+      search: string,
+      navigation: string,
+      starts: boolean,
+      expectedSearch: string,
+    ][] = [
+      // A shared link's search is that search's own wall.
+      ["?q=mirror", "navigate", false, "mirror"],
+      ["?q=mirror", "back_forward", false, "mirror"],
+      // Reloaded, the search is gone and the wall is the unfiltered one.
+      ["?q=mirror", "reload", true, ""],
+      // Every other filter stays, so the wall is still narrowed.
+      ["?q=mirror&tags=bias", "reload", false, ""],
+    ];
+    for (const [search, navigation, starts, expectedSearch] of cases) {
+      const label = `${navigation} ${search}`;
+      // The inline script and the wall read the same Navigation Timing.
+      const timing = loadedBy(navigation);
+      const fetched =
+        run("/", search, null, null, undefined, timing).fetch.mock.calls
+          .length > 0;
+      expect(fetched, label).toBe(starts);
+      // The landing preload resolves the same filters the wall opens with.
+      const filters = resolveGalleryFilters(search, null, {
+        reload: isPageReload(timing),
+      });
+      expect(filters.search, label).toBe(expectedSearch);
+      if (fetched)
+        expect(
+          galleryFeedQueryKey({ ...filters, q: filters.search, source: null }),
+          label,
+        ).toBe("");
     }
   });
 

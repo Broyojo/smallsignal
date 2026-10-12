@@ -184,16 +184,23 @@ deleted.
   a Project read. Shelf and historical previews share formula preparation and
   recovery while retaining their private access rules.
 - Which circuits a reader is looking at — the wall (`view`), the byline
-  (`author`), the tags (`tags`), the text (`q`), and the netlist and liked
-  filters (`netlist`, `liked`) — is one preference and persists as one: it rides in
+  (`author`), the tags (`tags`), and the netlist and liked filters
+  (`netlist`, `liked`) — is one preference and persists as one: it rides in
   the address so a link and the Back button carry the same slice, and in the
   browser's own store (`icm.gallery-filters.v1`) so opening a circuit and
   returning to the bare address restores it, including an emptiness the reader
   chose. A link that names any narrowing parameter is somebody's request for
   exactly that slice and replaces the stored preference outright rather than
-  intersecting with it. The text query is answered in the browser over what
-  has loaded, so it never speaks for the wall's `total`. The store is a
-  convenience: a browser that refuses it loses only the memory, never the wall.
+  intersecting with it. The store is a convenience: a browser that refuses it
+  loses only the memory, never the wall.
+- The text search (`q`) is not part of that preference (#1675). It rides in
+  the address, so a link that carries it, opened fresh, shows that search,
+  but the store never keeps it (a stored search from before is not restored),
+  so a later visit opens unsearched. Any reload of the page, the reader's or
+  the app's own, opens with the search cleared and `q` gone from the address,
+  keeping every other filter and the wall; the landing's early requests ask
+  for that unsearched wall. The text query is answered in the browser over
+  what has loaded, so it never speaks for the wall's `total`.
 - `/` serves the full-screen feed; each tile links to `/g/<id>`, which the
   editor opens through the ordinary protocol boundary. `/editor` is the
   plain editor; `/editor?example=<id>` opens a bundled example. One thing

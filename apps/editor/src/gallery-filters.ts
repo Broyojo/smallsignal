@@ -5,8 +5,10 @@
  * between them: React state while the reader is on the wall, the URL so a
  * link and the Back button carry the same slice, and browser storage so
  * opening a circuit and coming back does not silently widen the wall again.
- * Narrowing by author, by tag, by text, and the two marks are all one kind
- * of thing to a reader, so they persist as one thing.
+ * Narrowing by author, by tag and by the marks are all one kind of thing to a
+ * reader, so they persist as one thing. The text search is the exception: a
+ * link carries it, but storage never keeps it and a reload drops it (#1675),
+ * so a returning reader is not left on a wall a forgotten search narrowed.
  */
 
 import { gallerySourceByKey, gallerySourceOfEntryId } from "./gallery-sources";
@@ -222,6 +224,19 @@ export function galleryFilterSearch(
   return query.length > 0 ? `?${query}` : "";
 }
 
+/** The preference as browser storage keeps it: every filter but the search. */
+export function storedGalleryFilters(filters: GalleryFilterState): string {
+  const { search: _search, ...kept } = filters;
+  return JSON.stringify(kept);
+}
+
+/** A location's query without the text search, every other parameter kept. */
+function withoutSearch(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("q");
+  return params.toString();
+}
+
 /** A stored preference, or null when there is nothing legible to restore. */
 export function parseStoredGalleryFilters(
   raw: string | null,
@@ -246,10 +261,8 @@ export function parseStoredGalleryFilters(
     ownerUserId:
       ownerUserId.length > 0 ? ownerUserId.slice(0, MAX_FILTER_LENGTH) : null,
     tags: boundedTags(Array.isArray(record.tags) ? record.tags : []),
-    search:
-      typeof record.search === "string"
-        ? record.search.slice(0, MAX_FILTER_LENGTH)
-        : "",
+    // An older store kept the search; it is no longer restored (#1675).
+    search: "",
     netlistable: record.netlistable === true,
     withoutNetlist:
       record.netlistable !== true && record.withoutNetlist === true,
@@ -266,18 +279,46 @@ export function parseStoredGalleryFilters(
   };
 }
 
+/** Where a page learns how it was loaded: `performance`, in a browser. */
+interface NavigationTimingSource {
+  getEntriesByType(type: "navigation"): readonly unknown[];
+}
+
+/**
+ * Whether this page load is the reader reloading it, as Navigation Timing
+ * tells; a browser that cannot say is taken as a fresh visit. It stays true
+ * for the document's life, which is safe because the wall (GalleryFeed)
+ * mounts once per document: the path picks the page once, with no client
+ * routing back to the wall.
+ */
+export function isPageReload(
+  timing: NavigationTimingSource | undefined = globalThis.performance as
+    Performance | undefined,
+): boolean {
+  try {
+    const [entry] = timing?.getEntriesByType("navigation") ?? [];
+    return (entry as { type?: unknown } | undefined)?.type === "reload";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The filters the wall opens with. A link that narrows the wall wins outright
  * — it is somebody's request for that slice — and otherwise the reader's own
  * last choice is restored, including the empty one they cleared on purpose.
  * A link to one circuit (`?entry=`) asks for the whole wall, where that
- * circuit is sure to be.
+ * circuit is sure to be. A reload opens unsearched (#1675): the address's
+ * `q` is read as absent, and every other choice it names stands.
  */
 export function resolveGalleryFilters(
   search: string,
   storedRaw: string | null,
+  { reload = false }: { reload?: boolean } = {},
 ): GalleryFilterState {
-  const { filters, narrowed, namesView } = parseGalleryFilterQuery(search);
+  const { filters, narrowed, namesView } = parseGalleryFilterQuery(
+    reload ? withoutSearch(search) : search,
+  );
   const stored = parseStoredGalleryFilters(storedRaw);
   const focused = galleryFocusEntryId(search);
   // A linked circuit of a reference dataset opens that dataset's wall.

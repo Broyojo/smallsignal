@@ -921,6 +921,54 @@ test("a search keeps what it found when the window comes back into focus", async
   await expect(progress).toHaveText("Searched all 31 circuits · 2 matches");
 });
 
+test("a reload clears the search and keeps every other filter; a shared search still opens (#1675)", async ({
+  page,
+}) => {
+  await signIn(page, sessionUser({ displayName: "Reader" }));
+  const asked: string[] = [];
+  await mockPreviews(page);
+  await mockGalleryApi(page, { tags: [] }, async (url, route) => {
+    asked.push(url.searchParams.get("q") ?? "");
+    return route.fulfill({
+      json: { entries: [ENTRY], total: 1, nextCursor: null },
+    });
+  });
+  const search = page.getByTestId("gallery-search");
+  const netlist = page.getByTestId("gallery-filter-netlistable");
+  await page.goto("/?netlist=1&utm_source=share");
+  await search.fill("mirror");
+  await expect(page).toHaveURL((url) => url.searchParams.get("q") === "mirror");
+  await expect.poll(() => asked.at(-1)).toBe("mirror");
+  // The search is never remembered, so a later visit opens unsearched.
+  const stored = () =>
+    page.evaluate(() =>
+      JSON.parse(localStorage.getItem("icm.gallery-filters.v1") ?? "{}"),
+    );
+  expect(await stored()).toMatchObject({ netlistable: true });
+  expect(await stored()).not.toHaveProperty("search");
+  await page.goto("/");
+  await expect(netlist).toHaveAttribute("aria-pressed", "true");
+  await expect(search).toHaveValue("");
+
+  // A link that carries a search, opened fresh, shows that search.
+  await page.goto("/?netlist=1&q=mirror&utm_source=share");
+  await expect(search).toHaveValue("mirror");
+  await expect.poll(() => asked.at(-1)).toBe("mirror");
+
+  // Reloaded, it opens unsearched and keeps everything else.
+  await page.reload();
+  await expect(search).toHaveValue("");
+  await expect(page.getByTestId(`gallery-tile-${ENTRY.id}`)).toBeVisible();
+  await expect(netlist).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(
+    (url) =>
+      !url.searchParams.has("q") &&
+      url.searchParams.get("netlist") === "1" &&
+      url.searchParams.get("utm_source") === "share",
+  );
+  expect(asked.at(-1)).toBe("");
+});
+
 // Tags.
 
 test("tag categories select all children, retain other groups and expose mixed selection", async ({
