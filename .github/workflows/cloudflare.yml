@@ -67,6 +67,7 @@ jobs:
           wrangler-config: wrangler.jsonc
           release-sha: ${{ steps.release.outputs.release_sha }}
           candidate-dir: ${{ runner.temp }}/analog-canvas-candidate
+          retain-assets-from: https://analog-canvas.tokenzhang.com
       - name: Verify the deployment candidate
         run: |
           node scripts/deployment-candidate.mjs verify \

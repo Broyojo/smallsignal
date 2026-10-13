@@ -3,6 +3,7 @@ import { Suspense, type ComponentProps } from "react";
 import type { AgentFileCandidateSummary } from "@icm/agent-adapter";
 
 import { ChunkLoadBanner } from "../components/chunk-load-fallback";
+import { NewDeployBanner } from "../components/new-deploy-banner";
 import {
   RecoveryAvailableBanner,
   RecoveryFailureBanner,
@@ -65,6 +66,7 @@ export function EditorDialogLayer({
     <>
       <Suspense fallback={null}>
         {chunkLoadFailure ? <ChunkLoadBanner {...chunkLoadFailure} /> : null}
+        <NewDeployBanner />
         {recoveryFailure ? (
           <RecoveryFailureBanner {...recoveryFailure} />
         ) : null}
