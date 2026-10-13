@@ -213,7 +213,21 @@ export function GalleryCountPanel({
   currentDataset?: string | null;
   onSelectDataset?: (key: string) => void;
 }) {
-  const label = galleryCountLabel(total, { filtered, search, searched });
+  // The whole community wall counts every circuit the Gallery holds, the
+  // reference datasets' too; a dataset's wall, a narrowed wall or a search
+  // counts only what it shows.
+  const datasetCircuits =
+    currentDataset === null && !filtered && !searched && !search && !author
+      ? datasets.reduce((sum, dataset) => sum + dataset.count, 0)
+      : 0;
+  const label = galleryCountLabel(
+    total === null ? null : total + datasetCircuits,
+    { filtered, search, searched },
+  );
+  const breakdown =
+    total !== null && datasetCircuits > 0
+      ? `${total.toLocaleString()} community · ${datasetCircuits.toLocaleString()} from datasets`
+      : undefined;
   const rootRef = useRef<HTMLDetailsElement | null>(null);
   // By circuits or by name (#1502), remembered in this browser.
   const [order, setOrder] = useState<ContributorOrder>(() => {
@@ -275,6 +289,7 @@ export function GalleryCountPanel({
         className="gallery-count-panel"
         data-testid="gallery-count-panel"
         aria-label={`${label}. Show contributor leaderboard`}
+        title={breakdown}
       >
         <span className="gallery-count-label">{label}</span>
       </summary>

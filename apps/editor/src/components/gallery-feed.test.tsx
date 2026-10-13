@@ -451,6 +451,36 @@ describe("GalleryCountPanel", () => {
     expect(datasetWall).toContain('data-testid="gallery-contributor-all"');
     expect(datasetWall).toContain('aria-current="true"');
   });
+
+  it("counts the datasets' circuits into the community wall's total", () => {
+    const datasets = [
+      { key: "amsnet", name: "AMS-Net", count: 641 },
+      { key: "circuitthink", name: "CircuitThink", count: 72 },
+    ];
+    const render = (props: Partial<Parameters<typeof GalleryCountPanel>[0]>) =>
+      renderToStaticMarkup(
+        createElement(GalleryCountPanel, { total: 1363, datasets, ...props }),
+      );
+    const community = render({});
+    expect(community).toContain(`${(2076).toLocaleString()} circuits`);
+    expect(community).toContain(
+      `title="${(1363).toLocaleString()} community · ${(713).toLocaleString()} from datasets"`,
+    );
+    // A dataset's own wall, a narrowed wall and a search count what they show.
+    expect(render({ total: 72, currentDataset: "circuitthink" })).toContain(
+      ">72 circuits<",
+    );
+    expect(render({ filtered: true })).toContain(
+      `${(1363).toLocaleString()} filtered circuits`,
+    );
+    expect(render({ author: "boboIC", total: 86 })).toContain(">86 circuits<");
+    expect(render({ searched: true, total: 5 })).toContain(
+      "5 matching circuits",
+    );
+    expect(render({ search: { visible: 3, settled: true } })).toContain(
+      `${(1363).toLocaleString()} circuits · 3 matches`,
+    );
+  });
 });
 
 describe("GalleryFeed", () => {
