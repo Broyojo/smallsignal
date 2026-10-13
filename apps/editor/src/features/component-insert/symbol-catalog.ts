@@ -83,6 +83,7 @@ export function symbolCategory(symbolId: string): string {
       "opamp-differential-wide",
       "opamp-differential-lettered",
       "opamp-differential-crossed",
+      "opamp-differential-wide-crossed",
       "opamp-differential-crossed-lettered",
       "voltage-amplifier",
       "comparator",
@@ -160,8 +161,8 @@ export function symbolCategory(symbolId: string): string {
 const LIBRARY_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   opamp: "Op Amp S",
   "opamp-wide": "Op Amp",
-  "opamp-differential": "FD Amp S",
-  "opamp-differential-wide": "FD Amp",
+  "opamp-differential-crossed": "FD Amp S",
+  "opamp-differential-wide-crossed": "FD Amp",
   "depletion-nmos": "D-NMOS",
   "depletion-pmos": "D-PMOS",
   "externally-controlled-switch": "Ctrl SW",
@@ -182,8 +183,10 @@ const LIBRARY_DESCRIPTIONS: Readonly<Record<string, string>> = {
     "Center-tapped inductor: two series halves meeting at the tap, no bridge capacitor",
   opamp: "Compact Op Amp — input pin spacing: 20",
   "opamp-wide": "Op Amp — input pin spacing: 40",
-  "opamp-differential": "Compact FD Amp — input/output pin spacing: 20",
-  "opamp-differential-wide": "FD Amp — input/output pin spacing: 40",
+  "opamp-differential-crossed":
+    "Compact FD Amp — input/output pin spacing: 20; each row pairs + with −",
+  "opamp-differential-wide-crossed":
+    "FD Amp — input/output pin spacing: 40; each row pairs + with −",
   "d-flip-flop-reset":
     "Rising-edge D flip-flop with an active-high asynchronous reset",
   "voltage-controlled-switch":
@@ -207,6 +210,17 @@ export function libraryDescription(symbolId: string): string | undefined {
   return LIBRARY_DESCRIPTIONS[symbolId];
 }
 
+/**
+ * Catalog parts the Library leaves out. The FD amps it offers are the
+ * crossed ones, each row pairing + with −; the straight ones stay in the
+ * catalog for the Agent and for drawings, and Swap outputs reaches them.
+ */
+const LIBRARY_LEAVES_OUT = new Set([
+  "pulse-voltage-source",
+  "opamp-differential",
+  "opamp-differential-wide",
+]);
+
 export function paletteSymbols(_styleProfileId: string): SymbolDefinition[] {
   const symbols = [
     vddRailPreviewSymbol,
@@ -214,7 +228,7 @@ export function paletteSymbols(_styleProfileId: string): SymbolDefinition[] {
     ...annotationPreviewSymbols,
     ...expandedDeviceSymbols,
   ];
-  return symbols.filter((symbol) => symbol.id !== "pulse-voltage-source");
+  return symbols.filter((symbol) => !LIBRARY_LEAVES_OUT.has(symbol.id));
 }
 
 /**
@@ -289,8 +303,8 @@ const SYMBOL_ORDER: readonly string[] = [
   // comparators an analog schematic reaches for far more often.
   "opamp-wide",
   "opamp",
-  "opamp-differential-wide",
-  "opamp-differential",
+  "opamp-differential-wide-crossed",
+  "opamp-differential-crossed",
   "voltage-amplifier",
   "transconductance",
   "differential-transconductance",

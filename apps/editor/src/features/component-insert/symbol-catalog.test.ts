@@ -6,6 +6,7 @@ import {
   findPaletteSymbol,
   libraryDescription,
   libraryDisplayName,
+  paletteSymbols,
   symbolCategory,
 } from "./symbol-catalog";
 
@@ -345,8 +346,8 @@ describe("reach order inside a category", () => {
     expect(blocks).toEqual([
       "opamp-wide",
       "opamp",
-      "opamp-differential-wide",
-      "opamp-differential",
+      "opamp-differential-wide-crossed",
+      "opamp-differential-crossed",
       "voltage-amplifier",
       "transconductance",
       "differential-transconductance",
@@ -362,7 +363,7 @@ describe("reach order inside a category", () => {
     ]);
     for (const [name, id] of [
       ["Op Amp S", "opamp"],
-      ["FD Amp S", "opamp-differential"],
+      ["FD Amp S", "opamp-differential-crossed"],
     ] as const) {
       expect(
         flattenComponentCatalog(
@@ -372,7 +373,18 @@ describe("reach order inside a category", () => {
       expect(libraryDescription(id)).toContain("20");
     }
     expect(libraryDescription("opamp-wide")).toContain("40");
-    expect(libraryDescription("opamp-differential-wide")).toContain("40");
+    expect(libraryDescription("opamp-differential-wide-crossed")).toContain(
+      "40",
+    );
+    // The FD amps it offers pair + with − on each row (inputs + below,
+    // outputs + above); the straight ones stay out of the Library.
+    const fd = paletteSymbols("razavi-textbook-v1").find(
+      (symbol) => symbol.id === "opamp-differential-crossed",
+    )!;
+    const y = (name: string) => fd.pins.find((pin) => pin.name === name)!.at.y;
+    expect(Math.sign(y("IN+"))).toBe(-Math.sign(y("OUT+")));
+    expect(blocks).not.toContain("opamp-differential");
+    expect(blocks).not.toContain("opamp-differential-wide");
   });
 
   it("orders logic gates by family rather than by name", () => {

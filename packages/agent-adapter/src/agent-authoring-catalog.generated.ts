@@ -1788,6 +1788,122 @@ export const agentRazaviAuthoringCatalog = {
       variants: [],
     },
     {
+      symbolId: "opamp-differential-crossed",
+      name: "Differential Op Amp (crossed outputs)",
+      category: "analog-block",
+      defaultVariantId: null,
+      labelVisibility: "shown",
+      formula: false,
+      coefficient: false,
+      bounds: {
+        x: -40,
+        y: -30,
+        width: 70,
+        height: 60,
+      },
+      pins: [
+        {
+          name: "IN+",
+          role: "non-inverting-input",
+          direction: "west",
+          visibility: "visible",
+          at: {
+            x: -40,
+            y: 10,
+          },
+        },
+        {
+          name: "IN-",
+          role: "inverting-input",
+          direction: "west",
+          visibility: "visible",
+          at: {
+            x: -40,
+            y: -10,
+          },
+        },
+        {
+          name: "OUT+",
+          role: "output",
+          direction: "east",
+          visibility: "visible",
+          at: {
+            x: 30,
+            y: -10,
+          },
+        },
+        {
+          name: "OUT-",
+          role: "output",
+          direction: "east",
+          visibility: "visible",
+          at: {
+            x: 30,
+            y: 10,
+          },
+        },
+      ],
+      variants: [],
+    },
+    {
+      symbolId: "opamp-differential-wide-crossed",
+      name: "FD Amp Wide (crossed outputs)",
+      category: "analog-block",
+      defaultVariantId: null,
+      labelVisibility: "shown",
+      formula: false,
+      coefficient: false,
+      bounds: {
+        x: -40,
+        y: -30,
+        width: 70,
+        height: 60,
+      },
+      pins: [
+        {
+          name: "IN+",
+          role: "non-inverting-input",
+          direction: "west",
+          visibility: "visible",
+          at: {
+            x: -40,
+            y: 20,
+          },
+        },
+        {
+          name: "IN-",
+          role: "inverting-input",
+          direction: "west",
+          visibility: "visible",
+          at: {
+            x: -40,
+            y: -20,
+          },
+        },
+        {
+          name: "OUT+",
+          role: "output",
+          direction: "east",
+          visibility: "visible",
+          at: {
+            x: 30,
+            y: -20,
+          },
+        },
+        {
+          name: "OUT-",
+          role: "output",
+          direction: "east",
+          visibility: "visible",
+          at: {
+            x: 30,
+            y: 20,
+          },
+        },
+      ],
+      variants: [],
+    },
+    {
       symbolId: "or-gate",
       name: "OR Gate",
       category: "logic",
