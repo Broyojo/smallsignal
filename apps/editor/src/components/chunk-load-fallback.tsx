@@ -7,7 +7,7 @@ export interface ChunkLoadFallbackProps {
   onCancel?: () => void;
 }
 
-function refreshWithRestore(): void {
+export function refreshWithRestore(): void {
   try {
     // The recovery coordinator flushes on pagehide, so the snapshot survives
     // this reload; the flag lets the refreshed page restore it automatically.

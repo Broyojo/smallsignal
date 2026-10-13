@@ -43,6 +43,15 @@ download. Only this app's store is pruned. Legacy `icm.recovery.v1`
 localStorage migrates on first launch, removed only after the IndexedDB
 commit; unmigratable data stays for raw download/discard.
 
+## A page across deploys
+
+A deploy keeps the week's earlier content-hashed assets online
+([deployment](../deployment.md#assets-across-deploys)), so a page opened before
+it keeps loading the dialogs and panels it has not used yet and keeps saving.
+The editor checks the live entry script every 10 minutes while visible and on
+focus (at most once a minute); once it differs it shows one dismissible notice
+to reload when the work is saved, the reload restoring the current circuit.
+
 ## Browser-window workspace
 
 - Open tabs, unsaved content, active tab, Cloud bindings and Cell views

@@ -68,6 +68,15 @@ and after a rollback measure the serving version, bindings and simulator. Update
 a verification assertion when its contract changes, or it rolls back correct
 behavior.
 
+### Assets across deploys
+
+Each deploy publishes `/asset-history.json` (every served asset with the last
+deploy that served it) and uploads, beside its own build, the earlier assets a
+deploy served within 7 days (`scripts/retain-previous-assets.mjs`, at most
+6000 files), so a tab opened before the deploy still loads what it needs. A
+missing history or file is reported, never fatal; the first deploy starts the
+history.
+
 ### Where the credentials live
 
 Environment secrets are reachable only from `main` (and `v*` tags).

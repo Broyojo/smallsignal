@@ -14,6 +14,13 @@ inputs:
   candidate-dir:
     description: Empty directory that receives the candidate.
     required: true
+  retain-assets-from:
+    description: >-
+      Live origin whose recent deploys' assets this build carries, so tabs
+      opened before the deploy still load them (scripts/retain-previous-assets.mjs).
+      Empty keeps only this build's.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -34,6 +41,12 @@ runs:
         VITE_SIMULATION_GZIP: "1"
     # Bundle the Worker once. The channel deploys these exact bytes with
     # --no-bundle, and a successful Preview run preserves them for promotion.
+    - name: Keep recent deploys' assets for tabs opened before this one
+      if: ${{ inputs.retain-assets-from != '' }}
+      shell: bash
+      env:
+        LIVE_ORIGIN: ${{ inputs.retain-assets-from }}
+      run: node scripts/retain-previous-assets.mjs apps/editor/dist "$LIVE_ORIGIN"
     - name: Package the candidate
       shell: bash
       env:
