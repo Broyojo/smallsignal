@@ -119,6 +119,12 @@ is refused with their IDs, never resolved to the first.
     the gate's own Cell is refused, and used Pins cannot be renamed or removed.
 
   An empty model returns the ideal body and default parameters.
+- A fully differential amplifier is `opamp-differential-crossed` (compact) or
+  `opamp-differential-wide-crossed` by default: each row pairs + with − (IN−
+  with OUT+ above, IN+ with OUT− below), so feedback from an output to the
+  input on its row runs straight. `opamp-differential` / `-wide` put OUT+ in
+  line with IN+; use them where that keeps wires from crossing. A placed one
+  switches with `set_instance_symbol` (same pin names, Nets kept).
 - AND/NAND/OR/NOR/XOR/XNOR have 2–4 inputs: place `nor-gate-3`, `xor-gate-4`,
   or `set-property {target, set:{inputs:"3"}}` (symbol and default target
   change; shared inputs keep wires). Removing a wired input is refused, as is a

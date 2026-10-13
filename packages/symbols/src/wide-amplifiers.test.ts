@@ -8,11 +8,17 @@ describe("Wide amplifier geometry", () => {
   const entries = razaviSymbolCatalogEntries.filter(
     (entry) => entry.generation?.kind === "derived-wide-amplifier",
   );
-  it("offers exactly two Wide tiles and retains every configurable state", () => {
+  it("offers the Wide catalog entries and retains every configurable state", () => {
     expect(entries).toHaveLength(12);
+    // The crossed FD amp is the one the Library shows; the straight one
+    // stays for the Agent and for drawings.
     expect(
       entries.filter((entry) => entry.palette).map((entry) => entry.symbolId),
-    ).toEqual(["opamp-wide", "opamp-differential-wide"]);
+    ).toEqual([
+      "opamp-wide",
+      "opamp-differential-wide",
+      "opamp-differential-wide-crossed",
+    ]);
   });
   for (const entry of entries) {
     it(`keeps ${entry.symbolId} on-grid with unchanged pin identities and legible marks`, () => {

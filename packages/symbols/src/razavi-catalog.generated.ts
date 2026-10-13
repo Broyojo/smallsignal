@@ -1803,7 +1803,7 @@ export const razaviSymbolCatalogEntries: readonly RazaviSymbolCatalogEntry[] = [
     category: "analog-block",
     reviewStatus: "reviewed",
     pinOrder: ["IN+", "IN-", "OUT+", "OUT-"],
-    palette: false,
+    palette: true,
     automaticMappings: [],
     manualOnlyReason:
       "Output-polarity sibling of opamp-differential; SPICE subcircuit pin and supply contracts require an explicit PDK mapping.",
@@ -1839,7 +1839,7 @@ export const razaviSymbolCatalogEntries: readonly RazaviSymbolCatalogEntry[] = [
     category: "analog-block",
     reviewStatus: "reviewed",
     pinOrder: ["IN+", "IN-", "OUT+", "OUT-"],
-    palette: false,
+    palette: true,
     automaticMappings: [],
     manualOnlyReason:
       "Output-polarity sibling of opamp-differential; SPICE subcircuit pin and supply contracts require an explicit PDK mapping.",
