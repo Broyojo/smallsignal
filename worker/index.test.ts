@@ -85,6 +85,66 @@ describe("assets binding wiring", () => {
   });
 });
 
+describe("the /api flood limit", () => {
+  it("is bound on Production", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "wrangler.jsonc"),
+      "utf8",
+    );
+    const config = JSON.parse(
+      source.replace(/^\s*\/\/.*$/gmu, "").replace(/,(\s*[}\]])/gu, "$1"),
+    ) as { ratelimits?: { name: string; simple: { period: number } }[] };
+    expect(config.ratelimits).toContainEqual(
+      expect.objectContaining({
+        name: "API_RATE_LIMITER",
+        simple: expect.objectContaining({ period: 60 }),
+      }),
+    );
+  });
+
+  it("refuses an address past its allowance, except the Owner's jobs", async () => {
+    const { default: worker } = await import("./index");
+    const keys: string[] = [];
+    const env = {
+      API_RATE_LIMITER: {
+        limit: async ({ key }: { key: string }) => {
+          keys.push(key);
+          return { success: false };
+        },
+      },
+      SIMULATION_SMOKE_TOKEN: "smoke-token",
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    const capabilities = (headers: Record<string, string>) =>
+      worker.fetch(
+        new Request("https://canvas.test/api/simulate", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ operation: "capabilities" }),
+        }),
+        env,
+      );
+
+    const refused = await capabilities({ "cf-connecting-ip": "203.0.113.7" });
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("60");
+    expect(await refused.json()).toEqual({ error: "rate-limited" });
+    expect(keys).toEqual(["203.0.113.7"]);
+
+    // The deploy's own smoke run and a local request with no client
+    // address are not counted.
+    expect(
+      (
+        await capabilities({
+          "cf-connecting-ip": "203.0.113.7",
+          authorization: "Bearer smoke-token",
+        })
+      ).status,
+    ).not.toBe(429);
+    expect((await capabilities({})).status).not.toBe(429);
+    expect(keys).toHaveLength(1);
+  });
+});
+
 describe("hosted simulation", () => {
   it("asks a signed-out visitor to sign in before the Worker runs anything", async () => {
     const { default: worker } = await import("./index");
