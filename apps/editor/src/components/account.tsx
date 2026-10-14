@@ -1,5 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
+import { isDailyAllowanceRefusal } from "../daily-allowance";
+
 const AccountMenuView = /* @__PURE__ */ lazy(
   () => import("./account-menu-view"),
 );
@@ -121,7 +123,7 @@ export async function requestEmailCode(
       body: JSON.stringify({ email }),
     });
     if (response.status === 202) return { ok: true };
-    if (response.status === 429)
+    if (await isDailyAllowanceRefusal(response))
       return { ok: false, message: "Daily limit reached — try tomorrow." };
     if (response.status === 400)
       return { ok: false, message: "That email address looks invalid." };

@@ -448,7 +448,7 @@ describe("suspended public Gallery documents", () => {
     }
   });
 
-  it("does not advertise or serve crawler and Agent discovery documents", async () => {
+  it("lists no resources for crawlers or Agents, and llms.txt states only the usage policy", async () => {
     const env = environment();
     const sitemap = await route(env, new Request(`${ORIGIN}/sitemap.xml`));
     expect(sitemap.status).toBe(404);

@@ -3,24 +3,25 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-describe("assets binding wiring", () => {
-  /** wrangler.jsonc allows comments and trailing commas; JSON does not. */
-  function wranglerConfig(file = "wrangler.jsonc"): {
-    assets: {
-      binding?: string;
-      run_worker_first?: string[];
-      not_found_handling?: string;
-    };
-    triggers?: { crons?: string[] };
-    services?: { binding: string; service: string }[];
-  } {
-    const source = readFileSync(resolve(process.cwd(), file), "utf8");
-    const stripped = source
-      .replace(/^\s*\/\/.*$/gmu, "")
-      .replace(/,(\s*[}\]])/gu, "$1");
-    return JSON.parse(stripped) as ReturnType<typeof wranglerConfig>;
-  }
+/** wrangler.jsonc allows comments and trailing commas; JSON does not. */
+function wranglerConfig(file = "wrangler.jsonc"): {
+  assets: {
+    binding?: string;
+    run_worker_first?: string[];
+    not_found_handling?: string;
+  };
+  triggers?: { crons?: string[] };
+  services?: { binding: string; service: string }[];
+  ratelimits?: { name: string; simple: { limit: number; period: number } }[];
+} {
+  const source = readFileSync(resolve(process.cwd(), file), "utf8");
+  const stripped = source
+    .replace(/^\s*\/\/.*$/gmu, "")
+    .replace(/,(\s*[}\]])/gu, "$1");
+  return JSON.parse(stripped) as ReturnType<typeof wranglerConfig>;
+}
 
+describe("assets binding wiring", () => {
   it("schedules the netlist mark pass on Production", () => {
     // Stored Gallery marks answer the rule that produced them. Without a
     // tick, a deployed rule change would leave every one of them stale
@@ -87,14 +88,7 @@ describe("assets binding wiring", () => {
 
 describe("the /api flood limit", () => {
   it("is bound on Production", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "wrangler.jsonc"),
-      "utf8",
-    );
-    const config = JSON.parse(
-      source.replace(/^\s*\/\/.*$/gmu, "").replace(/,(\s*[}\]])/gu, "$1"),
-    ) as { ratelimits?: { name: string; simple: { period: number } }[] };
-    expect(config.ratelimits).toContainEqual(
+    expect(wranglerConfig().ratelimits).toContainEqual(
       expect.objectContaining({
         name: "API_RATE_LIMITER",
         simple: expect.objectContaining({ period: 60 }),
@@ -102,46 +96,52 @@ describe("the /api flood limit", () => {
     );
   });
 
-  it("refuses an address past its allowance, except the Owner's jobs", async () => {
+  it("refuses an address past its allowance, except the Owner's jobs and Arena", async () => {
     const { default: worker } = await import("./index");
     const keys: string[] = [];
+    let limiterFails = false;
     const env = {
       API_RATE_LIMITER: {
         limit: async ({ key }: { key: string }) => {
           keys.push(key);
+          if (limiterFails) throw new Error("limiter unavailable");
           return { success: false };
         },
       },
       SIMULATION_SMOKE_TOKEN: "smoke-token",
     } as unknown as Parameters<typeof worker.fetch>[1];
-    const capabilities = (headers: Record<string, string>) =>
+    const call = (path: string, headers: Record<string, string>) =>
       worker.fetch(
-        new Request("https://canvas.test/api/simulate", {
+        new Request(`https://canvas.test${path}`, {
           method: "POST",
           headers,
           body: JSON.stringify({ operation: "capabilities" }),
         }),
         env,
       );
+    const address = { "cf-connecting-ip": "203.0.113.7" };
 
-    const refused = await capabilities({ "cf-connecting-ip": "203.0.113.7" });
+    const refused = await call("/api/simulate", address);
     expect(refused.status).toBe(429);
     expect(refused.headers.get("retry-after")).toBe("60");
-    expect(await refused.json()).toEqual({ error: "rate-limited" });
+    // Not the daily allowances' refusal, and it names the usage policy.
+    expect(await refused.json()).toMatchObject({
+      error: "too-many-requests",
+      usage: expect.stringContaining("zzhishuai@ethz.ch"),
+    });
     expect(keys).toEqual(["203.0.113.7"]);
 
-    // The deploy's own smoke run and a local request with no client
-    // address are not counted.
-    expect(
-      (
-        await capabilities({
-          "cf-connecting-ip": "203.0.113.7",
-          authorization: "Bearer smoke-token",
-        })
-      ).status,
-    ).not.toBe(429);
-    expect((await capabilities({})).status).not.toBe(429);
+    // The deploy's smoke run, a local request with no client address and
+    // AnalogArena's forwarded API are not counted.
+    const smoke = { ...address, authorization: "Bearer smoke-token" };
+    expect((await call("/api/simulate", smoke)).status).not.toBe(429);
+    expect((await call("/api/simulate", {})).status).not.toBe(429);
+    expect((await call("/api/arena/battle", address)).status).not.toBe(429);
     expect(keys).toHaveLength(1);
+
+    // A limiter that fails lets the request through.
+    limiterFails = true;
+    expect((await call("/api/simulate", address)).status).not.toBe(429);
   });
 });
 

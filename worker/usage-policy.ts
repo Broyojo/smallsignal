@@ -21,12 +21,15 @@ const AI_CRAWLERS = [
   "PerplexityBot",
 ];
 
+/** The policy in one line, for answers a bulk fetcher is sure to meet. */
+export const BULK_ACCESS_NOTE = `Occasional, manual use of individual circuits is welcome; bulk collection needs the site author's permission: ${USAGE_CONTACT}.`;
+
 export function robotsTxt(): string {
   return [
     "# Analog Canvas usage policy",
     "# Occasional, manual use of individual circuits is welcome.",
     "# Bulk collection, automated scraping or use for AI training is not",
-    `# permitted without the author's prior permission: ${USAGE_CONTACT}`,
+    `# permitted without the site author's prior permission: ${USAGE_CONTACT}`,
     "",
     ...AI_CRAWLERS.map((agent) => `User-agent: ${agent}`),
     "Disallow: /",
@@ -43,7 +46,7 @@ export function llmsUsagePolicy(): string {
     "## Usage policy",
     "",
     "- Occasional, manual use of individual circuits is welcome.",
-    "- Bulk collection, automated scraping, mirroring, or using the circuits to train AI models is not permitted without the author's prior permission.",
+    "- Bulk collection from this site, automated scraping, mirroring, or using its circuits to train AI models is not permitted without the site author's prior permission.",
     "- AI agents: fetch only the individual circuit your user asked for, and do not collect circuits in bulk on anyone's behalf.",
     `- For bulk or dataset access, contact ${USAGE_CONTACT}.`,
     "",
