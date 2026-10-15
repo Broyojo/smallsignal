@@ -85,6 +85,8 @@ export interface ComponentDefinitionEditorProps {
   onPlaceCircuit(packaged: CircuitComponentPackage): void;
   onClose(): void;
   onBackToLibrary?: (() => void) | undefined;
+  onCreateVariant?: (() => void) | undefined;
+  isVariant?: boolean | undefined;
 }
 
 export default function ComponentDefinitionEditor(
@@ -107,11 +109,13 @@ export default function ComponentDefinitionEditor(
   const [baseline, setBaseline] = useState(source);
   const [localApplied, setLocalApplied] = useState<ComponentDefinition | null>(
     savedArtwork?.appliedDefinition ??
-      (props.mode === "new" ? null : props.definition),
+      (props.mode === "new" || props.isVariant ? null : props.definition),
   );
   const [localAppliedText, setLocalAppliedText] = useState(
     savedArtwork?.appliedText ??
-      (props.mode === "new" ? "" : JSON.stringify(props.definition, null, 2)),
+      (props.mode === "new" || props.isVariant
+        ? ""
+        : JSON.stringify(props.definition, null, 2)),
   );
   const [record, setRecord] = useState(props.entry);
   const [publication, setPublication] = useState<ComponentPublication>(
@@ -247,7 +251,9 @@ export default function ComponentDefinitionEditor(
   );
   const [repair, setRepair] = useState<LegacyCircuitRepair | null>(() =>
     props.mode !== "new" &&
-    props.definition.subcircuit &&
+    !props.definition.electrical &&
+    !props.definition.circuitBinding &&
+    !props.definition.generatedFrom &&
     !hasBuiltInSubcircuitInterface(props.definition) &&
     !props.entry?.circuit &&
     baseAuthoring &&
@@ -259,9 +265,10 @@ export default function ComponentDefinitionEditor(
         )
       : null,
   );
-  const [repairScope, setRepairScope] = useState<"class" | "selected">(
+  const [repairScope] = useState<"class" | "selected">(
     savedRepairCandidate?.legacyRepair?.selected ? "selected" : "class",
   );
+  const [connectionChangeNeeded, setConnectionChangeNeeded] = useState(false);
   const [disconnectPorts, setDisconnectPorts] = useState<string[]>(
     savedRepairCandidate?.legacyRepair?.disconnectPorts ?? [],
   );
@@ -301,7 +308,10 @@ export default function ComponentDefinitionEditor(
                 )!.revision,
               };
             } catch (error) {
-              return { ok: false, message: definitionError(error) };
+              const message = definitionError(error);
+              if (message.includes("Connected legacy port"))
+                setConnectionChangeNeeded(true);
+              return { ok: false, message };
             }
           },
           onSaveDraft: (edits, definitionId) => {
@@ -323,7 +333,7 @@ export default function ComponentDefinitionEditor(
               return {
                 ...result,
                 message: result.ok
-                  ? "Saved repair draft. The captured class is unchanged."
+                  ? "Saved circuit draft. Existing instances are unchanged."
                   : result.message,
               };
             } catch (error) {
@@ -332,20 +342,21 @@ export default function ComponentDefinitionEditor(
           },
           onSetDefinition: () => ({
             ok: false,
-            message: "Apply the repair before editing metadata.",
+            message: "Apply the circuit before editing metadata.",
           }),
           onRemoveDefinition: () => ({
             ok: false,
-            message: "No applied repair to remove.",
+            message: "No applied circuit to remove.",
           }),
           onPlace: () =>
-            setNotice("Apply the repair before placing another instance."),
+            setNotice("Apply the circuit before placing another instance."),
         }
       : baseAuthoring;
   const [definitionType, setDefinitionType] = useState(
     props.draft && (!isLibraryAuthoringDraft(props.draft) || savedArtwork)
       ? "json"
-      : authoring?.definitionId || (props.mode === "new" && authoring)
+      : (authoring?.definitionId && (!repair || props.definition.subcircuit)) ||
+          (props.mode === "new" && authoring)
         ? "circuit"
         : "json",
   );
@@ -367,6 +378,7 @@ export default function ComponentDefinitionEditor(
       )
     : undefined;
   const nativeReady =
+    !props.isVariant &&
     nativeOwner?.implementation?.kind === "source" &&
     !!nativeSource &&
     nativeSource.revision > 0 &&
@@ -853,11 +865,13 @@ export default function ComponentDefinitionEditor(
     >
       <header>
         <strong>
-          {props.mode === "new"
-            ? "Create Component"
-            : props.mode === "library" && publication.kind === "new"
-              ? "Create from Component"
-              : "Edit Component"}
+          {props.isVariant
+            ? "Create variant"
+            : props.mode === "new"
+              ? "Create Component"
+              : props.mode === "library" && publication.kind === "new"
+                ? "Create from Component"
+                : "Edit Component"}
         </strong>
         {(props.mode === "new" || repair) && props.circuit ? (
           <label className="component-definition-type">
@@ -876,6 +890,15 @@ export default function ComponentDefinitionEditor(
           </label>
         ) : null}
         <div className="component-definition-actions">
+          {props.onCreateVariant ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => requestLeave(props.onCreateVariant!)}
+            >
+              Create variant…
+            </button>
+          ) : null}
           {props.onBackToLibrary ? (
             <button
               type="button"
@@ -921,28 +944,9 @@ export default function ComponentDefinitionEditor(
       </header>
       {authoring ? (
         <div className="component-native-session" hidden={!native}>
-          {repair ? (
-            <label className="component-definition-type">
-              Apply to{" "}
-              <select
-                aria-label="Repair scope"
-                value={repairScope}
-                onChange={(event) =>
-                  setRepairScope(
-                    event.currentTarget.value as "class" | "selected",
-                  )
-                }
-              >
-                <option value="class">Captured class in this Project</option>
-                {props.repairTarget ? (
-                  <option value="selected">Selected instance</option>
-                ) : null}
-              </select>
-            </label>
-          ) : null}
-          {repair ? (
-            <details className="component-repair-connections">
-              <summary>Repair connections</summary>
+          {repair && connectionChangeNeeded ? (
+            <details className="component-repair-connections" open>
+              <summary>Connection changes</summary>
               <p>
                 {repairScope === "selected"
                   ? 1
@@ -952,9 +956,12 @@ export default function ComponentDefinitionEditor(
                         (instance) =>
                           instance.symbolId === props.definition.symbol.id,
                       ).length}{" "}
-                legacy instance(s) in this Project.
+                instance(s) use this definition.
               </p>
-              {props.definition.subcircuit!.ports.map((port) => (
+              {(
+                props.definition.subcircuit?.ports ??
+                props.definition.symbol.pins.map((pin) => ({ name: pin.name }))
+              ).map((port) => (
                 <label key={port.name}>
                   <input
                     type="checkbox"

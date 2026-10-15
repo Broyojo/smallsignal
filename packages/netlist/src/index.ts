@@ -6,6 +6,7 @@ export {
 } from "./extract-generic-models.js";
 export * from "./export.js";
 export * from "./project-model-source.js";
+export * from "./model-source-variant.js";
 export * from "./model-source-transform.js";
 export * from "./draft-preview.js";
 export * from "./ir.js";

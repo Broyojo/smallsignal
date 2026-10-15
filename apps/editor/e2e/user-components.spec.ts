@@ -26,7 +26,10 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { createEmptyProject, routeEnd, type CircuitProject } from "@icm/model";
 import { serializeProject } from "@icm/project-protocol";
-import { executeProjectTransaction } from "@icm/edit-engine";
+import {
+  executeProjectTransaction,
+  createExternalSubcircuitInstance,
+} from "@icm/edit-engine";
 import { newComponentDefinition } from "../src/features/user-components/component-definition-edit";
 import { publishedDefinition } from "../src/features/user-components/component-library-contract";
 import {
@@ -1347,7 +1350,7 @@ test("new circuit authoring starts with native source and places a complete six-
   );
 });
 
-test("selecting a second native source entry preserves the first owner's identity and circuit", async ({
+test("creating a native component keeps existing source owners isolated", async ({
   page,
   context,
 }) => {
@@ -1383,8 +1386,15 @@ test("selecting a second native source entry preserves the first owner's identit
   await openProjectFile(page, prepared.project);
   const editor = await openNativeComponent(page);
   await authoringView(editor, "Circuit");
-  await choose(editor, "External model source owner", { label: "model.spice" });
-  await entry(editor).selectOption("second");
+  await expect(editor.getByLabel("External model source owner")).toHaveCount(0);
+  await netlist(editor).fill(".subckt second A B\nR1 A B 2k\n.ends second\n");
+  await button(editor, "Apply model").click();
+  await expect(editor.getByRole("status")).toContainText(
+    "conflicts with second",
+  );
+  await netlist(editor).fill(
+    ".subckt independent A B\nR1 A B 2k\n.ends independent\n",
+  );
   await button(editor, "Apply & Place").click();
   await place(page);
   const saved = await readProject(page);
@@ -1395,10 +1405,11 @@ test("selecting a second native source entry preserves the first owner's identit
     ),
   ).toEqual(prepared.project.externalSubcircuitDefinitions[0]);
   const second = saved.externalSubcircuitDefinitions.find(
-    (owner) => owner.name === "second",
+    (owner) => owner.name === "independent",
   )!;
   expect(second.id).not.toBe("first-owner");
-  expect(second.implementation?.sourceId).toBe("multi-source");
+  expect(second.implementation?.sourceId).not.toBe("multi-source");
+  expect(saved.modelSources![0]).toEqual(prepared.project.modelSources![0]);
   expect(saved.documents[0]!.instances[0]!.netlist?.binding).toEqual({
     kind: "external-subcircuit",
     definitionId: second.id,
@@ -1470,7 +1481,9 @@ test("legacy four-to-six repair uses the full native pin editor, keeps a saved d
   await text(editor, "More").click();
   await button(editor, "Save draft").click();
   await expect(
-    text(editor, "Saved repair draft. The captured class is unchanged."),
+    editor.getByText(
+      /Saved circuit draft\. Existing instances are unchanged\./,
+    ),
   ).toBeVisible();
   await editor.getByLabel("Close component editor").click();
   const saved = await readProject(page);
@@ -1594,8 +1607,8 @@ test("automatic layout only enables explicit offsets and distinguishes pending s
   await expect(button(editor, "Apply & Place")).toBeDisabled();
   await authoringView(editor, "Symbol");
   await expect(
-    text(editor, "Define the circuit interface to generate a symbol."),
-  ).toBeVisible();
+    text(editor, "Add a .subckt definition to continue."),
+  ).toHaveCount(1);
   await authoringView(editor, "Circuit");
   await netlist(editor).fill(
     ".subckt simple IN OUT\nR1 IN OUT 1k\n.ends simple\n",
@@ -1769,6 +1782,312 @@ async function openNativeComponent(page: Page) {
   return editor;
 }
 
+test("symbol modes switch immediately and retain custom text through draft recovery", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const editor = await openFiniteGain(page);
+  await authoringView(editor, "Mapping");
+  await editor
+    .getByRole("button", { name: "Customize symbol", exact: true })
+    .click();
+  const code = symbolJson(editor);
+  const original = await copyText(page, code);
+  const custom = original.replace(
+    '"name": "finite_gain"',
+    '"name": "Retained amplifier"',
+  );
+  await code.fill(custom);
+  await choose(editor, "Symbol mode", "automatic");
+  await expect(editor.getByLabel("Symbol mode")).toHaveValue("automatic");
+  await expect(button(editor, "Discard changes")).toHaveCount(0);
+  await authoringView(editor, "Mapping");
+  await editor
+    .getByRole("button", { name: "Customize symbol", exact: true })
+    .click();
+  expect(await copyText(page, code)).toBe(custom);
+  await choose(editor, "Symbol mode", "automatic");
+  await editor.getByLabel("Symbol mode").focus();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(editor.getByRole("status")).toContainText("draft");
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  const saved = await readProject(page);
+  expect(saved.modelSources![0]!.draft!.authoring![0]!.artworkText).toBe(
+    custom,
+  );
+  expect(saved.modelSources![0]!.draft!.authoring![0]!.symbolMode).toBe(
+    "automatic",
+  );
+  await openProjectDraft(page, /^Circuit draft /);
+  await authoringView(editor, "Symbol");
+  await expect(editor.getByLabel("Symbol mode")).toHaveValue("automatic");
+  await choose(editor, "Symbol mode", "custom");
+  expect(await copyText(page, symbolJson(editor))).toBe(custom);
+});
+
+test("empty Custom JSON survives mode switching and saved draft recovery", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const editor = await openFiniteGain(page, "custom");
+  await symbolJson(editor).fill("");
+  await symbolJson(editor).focus();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(editor.getByRole("status")).toContainText("JSON");
+  await expect(editor.getByRole("status")).toContainText("Saved draft");
+  await choose(editor, "Symbol mode", "automatic");
+  await choose(editor, "Symbol mode", "custom");
+  expect(await copyText(page, symbolJson(editor))).toBe("");
+  await choose(editor, "Symbol mode", "automatic");
+  await editor.getByLabel("Symbol mode").focus();
+  await page.keyboard.press("ControlOrMeta+s");
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  await openProjectDraft(page, /^Circuit draft /);
+  await authoringView(editor, "Symbol");
+  await choose(editor, "Symbol mode", "custom");
+  expect(await copyText(page, symbolJson(editor))).toBe("");
+});
+
+test("first Custom entry after saving Automatic uses the current interface", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const editor = await openFiniteGain(page);
+  await netlist(editor).focus();
+  await page.keyboard.press("ControlOrMeta+s");
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  await openProjectDraft(page, /^Circuit draft /);
+  await netlist(editor).fill(".subckt six A B C D E F\nR1 A B 1k\n.ends six\n");
+  await authoringView(editor, "Symbol");
+  await choose(editor, "Symbol mode", "custom");
+  const artwork = JSON.parse(await copyText(page, symbolJson(editor)));
+  expect(artwork.symbol.pins.map((pin: { name: string }) => pin.name)).toEqual([
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+  ]);
+  await expect(button(editor, "Apply model")).toBeEnabled();
+});
+
+test("shared source refusal stays in the editor and preserves every caller", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const empty = createEmptyProject("shared", "Shared source");
+  const applied = executeProjectTransaction(empty, {
+    projectId: empty.id,
+    expectedStructureRevision: 0,
+    transactionId: "seed",
+    actor: { kind: "human", id: "test" },
+    edits: [
+      {
+        kind: "apply_model_source",
+        source: {
+          id: "shared-source",
+          revision: 0,
+          language: "spice",
+          entry: "model.spice",
+          dependencies: [],
+          files: [
+            {
+              path: "model.spice",
+              text: ".subckt first A B\nR1 A B 1k\n.ends first\n.subckt second A B\nR1 A B 2k\n.ends second\n",
+            },
+          ],
+        },
+        definitions: [
+          { definitionId: "first", entry: "first" },
+          { definitionId: "second", entry: "second" },
+        ],
+      },
+    ],
+  });
+  if (!applied.ok) throw Error(applied.error.message);
+  applied.project.documents[0]!.instances =
+    applied.project.externalSubcircuitDefinitions.map((owner, index) =>
+      createExternalSubcircuitInstance(`X${index + 1}`, owner, {
+        position: { x: 200 + index * 200, y: 200 },
+        rotation: 0,
+        mirror: "none",
+      }),
+    );
+  await openProjectFile(page, applied.project);
+  await awaitEditorReady(page);
+  const before = await readProject(page);
+  const editor = await editWithKey(page, "X1");
+  await authoringView(editor, "Circuit");
+  await netlist(editor).fill(
+    applied.project.modelSources![0]!.files[0]!.text.replace("1k", "3k"),
+  );
+  await button(editor, "Apply model").click();
+  await expect(editor.getByRole("status")).toContainText("Create a variant");
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  await button(editor, "Discard changes").click();
+  expect(await readProject(page)).toEqual(before);
+});
+
+test("Symbol only can add a circuit through the same editor without a permanent Repair panel", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, "alice");
+  await publishComponent(
+    page,
+    "symbol-only",
+    symbolDefinition("Passive block"),
+  );
+  await placeFromLibrary(page, "Passive block", 400, 240);
+  const editor = await editWithKey(page, "X1");
+  await expect(editor.getByLabel("Definition type")).toHaveValue("json");
+  await choose(editor, "Definition type", "circuit");
+  await netlist(editor).fill(
+    ".subckt passive IN OUT\nR1 IN OUT 1k\n.ends passive\n",
+  );
+  await applyModel(editor);
+  await expect(
+    editor.getByText("Connection changes", { exact: true }),
+  ).toHaveCount(0);
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  expect(
+    (await readProject(page)).documents[0]!.instances[0]!.netlist!.binding!
+      .kind,
+  ).toBe("external-subcircuit");
+});
+
+test("source errors have one main status and additional diagnostics with locations", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const editor = await openNativeComponent(page);
+  await netlist(editor).fill(
+    '.include "missing-a.sp"\n.include "missing-b.sp"\n',
+  );
+  await expect(editor.getByRole("status")).toHaveCount(1);
+  await expect(editor.getByRole("status")).toContainText("missing-a.sp");
+  await editor.getByText(/more diagnostics/).click();
+  await expect(editor.getByText(/missing-b.sp/).last()).toBeVisible();
+  await expect(
+    editor.getByRole("button", { name: /model.spice:2/ }),
+  ).toBeVisible();
+});
+
+test("component authoring stays compact without overflowing at narrow widths and zoom", async ({
+  page,
+  service,
+}, testInfo) => {
+  await service.openEditorAs(page, null);
+  const editor = await openFiniteGain(page, "custom");
+  const mode = editor.getByLabel("Symbol mode");
+  const name = editor.getByLabel("Component display name");
+  await name.fill(
+    "Reusable amplifier with a deliberately long descriptive name",
+  );
+  await mode.focus();
+  for (const width of [1440, 900, 640]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const zoom of [1, 1.25, 1.5]) {
+      await page.evaluate((value) => {
+        document.documentElement.style.zoom = String(value);
+      }, zoom);
+      await expect(mode).toBeVisible();
+      const overflow = await editor.evaluate((dialog) => {
+        const bounds = dialog.getBoundingClientRect();
+        return [
+          ...dialog.querySelectorAll<HTMLElement>(
+            ".component-symbol-controls, .component-symbol-controls input, .component-symbol-controls select, .external-model-actionbar",
+          ),
+        ]
+          .filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.left < bounds.left - 1 || box.right > bounds.right + 1;
+          })
+          .map((el) => el.className || el.tagName);
+      });
+      expect(overflow, `width ${width}, zoom ${zoom}`).toEqual([]);
+    }
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.zoom = "1";
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await editor.screenshot({
+    path: testInfo.outputPath("component-authoring.png"),
+  });
+});
+
+test("variant draft keeps the original untouched and applies as one undo", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const editor = await openFiniteGain(page);
+  await applyAndPlace(editor, 450, 260);
+  const original = await readProject(page);
+  await editWithKey(page, "X1");
+  await button(editor, "Create variant…").click();
+  await authoringView(editor, "Circuit");
+  const textBefore = await copyText(page, netlist(editor));
+  await netlist(editor).fill(textBefore.replace("gain=10", "gain=20"));
+  await netlist(editor).focus();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(editor.getByRole("status")).toContainText("Saved variant draft");
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  const saved = await readProject(page);
+  expect(saved.documents).toEqual(original.documents);
+  expect(saved.modelSources).toEqual(original.modelSources);
+  await openProjectDraft(page, /^Variant draft /);
+  await authoringView(editor, "Circuit");
+  expect(await copyText(page, netlist(editor))).toContain("gain=20");
+  await applyModel(editor);
+  await editor.getByLabel("Close component editor", { exact: true }).click();
+  const changed = await readProject(page);
+  expect(changed.modelSources).toHaveLength(2);
+  expect(changed.modelSources![0]).toEqual(original.modelSources![0]);
+  expect(changed.documents[0]!.instances[0]!.netlist!.binding).not.toEqual(
+    original.documents[0]!.instances[0]!.netlist!.binding,
+  );
+  expect(changed.componentAuthoringDrafts ?? []).toHaveLength(0);
+  await button(page, "Undo").click();
+  const undone = await readProject(page);
+  expect(
+    undone.documents.map(({ revision: _revision, ...document }) => document),
+  ).toEqual(
+    original.documents.map(({ revision: _revision, ...document }) => document),
+  );
+  expect(undone.modelSources).toEqual(original.modelSources);
+  await button(page, "Redo").click();
+  expect((await readProject(page)).modelSources).toEqual(changed.modelSources);
+});
+
+test("blank component authoring has one actionable status and contextual advanced actions", async ({
+  page,
+  service,
+}) => {
+  await service.openEditorAs(page, null);
+  const editor = await openNativeComponent(page);
+  await expect(editor.getByLabel("Repair scope")).toHaveCount(0);
+  await expect(editor.getByRole("status")).toHaveCount(1);
+  await expect(editor.getByRole("status")).toHaveText(
+    "Add a .subckt definition to continue.",
+  );
+  await expect(
+    editor.getByText("No subcircuit yet", { exact: true }),
+  ).toHaveCount(0);
+  await text(editor, "More").click();
+  await expect(button(editor, "Source files…")).toBeVisible();
+  await expect(button(editor, "Save draft")).toBeVisible();
+  await expect(button(editor, "Fork model…")).toHaveCount(0);
+  await expect(button(editor, "Delete definition")).toHaveCount(0);
+});
+
 test("repairs a wired legacy custom component with explicit native port mapping in one undo", async ({
   page,
   baseURL,
@@ -1830,7 +2149,7 @@ test("repairs a wired legacy custom component with explicit native port mapping 
   await netlist(dialog).fill(".subckt incomplete IN OUT VSS\n");
   await expect(button(dialog, "Apply model")).toBeDisabled();
   await expect(
-    text(dialog, "Missing .ends for incomplete").first(),
+    dialog.getByText(/Missing \.ends for incomplete/).first(),
   ).toBeVisible();
   await dialog
     .getByRole("textbox", { name: "External model netlist", exact: true })
@@ -2196,7 +2515,7 @@ test("creates a native User Component through the shared model owner and places 
   await expect(button(dialog, "Place finite_gain")).toHaveCount(0);
 });
 
-test("native User Components bind an existing owner, guard unsaved text and keep a stale draft on the latest version", async ({
+test("editing a native definition guards unsaved text and keeps a stale draft on the latest version", async ({
   page,
   baseURL,
   service,
@@ -2204,23 +2523,18 @@ test("native User Components bind an existing owner, guard unsaved text and keep
   test.setTimeout(90_000);
   await service.openEditorAs(page, null);
   let editor = await openFiniteGain(page);
-  await button(editor, "Apply model").click();
-  await editor.getByLabel("Close component editor", { exact: true }).click();
+  await applyAndPlace(editor, 450, 260);
   const client = await pairAgent(page, baseURL!);
   const before = await readProject(page);
   const owner = before.modelSources![0]!;
-  editor = await openNativeComponent(page);
+  editor = await editWithKey(page, "X1");
   await authoringView(editor, "Circuit");
-  await choose(editor, "External model source owner", owner.id);
-  await authoringView(editor, "Circuit");
-  await entry(editor).selectOption("finite_gain");
   const pendingText = finiteGainSource.replace("gain=10", "gain=17");
   await authoringView(editor, "Circuit");
   await netlist(editor).fill(pendingText);
-  await editor.getByLabel("Definition type").selectOption("json");
+  await authoringView(editor, "Symbol");
   await expect(button(editor, "Discard changes")).toHaveCount(0);
-  await editor.getByLabel("Definition type").selectOption("circuit");
-  await expect(editor.getByLabel("Definition type")).toHaveValue("circuit");
+  await authoringView(editor, "Circuit");
   await expect(netlist(editor)).toContainText("gain=17");
   const updated = await client.advancedTransact({
     structureEdits: [
@@ -2346,14 +2660,12 @@ test("native Save draft keeps an existing placeholder owner's name and terminals
   });
   // The native editor reopens that draft for the same owner, then names
   // a different entry.
-  const editor = await openNativeComponent(page);
-  await authoringView(editor, "Circuit");
-  await choose(editor, "External model source owner", source.id);
+  const editor = await openExternalCircuit(page, "legacy_gain");
   await netlist(editor).fill(".subckt other_gain P Q\n");
   await text(editor, "More").click();
   await button(editor, "Save draft").click();
   await expect(editor.getByRole("status")).toContainText("Saved draft");
-  await editor.getByLabel("Close component editor", { exact: true }).click();
+  await editor.getByLabel("Close Cell Manager").click();
   const saved = await readProject(page);
   expect(saved.externalSubcircuitDefinitions).toEqual([owner]);
   expect(saved.modelSources![0]!.draft!.files[0]!.text).toBe(
@@ -2507,7 +2819,10 @@ test("editing connected custom artwork and switching modes preserves logical pin
   expect(moved.externalSubcircuitDefinitions[0]!.terminals).toEqual(
     before.externalSubcircuitDefinitions[0]!.terminals,
   );
-  expect(instanceOf(moved, "X2")).toEqual(peer);
+  expect(instanceOf(moved, "X2")).toEqual({
+    ...peer,
+    symbolId: instanceOf(moved, "X1").symbolId,
+  });
   const endpoint = {
     kind: "terminal" as const,
     instanceId: "X1",
@@ -2533,9 +2848,7 @@ test("editing connected custom artwork and switching modes preserves logical pin
     )!.centerline.at(-1),
   ).toEqual(movedPoint);
   expect(instanceOf(moved, "X1").symbolId).not.toBe(artwork.symbol.id);
-  expect(definitionOf(moved, artwork.symbol.id)).toEqual(
-    definitionOf(before, artwork.symbol.id),
-  );
+  expect(definitionOf(moved, artwork.symbol.id)).toBeUndefined();
   await page.keyboard.press("ControlOrMeta+z");
   expect(await readProject(page)).toEqual({
     ...before,
@@ -2565,7 +2878,11 @@ test("editing connected custom artwork and switching modes preserves logical pin
     before.modelSources![0]!.files,
   );
   expect(automatic.documents[0]!.nets).toEqual(before.documents[0]!.nets);
-  expect(instanceOf(automatic, "X2")).toEqual(peer);
+  const { symbolVariantId: _variant, ...automaticPeer } = peer;
+  expect(instanceOf(automatic, "X2")).toEqual({
+    ...automaticPeer,
+    symbolId: caller.symbolId,
+  });
 });
 
 test("copying custom circuits keeps terminal identities scoped to each native owner", async ({
@@ -2824,23 +3141,12 @@ test("native port removal migrates preferred artwork past a different placed cap
       center: { x: 0, y: 0 },
       radius: 6,
     });
-    editor = await openNativeComponent(page);
-    await authoringView(editor, "Circuit");
-    await choose(
-      editor,
-      "External model source owner",
-      placed.modelSources![0]!.id,
-    );
-    await authoringView(editor, "Circuit");
-    await entry(editor).selectOption("finite_gain");
-    await authoringView(editor, "Symbol");
-    await editor.getByLabel("Symbol mode").selectOption("custom");
-    await editor
-      .getByRole("textbox", { name: "Circuit symbol JSON", exact: true })
-      .fill(JSON.stringify(artwork, null, 2));
-    await applyModel(editor);
+    // A saved Project can prefer newer artwork while retaining an older
+    // placed capture. New Component no longer edits an existing source owner.
+    placed.componentDefinitions!.push(artwork);
+    placed.externalSubcircuitDefinitions[0]!.symbolId = artwork.symbol.id;
+    await openProjectFile(page, placed);
   }
-  await editor.getByLabel("Close component editor", { exact: true }).click();
   const before = await readProject(page);
   const oldPreference = before.externalSubcircuitDefinitions[0]!.symbolId!;
   expect(

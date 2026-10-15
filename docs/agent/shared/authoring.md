@@ -423,6 +423,18 @@ compiled `symbol` or ID-keyed directions on one target; the edit schema covers
 `artworkOrigin` and caller migrations. Validate with `dryRun:true`, then commit
 at the same revisions.
 
+For project definition editing use `apply_actions` command
+`apply-component-definition` with `edit: {kind:"apply_model_source", ...}`.
+It resolves all callers of the exact native owner, matching GUI Edit definition.
+`apply-component-artwork` takes `instanceId` and a complete `definition` for
+captured primitive or Symbol-only definitions. `create-component-variant` takes
+`instanceId` and a fresh `identity`; it clones owned resources and rebinds only
+that instance in one transaction. Inspect the resulting source/owner IDs before
+editing the variant. Declarations and references are namespaced using parsed
+source spans; global parameters or ambiguous opaque references require manual
+source isolation. Display names may remain identical. These operations do not
+publish. Dry-run and revision guards apply as for other authoring commands.
+
 Only reviewed core SKY130 1.8 V and IHP SG13G2 low-voltage MOS conversions
 exist; others refuse without partial change; converted spans cannot be reverse
 edited. Only the SPICE projection runs (on qualified ngspice), whatever the

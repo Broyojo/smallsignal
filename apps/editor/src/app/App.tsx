@@ -7204,7 +7204,6 @@ function WorkspaceEditor({
         setComponentLibraryRefresh={setComponentLibraryRefresh}
         userComponentsOpen={userComponentsOpen}
         setUserComponentsOpen={setUserComponentsOpen}
-        commitProjectStructure={commitProjectStructure}
         editorDocumentController={editorDocumentController}
         synchronizeExternalCommit={synchronizeExternalCommit}
         definitionProjectRef={definitionProjectRef}
