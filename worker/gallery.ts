@@ -20,6 +20,7 @@ import {
   wallTagCounts,
 } from "./gallery-wall-merge";
 import { sameOrigin } from "./same-origin";
+import { llmsUsagePolicy, robotsTxt } from "./usage-policy";
 import {
   GALLERY_DAILY_OPEN_LIMIT,
   GALLERY_MAX_REJECT_REASON_LENGTH,
@@ -366,9 +367,23 @@ export async function routeGalleryRequest(
   const directResource = await directGalleryResource(request, env, runtime);
   if (directResource) return directResource;
   if (request.method === "GET" && url.pathname === "/robots.txt") {
-    return new Response("User-agent: *\nDisallow: /g/\n", {
+    return new Response(robotsTxt(), {
       headers: {
         "cache-control": "no-store",
+        "content-type": "text/plain; charset=utf-8",
+      },
+    });
+  }
+  // llms.txt always states the usage policy; it lists the public resources
+  // only while public Gallery documents are on.
+  if (
+    request.method === "GET" &&
+    url.pathname === "/llms.txt" &&
+    !PUBLIC_GALLERY_DOCUMENTS_ENABLED
+  ) {
+    return new Response(`# Analog Canvas\n\n${llmsUsagePolicy()}`, {
+      headers: {
+        "cache-control": "public, max-age=300",
         "content-type": "text/plain; charset=utf-8",
       },
     });
@@ -403,7 +418,7 @@ export async function routeGalleryRequest(
       );
     }
     return new Response(
-      `# Analog Canvas\n\nPublic analog-circuit Gallery. No account or private Canvas connection is required to read public pages and resources.\n\n- Gallery: ${url.origin}/\n- Public circuits: ${catalog.total}\n- Netlistable circuits: ${catalog.netlistable}\n- Search: ${url.origin}/?q=ota\n- Filter by tag: ${url.origin}/?tags=bandgap\n- Circuit page: ${url.origin}/g/{id}\n- Project Code: ${url.origin}/g/{id}/project.icproj.json\n- SPICE: ${url.origin}/g/{id}/netlist.sp\n- Spectre: ${url.origin}/g/{id}/netlist.scs\n- Complete URL index: ${url.origin}/sitemap.xml\n\nPrivate Projects and all edits require an explicitly authorized Editor connection.\n`,
+      `# Analog Canvas\n\nPublic analog-circuit Gallery. No account or private Canvas connection is required to read public pages and resources.\n\n- Gallery: ${url.origin}/\n- Public circuits: ${catalog.total}\n- Netlistable circuits: ${catalog.netlistable}\n- Search: ${url.origin}/?q=ota\n- Filter by tag: ${url.origin}/?tags=bandgap\n- Circuit page: ${url.origin}/g/{id}\n- Project Code: ${url.origin}/g/{id}/project.icproj.json\n- SPICE: ${url.origin}/g/{id}/netlist.sp\n- Spectre: ${url.origin}/g/{id}/netlist.scs\n- Complete URL index: ${url.origin}/sitemap.xml\n\nPrivate Projects and all edits require an explicitly authorized Editor connection.\n\n${llmsUsagePolicy()}`,
       {
         headers: {
           "cache-control": "public, max-age=300",
