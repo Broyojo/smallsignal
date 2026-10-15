@@ -347,13 +347,24 @@
   .circuit-symbol-authoring:has(.component-definition-workspace) {
   flex: 1;
 }
-.component-definition-native .circuit-symbol-authoring > label {
+.component-symbol-controls {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--icm-space-2) var(--icm-space-3);
+  min-width: 0;
+}
+.component-definition-native .component-symbol-controls > label {
+  display: flex;
+  flex: 1 1 15rem;
   align-items: center;
   gap: var(--icm-space-2);
 }
-.component-definition-native .circuit-symbol-authoring > label select {
-  width: 12rem;
+.component-definition-native .component-symbol-controls :is(select, input) {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 .component-definition-native .component-definition-workspace {
   grid-template-columns: minmax(0, var(--definition-split, 65%)) 8px minmax(

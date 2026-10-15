@@ -76,8 +76,10 @@ owns visual authority.
   Formal direction (input/output/inout/passive) is separate from geometric
   side and JSON roles (gate/bulk); direction edits keep roles and mode.
   Customize symbol captures generated artwork before exceptional mapping;
-  returning to Automatic is explicit with the dirty-change safeguard. Display
-  name edits change `symbol.name`, not the source entry.
+  switching Automatic/Custom is immediate and keeps inactive JSON in the draft.
+  Inactive JSON never blocks Automatic Apply or enters executable output.
+  Reset custom symbol confirms only the artwork reset. Display name edits
+  change `symbol.name`, not the source entry.
 - Invalid artwork stays a draft (source and directions stay editable); stale
   previews are labelled and never applied.
 - `apply_model_source.definitions[].authoring` (GUI and Agent): `symbolMode`,
@@ -90,6 +92,23 @@ owns visual authority.
   it); a mode change resets to Automatic. `authoringDefinitionIds` default to
   the explicitly supplied targets; other shared-source entries keep their
   drafts at the new revision. Transient input, no parallel fact store.
+- Create and Create from edit detached candidates. Edit definition follows the
+  native owner across the Project (captured symbol identity for primitives and
+  Symbol only). Create variant installs independent resources and rebinds only
+  the selected instance on Apply; cancel and draft save leave instances alone.
+  Apply is one Undo; variants start with new publication intent. Mutating a
+  source also used by other owners requires explicit shared-source editing in
+  Cell Manager or an isolated variant. Unsafe namespace rewrites refuse with a
+  location; ordinary source editing retains the full supported language.
+- GUI and Agent share these planners through `apply-component-definition`,
+  `apply-component-artwork` and `create-component-variant`. Existing explicit
+  caller/scope operations retain their original meaning. Targets use stable
+  IDs and transaction revisions, never display-name matching.
+- One main diagnostic prioritizes conflicts and blocking errors over operation
+  results and empty help. Normal creation has no repair or scope selector;
+  connection migration appears only where a connected contact changes.
+  Circuit owns interfaces; Symbol owns geometry. Advanced source files,
+  dependencies and raw primitive/artwork editing remain available.
 - Save draft keeps the whole candidate, invalid text included, apart from
   applied facts. Local Apply and Place need no account and never publish;
   Place applies pending changes first. Interface-only definitions refuse

@@ -16,6 +16,7 @@ export interface CircuitComponentAuthoring {
   definitionId?: string | undefined;
   symbolId?: string | undefined;
   pendingRepair?: boolean;
+  pendingVariant?: boolean;
   onApply(edit: ApplyModelSourceEdit): ExternalDefinitionResult;
   onSaveDraft(
     edits: ProjectStructureEdit[],
@@ -81,7 +82,7 @@ export function NativeComponentEditor({
         customSymbols
         publicationAction={publicationAction}
         legacyDefinition={legacyDefinition}
-        canPlace={!authoring.pendingRepair}
+        canPlace={!authoring.pendingRepair && !authoring.pendingVariant}
         initialSymbolId={authoring.symbolId}
         allowOwnerChange={!!authoring.pendingRepair}
         project={authoring.project}

@@ -1,3 +1,4 @@
+import { InlineConfirm } from "../../components/inline-confirm";
 import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
 import {
   createId,
@@ -82,7 +83,6 @@ export function ExternalModelSourceEditor({
   onCopyText = browserExportDelivery.copyText,
   onAppliedViewChange,
   publicationAction,
-  legacyDefinition,
 }: {
   project: CircuitProject;
   publicationAction?: ReactNode;
@@ -206,6 +206,10 @@ export function ExternalModelSourceEditor({
   const [artworkOrigin, setArtworkOrigin] = useState(
     savedAuthoring?.artworkOrigin,
   );
+  const [artworkInitialized, setArtworkInitialized] = useState(
+    savedAuthoring?.artworkInitialized ??
+      (symbolMode === "custom" || artworkText !== ""),
+  );
   const [terminalDirections, setTerminalDirections] = useState(
     savedAuthoring?.terminalDirections ?? {},
   );
@@ -224,6 +228,7 @@ export function ExternalModelSourceEditor({
     portMaps,
     symbolMode,
     artworkText,
+    artworkInitialized,
     artworkOrigin,
     terminalDirections,
     presentation,
@@ -249,6 +254,7 @@ export function ExternalModelSourceEditor({
     setPortMaps(draft.portMaps);
     setSymbolMode(draft.symbolMode);
     setArtworkText(draft.artworkText);
+    setArtworkInitialized(draft.artworkInitialized);
     setArtworkOrigin(draft.artworkOrigin);
     setTerminalDirections(draft.terminalDirections);
     setPresentation(draft.presentation);
@@ -258,7 +264,13 @@ export function ExternalModelSourceEditor({
     setResult(null);
   };
   const editDraft = (overrides: Partial<typeof currentDraft>) => {
-    const next = { ...currentDraft, ...overrides };
+    const next = {
+      ...currentDraft,
+      ...(overrides.artworkText !== undefined
+        ? { artworkInitialized: true }
+        : {}),
+      ...overrides,
+    };
     if (JSON.stringify(next) === snapshot) return;
     draftHistory.current.past.push(structuredClone(currentDraft));
     if (draftHistory.current.past.length > 100)
@@ -294,6 +306,17 @@ export function ExternalModelSourceEditor({
       ? inspection.entries[0]
       : inspection.entries.find((e) => e.name === entry);
   const failure = inspection.diagnostics.find((d) => d.severity === "error");
+  const otherDiagnostics = inspection.diagnostics.filter((d) => d !== failure);
+  const revealDiagnostic = (diagnostic: SimulationSourceDiagnostic) => {
+    setView("circuit");
+    const path = diagnostic.sourceRef?.fileId ?? diagnostic.path;
+    if (path && files.some((f) => f.path === path)) setFilePath(path);
+    requestAnimationFrame(() =>
+      workbench.current
+        ?.querySelector<HTMLElement>('[aria-label="External model netlist"]')
+        ?.focus(),
+    );
+  };
   const shared = project.externalSubcircuitDefinitions.filter(
     (d) =>
       d.implementation?.kind === "source" &&
@@ -434,10 +457,24 @@ export function ExternalModelSourceEditor({
       });
     } else setResult(onMetadata(next));
   };
+  const initialArtworkText = () =>
+    JSON.stringify(
+      automaticComponent ?? {
+        symbol: { ...newComponentDefinition().symbol, id: automaticSymbolId },
+      },
+      null,
+      2,
+    );
+  const changeSymbolMode = (next: typeof symbolMode) =>
+    editDraft({
+      symbolMode: next,
+      artworkText: artworkInitialized ? artworkText : initialArtworkText(),
+      artworkInitialized: true,
+    });
   const applyUnavailable =
     failure?.message ??
     (!selected
-      ? "Add a .subckt definition and select its entry."
+      ? "Add a .subckt definition to continue."
       : customSymbols
         ? artwork.error
         : null);
@@ -649,6 +686,7 @@ export function ExternalModelSourceEditor({
           entry: selected?.name ?? entry,
           symbolMode,
           artworkText,
+          artworkInitialized,
           portMaps,
           terminalDirections,
           ...(lastValidArtwork.current
@@ -703,6 +741,11 @@ export function ExternalModelSourceEditor({
       presentation: candidate?.presentation ?? knownOwner?.presentation,
       symbolMode: candidate?.symbolMode ?? symbolMode,
       artworkText: candidate?.artworkText ?? artworkText,
+      artworkInitialized:
+        candidate?.artworkInitialized ??
+        (candidate
+          ? candidate.symbolMode === "custom" || candidate.artworkText !== ""
+          : artworkInitialized),
       artworkOrigin: candidate?.artworkOrigin,
     };
     let currentArtwork = artwork.definition;
@@ -776,7 +819,7 @@ export function ExternalModelSourceEditor({
         if (
           !(event.target instanceof HTMLElement) ||
           !event.target.closest(
-            ".project-source-editor, .netlist-code-controls",
+            ".project-source-editor, .netlist-code-controls, .component-symbol-controls",
           )
         )
           return;
@@ -815,6 +858,103 @@ export function ExternalModelSourceEditor({
             </button>
           ))}
         </nav>
+      ) : null}
+      {result ||
+      failure ||
+      stale ||
+      (customSymbols && artwork.error) ||
+      (customSymbols && !selected) ? (
+        <p className="cell-external-result" role="status">
+          {stale
+            ? "The applied model changed; keep this draft on the latest version before Apply."
+            : (failure?.message ??
+              (!selected
+                ? applyUnavailable
+                : customSymbols
+                  ? artwork.error
+                  : null) ??
+              result?.message ??
+              "Correct the model source before Apply.")}
+          {!stale &&
+          result &&
+          (failure || (customSymbols && artwork.error) || !selected) ? (
+            <small> · {result.message}</small>
+          ) : null}
+          {!result &&
+          existing?.draft &&
+          (failure || (customSymbols && artwork.error) || !selected) ? (
+            <small> · Saved draft</small>
+          ) : null}
+          {failure?.path ? (
+            <small>
+              {" "}
+              {failure.sourceRef?.fileId ?? failure.path}:
+              {failure.sourceRef?.start.line ?? 1}
+            </small>
+          ) : null}
+          {stale ? (
+            <button
+              type="button"
+              onClick={() => {
+                setBaseRevision(existing!.revision);
+                setResult(null);
+              }}
+            >
+              Keep my draft on the latest version
+            </button>
+          ) : conversionDiagnostic || failure ? (
+            <button
+              type="button"
+              title={`${(conversionDiagnostic ?? failure)!.path}:${(conversionDiagnostic ?? failure)!.sourceRef?.start.line ?? 1}: ${(conversionDiagnostic ?? failure)!.message}`}
+              onClick={() => {
+                revealDiagnostic(conversionDiagnostic ?? failure!);
+              }}
+            >
+              Edit model
+            </button>
+          ) : null}
+        </p>
+      ) : null}
+      {otherDiagnostics.length ? (
+        <details className="external-model-section">
+          <summary>{otherDiagnostics.length} more diagnostics</summary>
+          <ul>
+            {otherDiagnostics.map((diagnostic, index) => (
+              <li key={index}>
+                <button
+                  type="button"
+                  onClick={() => revealDiagnostic(diagnostic)}
+                >
+                  {diagnostic.sourceRef?.fileId ?? diagnostic.path}:
+                  {diagnostic.sourceRef?.start.line ?? 1}
+                </button>{" "}
+                {diagnostic.message}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {!(
+        result ||
+        failure ||
+        stale ||
+        (customSymbols && artwork.error) ||
+        !selected
+      ) &&
+      (binding?.kind !== "source" || existing?.draft || dirty) ? (
+        <p className="external-model-state" role="status">
+          {[
+            binding?.kind !== "source"
+              ? selected && !failure
+                ? "Not applied"
+                : "Draft"
+              : null,
+            existing?.draft ? "Saved draft" : null,
+            dirty ? "Unsaved changes" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
       ) : null}
       <div
         className="external-model-source-view"
@@ -856,50 +996,8 @@ export function ExternalModelSourceEditor({
             />
           </div>
         </div>
-        {(result || failure || stale || artwork.error) &&
-        (!customSymbols || view === "circuit") ? (
-          <p className="cell-external-result" role="status">
-            {stale
-              ? "The applied model changed; keep this draft on the latest version before Apply."
-              : (result?.message ??
-                artwork.error ??
-                "Correct the model source before Apply.")}
-            {stale ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setBaseRevision(existing!.revision);
-                  setResult(null);
-                }}
-              >
-                Keep my draft on the latest version
-              </button>
-            ) : conversionDiagnostic || failure ? (
-              <button
-                type="button"
-                title={`${(conversionDiagnostic ?? failure)!.path}:${(conversionDiagnostic ?? failure)!.sourceRef?.start.line ?? 1}: ${(conversionDiagnostic ?? failure)!.message}`}
-                onClick={() => {
-                  const diagnostic = conversionDiagnostic ?? failure!;
-                  if (
-                    diagnostic.path &&
-                    files.some((f) => f.path === diagnostic.path)
-                  )
-                    setFilePath(diagnostic.path);
-                  requestAnimationFrame(() =>
-                    workbench.current
-                      ?.querySelector<HTMLElement>(
-                        '[aria-label="External model netlist"]',
-                      )
-                      ?.focus(),
-                  );
-                }}
-              >
-                Edit model
-              </button>
-            ) : null}
-          </p>
-        ) : null}
-        {(!definition || allowOwnerChange) &&
+        {(!customSymbols || allowOwnerChange) &&
+        (!definition || allowOwnerChange) &&
         !forking &&
         project.modelSources?.length ? (
           <label>
@@ -923,21 +1021,6 @@ export function ExternalModelSourceEditor({
                 ))}
             </select>
           </label>
-        ) : null}
-        {binding?.kind !== "source" || existing?.draft || dirty ? (
-          <p className="external-model-state">
-            {[
-              binding?.kind !== "source"
-                ? selected && !failure
-                  ? "Not applied"
-                  : "Draft"
-                : null,
-              existing?.draft ? "Saved draft" : null,
-              dirty ? "Unsaved changes" : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
         ) : null}
         {customSymbols &&
         existing?.draft &&
@@ -965,6 +1048,7 @@ export function ExternalModelSourceEditor({
                   artworkText: captured
                     ? JSON.stringify(captured, null, 2)
                     : "",
+                  artworkInitialized: Boolean(captured),
                   artworkOrigin: undefined,
                   terminalDirections: {},
                   presentation: definition?.presentation,
@@ -990,7 +1074,7 @@ export function ExternalModelSourceEditor({
         ) : null}
         {viewingApplied && existing?.draft ? (
           <p className="cell-external-result" role="status">
-            Showing the applied error snapshot. Your saved draft is retained.{" "}
+            Showing the applied version. Your saved draft is retained.{" "}
             <button
               type="button"
               onClick={() => {
@@ -1009,6 +1093,12 @@ export function ExternalModelSourceEditor({
                   portMaps: candidate?.portMaps ?? {},
                   symbolMode: candidate?.symbolMode ?? symbolMode,
                   artworkText: candidate?.artworkText ?? artworkText,
+                  artworkInitialized:
+                    candidate?.artworkInitialized ??
+                    (candidate
+                      ? candidate.symbolMode === "custom" ||
+                        candidate.artworkText !== ""
+                      : artworkInitialized),
                   artworkOrigin: candidate?.artworkOrigin,
                   terminalDirections: candidate?.terminalDirections ?? {},
                   presentation:
@@ -1116,9 +1206,7 @@ export function ExternalModelSourceEditor({
                 </span>
               ) : null}
             </>
-          ) : (
-            <span>No subcircuit yet</span>
-          )}
+          ) : null}
         </div>
         {customSymbols && previewDefinition ? (
           <CircuitInterfaceEditor
@@ -1137,10 +1225,7 @@ export function ExternalModelSourceEditor({
               editDraft({ artworkText: JSON.stringify(component, null, 2) })
             }
             onCustomize={() => {
-              editDraft({
-                symbolMode: "custom",
-                artworkText: JSON.stringify(automaticComponent, null, 2),
-              });
+              changeSymbolMode("custom");
               setView("symbol");
             }}
           />
@@ -1307,78 +1392,55 @@ export function ExternalModelSourceEditor({
           aria-label="Circuit symbol"
           hidden={view !== "symbol"}
         >
-          <label>
-            Symbol mode{" "}
-            <select
-              aria-label="Symbol mode"
-              disabled={viewingApplied}
-              value={symbolMode}
-              onChange={(event) => {
-                const next = event.currentTarget.value as typeof symbolMode;
-                const text =
-                  artworkText ||
-                  JSON.stringify(
-                    automaticComponent ?? {
-                      symbol: {
-                        ...newComponentDefinition().symbol,
-                        id: automaticSymbolId,
-                      },
-                    },
-                    null,
-                    2,
-                  );
-                const change = () =>
-                  editDraft({
-                    symbolMode: next,
-                    artworkText: next === "automatic" ? "" : text,
-                    artworkOrigin:
-                      next === "automatic" ? undefined : artworkOrigin,
-                  });
-                if (next === "automatic" && symbolMode === "custom")
-                  onRequestLeave(change);
-                else change();
-              }}
-            >
-              <option value="automatic">Automatic</option>
-              <option value="custom">Custom JSON</option>
-            </select>
-          </label>
-          {symbolMode === "automatic" && !previewDefinition ? (
-            <p className="component-definition-note">
-              Define the circuit interface to generate a symbol.
-            </p>
-          ) : null}
-          {symbolMode === "custom" && artwork.definition ? (
+          <div className="component-symbol-controls">
             <label>
-              Display name{" "}
-              <input
-                aria-label="Component display name"
-                key={artwork.definition.symbol.name}
-                defaultValue={artwork.definition.symbol.name}
+              Symbol mode{" "}
+              <select
+                aria-label="Symbol mode"
                 disabled={viewingApplied}
-                maxLength={100}
-                onBlur={(event) => {
-                  if (!event.currentTarget.value.trim()) {
-                    event.currentTarget.value = artwork.definition!.symbol.name;
-                    return;
-                  }
-                  editDraft({
-                    artworkText: JSON.stringify(
-                      {
-                        ...artwork.definition,
-                        symbol: {
-                          ...artwork.definition!.symbol,
-                          name: event.currentTarget.value,
-                        },
-                      },
-                      null,
-                      2,
-                    ),
-                  });
+                value={symbolMode}
+                onChange={(event) => {
+                  const next = event.currentTarget.value as typeof symbolMode;
+                  changeSymbolMode(next);
                 }}
-              />
+              >
+                <option value="automatic">Automatic</option>
+                <option value="custom">Custom JSON</option>
+              </select>
             </label>
-          ) : null}
+            {symbolMode === "custom" && artwork.definition ? (
+              <label>
+                Display name{" "}
+                <input
+                  aria-label="Component display name"
+                  key={artwork.definition.symbol.name}
+                  defaultValue={artwork.definition.symbol.name}
+                  disabled={viewingApplied}
+                  maxLength={100}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.value.trim()) {
+                      event.currentTarget.value =
+                        artwork.definition!.symbol.name;
+                      return;
+                    }
+                    editDraft({
+                      artworkText: JSON.stringify(
+                        {
+                          ...artwork.definition,
+                          symbol: {
+                            ...artwork.definition!.symbol,
+                            name: event.currentTarget.value,
+                          },
+                        },
+                        null,
+                        2,
+                      ),
+                    });
+                  }}
+                />
+              </label>
+            ) : null}
+          </div>
           {symbolMode === "custom" ? (
             <>
               <DefinitionWorkspace initialSplit={65}>
@@ -1400,7 +1462,7 @@ export function ExternalModelSourceEditor({
                   {(artwork.definition ?? lastValidArtwork.current) ? (
                     <>
                       {!artwork.definition ? (
-                        <p role="status">Showing the last valid preview.</p>
+                        <small>Showing the last valid preview.</small>
                       ) : null}
                       <SymbolArtwork
                         fitContent
@@ -1418,16 +1480,13 @@ export function ExternalModelSourceEditor({
                         }
                         className="component-definition-artwork"
                       />
-                      {previewWarning ? (
-                        <small role="status">{previewWarning}</small>
-                      ) : null}
+                      {previewWarning ? <small>{previewWarning}</small> : null}
                     </>
                   ) : (
                     <p>Correct the JSON to preview.</p>
                   )}
                 </section>
               </DefinitionWorkspace>
-              {artwork.error ? <p role="status">{artwork.error}</p> : null}
             </>
           ) : null}
         </section>
@@ -1550,32 +1609,16 @@ export function ExternalModelSourceEditor({
           </div>
         </section>
       ) : null}
-      {customSymbols &&
-      previewDefinition &&
-      (sourceCallCount > 0 || legacyDefinition?.subcircuit) ? (
+      {customSymbols && previewDefinition && sourceCallCount > 1 ? (
         <p className="component-definition-note">
-          {legacyDefinition?.subcircuit
-            ? "Native interface: " +
-              previewDefinition.terminals.length +
-              " terminals; legacy interface: " +
-              legacyDefinition.subcircuit.ports.length +
-              " terminals. "
-            : ""}
-          {sourceCallCount > 0
-            ? `${sourceCallCount} call(s) share this model source.`
-            : ""}
+          Used by {sourceCallCount} instances in this project.
         </p>
       ) : null}
       <footer className="external-model-actionbar">
-        {applyUnavailable ? (
+        {applyUnavailable && !customSymbols ? (
           <small className="component-definition-note">
             {applyUnavailable}
           </small>
-        ) : null}
-        {customSymbols && view !== "circuit" && result ? (
-          <p role="status" className="cell-external-result">
-            {result.message}
-          </p>
         ) : null}
         {!definition && canPlace ? (
           <button
@@ -1617,15 +1660,31 @@ export function ExternalModelSourceEditor({
               type="button"
               onClick={(event) => {
                 setFileSettingsOpen(true);
+                setView("circuit");
                 const menu = event.currentTarget.closest("details");
                 if (menu) menu.open = false;
               }}
             >
-              Files and dependencies
+              {customSymbols ? "Source files…" : "Files and dependencies"}
             </button>
             <button type="button" onClick={saveDraft} disabled={viewingApplied}>
               Save draft
             </button>
+            {customSymbols && symbolMode === "custom" && automaticComponent ? (
+              <InlineConfirm
+                disabled={viewingApplied}
+                confirmLabel="Reset custom symbol"
+                cancelLabel="Keep custom symbol"
+                onConfirm={() =>
+                  editDraft({
+                    artworkText: JSON.stringify(automaticComponent, null, 2),
+                    artworkOrigin: undefined,
+                  })
+                }
+              >
+                Reset custom symbol…
+              </InlineConfirm>
+            ) : null}
             {!definition && onPlaceholder ? (
               <button
                 type="button"
@@ -1634,7 +1693,7 @@ export function ExternalModelSourceEditor({
                 Create placeholder…
               </button>
             ) : null}
-            {definition ? (
+            {definition && !customSymbols ? (
               <>
                 <button type="button" onClick={fork}>
                   Fork model…
