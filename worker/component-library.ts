@@ -59,6 +59,21 @@ export async function routeComponentLibraryRequest(
           limit: url.searchParams.get("limit"),
           deleted,
           summary: url.searchParams.get("view") === "summary",
+          ...(url.searchParams.has("catalog")
+            ? {
+                catalog: {
+                  version: Number(url.searchParams.get("catalog")),
+                  type: url.searchParams.get("type") ?? "all",
+                  order: url.searchParams.get("order") ?? "circuit-first",
+                  ...(url.searchParams.has("author")
+                    ? { authorId: url.searchParams.get("author") }
+                    : {}),
+                },
+                ...(url.searchParams.has("since")
+                  ? { ifCatalogRevision: Number(url.searchParams.get("since")) }
+                  : {}),
+              }
+            : {}),
         })
       : call("get", {
           id,

@@ -6,6 +6,8 @@ import type { ComponentDefinition } from "@icm/model";
 // The subpath holds only the library schemas, not the Agent adapter (#1673).
 import {
   ComponentLibrarySummarySchema,
+  ComponentCatalogAuthorSchema,
+  type ComponentCatalogQuery,
   type ComponentLibrarySummary,
 } from "@icm/agent-adapter/component-resource";
 import { SymbolDefinitionSchema } from "@icm/symbols";
@@ -123,6 +125,8 @@ export async function loadSharedComponentSummaries(
   deleted = false,
   signal?: AbortSignal,
   fetchLibrary: typeof fetch = fetch,
+  catalog?: ComponentCatalogQuery,
+  ifCatalogRevision?: number,
 ): Promise<ComponentLibrarySummaryPage> {
   const params = new URLSearchParams({
     q: query,
@@ -131,6 +135,14 @@ export async function loadSharedComponentSummaries(
   });
   if (cursor) params.set("cursor", cursor);
   if (deleted) params.set("status", "deleted");
+  if (catalog) {
+    params.set("catalog", String(catalog.version));
+    params.set("type", catalog.type);
+    params.set("order", catalog.order);
+    if (catalog.authorId) params.set("author", catalog.authorId);
+    if (ifCatalogRevision !== undefined)
+      params.set("since", String(ifCatalogRevision));
+  }
   const payload = await libraryJson(
     `/api/components?${params}`,
     {},
@@ -142,6 +154,14 @@ export async function loadSharedComponentSummaries(
     (payload.nextCursor !== null && typeof payload.nextCursor !== "string")
   )
     throw Error("Component library unavailable: invalid page");
+  if (
+    catalog &&
+    (!Number.isSafeInteger(payload.catalogRevision) ||
+      Number(payload.catalogRevision) < 0)
+  )
+    throw Error(
+      "This library does not support catalog filters yet. Reopen after the update.",
+    );
   return {
     entries: payload.entries.map((value): ComponentLibrarySummary => {
       // An older service can still return its complete record during staged deployment.
@@ -155,6 +175,19 @@ export async function loadSharedComponentSummaries(
       return ComponentLibrarySummarySchema.parse(value);
     }),
     nextCursor: payload.nextCursor,
+    ...(catalog
+      ? {
+          catalogRevision: Number(payload.catalogRevision),
+          ...(payload.notModified === true ? { notModified: true } : {}),
+          ...(Array.isArray(payload.authors)
+            ? {
+                authors: payload.authors.map((author) =>
+                  ComponentCatalogAuthorSchema.parse(author),
+                ),
+              }
+            : {}),
+        }
+      : {}),
   };
 }
 

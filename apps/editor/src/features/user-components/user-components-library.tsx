@@ -1,67 +1,29 @@
 import { parseSharedComponentEntry } from "./component-library-entry";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentLibrarySummary } from "@icm/agent-adapter";
-import { fetchSessionUser, type SessionUser } from "../../components/account";
+import { readSessionUser, type SessionUser } from "../../components/account";
 import { SymbolArtwork } from "../component-insert/symbol-artwork";
 import type {
   ComponentLibrarySummaryPage,
   SharedComponent,
 } from "./component-library-contract";
 import {
-  loadSharedComponentSummaries,
   readSharedComponentRecord,
   ComponentLibraryError,
   checkSharedComponentRevision,
 } from "./component-library-client";
 import { LibraryCache } from "./library-cache";
 import { LibraryPreview } from "./library-preview";
+import { loadComponentCatalog as loadCatalog } from "./component-catalog-loading";
+import { ComponentCatalogControls } from "./component-catalog-controls";
+import type { ComponentCatalogQuery } from "./component-library-contract";
 
 const capabilityLabel = (entry: ComponentLibrarySummary) =>
   entry.capability === "symbol-only"
     ? "Symbol only"
     : entry.capability === "needs-repair"
       ? "Needs repair"
-      : null;
-
-async function loadCatalog(
-  query: string,
-  deleted: boolean,
-  signal: AbortSignal,
-  receive: (page: ComponentLibrarySummaryPage) => void,
-  previous?: ComponentLibrarySummaryPage,
-) {
-  if (previous && !previous.nextCursor) return;
-  let page = previous;
-  let cursor = previous?.nextCursor ?? null;
-  const visited = new Set<string>();
-  do {
-    if (cursor) {
-      if (visited.has(cursor))
-        throw Error("Component library returned a repeated page. Try again.");
-      visited.add(cursor);
-    }
-    const next = await loadSharedComponentSummaries(
-      query,
-      cursor,
-      deleted,
-      signal,
-    );
-    signal.throwIfAborted();
-    page = {
-      entries: [
-        ...new Map(
-          [...(page?.entries ?? []), ...next.entries].map((entry) => [
-            entry.id,
-            entry,
-          ]),
-        ).values(),
-      ],
-      nextCursor: next.nextCursor,
-    };
-    receive(page);
-    cursor = next.nextCursor;
-  } while (cursor);
-}
+      : "With circuit";
 
 export default function UserComponentsLibrary({
   open,
@@ -86,6 +48,7 @@ export default function UserComponentsLibrary({
   onOpenDraft?(id: string): void;
 }) {
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [query, setQuery] = useState("");
   const [deleted, setDeleted] = useState(false);
   const [page, setPage] = useState<ComponentLibrarySummaryPage>({
@@ -95,8 +58,12 @@ export default function UserComponentsLibrary({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [retry, setRetry] = useState(0);
   const [attempt, setAttempt] = useState(0);
+  const [catalog, setCatalog] = useState<ComponentCatalogQuery>({
+    version: 1,
+    type: "all",
+    order: "circuit-first",
+  });
   const [detail, setDetail] = useState<{
     summary: ComponentLibrarySummary;
     entry: SharedComponent;
@@ -118,12 +85,35 @@ export default function UserComponentsLibrary({
     value: { page: ComponentLibrarySummaryPage; scroll: number };
   } | null>(null);
   const request = useRef<AbortController | null>(null);
+  const bufferedRefresh = useRef<{
+    key: string;
+    page: ComponentLibrarySummaryPage;
+  } | null>(null);
   const selection = useRef<AbortController | null>(null);
   const grid = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const scroll = useRef(0);
   const listIdentity = useRef("");
-  const key = JSON.stringify([refresh, retry, query.trim().toLowerCase()]);
+  const key = JSON.stringify([
+    user?.id ?? null,
+    query.trim().toLowerCase(),
+    catalog,
+  ]);
+  function catalogProgress(signal: AbortSignal) {
+    const identity = JSON.stringify([key, deleted]);
+    return {
+      resume:
+        bufferedRefresh.current?.key === identity
+          ? bufferedRefresh.current.page
+          : undefined,
+      retain(next: ComponentLibrarySummaryPage | undefined) {
+        if (signal.aborted) return;
+        if (next) bufferedRefresh.current = { key: identity, page: next };
+        else if (bufferedRefresh.current?.key === identity)
+          bufferedRefresh.current = null;
+      },
+    };
+  }
   function showPage(next: ComponentLibrarySummaryPage) {
     setPage(next);
     if (!deleted) {
@@ -141,16 +131,48 @@ export default function UserComponentsLibrary({
     }
   }, [open, refresh]);
   useEffect(() => {
+    details.current.clear();
+  }, [refresh]);
+  useEffect(() => {
     cache.current.clear();
     details.current.clear();
     retained.current = null;
-  }, [refresh, retry, user?.id]);
+    bufferedRefresh.current = null;
+  }, [user?.id]);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    const refreshVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void readSessionUser().then((result) => {
+        if (!active) return;
+        if (result.available) {
+          setUser(result.user);
+          if (!result.user?.isAdmin) setDeleted(false);
+        }
+        if (!request.current) setAttempt((value) => value + 1);
+      });
+    };
+    window.addEventListener("focus", refreshVisible);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshVisible);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     let active = true;
     const frame = requestAnimationFrame(() => search.current?.focus());
-    void fetchSessionUser().then((next) => {
-      if (active) setUser(next);
+    void readSessionUser().then((result) => {
+      if (active) {
+        if (result.available) {
+          setUser(result.user);
+          if (!result.user?.isAdmin) setDeleted(false);
+        }
+        setAuthReady(true);
+      }
     });
     return () => {
       active = false;
@@ -159,7 +181,7 @@ export default function UserComponentsLibrary({
     };
   }, [open, refresh]);
   useEffect(() => {
-    if (!open) return;
+    if (!open || !authReady) return;
     const controller = new AbortController();
     request.current = controller;
     setError(null);
@@ -169,7 +191,12 @@ export default function UserComponentsLibrary({
       ? (cache.current.get(key) ??
         (retained.current?.key === key ? retained.current.value : undefined))
       : undefined;
-    const identity = JSON.stringify([query.trim().toLowerCase(), deleted]);
+    const identity = JSON.stringify([
+      query.trim().toLowerCase(),
+      deleted,
+      catalog,
+      user?.id ?? null,
+    ]);
     if (cached) setPage(cached.page);
     else if (deleted || identity !== listIdentity.current)
       setPage({ entries: [], nextCursor: null });
@@ -185,9 +212,11 @@ export default function UserComponentsLibrary({
         void loadCatalog(
           query.trim(),
           deleted,
+          catalog,
           controller.signal,
           showPage,
           cached?.page,
+          catalogProgress(controller.signal),
         )
           .catch((error: unknown) => {
             if (!controller.signal.aborted)
@@ -195,6 +224,7 @@ export default function UserComponentsLibrary({
           })
           .finally(() => {
             if (!controller.signal.aborted) setLoading(false);
+            if (request.current === controller) request.current = null;
           });
       },
       query ? 150 : 0,
@@ -202,9 +232,10 @@ export default function UserComponentsLibrary({
     return () => {
       clearTimeout(timer);
       controller.abort();
+      if (request.current === controller) request.current = null;
       selection.current?.abort();
     };
-  }, [open, key, deleted, attempt]);
+  }, [open, key, deleted, attempt, authReady, refresh]);
   async function choose(
     summary: ComponentLibrarySummary,
     action: "details" | "place" | "new" | "update" | "raw",
@@ -253,16 +284,17 @@ export default function UserComponentsLibrary({
         if (error instanceof ComponentLibraryError && error.status === 409) {
           request.current?.abort();
           setLoading(false);
-          cache.current.clear();
           details.current.clear();
-          retained.current = null;
           setDetail(null);
           // Refresh only this immutable selection; never silently place a newer revision.
           await loadCatalog(
             query.trim(),
             deleted,
+            catalog,
             controller.signal,
             showPage,
+            page,
+            catalogProgress(controller.signal),
           ).catch((error: unknown) => {
             if (!controller.signal.aborted)
               setError(error instanceof Error ? error.message : String(error));
@@ -389,15 +421,37 @@ export default function UserComponentsLibrary({
           </section>
         ) : (
           <>
-            <input
-              ref={search}
-              aria-label="Search User Defined components"
-              autoComplete="off"
-              className="user-components-search"
-              placeholder="Find a component…"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
+            <div className="component-catalog-controls">
+              <input
+                ref={search}
+                aria-label="Search User Defined components"
+                autoComplete="off"
+                className="user-components-search"
+                placeholder="Find a component…"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <ComponentCatalogControls
+                value={catalog}
+                authors={page.authors}
+                onChange={setCatalog}
+              />
+              {query || catalog.type !== "all" || catalog.authorId ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    setCatalog({
+                      version: 1,
+                      type: "all",
+                      order: catalog.order,
+                    });
+                  }}
+                >
+                  Clear filters
+                </button>
+              ) : null}
+            </div>
             {user?.isAdmin ? (
               <button
                 type="button"
@@ -458,33 +512,54 @@ export default function UserComponentsLibrary({
                   {entry.capability === "needs-repair" ? (
                     <div className="user-component-caption">
                       <strong title={entry.name}>{entry.name}</strong>
-                      <small>{entry.author}</small>
+                      <button
+                        type="button"
+                        className="user-component-author"
+                        aria-label={"Filter by author " + entry.author}
+                        onClick={() =>
+                          setCatalog({ ...catalog, authorId: entry.authorId })
+                        }
+                      >
+                        {entry.author || "Unknown author"}
+                      </button>
                       <small>Needs repair</small>
                       <small title={entry.diagnostic}>{entry.diagnostic}</small>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      className="user-component-place"
-                      disabled={deleted || busy}
-                      aria-label={"Place " + entry.name}
-                      title={entry.name + " · " + entry.author}
-                      onClick={() => void choose(entry, "place")}
-                    >
-                      <LibraryPreview entry={entry} />
-                      <span className="user-component-caption">
-                        <strong title={entry.name}>{entry.name}</strong>
-                        <small title={entry.author}>
+                    <>
+                      <button
+                        type="button"
+                        className="user-component-place"
+                        disabled={deleted || busy}
+                        aria-label={"Place " + entry.name}
+                        title={entry.name + " · " + entry.author}
+                        onClick={() => void choose(entry, "place")}
+                      >
+                        <LibraryPreview entry={entry} />
+                        <span className="user-component-caption">
+                          <strong title={entry.name}>{entry.name}</strong>
+                        </span>
+                      </button>
+                      <div className="user-component-caption">
+                        <button
+                          type="button"
+                          className="user-component-author"
+                          title={entry.author}
+                          aria-label={"Filter by author " + entry.author}
+                          onClick={() =>
+                            setCatalog({ ...catalog, authorId: entry.authorId })
+                          }
+                        >
                           {entry.author.trim() || "Unknown author"}
-                        </small>
+                        </button>
                         {entry.status === "official" ? (
                           <small>Official</small>
                         ) : null}
                         {capabilityLabel(entry) ? (
                           <small>{capabilityLabel(entry)}</small>
                         ) : null}
-                      </span>
-                    </button>
+                      </div>
+                    </>
                   )}
                   <div className="user-component-actions">
                     {entry.capability === "needs-repair" ? (
@@ -562,25 +637,17 @@ export default function UserComponentsLibrary({
                 <p className="user-components-empty">
                   {query
                     ? "No user components match this search."
-                    : deleted
-                      ? "No deleted components."
-                      : "No user components yet."}
+                    : catalog.type !== "all" || catalog.authorId
+                      ? "No components match these filters."
+                      : deleted
+                        ? "No deleted components."
+                        : "No user components yet."}
                 </p>
               ) : null}
             </div>
           </>
         )}
         <footer className="user-components-footer">
-          <button
-            type="button"
-            disabled={loading || busy}
-            onClick={() => {
-              setDetail(null);
-              setRetry((value) => value + 1);
-            }}
-          >
-            Refresh
-          </button>
           {drafts.length ? (
             <details>
               <summary>Project drafts ({drafts.length})</summary>

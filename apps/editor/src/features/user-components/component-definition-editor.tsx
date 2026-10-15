@@ -9,7 +9,25 @@ import {
 } from "./component-publication-host";
 import { componentPublicationContent } from "./component-publication-content";
 import { definitionError } from "./component-definition-error";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  ComponentAuthoringWorkspace,
+  registerComponentAuthoring,
+} from "./component-authoring-workspace";
+import { useAuthoringDocument } from "./use-authoring-document";
+import type { ComponentAuthoringTarget } from "@icm/agent-adapter/component-resource";
+import { ComponentAgentControls } from "./component-agent-controls";
+import { ComponentLeaveConfirmation } from "./component-leave-confirmation";
+import { ComponentDisplayName } from "./component-display-name";
 import { InlineConfirm } from "../../components/inline-confirm";
 import {
   NativeComponentEditor,
@@ -59,6 +77,9 @@ const ProjectTextEditor = lazy(
 );
 
 export interface ComponentDefinitionEditorProps {
+  authoringIdentity: Omit<ComponentAuthoringTarget, "sessionId">;
+  authoringRevision: string;
+  onAgentEdit(): void;
   definition: ComponentDefinition;
   entry?: SharedComponent;
   publicationIntent?: "new" | "update" | undefined;
@@ -100,13 +121,37 @@ export default function ComponentDefinitionEditor(
       : undefined;
     return restored?.kind === "definition" ? restored : undefined;
   });
-  const [source, setSource] = useState(
+  const [workspace] = useState(
     () =>
-      savedArtwork?.text ??
-      (!isLibraryAuthoringDraft(props.draft) ? props.draft?.text : undefined) ??
-      JSON.stringify(props.definition, null, 2),
+      new ComponentAuthoringWorkspace(props.authoringIdentity, props.mode, () =>
+        latest.current.onAgentEdit(),
+      ),
   );
-  const [baseline, setBaseline] = useState(source);
+  const candidateRevision = useSyncExternalStore(
+    workspace.subscribe,
+    workspace.getRevision,
+  );
+  useLayoutEffect(() => registerComponentAuthoring(workspace), [workspace]);
+  const initialSource = () =>
+    savedArtwork?.text ??
+    (!isLibraryAuthoringDraft(props.draft) ? props.draft?.text : undefined) ??
+    JSON.stringify(props.definition, null, 2);
+  const [definitionDocument] = useState(() =>
+    workspace.document(
+      "definition",
+      initialSource(),
+      props.draft
+        ? "saved"
+        : props.mode === "new" || props.isVariant
+          ? "untouched"
+          : "applied",
+    ),
+  );
+  const { value: source, dirty: definitionDirty } = useAuthoringDocument(
+    initialSource,
+    definitionDocument,
+  );
+  const setSource = (text: string) => definitionDocument.set(text);
   const [localApplied, setLocalApplied] = useState<ComponentDefinition | null>(
     savedArtwork?.appliedDefinition ??
       (props.mode === "new" || props.isVariant ? null : props.definition),
@@ -281,7 +326,7 @@ export default function ComponentDefinitionEditor(
             savedRepairCandidate?.definitionId ?? repair.definitionId,
           symbolId: repair.symbolId,
           pendingRepair: true,
-          onApply: (edit) => {
+          onApply: (edit, dryRun = false) => {
             try {
               const prepared = prepareLegacyCircuitRepair(
                 repair.expectedProject,
@@ -299,8 +344,9 @@ export default function ComponentDefinitionEditor(
                 prepared.edits,
                 prepared.definitionId,
                 prepared.expectedProject,
+                dryRun,
               );
-              if (result.ok) setRepair(null);
+              if (result.ok && !dryRun) setRepair(null);
               return {
                 ...result,
                 sourceRevision: prepared.project.modelSources!.find(
@@ -365,7 +411,10 @@ export default function ComponentDefinitionEditor(
   const [nativeDefinitionId, setNativeDefinitionId] = useState(
     authoring?.definitionId,
   );
-  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+  const [pendingLeave, setPendingLeave] = useState<{
+    action: () => void;
+    trigger: "back" | "close" | "variant" | "type";
+  } | null>(null);
   const native = definitionType === "circuit" && authoring;
   const nativeOwner = native
     ? native.project.externalSubcircuitDefinitions.find(
@@ -383,7 +432,25 @@ export default function ComponentDefinitionEditor(
     !!nativeSource &&
     nativeSource.revision > 0 &&
     (!nativeSource.draft || viewingApplied);
-  const dirty = nativeDirty || source !== baseline;
+  const dirty = native ? nativeDirty : definitionDirty;
+  useLayoutEffect(() => workspace.setOperationPending(busy), [workspace, busy]);
+  useLayoutEffect(
+    () => workspace.activate(native ? "circuit" : "definition"),
+    [workspace, !!native],
+  );
+  useLayoutEffect(() => {
+    workspace.invalidate();
+  }, [
+    workspace,
+    props.authoringRevision,
+    user?.id,
+    publication.kind,
+    publication.componentId,
+    publication.expectedLibraryRevision,
+  ]);
+  useEffect(() => {
+    setPendingLeave(null);
+  }, [candidateRevision]);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     dialog.current?.showModal();
@@ -423,8 +490,12 @@ export default function ComponentDefinitionEditor(
     publication.kind === "update"
       ? (publication.expectedLibraryRevision ?? record?.revision ?? 0)
       : 0;
-  function requestLeave(action: () => void) {
-    if (dirty) setPendingLeave(() => action);
+  function requestLeave(
+    action: () => void,
+    trigger: "back" | "close" | "variant" | "type" = "close",
+  ) {
+    if (workspace.snapshot()?.dirty ?? dirty)
+      setPendingLeave({ action, trigger });
     else action();
   }
   function close() {
@@ -432,7 +503,7 @@ export default function ComponentDefinitionEditor(
     requestLeave(props.onClose);
   }
   function applyLocal(): ComponentDefinition | null {
-    if (!parsed.definition) return null;
+    if (!parsed.definition || busy) return null;
     const definition = localComponentDefinition(
       parsed.definition,
       crypto.randomUUID(),
@@ -457,7 +528,7 @@ export default function ComponentDefinitionEditor(
     }
     setLocalApplied(definition);
     setLocalAppliedText(source);
-    setBaseline(source);
+    definitionDocument.markApplied();
     setNotice("Applied component definition.");
     return definition;
   }
@@ -472,15 +543,17 @@ export default function ComponentDefinitionEditor(
     else props.onClose();
   }
   function saveLocalDraft() {
+    if (busy) return "Wait for publication to finish before saving the draft.";
     const error =
       props.mode === "library" || isLibraryAuthoringDraft(props.draft)
         ? saveArtworkDraft(record)
         : latest.current.onSaveDefinitionDraft(source);
     if (error) setNotice(error);
     else {
-      setBaseline(source);
+      definitionDocument.markSaved();
       setNotice("Saved authoring draft. Applied definitions are unchanged.");
     }
+    return error;
   }
   function saveArtworkDraft(
     entry: SharedComponent | undefined,
@@ -691,13 +764,13 @@ export default function ComponentDefinitionEditor(
         componentId: saved.id,
         expectedLibraryRevision: saved.revision,
       });
-      setBaseline(source);
       latest.current.onManaged();
       const draftError = saveArtworkDraft(saved, associated, localAppliedText, {
         kind: "update",
         componentId: saved.id,
         expectedLibraryRevision: saved.revision,
       });
+      if (!draftError) definitionDocument.markSaved(source);
       setNotice(
         import.meta.env?.ICM_DESKTOP
           ? draftError
@@ -809,6 +882,57 @@ export default function ComponentDefinitionEditor(
       setBusy(false);
     }
   }
+  const commandRevision = workspace.getRevision();
+  useLayoutEffect(() => {
+    workspace.bindCommands(
+      "definition",
+      {
+        canApply: !busy && !!parsed.definition,
+        diagnostics: parsed.error ? [parsed.error] : [],
+        publication,
+        apply: (dryRun) => {
+          if (busy) return "Wait for publication to finish before applying.";
+          if (!parsed.definition)
+            return parsed.error ?? "Fix the definition before applying.";
+          const error = latest.current.validateApply?.(
+            parsed.definition,
+            planComponentDefinitionEdit,
+          );
+          if (error) return error;
+          if (dryRun) return null;
+          return applyLocal()
+            ? null
+            : "Could not apply the component definition.";
+        },
+        save: saveLocalDraft,
+      },
+      commandRevision,
+    );
+  });
+  const confirmation = (trigger: "back" | "close" | "variant" | "type") =>
+    pendingLeave?.trigger === trigger ? (
+      <ComponentLeaveConfirmation
+        onKeepEditing={() => setPendingLeave(null)}
+        onDiscard={() => {
+          const action = pendingLeave.action;
+          setPendingLeave(null);
+          action();
+        }}
+        onSave={() => {
+          const action = pendingLeave.action;
+          try {
+            const current = workspace.snapshot();
+            if (!current)
+              throw Error("The editor is still preparing this candidate.");
+            workspace.run(current.target, current.candidateRevision, "save");
+            setPendingLeave(null);
+            action();
+          } catch (error) {
+            setNotice(definitionError(error));
+          }
+        }}
+      />
+    ) : null;
   const publishAction = (
     <button
       type="button"
@@ -850,7 +974,19 @@ export default function ComponentDefinitionEditor(
       aria-label="Edit Component Definition"
       onCancel={(event) => {
         event.preventDefault();
-        close();
+        if (pendingLeave) setPendingLeave(null);
+        else close();
+      }}
+      onCompositionStartCapture={() => workspace.setComposing(true)}
+      onCompositionEndCapture={() => workspace.setComposing(false)}
+      onKeyDownCapture={(event) => {
+        if (native || !(event.ctrlKey || event.metaKey)) return;
+        const key = event.key.toLowerCase();
+        if (key !== "z" && key !== "y") return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (key === "y" || event.shiftKey) definitionDocument.redo();
+        else definitionDocument.undo();
       }}
       onKeyDown={(event) => {
         if (
@@ -874,63 +1010,60 @@ export default function ComponentDefinitionEditor(
                 : "Edit Component"}
         </strong>
         {(props.mode === "new" || repair) && props.circuit ? (
-          <label className="component-definition-type">
-            Definition type{" "}
-            <select
-              aria-label="Definition type"
-              value={definitionType}
-              onChange={(event) => {
-                const next = event.currentTarget.value;
-                setDefinitionType(next);
-              }}
-            >
-              <option value="circuit">Circuit</option>
-              <option value="json">Primitive / Artwork (advanced)</option>
-            </select>
-          </label>
+          <div className="component-exit">
+            <label className="component-definition-type">
+              Definition type{" "}
+              <select
+                aria-label="Definition type"
+                value={definitionType}
+                onChange={(event) => {
+                  const next = event.currentTarget.value;
+                  requestLeave(() => {
+                    workspace.discardCurrent();
+                    setDefinitionType(next);
+                  }, "type");
+                }}
+              >
+                <option value="circuit">Circuit</option>
+                <option value="json">Primitive / Artwork (advanced)</option>
+              </select>
+            </label>
+            {confirmation("type")}
+          </div>
         ) : null}
         <div className="component-definition-actions">
           {props.onCreateVariant ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => requestLeave(props.onCreateVariant!)}
-            >
-              Create variant…
-            </button>
+            <div className="component-exit">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => requestLeave(props.onCreateVariant!, "variant")}
+              >
+                Create variant…
+              </button>
+              {confirmation("variant")}
+            </div>
           ) : null}
           {props.onBackToLibrary ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => requestLeave(props.onBackToLibrary!)}
-            >
-              Back to library
-            </button>
+            <div className="component-exit component-exit-back">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => requestLeave(props.onBackToLibrary!, "back")}
+              >
+                Back to library
+              </button>
+              {confirmation("back")}
+            </div>
           ) : null}
           {!import.meta.env?.ICM_DESKTOP && !user && authReady ? (
             <AccountMenu inEditor />
           ) : null}
-          {dirty || pendingLeave ? (
-            <InlineConfirm
-              aria-label="Close component editor"
-              disabled={busy}
-              open={!!pendingLeave}
-              onOpenChange={(open) =>
-                setPendingLeave(open ? () => props.onClose : null)
-              }
-              confirmLabel="Discard changes"
-              cancelLabel="Keep editing"
-              onConfirm={() => {
-                const action = pendingLeave;
-                setPendingLeave(null);
-                if (!native) setSource(baseline);
-                action?.();
-              }}
-            >
-              ×
-            </InlineConfirm>
-          ) : (
+          <ComponentAgentControls
+            workspace={workspace}
+            label={props.definition.symbol.name}
+          />
+          <div className="component-exit">
             <button
               type="button"
               aria-label="Close component editor"
@@ -939,7 +1072,8 @@ export default function ComponentDefinitionEditor(
             >
               ×
             </button>
-          )}
+            {confirmation("close")}
+          </div>
         </div>
       </header>
       {authoring ? (
@@ -983,6 +1117,8 @@ export default function ComponentDefinitionEditor(
           ) : null}
           <NativeComponentEditor
             authoring={authoring}
+            workspace={workspace}
+            publication={publication}
             publicationAction={publishAction}
             legacyDefinition={repair ? props.definition : undefined}
             onDirtyChange={setNativeDirty}
@@ -1001,36 +1137,7 @@ export default function ComponentDefinitionEditor(
               Symbol only · add a circuit implementation to simulate.
             </p>
           ) : null}
-          {parsed.definition ? (
-            <label className="component-definition-name">
-              Display name{" "}
-              <input
-                aria-label="Component display name"
-                key={parsed.definition.symbol.name}
-                defaultValue={parsed.definition.symbol.name}
-                maxLength={100}
-                onBlur={(event) => {
-                  if (!event.currentTarget.value.trim()) {
-                    event.currentTarget.value = parsed.definition!.symbol.name;
-                    return;
-                  }
-                  setSource(
-                    JSON.stringify(
-                      {
-                        ...parsed.definition,
-                        symbol: {
-                          ...parsed.definition!.symbol,
-                          name: event.currentTarget.value,
-                        },
-                      },
-                      null,
-                      2,
-                    ),
-                  );
-                }}
-              />
-            </label>
-          ) : null}
+          <ComponentDisplayName source={source} onChange={setSource} />
           <DefinitionWorkspace>
             <section
               className="component-definition-preview"

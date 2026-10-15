@@ -113,20 +113,43 @@ owns visual authority.
   applied facts. Local Apply and Place need no account and never publish;
   Place applies pending changes first. Interface-only definitions refuse
   execution.
+- The open authoring workspace owns raw GUI/Agent input and shared Undo/Redo.
+  Its Project session, draft ID, open-session epoch and monotonic candidate
+  revision guard writes; stale handles and active composition refuse them.
+  Publication blocks overlapping saves and applies; its completion checkpoints
+  only the raw input actually saved, preserving later input as unsaved.
+  Applied definitions remain the executable authority. Agent calls and
+  permissions are in [authoring](../agent/shared/authoring.md#external-model-sources).
+- Back, Close and definition-type changes leave untouched, applied or saved candidates directly.
+  Unsaved input offers Save draft & leave, Discard and Keep editing beside the
+  clicked trigger without moving focus; Escape cancels the pending exit.
+  Save must succeed before leaving. Discard preserves earlier saved/applied
+  checkpoints. Publish is independent of leaving. Use Agent reuses the page's
+  connection inside the editor; Copy task contains target identity, no Claim
+  or credentials.
 - Public-library editing uses an isolated snapshot in the Project's
   non-executable drafts at its fixed library revision, never replacing
   drawing captures; destination and write rules are in
   [publication](component-publication.md).
-- Discovery derives capability from the validated definition (**Symbol
-  only**, **Needs repair**, **Not applied**; none certifies an engine).
+- Discovery derives capability from the validated definition (**With circuit**,
+  **Symbol only**, **Needs repair**; none certifies an engine).
   Invalid historical records stay visible but unplaceable and never block
   valid ones; summaries carry no executable source; selection
   re-reads the full record and checks its revision.
-- The GUI loads every summary automatically, displays arrivals progressively,
-  and retains bounded public-list caches for the Editor session. Refresh,
-  publication and account changes invalidate them; interrupted public loads
-  resume at their remaining page. Previews load near the visible area. The
-  Agent/HTTP cursor interface remains paginated.
+- Catalog search, capability, stable author ID and creation-time order apply
+  before pagination. Default Circuit first groups electrical implementations,
+  symbol-only and needs-repair, then sorts each by createdAt descending and ID.
+  Newest/Oldest use createdAt alone with an ID tie-breaker. Authors come from
+  the full visible query, excluding the selected author filter.
+- The GUI automatically loads summaries progressively into bounded session
+  caches and retains filters and scroll on return. Open, focus, visibility,
+  publication and account changes revalidate the catalog revision; unchanged
+  catalogs send no summary bodies. Changed generations replace the cached
+  result together; interrupted initial loads resume their valid cursor.
+  Late responses cannot change another query. Failures retain loaded cards
+  with Try Again; Refresh and Load more are absent. Previews load near the
+  visible area. Agent/HTTP catalog queries use the same paginated ordering;
+  older queries without the versioned catalog option retain ID cursors.
 - GUI placement uses the Agent insert planner: capture, instance and
   annotations commit together; cancel leaves nothing; one Undo; the snapshot
   never advances to newer cloud content.

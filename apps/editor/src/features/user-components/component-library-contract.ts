@@ -7,7 +7,11 @@ import {
   type CircuitComponentResources,
 } from "@icm/edit-engine";
 import { hasBuiltInSubcircuitInterface } from "@icm/devices";
-import type { ComponentLibrarySummary } from "@icm/agent-adapter";
+import type {
+  ComponentLibrarySummary,
+  ComponentCatalogQuery,
+} from "@icm/agent-adapter";
+export type { ComponentCatalogQuery };
 import {
   definitionError,
   componentDefinitionDiagnostics,
@@ -33,6 +37,9 @@ export interface ComponentLibraryPage {
 export interface ComponentLibrarySummaryPage {
   entries: ComponentLibrarySummary[];
   nextCursor: string | null;
+  catalogRevision?: number;
+  notModified?: boolean;
+  authors?: { authorId: string; author: string; count: number }[];
 }
 
 /** Derived capabilities do not imply qualification for a simulation engine. */

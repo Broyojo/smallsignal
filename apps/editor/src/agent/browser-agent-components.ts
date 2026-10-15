@@ -3,6 +3,7 @@ import {
   type AgentComponentLibraryAction,
   type AgentProjectResourceRequest,
   type AgentProjectResourceResponse,
+  componentAuthoringCapability,
 } from "@icm/agent-adapter";
 import { buildCircuitComponentPackage } from "@icm/edit-engine";
 import type { CircuitProject } from "@icm/model";
@@ -29,6 +30,10 @@ import {
 } from "../features/user-components/component-publication-operation";
 import { publicationFromOrigin } from "../features/user-components/component-publication";
 import type { BrowserAgentProjectHostOptions } from "./browser-agent-project-host";
+import {
+  currentComponentAuthoring,
+  ComponentAuthoringError,
+} from "../features/user-components/component-authoring-workspace";
 
 type Request = Extract<
   AgentProjectResourceRequest,
@@ -122,6 +127,75 @@ export async function handleAgentComponents(
   try {
     assertBound();
     const action = request.request;
+    if (action.action === "authoring-read") {
+      const workspace = currentComponentAuthoring(
+        options.getProjectSessionId(),
+      );
+      return {
+        ...base,
+        ok: true,
+        result: {
+          action: "authoring-read",
+          capabilities: componentAuthoringCapability,
+          workspace:
+            workspace?.target.projectId === options.getProject().id
+              ? workspace.snapshot()
+              : null,
+        },
+      };
+    }
+    if (
+      action.action === "authoring-update" ||
+      action.action === "authoring-save" ||
+      action.action === "authoring-apply"
+    ) {
+      const workspace = currentComponentAuthoring(
+        options.getProjectSessionId(),
+      );
+      if (!workspace || workspace.target.projectId !== options.getProject().id)
+        throw new ComponentAuthoringError(
+          "AUTHORING_TARGET_CLOSED",
+          "Open the component editor and read its current authoring workspace.",
+        );
+      if (action.action === "authoring-update") {
+        const before = workspace.getRevision();
+        const updated = workspace.update(
+          action.target,
+          action.expectedCandidateRevision,
+          action.candidate,
+        );
+        if (before !== workspace.getRevision()) workspace.noteAgentEdit();
+        return {
+          ...base,
+          ok: true,
+          result: {
+            action: action.action,
+            workspace: updated,
+          },
+        };
+      }
+      const result = workspace.run(
+        action.target,
+        action.expectedCandidateRevision,
+        action.action === "authoring-save" ? "save" : "apply",
+        action.action === "authoring-apply" && action.dryRun,
+      );
+      if (action.action === "authoring-save" || !action.dryRun)
+        workspace.noteAgentEdit();
+      return {
+        ...base,
+        ok: true,
+        result:
+          action.action === "authoring-save"
+            ? { action: action.action, workspace: result }
+            : {
+                action: action.action,
+                dryRun: action.dryRun,
+                applied: !action.dryRun,
+                workspace: result,
+              },
+      };
+    }
     if (action.action === "browse") {
       const page = await loadSharedComponentSummaries(
         action.query ?? "",
@@ -129,6 +203,8 @@ export async function handleAgentComponents(
         false,
         undefined,
         fetchLibrary,
+        action.catalog,
+        action.ifCatalogRevision,
       );
       assertBound();
       return { ...base, ok: true, result: { action: "browse", ...page } };
@@ -410,38 +486,44 @@ export async function handleAgentComponents(
     };
   } catch (error) {
     const failure =
-      error instanceof ComponentOperationError
-        ? error
-        : error instanceof ComponentLibraryError
-          ? new ComponentOperationError(
-              error.code === "COMPONENT_ALREADY_PUBLISHED"
-                ? error.code
-                : error.outcomeUnknown
-                  ? "COMPONENT_WRITE_UNKNOWN"
-                  : error.status === 401
-                    ? "SIGN_IN_REQUIRED"
-                    : error.status === 403
-                      ? "COMPONENT_PERMISSION_DENIED"
-                      : error.status === 409
-                        ? "COMPONENT_REVISION_CONFLICT"
-                        : error.status === 404
-                          ? "COMPONENT_NOT_FOUND"
-                          : "COMPONENT_LIBRARY_FAILED",
-              error.existing
-                ? `${error.message} Existing component: ${error.existing.id}, revision ${error.existing.revision}.`
-                : error.message,
-              error.status === 401
-                ? "sign-in"
-                : error.status === 409
-                  ? "refresh"
-                  : error.status >= 500 || error.status === 408
-                    ? "retry"
-                    : "fix-input",
-            )
-          : new ComponentOperationError(
-              "COMPONENT_INVALID",
-              `${"componentId" in request.request ? request.request.componentId + ": " : ""}${error instanceof Error ? error.message : String(error)}. Use browse diagnostics to locate definition repairs.`,
-            );
+      error instanceof ComponentAuthoringError
+        ? new ComponentOperationError(
+            error.code,
+            error.message,
+            error.code === "AUTHORING_INVALID" ? "fix-input" : "refresh",
+          )
+        : error instanceof ComponentOperationError
+          ? error
+          : error instanceof ComponentLibraryError
+            ? new ComponentOperationError(
+                error.code === "COMPONENT_ALREADY_PUBLISHED"
+                  ? error.code
+                  : error.outcomeUnknown
+                    ? "COMPONENT_WRITE_UNKNOWN"
+                    : error.status === 401
+                      ? "SIGN_IN_REQUIRED"
+                      : error.status === 403
+                        ? "COMPONENT_PERMISSION_DENIED"
+                        : error.status === 409
+                          ? "COMPONENT_REVISION_CONFLICT"
+                          : error.status === 404
+                            ? "COMPONENT_NOT_FOUND"
+                            : "COMPONENT_LIBRARY_FAILED",
+                error.existing
+                  ? `${error.message} Existing component: ${error.existing.id}, revision ${error.existing.revision}.`
+                  : error.message,
+                error.status === 401
+                  ? "sign-in"
+                  : error.status === 409
+                    ? "refresh"
+                    : error.status >= 500 || error.status === 408
+                      ? "retry"
+                      : "fix-input",
+              )
+            : new ComponentOperationError(
+                "COMPONENT_INVALID",
+                `${"componentId" in request.request ? request.request.componentId + ": " : ""}${error instanceof Error ? error.message : String(error)}. Use browse diagnostics to locate definition repairs.`,
+              );
     return {
       ...base,
       ok: false,
