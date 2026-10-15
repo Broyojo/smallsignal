@@ -1,5 +1,6 @@
 import { prepareComponentCapture } from "../features/user-components/component-placement";
 import { componentLibraryAssociation } from "../features/user-components/component-library-origin";
+import { componentDraftCheckpoint } from "../features/user-components/component-draft-checkpoint";
 import { captureLibraryComponent as componentLibraryCapture } from "../features/user-components/component-publication-host";
 import type { SharedDefinitionPayload } from "../features/user-components/component-library-contract";
 // The shared-component editor and the public component library, opened over
@@ -230,6 +231,7 @@ export function EditorComponentEditor({
     definitionId: string,
     message: string,
     onApplied?: (project: CircuitProject) => void,
+    dryRun = false,
   ) {
     const current = definitionProjectRef.current.project;
     const variant = componentEditor?.variant;
@@ -239,11 +241,11 @@ export function EditorComponentEditor({
         definitionId,
         message: "The Project changed. Reopen the variant before applying.",
       };
-    const result = dispatchProjectTransaction({
+    const transaction = {
       transactionId: `model-${crypto.randomUUID()}`,
       projectId: current.id,
       expectedStructureRevision: current.structureRevision,
-      actor: { kind: "human", id: "human-local" },
+      actor: { kind: "human" as const, id: "human-local" },
       edits: variant
         ? [
             ...variant.edits,
@@ -259,8 +261,11 @@ export function EditorComponentEditor({
               : []),
           ]
         : edits,
-    });
-    if (result.ok) {
+    };
+    const result = dryRun
+      ? executeProjectTransaction(current, { ...transaction, dryRun: true })
+      : dispatchProjectTransaction(transaction);
+    if (result.ok && !dryRun) {
       definitionProjectRef.current = {
         ...definitionProjectRef.current,
         project: result.project,
@@ -293,6 +298,14 @@ export function EditorComponentEditor({
     return {
       ok: result.ok,
       definitionId,
+      ...(result.ok
+        ? {
+            draftCheckpoint: componentDraftCheckpoint(
+              result.project,
+              definitionId,
+            ),
+          }
+        : {}),
       message: result.ok
         ? message
         : (result.diagnostics[0]?.message ?? result.error.message),
@@ -370,6 +383,14 @@ export function EditorComponentEditor({
     }
     return {
       ok: result.ok,
+      ...(result.ok
+        ? {
+            draftCheckpoint: componentDraftCheckpoint(
+              candidate,
+              variant.definitionId,
+            ),
+          }
+        : {}),
       message: result.ok
         ? "Saved variant draft. Existing instances are unchanged."
         : result.error.message,
@@ -465,6 +486,19 @@ export function EditorComponentEditor({
         <Suspense fallback={null}>
           <ComponentDefinitionEditor
             key={componentEditor.key}
+            authoringIdentity={{
+              projectId: project.id,
+              projectSessionId: editorDocumentController.projectSessionId,
+              draftId: componentEditor.draft?.id ?? componentEditor.key,
+            }}
+            authoringRevision={JSON.stringify([
+              project.structureRevision,
+              project.documents.map((document) => [
+                document.id,
+                document.revision,
+              ]),
+            ])}
+            onAgentEdit={() => editorDocumentController.noteAgentEdit()}
             definition={componentEditor.definition}
             mode={componentEditor.mode}
             publicationIntent={componentEditor.publicationIntent}
@@ -532,7 +566,7 @@ export function EditorComponentEditor({
               symbolId:
                 componentEditor.variant?.symbolId ??
                 componentEditor.target?.instance.symbolId,
-              onRepair: (edits, definitionId, expectedProject) =>
+              onRepair: (edits, definitionId, expectedProject, dryRun) =>
                 withComponentSession(() => {
                   if (
                     JSON.stringify(
@@ -568,12 +602,19 @@ export function EditorComponentEditor({
                           : session,
                       );
                     },
+                    dryRun,
                   );
                 }),
-              onApply: (edit) =>
+              onApply: (edit, dryRun = false) =>
                 withComponentSession(() => {
                   const target = componentEditor.target;
                   const current = definitionProjectRef.current.project;
+                  if (current.structureRevision !== project.structureRevision)
+                    return {
+                      ok: false,
+                      message:
+                        "The Project changed. Reopen the candidate before applying.",
+                    };
                   if (target && componentEditor.externalDefinitionId) {
                     const instance = current.documents
                       .find((d) => d.id === target.documentId)
@@ -614,6 +655,7 @@ export function EditorComponentEditor({
                             );
                         }
                       : undefined,
+                    dryRun,
                   );
                 }),
               onSaveDraft: (edits, definitionId) =>
@@ -894,6 +936,7 @@ export function EditorComponentEditor({
               ),
             ]}
             onOpenDraft={(id) => {
+              returnToLibrary.current = true;
               const current = definitionProjectRef.current.project;
               const draft = current.componentAuthoringDrafts?.find(
                 (draft) => draft.id === id,

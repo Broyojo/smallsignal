@@ -49,6 +49,12 @@ export function isReadOnlyProjectRequest(
     request.operation === "read-gallery-entries" ||
     request.operation === "read-project-code" ||
     request.operation === "read-netlist" ||
+    (request.operation === "components" &&
+      (["list", "browse", "read", "inspect", "authoring-read"].includes(
+        request.request.action,
+      ) ||
+        (request.request.action === "authoring-apply" &&
+          request.request.dryRun))) ||
     (request.operation === "workspace" && request.request.action === "list")
   );
 }

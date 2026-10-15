@@ -1,7 +1,4 @@
-import type {
-  SharedComponent,
-  ComponentLibraryStatus,
-} from "../apps/editor/src/features/user-components/component-library-contract";
+import type { SharedComponent } from "../apps/editor/src/features/user-components/component-library-contract";
 import {
   publishedComponentPayload,
   parseSharedComponentPayload,
@@ -15,6 +12,10 @@ import {
   ComponentPublicationIndex,
   type ComponentLibrarySql,
 } from "./component-publication-index";
+import {
+  ComponentCatalog,
+  type ComponentCatalogRow,
+} from "./component-catalog";
 
 export interface ComponentLibraryState {
   storage: {
@@ -22,16 +23,7 @@ export interface ComponentLibraryState {
     transactionSync<T>(callback: () => T): T;
   };
 }
-interface Row {
-  id: string;
-  revision: number;
-  author_id: string;
-  author: string;
-  status: ComponentLibraryStatus;
-  created_at: string;
-  updated_at: string;
-  definition: string;
-}
+type Row = ComponentCatalogRow;
 const entry = (row: Row): SharedComponent => {
   let stored;
   try {
@@ -59,6 +51,7 @@ const entry = (row: Row): SharedComponent => {
 export class ComponentLibraryDO {
   private readonly sql: ComponentLibrarySql;
   private readonly contentIndex: ComponentPublicationIndex;
+  private readonly catalog: ComponentCatalog;
   constructor(private readonly state: ComponentLibraryState) {
     this.sql = state.storage.sql;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS components (
@@ -75,6 +68,9 @@ export class ComponentLibraryDO {
       PRIMARY KEY (user_id, request_key)
     ) WITHOUT ROWID`);
     this.contentIndex = new ComponentPublicationIndex(this.sql);
+    this.catalog = new ComponentCatalog(this.sql, (row) =>
+      summarizeSharedComponent(entry(row)),
+    );
   }
   async fetch(request: Request): Promise<Response> {
     const operation = new URL(request.url).pathname.slice(1);
@@ -100,6 +96,7 @@ export class ComponentLibraryDO {
             .join("")
         : null;
     if (operation === "list") {
+      if (body.catalog) return this.catalog.read(body);
       const limit = Math.min(
         30,
         Math.max(1, Math.floor(Number(body.limit) || 20)),

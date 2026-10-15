@@ -403,6 +403,36 @@ means deleting the Cell.
 
 ## External model sources
 
+When a User Component editor is open, collaborate on its current candidate
+through `user_components` authoring actions. `authoring-read` discovers the
+workspace and returns its raw candidate, diagnostics, protected owner context
+and `candidateRevision`, saved/applied checkpoint matches and publication
+destination; no open editor returns `workspace:null`. Confirm the returned
+`capabilities.version:1`; older Editors need an update. If the MCP tool lacks
+authoring actions, update the adapter before editing. `open:false` requires a
+person to open the intended GUI editor. Use that
+exact Project session, draft and open-session target for every write. A GUI
+edit, Undo/Redo or reopened editor invalidates older handles/revisions;
+composition refuses concurrent input. Reread and reconcile rather than
+overwriting. Keep inactive Custom artwork and unfinished text intact.
+
+`authoring-update` replaces the raw candidate visible in the GUI, including
+invalid text; it never changes executable facts. `authoring-save` saves the
+non-executable draft. `authoring-apply` with `dryRun:true` validates through the
+GUI planner without writing; actual Apply advances the same applied facts
+used by placement, netlist copy/export and simulation. Validation may be
+pending just after an update; wait for the Editor and reread. Library editing
+is isolated from drawing captures. Applying and saving do not publish.
+
+For example, call `user_components` with
+`{"request":{"action":"authoring-read"}}`, copy its candidate and change an
+owned source file's `text`. Send `authoring-update` with that complete
+`candidate`, the returned `target` and `expectedCandidateRevision`. Reread until
+validation is ready, then send `authoring-apply` with the new revision and
+`dryRun:true`; commit with `dryRun:false` only for the intended change. Let the
+user inspect it in the same editor. Place captures the applied definition;
+public publishing remains a separate action.
+
 `advanced_transact` `structureEdits` `apply_model_source` defines a
 Project-owned SPICE or Spectre source (files, entry, pinned dependencies) and
 `definitions:[{definitionId,entry,portMap?}]`; optional

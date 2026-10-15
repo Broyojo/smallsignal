@@ -1,5 +1,20 @@
 import { InlineConfirm } from "../../components/inline-confirm";
-import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useRef,
+  type ReactNode,
+} from "react";
+import type {
+  NativeComponentCandidate,
+  ComponentAuthoringSnapshot,
+} from "@icm/agent-adapter/component-resource";
+import type { ComponentAuthoringWorkspace } from "../user-components/component-authoring-workspace";
+import { nativeCandidateEdit } from "../user-components/component-authoring-workspace";
+import { useAuthoringDocument } from "../user-components/use-authoring-document";
+import { ComponentDisplayName } from "../user-components/component-display-name";
 import {
   createId,
   ComponentDefinitionSchema,
@@ -83,9 +98,15 @@ export function ExternalModelSourceEditor({
   onCopyText = browserExportDelivery.copyText,
   onAppliedViewChange,
   publicationAction,
+  workspace,
+  publication,
+  onValidate,
 }: {
   project: CircuitProject;
   publicationAction?: ReactNode;
+  workspace?: ComponentAuthoringWorkspace | undefined;
+  publication?: ComponentAuthoringSnapshot["publication"];
+  onValidate?(edit: ApplyModelSourceEdit): ExternalDefinitionResult;
   legacyDefinition?: ComponentDefinition | undefined;
   definition: ExternalSubcircuitDefinition | undefined;
   initialLocation?: SimulationSourceLocation | undefined;
@@ -143,86 +164,75 @@ export function ExternalModelSourceEditor({
       existing?.revision ??
       0,
   );
-  const [language, setLanguage] = useState<ProjectModelSource["language"]>(
-    (useAppliedBytes ? existing?.language : existing?.draft?.language) ??
-      existing?.language ??
-      "spice",
-  );
-  const [files, setFiles] = useState(() =>
-    structuredClone(
-      (useAppliedBytes ? existing?.files : existing?.draft?.files) ??
-        existing?.files ??
-        modelStarter(),
-    ),
-  );
-  const [entryPath, setEntryPath] = useState(
-    (useAppliedBytes ? existing?.entry : existing?.draft?.entry) ??
-      existing?.entry ??
-      "model.spice",
-  );
-  const [filePath, setFilePath] = useState(
-    useAppliedBytes ? (initialLocation?.path ?? entryPath) : entryPath,
-  );
-  const [newFile, setNewFile] = useState("");
-  const [fileSettingsOpen, setFileSettingsOpen] = useState(false);
-  const [dependencies, setDependencies] = useState(() =>
-    structuredClone(
-      (useAppliedBytes
-        ? existing?.dependencies
-        : existing?.draft?.dependencies) ??
-        existing?.dependencies ??
-        [],
-    ),
-  );
-  const [entry, setEntry] = useState(
-    savedAuthoring?.entry ?? (binding?.kind === "source" ? binding.entry : ""),
-  );
-  const [portMaps, setPortMaps] = useState<
-    Record<string, Record<string, string | null>>
-  >(savedAuthoring?.portMaps ?? {});
-  const [result, setResult] = useState<ExternalDefinitionResult | null>(null);
-  const [symbolMode, setSymbolMode] = useState<"automatic" | "custom">(
-    savedAuthoring?.symbolMode ??
-      ((
-        initialSymbolId
-          ? project.componentDefinitions?.some(
-              (d) => d.symbol.id === initialSymbolId && d.circuitBinding,
-            )
-          : definition?.symbolId
-      )
-        ? "custom"
-        : "automatic"),
-  );
-  const [automaticSymbolId] = useState(() => createId("circuit-symbol"));
-  const [artworkText, setArtworkText] = useState(() => {
-    if (savedAuthoring) return savedAuthoring.artworkText;
+  const initializeDraft = (): NativeComponentCandidate => {
     const captured = project.componentDefinitions?.find(
       (d) =>
         d.symbol.id === (initialSymbolId ?? definition?.symbolId) &&
         d.circuitBinding,
     );
-    return captured ? JSON.stringify(captured, null, 2) : "";
-  });
-  const [artworkOrigin, setArtworkOrigin] = useState(
-    savedAuthoring?.artworkOrigin,
+    const initialMode =
+      savedAuthoring?.symbolMode ??
+      ((initialSymbolId ? captured : definition?.symbolId)
+        ? "custom"
+        : "automatic");
+    const initialArtwork =
+      savedAuthoring?.artworkText ??
+      (captured ? JSON.stringify(captured, null, 2) : "");
+    return {
+      artworkInitialized:
+        savedAuthoring?.artworkInitialized ??
+        (initialMode === "custom" || initialArtwork !== ""),
+      language:
+        (useAppliedBytes ? existing?.language : existing?.draft?.language) ??
+        existing?.language ??
+        "spice",
+      files: structuredClone(
+        (useAppliedBytes ? existing?.files : existing?.draft?.files) ??
+          existing?.files ??
+          modelStarter(),
+      ),
+      entryPath:
+        (useAppliedBytes ? existing?.entry : existing?.draft?.entry) ??
+        existing?.entry ??
+        "model.spice",
+      dependencies: structuredClone(
+        (useAppliedBytes
+          ? existing?.dependencies
+          : existing?.draft?.dependencies) ??
+          existing?.dependencies ??
+          [],
+      ),
+      entry:
+        savedAuthoring?.entry ??
+        (binding?.kind === "source" ? binding.entry : ""),
+      portMaps: savedAuthoring?.portMaps ?? {},
+      symbolMode: initialMode,
+      artworkText: initialArtwork,
+      artworkOrigin: savedAuthoring?.artworkOrigin,
+      terminalDirections: savedAuthoring?.terminalDirections ?? {},
+      presentation: savedAuthoring?.presentation ?? definition?.presentation,
+    };
+  };
+  const [sharedDocument] = useState(() =>
+    workspace?.document(
+      "circuit",
+      initializeDraft(),
+      existing?.draft && !revealApplied
+        ? "saved"
+        : existing?.revision
+          ? "applied"
+          : "untouched",
+    ),
   );
-  const [artworkInitialized, setArtworkInitialized] = useState(
-    savedAuthoring?.artworkInitialized ??
-      (symbolMode === "custom" || artworkText !== ""),
-  );
-  const [terminalDirections, setTerminalDirections] = useState(
-    savedAuthoring?.terminalDirections ?? {},
-  );
-  const [presentation, setPresentation] = useState(
-    savedAuthoring?.presentation ?? definition?.presentation,
-  );
-  const [conversionDiagnostic, setConversionDiagnostic] =
-    useState<SimulationSourceDiagnostic | null>(null);
-  const workbench = useRef<HTMLElement>(null);
-  const currentDraft = {
+  const {
+    document: draftDocument,
+    value: currentDraft,
+    dirty: draftDirty,
+  } = useAuthoringDocument(initializeDraft, sharedDocument);
+  const {
     language,
-    entryPath,
     files,
+    entryPath,
     dependencies,
     entry,
     portMaps,
@@ -232,55 +242,56 @@ export function ExternalModelSourceEditor({
     artworkOrigin,
     terminalDirections,
     presentation,
-  };
-  const serializeDraft = (overrides: Partial<typeof currentDraft> = {}) =>
-    JSON.stringify({ ...currentDraft, ...overrides });
-  const snapshot = serializeDraft();
-  // One history entry restores every owned file and its syntax together.
-  // The text editor's per-file history cannot represent an owner conversion.
-  const draftHistory = useRef<{
-    past: (typeof currentDraft)[];
-    future: (typeof currentDraft)[];
-  }>({ past: [], future: [] });
-  useEffect(() => {
-    draftHistory.current = { past: [], future: [] };
-  }, [sourceId, viewingApplied]);
-  const restoreDraft = (draft: typeof currentDraft) => {
-    setLanguage(draft.language);
-    setFiles(draft.files);
-    setEntryPath(draft.entryPath);
-    setDependencies(draft.dependencies);
-    setEntry(draft.entry);
-    setPortMaps(draft.portMaps);
-    setSymbolMode(draft.symbolMode);
-    setArtworkText(draft.artworkText);
-    setArtworkInitialized(draft.artworkInitialized);
-    setArtworkOrigin(draft.artworkOrigin);
-    setTerminalDirections(draft.terminalDirections);
-    setPresentation(draft.presentation);
+  } = currentDraft;
+  const [filePath, setFilePath] = useState(
+    useAppliedBytes ? (initialLocation?.path ?? entryPath) : entryPath,
+  );
+  const [newFile, setNewFile] = useState("");
+  const [fileSettingsOpen, setFileSettingsOpen] = useState(false);
+  const [result, setResult] = useState<ExternalDefinitionResult | null>(null);
+  const [automaticSymbolId] = useState(() => createId("circuit-symbol"));
+  const [conversionDiagnostic, setConversionDiagnostic] =
+    useState<SimulationSourceDiagnostic | null>(null);
+  const workbench = useRef<HTMLElement>(null);
+  const restoreDraft = (draft: NativeComponentCandidate) => {
+    draftDocument.set(draft);
     if (!draft.files.some((f) => f.path === filePath))
       setFilePath(draft.entryPath);
     setConversionDiagnostic(null);
     setResult(null);
   };
-  const editDraft = (overrides: Partial<typeof currentDraft>) => {
-    const next = {
-      ...currentDraft,
-      ...(overrides.artworkText !== undefined
-        ? { artworkInitialized: true }
-        : {}),
-      ...overrides,
-    };
-    if (JSON.stringify(next) === snapshot) return;
-    draftHistory.current.past.push(structuredClone(currentDraft));
-    if (draftHistory.current.past.length > 100)
-      draftHistory.current.past.shift();
-    draftHistory.current.future = [];
-    restoreDraft(next);
-  };
-  const [savedSnapshot, setSavedSnapshot] = useState(snapshot);
-  const dirty = !viewingApplied && savedSnapshot !== snapshot;
+  const editDraft = (overrides: Partial<NativeComponentCandidate>) =>
+    restoreDraft(
+      nativeCandidateEdit(draftDocument.read(), {
+        ...draftDocument.read(),
+        ...overrides,
+      }),
+    );
+  const setFiles = (files: NativeComponentCandidate["files"]) =>
+    editDraft({ files });
+  const setDependencies = (
+    dependencies: NativeComponentCandidate["dependencies"],
+  ) => editDraft({ dependencies });
+  const setEntryPath = (entryPath: string) => editDraft({ entryPath });
+  const setEntry = (entry: string) => editDraft({ entry });
+  const setPortMaps = (portMaps: NativeComponentCandidate["portMaps"]) =>
+    editDraft({ portMaps });
+  const dirty = !viewingApplied && draftDirty;
+  useEffect(() => {
+    draftDocument.clearHistory();
+  }, [draftDocument, sourceId, viewingApplied]);
+  useEffect(() => {
+    if (!files.some((file) => file.path === filePath)) setFilePath(entryPath);
+  }, [files, entryPath, filePath]);
   const stale = Boolean(existing && baseRevision !== existing.revision);
+  const currentCheckpoint = JSON.stringify(existing?.draft ?? null);
+  const expectedCheckpoint = useRef({ sourceId, value: currentCheckpoint });
+  if (expectedCheckpoint.current.sourceId !== sourceId)
+    expectedCheckpoint.current = { sourceId, value: currentCheckpoint };
+  const checkpointConflict =
+    workspace && expectedCheckpoint.current.value !== currentCheckpoint
+      ? "The saved draft changed. Reopen it before saving or applying."
+      : null;
   useEffect(() => {
     onDirtyChange(dirty);
     return () => onDirtyChange(false);
@@ -472,6 +483,8 @@ export function ExternalModelSourceEditor({
       artworkInitialized: true,
     });
   const applyUnavailable =
+    (workspace?.operationPending ? "Wait for publication to finish." : null) ??
+    checkpointConflict ??
     failure?.message ??
     (!selected
       ? "Add a .subckt definition to continue."
@@ -491,17 +504,31 @@ export function ExternalModelSourceEditor({
         )
       );
     }).length;
-  const apply = (place = false) => {
-    if (viewingApplied) return;
-    if (failure || !selected || (customSymbols && artwork.error)) {
-      setResult({
+  const apply = (place = false, dryRun = false): ExternalDefinitionResult => {
+    if (workspace?.operationPending)
+      return { ok: false, message: "Wait for publication to finish." };
+    if (viewingApplied)
+      return { ok: false, message: "Open the candidate before applying." };
+    if (
+      checkpointConflict ||
+      stale ||
+      failure ||
+      !selected ||
+      (customSymbols && artwork.error)
+    ) {
+      const outcome = {
         ok: false,
         message:
+          checkpointConflict ??
+          (stale
+            ? "The applied source changed. Reopen it before applying."
+            : null) ??
           artwork.error ??
           failure?.message ??
           "Add a .subckt definition and select its entry.",
-      });
-      return;
+      };
+      if (!dryRun) setResult(outcome);
+      return outcome;
     }
     const definitions = [
       {
@@ -539,20 +566,31 @@ export function ExternalModelSourceEditor({
           ...(portMaps[d.id] ? { portMap: portMaps[d.id] } : {}),
         })),
     ];
-    const outcome = onApply({
+    const edit: ApplyModelSourceEdit = {
       kind: "apply_model_source",
       source,
       definitions,
       authoringDefinitionIds: [selectedDefinitionId],
-    });
+    };
+    const outcome = dryRun
+      ? (onValidate?.(edit) ?? {
+          ok: false,
+          message: "Candidate validation is unavailable.",
+        })
+      : onApply(edit);
+    if (dryRun) return outcome;
     setResult(outcome);
     if (outcome.ok) {
+      if (outcome.draftCheckpoint !== undefined)
+        expectedCheckpoint.current.value = outcome.draftCheckpoint;
       setDefinitionId(selectedDefinitionId);
-      setSavedSnapshot(serializeDraft({ portMaps: {} }));
+
       setBaseRevision(outcome.sourceRevision ?? baseRevision + 1);
-      setPortMaps({});
+      draftDocument.set({ ...draftDocument.read(), portMaps: {} });
+      draftDocument.markApplied();
       if (place) onPlace(selectedDefinitionId);
     }
+    return outcome;
   };
   const copyModel = async () => {
     if (
@@ -617,8 +655,16 @@ export function ExternalModelSourceEditor({
     setConversionDiagnostic(null);
     setResult(null);
   };
-  const saveDraft = () => {
-    if (viewingApplied) return;
+  const saveDraft = (): ExternalDefinitionResult => {
+    if (workspace?.operationPending)
+      return { ok: false, message: "Wait for publication to finish." };
+    if (checkpointConflict) {
+      const outcome = { ok: false, message: checkpointConflict };
+      setResult(outcome);
+      return outcome;
+    }
+    if (viewingApplied)
+      return { ok: false, message: "Open the candidate before saving." };
     const edits: ProjectStructureEdit[] = [];
     if (!existing) {
       edits.push({
@@ -700,10 +746,49 @@ export function ExternalModelSourceEditor({
     const outcome = onSaveDraft(edits, selectedDefinitionId);
     setResult(outcome);
     if (outcome.ok) {
+      if (outcome.draftCheckpoint !== undefined)
+        expectedCheckpoint.current.value = outcome.draftCheckpoint;
       setDefinitionId(selectedDefinitionId);
-      setSavedSnapshot(snapshot);
+      draftDocument.markSaved();
     }
+    return outcome;
   };
+  useLayoutEffect(() => {
+    workspace?.invalidate();
+  }, [workspace, viewingApplied, sourceId, definitionId, baseRevision]);
+  const commandRevision = workspace?.getRevision();
+  useLayoutEffect(() => {
+    if (!workspace) return;
+    workspace.bindCommands(
+      "circuit",
+      {
+        canApply: !viewingApplied && !stale && !applyUnavailable,
+        readOnly: viewingApplied,
+        diagnostics: [
+          stale ? "The applied source changed." : null,
+          applyUnavailable,
+        ].filter((message): message is string => !!message),
+        publication,
+        context: {
+          definitionId: selectedDefinitionId,
+          sourceId,
+          sourceRevision: baseRevision,
+          terminals: previewDefinition?.terminals.map(
+            ({ id, name, direction }) => ({ id, name, direction }),
+          ),
+        },
+        apply: (dryRun) => {
+          const outcome = apply(false, dryRun);
+          return outcome.ok ? null : outcome.message;
+        },
+        save: () => {
+          const outcome = saveDraft();
+          return outcome.ok ? null : outcome.message;
+        },
+      },
+      commandRevision,
+    );
+  });
   const chooseOwner = (id: string) => {
     setViewingApplied(false);
     const owner = project.modelSources?.find((s) => s.id === id);
@@ -784,7 +869,7 @@ export function ExternalModelSourceEditor({
     restoreDraft(next);
     setFilePath(next.entryPath);
     setResult(null);
-    setSavedSnapshot(serializeDraft(next));
+    draftDocument.markSaved();
   };
   const fork = () => {
     setViewingApplied(false);
@@ -828,16 +913,8 @@ export function ExternalModelSourceEditor({
         if (key !== "z" && key !== "y") return;
         event.preventDefault();
         event.stopPropagation();
-        const from = redo
-          ? draftHistory.current.future
-          : draftHistory.current.past;
-        const to = redo
-          ? draftHistory.current.past
-          : draftHistory.current.future;
-        const previous = from.pop();
-        if (!previous) return;
-        to.push(structuredClone(currentDraft));
-        restoreDraft(previous);
+        if (redo) draftDocument.redo();
+        else draftDocument.undo();
       }}
     >
       {customSymbols ? (
@@ -860,21 +937,23 @@ export function ExternalModelSourceEditor({
         </nav>
       ) : null}
       {result ||
+      checkpointConflict ||
       failure ||
       stale ||
       (customSymbols && artwork.error) ||
       (customSymbols && !selected) ? (
         <p className="cell-external-result" role="status">
-          {stale
-            ? "The applied model changed; keep this draft on the latest version before Apply."
-            : (failure?.message ??
-              (!selected
-                ? applyUnavailable
-                : customSymbols
-                  ? artwork.error
-                  : null) ??
-              result?.message ??
-              "Correct the model source before Apply.")}
+          {checkpointConflict ??
+            (stale
+              ? "The applied model changed; keep this draft on the latest version before Apply."
+              : (failure?.message ??
+                (!selected
+                  ? applyUnavailable
+                  : customSymbols
+                    ? artwork.error
+                    : null) ??
+                result?.message ??
+                "Correct the model source before Apply."))}
           {!stale &&
           result &&
           (failure || (customSymbols && artwork.error) || !selected) ? (
@@ -892,7 +971,7 @@ export function ExternalModelSourceEditor({
               {failure.sourceRef?.start.line ?? 1}
             </small>
           ) : null}
-          {stale ? (
+          {!checkpointConflict && stale ? (
             <button
               type="button"
               onClick={() => {
@@ -936,6 +1015,7 @@ export function ExternalModelSourceEditor({
       ) : null}
       {!(
         result ||
+        checkpointConflict ||
         failure ||
         stale ||
         (customSymbols && artwork.error) ||
@@ -1056,7 +1136,7 @@ export function ExternalModelSourceEditor({
                 restoreDraft(applied);
                 setBaseRevision(existing.revision);
                 setFilePath(existing.entry);
-                setSavedSnapshot(serializeDraft(applied));
+                draftDocument.markApplied();
                 setViewingApplied(true);
               })
             }
@@ -1107,13 +1187,8 @@ export function ExternalModelSourceEditor({
                 setViewingApplied(false);
                 restoreDraft(next);
                 setBaseRevision(draft.baseRevision);
-                setFiles(structuredClone(draft.files));
-                setDependencies(
-                  structuredClone(draft.dependencies ?? existing.dependencies),
-                );
-                setEntryPath(draft.entry);
                 setFilePath(draft.entry);
-                setSavedSnapshot(serializeDraft(next));
+                draftDocument.markSaved();
                 setResult(null);
               }}
             >
@@ -1408,37 +1483,12 @@ export function ExternalModelSourceEditor({
                 <option value="custom">Custom JSON</option>
               </select>
             </label>
-            {symbolMode === "custom" && artwork.definition ? (
-              <label>
-                Display name{" "}
-                <input
-                  aria-label="Component display name"
-                  key={artwork.definition.symbol.name}
-                  defaultValue={artwork.definition.symbol.name}
-                  disabled={viewingApplied}
-                  maxLength={100}
-                  onBlur={(event) => {
-                    if (!event.currentTarget.value.trim()) {
-                      event.currentTarget.value =
-                        artwork.definition!.symbol.name;
-                      return;
-                    }
-                    editDraft({
-                      artworkText: JSON.stringify(
-                        {
-                          ...artwork.definition,
-                          symbol: {
-                            ...artwork.definition!.symbol,
-                            name: event.currentTarget.value,
-                          },
-                        },
-                        null,
-                        2,
-                      ),
-                    });
-                  }}
-                />
-              </label>
+            {symbolMode === "custom" ? (
+              <ComponentDisplayName
+                source={artworkText}
+                onChange={(artworkText) => editDraft({ artworkText })}
+                disabled={viewingApplied}
+              />
             ) : null}
           </div>
           {symbolMode === "custom" ? (
@@ -1554,7 +1604,7 @@ export function ExternalModelSourceEditor({
                   id: externalSubcircuitSymbolId(layoutDefinition.id),
                   name: layoutDefinition.name,
                   revision: customSymbols
-                    ? draftHistory.current.past.length
+                    ? draftDocument.snapshot().revision
                     : project.structureRevision,
                   terminals: layoutDefinition.terminals,
                   presentation: layoutDefinition.presentation,
