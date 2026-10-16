@@ -45,3 +45,4 @@ apps/editor/dist-desktop/
 
 # Editor bundle browser tests serve under ICM_E2E_SERVER=preview.
 apps/editor/dist-e2e/
+/target

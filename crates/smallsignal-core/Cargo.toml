@@ -1,0 +1,11 @@
+[package]
+name = "smallsignal-core"
+description = "Symbolic small-signal analysis of analog circuits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+num-complex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
