@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { CircuitProject } from "@icm/model";
 import {
   ANALOG_CANVAS_MATH_PROFILE_ID,
@@ -16,12 +24,20 @@ import {
   smallSignalNetlist,
   type ComplexPoint,
   type Root,
+  type BjtOperatingPoint,
+  type MosOperatingPoint,
   type SmallSignalClient,
+  type DeviceOperatingPoint,
+  type SmallSignalSource,
   type SmallSignalQuantity,
   type SmallSignalRequest,
   type SmallSignalResponse,
-  type SmallSignalResult,
 } from "@icm/small-signal";
+import {
+  browserStaleBuildRecovery,
+  diagnoseModuleLoadFailure,
+  recoverFromStaleBuild,
+} from "../../components/stale-build-recovery";
 import "./small-signal-panel.css";
 
 const SOLVE_DEBOUNCE_MS = 120;
@@ -63,7 +79,14 @@ export function formatEngineering(value: number, unit = ""): string {
   return `${Number(scaled.toPrecision(4))}${unit || prefix ? " " : ""}${prefix}${unit}`;
 }
 
+/**
+ * Set when the typesetter chunk 404s: this page is from a build a newer
+ * deploy replaced, so the panel offers the editor's stale-build recovery.
+ */
+const StaleBuildContext = createContext<() => void>(() => {});
+
 function Formula({ latex }: { latex: string }) {
+  const onStale = useContext(StaleBuildContext);
   const request: FormulaRequest = {
     latex,
     display: "block",
@@ -75,6 +98,7 @@ function Formula({ latex }: { latex: string }) {
     result: FormulaTypesetResult;
   }>();
   const tooLong = latex.length > FORMULA_MAX_LATEX_LENGTH;
+  const [failed, setFailed] = useState<string | null>(null);
   const result =
     prepared?.latex === latex ? prepared.result : cachedFormulaResult(request);
   useEffect(() => {
@@ -89,27 +113,42 @@ function Formula({ latex }: { latex: string }) {
       (next) => {
         if (active) setPrepared({ latex, result: next });
       },
-      () => {
-        /* The LaTeX source stays readable if the typesetter fails to load. */
+      (error: unknown) => {
+        if (active) setFailed(latex);
+        // The LaTeX source stays readable; a retired chunk also offers a reload.
+        void diagnoseModuleLoadFailure(error, {
+          currentUrl: window.location.href,
+          fetch: (input, init) => fetch(input, init),
+        }).then((diagnosis) => {
+          if (active && diagnosis.kind === "stale-build") onStale();
+        });
       },
     );
     return () => {
       active = false;
     };
-  }, [latex, tooLong]);
+  }, [latex, tooLong, onStale]);
+  // While the typesetter loads, hold the space quietly; raw TeX reads as
+  // broken. Only a formula that cannot be typeset shows its source.
+  if (!tooLong && !result && failed !== latex)
+    return <span className="small-signal-formula-pending" aria-busy="true" />;
   if (tooLong || !result?.ok)
     return <code className="small-signal-latex-source">{latex}</code>;
   const artifact = result.artifact;
+  // Long expressions keep their size and scroll sideways rather than
+  // shrinking past legibility.
   return (
-    <img
-      className="small-signal-formula"
-      alt={latex}
-      src={`data:image/svg+xml,${encodeURIComponent(artifact.svg)}`}
-      style={{
-        width: `${artifact.width / CANONICAL_FORMULA_FONT_SIZE}em`,
-        height: `${artifact.height / CANONICAL_FORMULA_FONT_SIZE}em`,
-      }}
-    />
+    <div className="small-signal-formula-scroll">
+      <img
+        className="small-signal-formula"
+        alt={latex}
+        src={`data:image/svg+xml,${encodeURIComponent(artifact.svg)}`}
+        style={{
+          width: `${artifact.width / CANONICAL_FORMULA_FONT_SIZE}em`,
+          height: `${artifact.height / CANONICAL_FORMULA_FONT_SIZE}em`,
+        }}
+      />
+    </div>
   );
 }
 
@@ -141,22 +180,6 @@ function rootText(root: Root): string {
   return `${formatEngineering(root.re)} ± j${formatEngineering(root.im, "Hz")}`;
 }
 
-function RootsRow({
-  label,
-  roots,
-}: {
-  label: string;
-  roots: Root[] | undefined;
-}) {
-  const items = (roots ?? []).map(rootText).filter(Boolean);
-  if (!items.length) return null;
-  return (
-    <p className="small-signal-muted">
-      {label}: {items.join(", ")}
-    </p>
-  );
-}
-
 function ExactFormula({
   symbol,
   quantity,
@@ -176,10 +199,11 @@ function ExactFormula({
 
 function formatPercent(fraction: number): string {
   const percent = fraction * 100;
-  return percent < 0.01 ? "<0.01%" : `${percent.toPrecision(2)}%`;
+  return percent < 0.1 ? "<0.1%" : `${percent.toPrecision(2)}%`;
 }
 
-function QuantityView({
+/** One result: its equation, its value, and its poles. */
+function QuantityCard({
   title,
   symbol,
   quantity,
@@ -190,34 +214,38 @@ function QuantityView({
   quantity: SmallSignalQuantity;
   unit: string;
 }) {
-  // Show the approximation only when it dropped terms; otherwise the
-  // simplified form is the exact expression.
-  const simplified =
+  // The simpler form appears only when it actually dropped terms.
+  const simpler =
     quantity.simplified && !quantity.simplified.same
       ? quantity.simplified
       : null;
+  const value = quantity.values?.[0];
+  const poles = (quantity.poles ?? []).map(rootText).filter(Boolean);
   return (
-    <section className="small-signal-quantity" aria-label={title}>
-      <h3>{title}</h3>
-      {simplified ? (
-        <>
-          <Formula latex={`${symbol} \\approx ${simplified.latex}`} />
-          {simplified.maxRelError !== undefined ? (
-            <p className="small-signal-muted">
-              Approximation: drops small terms and stays within{" "}
-              {formatPercent(simplified.maxRelError)} of the exact expression
-              from 1 Hz to 100 GHz
-            </p>
-          ) : null}
-          <details>
-            <summary>Exact</summary>
-            <ExactFormula symbol={symbol} quantity={quantity} />
-          </details>
-        </>
-      ) : (
-        <ExactFormula symbol={symbol} quantity={quantity} />
-      )}
-      {quantity.values?.length ? (
+    <section className="small-signal-card" aria-label={title}>
+      <header>
+        <span>{title}</span>
+        {value ? (
+          <strong>
+            {pointText(value, unit)}
+            {quantity.values?.length === 1 &&
+            value.f > 0 &&
+            (quantity.poles?.length || quantity.zeros?.length) ? (
+              <small> at {formatEngineering(value.f, "Hz")}</small>
+            ) : null}
+          </strong>
+        ) : null}
+      </header>
+      <ExactFormula symbol={symbol} quantity={quantity} />
+      {simpler ? (
+        <div className="small-signal-simpler">
+          <Formula latex={`\\approx ${simpler.latex}`} />
+          <small>
+            within {formatPercent(simpler.maxRelError ?? 0)} of the exact form
+          </small>
+        </div>
+      ) : null}
+      {quantity.values && quantity.values.length > 1 ? (
         <table className="small-signal-values">
           <tbody>
             {quantity.values.map((point) => (
@@ -229,49 +257,63 @@ function QuantityView({
           </tbody>
         </table>
       ) : null}
-      <RootsRow label="Poles" roots={quantity.poles} />
-      <RootsRow label="Zeros" roots={quantity.zeros} />
+      {poles.length ? (
+        <small className="small-signal-muted">
+          {poles.length === 1 ? "Pole" : "Poles"} {poles.join(", ")}
+        </small>
+      ) : null}
     </section>
   );
 }
 
-function OperatingPoint({ result }: { result: SmallSignalResult }) {
-  const devices = Object.entries(result.op?.devices ?? {});
-  if (!devices.length) return null;
-  return (
-    <details className="small-signal-op">
-      <summary>Operating point</summary>
-      <table>
-        <tbody>
-          {devices.map(([name, device]) => (
-            <tr key={name}>
-              <th scope="row">{name}</th>
-              <td>
-                {"gm" in device && typeof device.gm === "number"
-                  ? `gm ${formatEngineering(device.gm, "S")}`
-                  : null}
-                {"gds" in device && typeof device.gds === "number"
-                  ? ` · ro ${formatEngineering(1 / device.gds, "Ω")}`
-                  : null}
-                {"go" in device && typeof device.go === "number"
-                  ? ` · ro ${formatEngineering(1 / device.go, "Ω")}`
-                  : null}
-                {"id" in device && typeof device.id === "number"
-                  ? ` · Id ${formatEngineering(device.id, "A")}`
-                  : null}
-                {"ic" in device && typeof device.ic === "number"
-                  ? ` · Ic ${formatEngineering(device.ic, "A")}`
-                  : null}
-                {"region" in device && typeof device.region === "string"
-                  ? ` · ${device.region}`
-                  : null}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </details>
-  );
+function volts(value: number): string {
+  return formatEngineering(value, "V");
+}
+
+/** One line per transistor: its region and the numbers that set gm and ro. */
+function DeviceLine({
+  name,
+  device,
+}: {
+  name: string;
+  device: DeviceOperatingPoint;
+}) {
+  if (device.type === "nmos" || device.type === "pmos") {
+    const m = device as MosOperatingPoint;
+    // In the device's own frame (positive for a conducting PMOS too).
+    const sign = m.type === "pmos" ? -1 : 1;
+    const vov = sign * m.vgs - sign * m.vth;
+    return (
+      <li>
+        <b>{name}</b>{" "}
+        <span className={`small-signal-region is-${m.region}`}>{m.region}</span>
+        <span>
+          I<sub>D</sub> {formatEngineering(Math.abs(m.id), "A")} · V
+          <sub>ov</sub> {volts(vov)} · V<sub>DS</sub> {volts(sign * m.vds)} · g
+          <sub>m</sub> {formatEngineering(m.gm, "S")} · r<sub>o</sub>{" "}
+          {m.gds > 0 ? formatEngineering(1 / m.gds, "Ω") : "∞"}
+        </span>
+      </li>
+    );
+  }
+  if (device.type === "npn" || device.type === "pnp") {
+    const q = device as BjtOperatingPoint;
+    const sign = q.type === "pnp" ? -1 : 1;
+    const region = q.region === "forward-active" ? "active" : q.region;
+    return (
+      <li>
+        <b>{name}</b>{" "}
+        <span className={`small-signal-region is-${region}`}>{region}</span>
+        <span>
+          I<sub>C</sub> {formatEngineering(Math.abs(q.ic), "A")} · V
+          <sub>CE</sub> {volts(sign * q.vce)} · g<sub>m</sub>{" "}
+          {formatEngineering(q.gm, "S")} · r<sub>π</sub>{" "}
+          {formatEngineering(1 / q.gpi, "Ω")}
+        </span>
+      </li>
+    );
+  }
+  return null;
 }
 
 /** `v_{out}` for a net named Vout or out, `i_{1}` for a source named I1. */
@@ -282,13 +324,28 @@ export function signalLabel(letter: "v" | "i", name: string): string {
   return `${letter}_{${body.replace(/_/gu, "\\_")}}`;
 }
 
-function preferredOutput(nets: string[], sourceNodes: Set<string>) {
+/**
+ * A net named like an output, else the first that is neither driven by a
+ * source nor a supply rail (a rail is AC ground, never a useful output).
+ */
+export function preferredOutput(
+  nets: string[],
+  sourceNodes: Set<string>,
+  supplies: string[] = [],
+) {
+  const candidates = nets.filter(
+    (net) => net !== "0" && !supplies.includes(net),
+  );
   return (
-    nets.find((net) => /^v?out/iu.test(net)) ??
-    nets.find((net) => net !== "0" && !sourceNodes.has(net)) ??
-    nets.find((net) => net !== "0") ??
+    candidates.find((net) => /out/iu.test(net)) ??
+    candidates.find((net) => !sourceNodes.has(net)) ??
+    candidates[0] ??
     "0"
   );
+}
+
+function sourceLabel(source: SmallSignalSource): string {
+  return source.pin ?? source.name;
 }
 
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
@@ -301,27 +358,46 @@ export function SmallSignalPanel({
 }) {
   const [supply, setSupply] = useState(String(DEFAULT_SUPPLY_VOLTAGE));
   const supplyVoltage = parseFrequencies(supply)[0] ?? DEFAULT_SUPPLY_VOLTAGE;
+  // DC values typed for undriven Pins (inputs and bias nodes).
+  const [pinBiasText, setPinBiasText] = useState<Record<string, string>>({});
+  const pinBias = useMemo(() => {
+    const values: Record<string, number> = {};
+    for (const [pin, text] of Object.entries(pinBiasText)) {
+      const value = Number.parseFloat(text);
+      if (text.trim() && Number.isFinite(value)) values[pin] = value;
+    }
+    return values;
+  }, [pinBiasText]);
   const netlist = useMemo(
     () =>
       smallSignalNetlist(project, {
         ...(rootDocumentId ? { rootDocumentId } : {}),
         supplyVoltage,
+        pinBias,
       }),
-    [project, rootDocumentId, supplyVoltage],
+    [project, rootDocumentId, supplyVoltage, pinBias],
   );
   const [input, setInput] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [reference, setReference] = useState("0");
   const [frequencies, setFrequencies] = useState("1k");
-  const [rin, setRin] = useState(true);
-  const [rout, setRout] = useState(true);
+  // Hand-analysis mode: no bias, every transistor taken as saturated.
+  const [assumeSaturation, setAssumeSaturation] = useState(false);
   const [response, setResponse] = useState<SmallSignalResponse | null>(null);
+  const [staleBuild, setStaleBuild] = useState(false);
+  const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
   const clientRef = useRef<SmallSignalClient | null>(null);
   const generation = useRef(0);
 
   useEffect(() => {
+    // Start loading the typesetter now, before the first result arrives.
+    void prepareFormula({
+      latex: "g_m",
+      display: "block",
+      profileId: ANALOG_CANVAS_MATH_PROFILE_ID,
+      bold: false,
+    }).catch(() => {});
     const client = createSmallSignalClient();
     clientRef.current = client;
     return () => {
@@ -330,30 +406,37 @@ export function SmallSignalPanel({
     };
   }, []);
 
-  const nets = netlist?.nets ?? [];
+  // `nc…` nets stand in for unconnected pins: never something to pick.
+  const nets = (netlist?.nets ?? []).filter((net) => !/^nc\d+$/u.test(net));
   const sources = netlist?.sources ?? [];
   const sourceNodes = new Set(sources.flatMap((source) => source.nodes));
   const chosenInput =
     input && sources.some((source) => source.name === input)
       ? input
-      : (sources.find((source) => /in/iu.test(source.name))?.name ??
+      : (sources.find((source) => /in/iu.test(sourceLabel(source)))?.name ??
         sources[0]?.name ??
         null);
   const chosenOutput =
     output && nets.includes(output)
       ? output
-      : preferredOutput(nets, sourceNodes);
+      : preferredOutput(nets, sourceNodes, netlist?.supplies ?? []);
   const chosenReference = nets.includes(reference) ? reference : "0";
 
+  // An open pin makes every number meaningless: refuse rather than guess.
+  const unconnected = netlist?.unconnected ?? [];
+  const unknownBias = netlist?.unknownBias ?? [];
+  // Without every bias value there is no operating point: hand analysis.
+  const handAnalysis = assumeSaturation || unknownBias.length > 0;
   const request: SmallSignalRequest | null =
-    netlist && chosenInput
+    netlist && chosenInput && !unconnected.length
       ? {
           input: chosenInput,
           output: chosenOutput,
           ref: chosenReference === "0" ? null : chosenReference,
           freqs: parseFrequencies(frequencies),
-          rin,
-          rout,
+          rin: true,
+          rout: true,
+          ...(handAnalysis ? { symbolic: true } : {}),
         }
       : null;
   const requestKey =
@@ -371,10 +454,8 @@ export function SmallSignalPanel({
       const client = clientRef.current;
       if (!client) return;
       setSolving(true);
-      const started = performance.now();
       void client.analyze(text, job).then((next) => {
         if (current !== generation.current) return;
-        setElapsed(performance.now() - started);
         setResponse(next);
         setSolving(false);
       });
@@ -383,7 +464,14 @@ export function SmallSignalPanel({
     // requestKey covers the netlist text and every request field.
   }, [requestKey]);
 
-  const result = response && !isSmallSignalError(response) ? response : null;
+  const result =
+    response && !isSmallSignalError(response) && !unconnected.length
+      ? response
+      : null;
+  const error =
+    response && isSmallSignalError(response) && !unconnected.length
+      ? response.error
+      : null;
   const inputSource = sources.find((source) => source.name === chosenInput);
   const outputLabel =
     chosenReference === "0"
@@ -391,165 +479,262 @@ export function SmallSignalPanel({
       : `${signalLabel("v", chosenOutput)} - ${signalLabel("v", chosenReference)}`;
   const inputLabel = signalLabel(
     inputSource?.kind === "current" ? "i" : "v",
-    chosenInput ?? "",
+    inputSource ? sourceLabel(inputSource) : "",
+  );
+  const devices = Object.entries(result?.op?.devices ?? {});
+  const allGood =
+    result &&
+    !result.warnings?.length &&
+    devices.every(([, device]) =>
+      ["saturation", "forward-active"].includes(String(device.region)),
+    );
+  const pinsNeedingBias = sources.filter(
+    (source) => source.pin && unknownBias.includes(source.pin),
+  );
+  const otherUnknown = unknownBias.filter(
+    (name) => !sources.some((source) => source.pin === name),
   );
 
   return (
-    <section
-      className="small-signal-panel"
-      aria-label="Small-signal analysis"
-      data-testid="small-signal-panel"
-    >
-      <header className="small-signal-header">
-        <h2>Small-Signal</h2>
-        <span className="small-signal-muted" role="status">
-          {solving
-            ? "Solving…"
-            : elapsed !== null
-              ? `${elapsed < 10 ? elapsed.toFixed(1) : Math.round(elapsed)} ms`
-              : ""}
-        </span>
-      </header>
-      {!netlist ? (
-        <p className="small-signal-muted">Draw a circuit to analyze it.</p>
-      ) : (
-        <>
-          <div className="small-signal-controls">
-            {netlist.supplies.length ? (
-              <label title="DC value of the VDD symbols that no source drives">
-                <span>{netlist.supplies.join(", ")}</span>
-                <input
-                  aria-label="Supply voltage"
-                  value={supply}
-                  onChange={(event) => setSupply(event.currentTarget.value)}
-                />
-                <span>V</span>
-              </label>
-            ) : null}
-            <label>
-              <span>Input</span>
-              <select
-                aria-label="Input source"
-                value={chosenInput ?? ""}
-                disabled={!sources.length}
-                onChange={(event) => setInput(event.currentTarget.value)}
-              >
-                {sources.length ? null : (
-                  <option value="">Add a V or I source</option>
-                )}
-                {sources.map((source) => (
-                  <option key={source.name} value={source.name}>
-                    {source.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Output</span>
-              <select
-                aria-label="Output net"
-                value={chosenOutput}
-                onChange={(event) => setOutput(event.currentTarget.value)}
-              >
-                {nets.map((net) => (
-                  <option key={net} value={net}>
-                    {net}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Ref</span>
-              <select
-                aria-label="Output reference net"
-                value={chosenReference}
-                onChange={(event) => setReference(event.currentTarget.value)}
-              >
-                {nets.map((net) => (
-                  <option key={net} value={net}>
-                    {net === "0" ? "0 (ground)" : net}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>f</span>
-              <input
-                aria-label="Frequencies"
-                value={frequencies}
-                placeholder="1k, 1meg"
-                onChange={(event) => setFrequencies(event.currentTarget.value)}
-              />
-            </label>
-            <label className="small-signal-check">
-              <input
-                type="checkbox"
-                checked={rin}
-                onChange={(event) => setRin(event.currentTarget.checked)}
-              />
-              <span>
-                R<sub>in</sub>
-              </span>
-            </label>
-            <label className="small-signal-check">
-              <input
-                type="checkbox"
-                checked={rout}
-                onChange={(event) => setRout(event.currentTarget.checked)}
-              />
-              <span>
-                R<sub>out</sub>
-              </span>
-            </label>
+    <StaleBuildContext.Provider value={markStale}>
+      <section
+        className="small-signal-panel"
+        aria-label="Small-signal analysis"
+        data-testid="small-signal-panel"
+      >
+        <header className="small-signal-header">
+          <h2>Small-Signal</h2>
+          {solving ? (
+            <span className="small-signal-muted" role="status">
+              Solving…
+            </span>
+          ) : null}
+        </header>
+        {staleBuild ? (
+          <div className="small-signal-alert is-error" role="alert">
+            <p>This page is an older version of the site.</p>
+            <button
+              type="button"
+              onClick={() =>
+                void recoverFromStaleBuild(browserStaleBuildRecovery())
+              }
+            >
+              Reload to update
+            </button>
           </div>
-          {response && isSmallSignalError(response) ? (
-            <p role="alert">{response.error}</p>
-          ) : null}
-          {result?.warnings?.length ? (
-            <ul className="small-signal-warnings" aria-label="Solver warnings">
-              {result.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          ) : null}
-          {result?.gain ? (
-            <QuantityView
-              title="Gain"
-              symbol={`\\frac{${outputLabel}}{${inputLabel}}`}
-              quantity={result.gain}
-              unit={inputSource?.kind === "current" ? "Ω" : ""}
-            />
-          ) : null}
-          {result?.rin ? (
-            <QuantityView
-              title="Input impedance"
-              symbol="Z_{in}"
-              quantity={result.rin}
-              unit="Ω"
-            />
-          ) : null}
-          {result?.rout ? (
-            <QuantityView
-              title="Output impedance"
-              symbol="Z_{out}"
-              quantity={result.rout}
-              unit="Ω"
-            />
-          ) : null}
-          {result ? <OperatingPoint result={result} /> : null}
-          {netlist.notes.length ? (
-            <ul className="small-signal-notes">
-              {netlist.notes.map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          ) : null}
-          <details className="small-signal-netlist">
-            <summary>Solver netlist</summary>
-            <pre>{netlist.text}</pre>
-          </details>
-        </>
-      )}
-    </section>
+        ) : null}
+        {!netlist ? (
+          <p className="small-signal-muted">Draw a circuit to analyze it.</p>
+        ) : (
+          <>
+            <div className="small-signal-io">
+              <label>
+                Input
+                <select
+                  aria-label="Input"
+                  value={chosenInput ?? ""}
+                  disabled={!sources.length}
+                  onChange={(event) => setInput(event.currentTarget.value)}
+                >
+                  {sources.length ? null : (
+                    <option value="">Add a source or Pin</option>
+                  )}
+                  {sources.map((source) => (
+                    <option key={source.name} value={source.name}>
+                      {sourceLabel(source)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Output
+                <select
+                  aria-label="Output"
+                  value={chosenOutput}
+                  onChange={(event) => setOutput(event.currentTarget.value)}
+                >
+                  {nets
+                    .filter((net) => net !== "0")
+                    .map((net) => (
+                      <option key={net} value={net}>
+                        {net}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+
+            {unconnected.length ? (
+              <div className="small-signal-alert is-error" role="alert">
+                <p>
+                  <b>{unconnected.join(", ")}</b>{" "}
+                  {unconnected.length === 1 ? "is" : "are"} not connected.
+                </p>
+                <small>
+                  Touching parts aren&apos;t connected. Draw a wire to it (W).
+                </small>
+              </div>
+            ) : error ? (
+              <div className="small-signal-alert is-error" role="alert">
+                <p>{error}</p>
+              </div>
+            ) : result?.warnings?.length ? (
+              <div className="small-signal-alert is-warning" role="alert">
+                <ul>
+                  {result.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : handAnalysis && result ? (
+              <div className="small-signal-alert is-info" role="status">
+                <p>Hand analysis: transistors assumed saturated.</p>
+                {pinsNeedingBias.length || otherUnknown.length ? (
+                  <small>
+                    Enter bias voltages below for a real operating point.
+                  </small>
+                ) : null}
+              </div>
+            ) : allGood && devices.length ? (
+              <div className="small-signal-alert is-ok" role="status">
+                <p>
+                  {devices.length === 1
+                    ? `${devices[0]?.[0] ?? "The transistor"} is`
+                    : "All transistors are"}{" "}
+                  in saturation.
+                </p>
+              </div>
+            ) : null}
+
+            {pinsNeedingBias.length || otherUnknown.length ? (
+              <div className="small-signal-bias-inputs">
+                {pinsNeedingBias.map((source) => {
+                  const pin = source.pin ?? source.name;
+                  return (
+                    <label key={pin}>
+                      {pin} DC
+                      <input
+                        aria-label={`${pin} DC voltage`}
+                        inputMode="decimal"
+                        placeholder="V"
+                        value={pinBiasText[pin] ?? ""}
+                        onChange={(event) => {
+                          const text = event.currentTarget.value;
+                          setPinBiasText((prev) => ({ ...prev, [pin]: text }));
+                        }}
+                      />
+                    </label>
+                  );
+                })}
+                {otherUnknown.length ? (
+                  <small className="small-signal-muted">
+                    Set the DC value of {otherUnknown.join(", ")} in Properties.
+                  </small>
+                ) : null}
+              </div>
+            ) : null}
+
+            {result?.gain ? (
+              <QuantityCard
+                title="Gain"
+                symbol={`\\frac{${outputLabel}}{${inputLabel}}`}
+                quantity={result.gain}
+                unit={inputSource?.kind === "current" ? "Ω" : ""}
+              />
+            ) : null}
+            {result?.rin ? (
+              <QuantityCard
+                title="Input impedance"
+                symbol="Z_{in}"
+                quantity={result.rin}
+                unit="Ω"
+              />
+            ) : null}
+            {result?.rout ? (
+              <QuantityCard
+                title="Output impedance"
+                symbol="Z_{out}"
+                quantity={result.rout}
+                unit="Ω"
+              />
+            ) : null}
+
+            {result && devices.length ? (
+              <section className="small-signal-card" aria-label="Bias point">
+                <header>
+                  <span>Bias point</span>
+                </header>
+                <ul className="small-signal-devices">
+                  {devices.map(([name, device]) => (
+                    <DeviceLine key={name} name={name} device={device} />
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            <details className="small-signal-options">
+              <summary>Options</summary>
+              <div>
+                <label>
+                  Frequencies
+                  <input
+                    aria-label="Frequencies"
+                    value={frequencies}
+                    placeholder="1k, 1meg"
+                    onChange={(event) =>
+                      setFrequencies(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  Measured against
+                  <select
+                    aria-label="Output reference"
+                    value={chosenReference}
+                    onChange={(event) =>
+                      setReference(event.currentTarget.value)
+                    }
+                  >
+                    {nets.map((net) => (
+                      <option key={net} value={net}>
+                        {net === "0" ? "ground" : net}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {netlist.supplies.length ? (
+                  <label>
+                    {netlist.supplies.join(", ")} (V)
+                    <input
+                      aria-label="Supply voltage"
+                      inputMode="decimal"
+                      value={supply}
+                      onChange={(event) => setSupply(event.currentTarget.value)}
+                    />
+                  </label>
+                ) : null}
+                <label className="small-signal-check">
+                  <input
+                    type="checkbox"
+                    checked={assumeSaturation}
+                    onChange={(event) =>
+                      setAssumeSaturation(event.currentTarget.checked)
+                    }
+                  />
+                  Hand analysis (assume saturation)
+                </label>
+                <small className="small-signal-muted">
+                  Transistors use level-1 square-law models (W/L as drawn).
+                </small>
+                <details>
+                  <summary>Solver netlist</summary>
+                  <pre>{netlist.text}</pre>
+                </details>
+              </div>
+            </details>
+          </>
+        )}
+      </section>
+    </StaleBuildContext.Provider>
   );
 }

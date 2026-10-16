@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatPlain, signalLabel } from "./small-signal-panel";
+import {
+  formatPlain,
+  preferredOutput,
+  signalLabel,
+} from "./small-signal-panel";
 
 describe("formatPlain", () => {
   it("writes gains as plain numbers, never with SI prefixes", () => {
@@ -22,5 +26,22 @@ describe("signalLabel", () => {
 
   it("escapes underscores for TeX", () => {
     expect(signalLabel("v", "out_DUT")).toBe("v_{out\\_DUT}");
+  });
+});
+
+describe("preferredOutput", () => {
+  it("never defaults to a supply rail", () => {
+    // The drawing that picked VDD: drain net named Vinp, VDD from a symbol.
+    expect(
+      preferredOutput(["0", "VDD", "Vinp", "net0"], new Set(["net0", "0"]), [
+        "VDD",
+      ]),
+    ).toBe("Vinp");
+  });
+
+  it("prefers a net named like an output", () => {
+    expect(
+      preferredOutput(["0", "a", "vout", "vdd"], new Set(["vdd"]), []),
+    ).toBe("vout");
   });
 });

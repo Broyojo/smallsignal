@@ -1,116 +1,305 @@
+/* Small-Signal panel: same tokens, controls and cards as the Properties panel. */
+
 .small-signal-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--icm-space-3, 12px);
-  padding: var(--icm-space-2, 8px);
+  gap: 10px;
+  padding: 12px;
   color: var(--icm-text);
   font-size: var(--icm-font-md);
   overflow: auto;
 }
+
 .small-signal-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
 }
-.small-signal-header h2,
-.small-signal-quantity h3 {
+
+.small-signal-header h2 {
   margin: 0;
-  font-size: var(--icm-font-md);
-  font-weight: 700;
+  font-size: var(--icm-font-lg);
+  font-weight: 650;
 }
+
 .small-signal-muted {
   margin: 0;
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
+  line-height: var(--icm-line);
 }
-.small-signal-controls {
-  display: flex;
-  flex-wrap: wrap;
+
+/* Input / Output, and every labeled field: the Properties field look. */
+.small-signal-io {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
-.small-signal-controls label {
+
+.small-signal-panel label {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  flex: 1 1 120px;
-  gap: 6px;
-  min-width: 0;
+  gap: 0.25rem;
   color: var(--icm-text-muted);
-  font-size: var(--icm-font-xs);
-  font-weight: 600;
+  font-size: var(--icm-font-sm);
 }
-.small-signal-controls select,
-.small-signal-controls input:not([type="checkbox"]) {
+
+.small-signal-panel select,
+.small-signal-panel input:not([type="checkbox"]) {
   box-sizing: border-box;
-  min-width: 0;
   width: 100%;
-  padding: 4px 8px;
+  min-width: 0;
+  min-height: var(--icm-control-h-lg);
+  padding: 0.45rem 0.55rem;
   border: 1px solid var(--icm-border);
-  border-radius: 6px;
+  border-radius: var(--icm-radius-sm);
   background: var(--icm-surface);
   color: var(--icm-text);
   font: inherit;
 }
-.small-signal-controls .small-signal-check {
+
+.small-signal-panel .small-signal-check {
   display: flex;
-  flex: 0 0 auto;
-}
-.small-signal-quantity {
-  display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--icm-border);
-  border-radius: var(--icm-radius-sm, 6px);
-  background: var(--icm-surface);
+  color: var(--icm-text);
 }
-.small-signal-formula {
-  display: block;
-  max-width: 100%;
-  font-size: 18px;
-  object-fit: contain;
-  object-position: left center;
+
+/* One status line: ok, info, warning or error. */
+.small-signal-alert {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--icm-radius-sm);
+  font-size: var(--icm-font-sm);
+  line-height: var(--icm-line);
 }
-.small-signal-latex-source,
-.small-signal-netlist pre {
-  display: block;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+
+.small-signal-alert p,
+.small-signal-alert ul {
+  margin: 0;
+}
+
+.small-signal-alert ul {
+  padding-left: 16px;
+}
+
+.small-signal-alert small {
+  color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
 }
-.small-signal-values,
-.small-signal-op table {
-  border-collapse: collapse;
+
+.small-signal-alert button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.small-signal-alert.is-ok {
+  background: rgb(63 163 77 / 10%);
+  color: #2b7a37;
+}
+
+.small-signal-alert.is-info {
+  background: var(--icm-accent-soft);
+}
+
+.small-signal-alert.is-warning {
+  background: rgb(var(--icm-warning-rgb) / 12%);
+  color: var(--icm-warning);
+}
+
+.small-signal-alert.is-error {
+  background: color-mix(in srgb, var(--icm-error) 12%, transparent);
+  color: color-mix(in srgb, var(--icm-error) 80%, var(--icm-text));
+}
+
+.small-signal-bias-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.small-signal-bias-inputs > small {
+  grid-column: 1 / -1;
+}
+
+/* Result cards: the Properties card. */
+.small-signal-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-md);
+  background: var(--icm-surface);
+}
+
+.small-signal-card > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.small-signal-card > header strong {
+  color: var(--icm-text);
+  font-size: var(--icm-font-md);
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-card > header strong small {
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 400;
+}
+
+.small-signal-formula-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.small-signal-formula {
+  display: block;
+  max-width: none;
+  font-size: 15px;
+}
+
+.small-signal-latex-source {
+  overflow-wrap: anywhere;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-simpler {
+  display: grid;
+  gap: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--icm-border);
+}
+
+.small-signal-simpler .small-signal-formula {
+  font-size: 13px;
+}
+
+.small-signal-simpler small {
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-values {
+  font-size: var(--icm-font-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-values th {
+  padding-right: 12px;
+  color: var(--icm-text-muted);
+  font-weight: 400;
+  text-align: left;
+}
+
+/* Bias: one line per transistor. */
+.small-signal-devices {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--icm-font-sm);
+}
+
+.small-signal-devices li > span:last-child {
+  display: block;
+  color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
   font-variant-numeric: tabular-nums;
 }
-.small-signal-values th,
-.small-signal-op th {
-  padding-right: 12px;
-  color: var(--icm-text-muted);
-  font-weight: 600;
-  text-align: left;
-}
-.small-signal-notes {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--icm-text-muted);
+
+.small-signal-region {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--icm-surface-muted);
   font-size: var(--icm-font-xs);
 }
-.small-signal-panel details summary {
+
+.small-signal-region.is-saturation,
+.small-signal-region.is-active {
+  background: rgb(63 163 77 / 12%);
+  color: #2b7a37;
+}
+
+.small-signal-region.is-triode,
+.small-signal-region.is-cutoff,
+.small-signal-region.is-saturation-bjt {
+  background: rgb(var(--icm-warning-rgb) / 14%);
+  color: var(--icm-warning);
+}
+
+/* Options: the Properties disclosure. */
+.small-signal-options {
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-md);
+  background: var(--icm-surface);
+}
+
+.small-signal-options > summary {
+  padding: 8px 10px;
   cursor: pointer;
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.small-signal-warnings {
-  margin: 0;
-  padding: 8px 10px 8px 26px;
-  border-left: 3px solid var(--icm-warning);
-  border-radius: 4px;
-  background: rgb(var(--icm-warning-rgb) / 0.1);
+.small-signal-options > div {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.small-signal-options details summary {
+  cursor: pointer;
+  color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
+}
+
+.small-signal-options pre {
+  overflow: auto;
+  max-height: 200px;
+  margin: 4px 0 0;
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-formula-pending {
+  display: block;
+  height: 1.6em;
+  border-radius: var(--icm-radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--icm-surface-muted),
+    var(--icm-surface-hover),
+    var(--icm-surface-muted)
+  );
+  background-size: 200% 100%;
+  animation: small-signal-pending 1.2s ease-in-out infinite;
+}
+
+@keyframes small-signal-pending {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .small-signal-formula-pending {
+    animation: none;
+  }
 }

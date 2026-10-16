@@ -23,6 +23,9 @@ type ModelKind = keyof typeof SMALL_SIGNAL_MODEL_CARDS;
 /** DC value for supply symbols (VDD, VDD Rail) that no source drives. */
 export const DEFAULT_SUPPLY_VOLTAGE = 1.8;
 
+/** Symbols that mark a supply: VDD Rail (a global Net) and VDD (a Cell Pin). */
+const SUPPLY_SYMBOLS = new Set(["vdd", "vdd-port"]);
+
 /** Global rails held at 0 V rather than the supply voltage. */
 const GROUND_RAIL = /^(v?ss|gnd|agnd|dgnd)/iu;
 
@@ -30,6 +33,10 @@ export interface SmallSignalSource {
   name: string;
   kind: "voltage" | "current";
   nodes: [string, string];
+  /** DC value as drawn (the bias it sets), e.g. "0.7". */
+  dc: string;
+  /** Set for the source standing in for an undriven Pin, as that Pin's name. */
+  pin?: string;
 }
 
 export interface SmallSignalNetlist {
@@ -45,13 +52,30 @@ export interface SmallSignalNetlist {
   notes: string[];
   /** Supply nets drawn with a VDD symbol and driven by an added DC source. */
   supplies: string[];
+  /**
+   * Pins the drawing leaves unconnected, as `R1.1`. Touching parts are not
+   * connected in Analog Canvas (only wires connect), and an open pin makes
+   * any result meaningless, so the panel refuses to analyze until it is empty.
+   */
+  unconnected: string[];
+  /**
+   * Bias values the drawing does not give: sources without a DC value and
+   * undriven Pins (inputs or bias nodes). Without them no operating point
+   * exists, so the analysis is symbolic (transistors taken as saturated).
+   */
+  unknownBias: string[];
 }
 
 export interface SmallSignalNetlistOptions {
   rootDocumentId?: string;
   /** DC value for undriven supply symbols; defaults to 1.8 V. */
   supplyVoltage?: number;
+  /** DC values for undriven Pins, by Pin name. */
+  pinBias?: Readonly<Record<string, number>>;
 }
+
+/** Cell Pin symbols that may mark an input or a bias node. */
+const PIN_SYMBOLS = new Set(["port", "port-filled"]);
 
 const LETTER: Partial<Record<DesignNetlistInstance["deviceClass"], string>> = {
   resistor: "R",
@@ -133,13 +157,31 @@ export function smallSignalNetlist(
     project,
     ir,
     options.supplyVoltage ?? DEFAULT_SUPPLY_VOLTAGE,
+    options.pinBias ?? {},
   );
 }
+
+/**
+ * Pins that give their net a DC path (fix its voltage or conduct to it), by
+ * element letter. A net reached only by gates, capacitors and current
+ * sources has no DC path, so a Pin on it must be driven by something.
+ */
+const DC_PATH_PINS: Record<string, number[] | "all"> = {
+  R: "all",
+  L: "all",
+  V: "all",
+  D: "all",
+  Q: "all",
+  E: [0, 1],
+  H: [0, 1],
+  M: [0, 2],
+};
 
 function translate(
   project: CircuitProject,
   ir: DesignNetlistIR,
   supplyVoltage: number,
+  pinBias: Readonly<Record<string, number>>,
 ): SmallSignalNetlist {
   const cellsByName = new Map(ir.cells.map((cell) => [cell.name, cell]));
   const behavioral = new Set(
@@ -156,7 +198,10 @@ function translate(
   const usedModels = new Set<ModelKind>();
   const usedNames = new Set<string>();
   const supplyNets = new Set<string>();
+  const dcPath = new Set<string>();
+  const unknownBias: string[] = [];
   let floating = 0;
+  const unconnected: string[] = [];
 
   const symbolOf = (cell: DesignNetlistCell, id: string) =>
     (
@@ -206,7 +251,13 @@ function translate(
     const deferred: Array<() => void> = [];
 
     for (const instance of cell.instances) {
-      const nodes = instance.nodes.map((node) => net(node.netName));
+      const nodes = instance.nodes.map((node) => {
+        if (node.netName.startsWith("<unconnected:"))
+          unconnected.push(
+            `${instance.reference}${suffix ? `_${suffix}` : ""}.${node.pinName}`,
+          );
+        return net(node.netName);
+      });
       nodes.forEach((node) => nets.add(node));
       const label = `${instance.reference}${suffix ? ` in ${suffix}` : ""}`;
 
@@ -302,6 +353,11 @@ function translate(
       const name = uniqueName(letter, instance.reference, suffix);
       renamed.set(instance.reference, name);
       const card = [name, ...nodes];
+      const conducting = DC_PATH_PINS[letter];
+      nodes.forEach((node, index) => {
+        if (conducting === "all" || (conducting && conducting.includes(index)))
+          dcPath.add(node);
+      });
       const value = (...names: string[]) => {
         const found = parameter(instance, scope, ...names);
         if (!found) missing.push(name);
@@ -319,6 +375,7 @@ function translate(
         case "V":
         case "I": {
           const dc = parameter(instance, scope, "dc", "offset");
+          if (dc === undefined) unknownBias.push(name);
           card.push("DC", dc ?? "0");
           const ac = parameter(instance, scope, "acMagnitude");
           if (ac) card.push("AC", ac);
@@ -326,6 +383,7 @@ function translate(
             name,
             kind: letter === "V" ? "voltage" : "current",
             nodes: [nodes[0] ?? "0", nodes[1] ?? "0"],
+            dc: dc ?? "0",
           });
           break;
         }
@@ -390,6 +448,52 @@ function translate(
 
   if (top) emitCell(top, "", new Map(), new Map(), 0);
 
+  // A VDD symbol in the top Cell is a Cell Pin there (Plain Pin symbols such
+  // as an output label are not): nothing outside drives it, so it is a rail.
+  if (top) {
+    const document = project.documents.find((item) => item.id === top.id) as
+      | {
+          instances: Array<{ id: string; symbolId?: string }>;
+          netlist?: {
+            terminals?: Array<{
+              name: string;
+              interfaceInstanceIds?: string[];
+            }>;
+          };
+        }
+      | undefined;
+    const symbolById = new Map(
+      (document?.instances ?? []).map((item) => [item.id, item.symbolId]),
+    );
+    for (const terminal of document?.netlist?.terminals ?? []) {
+      const isSupply = (terminal.interfaceInstanceIds ?? []).some((id) =>
+        SUPPLY_SYMBOLS.has(symbolById.get(id) ?? ""),
+      );
+      const name = identifier(terminal.name);
+      if (isSupply && nets.has(name) && name !== "0") supplyNets.add(name);
+      // A Pin on a net nothing drives (only gates, capacitors…) is an input
+      // or a bias node: give it a source, AC ground unless chosen as the
+      // input, at its DC value if one is known.
+      const isPin = (terminal.interfaceInstanceIds ?? []).some((id) =>
+        PIN_SYMBOLS.has(symbolById.get(id) ?? ""),
+      );
+      if (!isPin || isSupply || !nets.has(name) || name === "0") continue;
+      if (dcPath.has(name)) continue;
+      const source = uniqueName("V", `PIN_${name}`, "");
+      const bias = pinBias[terminal.name];
+      if (bias === undefined) unknownBias.push(terminal.name);
+      lines.push(`${source} ${name} 0 DC ${bias ?? 0}`);
+      dcPath.add(name);
+      sources.push({
+        name: source,
+        kind: "voltage",
+        nodes: [name, "0"],
+        dc: bias === undefined ? "?" : String(bias),
+        pin: terminal.name,
+      });
+    }
+  }
+
   // A supply rail with no voltage source on it is a fixed DC rail, which is
   // AC ground in the small-signal circuit.
   const supplies: string[] = [];
@@ -404,10 +508,6 @@ function translate(
     supplies.push(supply);
     notes.push(`${supply} has no source: held at ${volts} V DC (AC ground)`);
   }
-  if (floating)
-    notes.push(
-      `${floating} unconnected pin${floating === 1 ? "" : "s"} left floating`,
-    );
   if (missing.length)
     notes.push(`No value drawn for ${missing.join(", ")}: kept symbolic`);
 
@@ -427,5 +527,7 @@ function translate(
     missing,
     notes,
     supplies,
+    unconnected,
+    unknownBias,
   };
 }

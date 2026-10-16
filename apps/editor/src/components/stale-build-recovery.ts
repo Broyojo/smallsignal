@@ -68,9 +68,12 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Where this build's chunks live: `/assets/`, or under a deploy base such as `/smallsignal/assets/`. */
+const ASSETS_PREFIX = `${import.meta.env.BASE_URL ?? "/"}assets/`;
+
 function moduleAssetUrl(error: unknown, currentUrl: string): string | null {
   const match = messageOf(error).match(
-    /(?:https?:\/\/[^\s"'<>]+|\/assets\/[^\s"'<>]+\.js(?:\?[^\s"'<>]*)?)/u,
+    /(?:https?:\/\/[^\s"'<>]+|\/(?:[^\s"'<>/]+\/)*assets\/[^\s"'<>]+\.js(?:\?[^\s"'<>]*)?)/u,
   );
   if (!match) return null;
   try {
@@ -78,7 +81,7 @@ function moduleAssetUrl(error: unknown, currentUrl: string): string | null {
     const asset = new URL(match[0], current);
     if (
       asset.origin !== current.origin ||
-      !asset.pathname.startsWith("/assets/") ||
+      !asset.pathname.startsWith(ASSETS_PREFIX) ||
       !asset.pathname.endsWith(".js")
     ) {
       return null;

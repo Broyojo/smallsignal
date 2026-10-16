@@ -14,6 +14,65 @@ const example = (name: string) =>
     ),
   );
 
+// Drawn by the editor's own headless engine: VDD symbol → R1 → Vout → M1,
+// V1 on the gate. "open" leaves the VDD symbol just off R1's pin, unwired.
+const fixture = (name: string) =>
+  parseProject(
+    readFileSync(
+      new URL(`../test-fixtures/${name}.icproj.json`, import.meta.url),
+      "utf8",
+    ),
+  );
+
+describe("common-source amplifier drawn with a VDD Pin symbol", () => {
+  it("holds the VDD Cell Pin at the supply, leaving the Vout Pin alone", () => {
+    const netlist = smallSignalNetlist(fixture("cs-vdd-pin-wired"))!;
+    const lines = netlist.text.split("\n");
+    expect(netlist.unconnected).toEqual([]);
+    expect(netlist.supplies).toEqual(["VDD"]);
+    expect(lines).toContain("VSUP_VDD VDD 0 DC 1.8");
+    expect(lines).toContain("R1 VDD Vout 10k");
+    expect(lines.some((line) => line.startsWith("VSUP_Vout"))).toBe(false);
+  });
+
+  it("reports a pin that only looks connected", () => {
+    const netlist = smallSignalNetlist(fixture("cs-vdd-pin-open"))!;
+    expect(netlist.unconnected).toEqual(["R1.1"]);
+  });
+});
+
+describe("textbook drawings with Pins instead of sources", () => {
+  it("turns undriven gate Pins into selectable inputs and AC-ground bias nodes", () => {
+    const netlist = smallSignalNetlist(
+      example("current-mirror-loaded-differential-pair"),
+    )!;
+    const pins = netlist.sources.filter((source) => source.pin);
+    expect(pins.map((source) => source.pin).sort()).toEqual([
+      "Vb",
+      "Vin1",
+      "Vin2",
+    ]);
+    // No bias values drawn: the analysis has to be hand analysis.
+    expect(netlist.unknownBias.sort()).toEqual(["Vb", "Vin1", "Vin2"]);
+    // Vout is an output label on a driven net, not an input.
+    expect(pins.some((source) => source.pin === "Vout")).toBe(false);
+  });
+
+  it("uses a typed Pin bias and counts it as known", () => {
+    const netlist = smallSignalNetlist(
+      example("current-mirror-loaded-differential-pair"),
+      { pinBias: { Vb: 0.8 } },
+    )!;
+    expect(netlist.text).toMatch(/^VPIN_Vb Vb 0 DC 0\.8$/mu);
+    expect(netlist.unknownBias).not.toContain("Vb");
+  });
+
+  it("treats a source with no DC value as an unknown bias, not 0 V", () => {
+    const netlist = smallSignalNetlist(example("common-source-amplifier"))!;
+    expect(netlist.unknownBias).toContain("Vin");
+  });
+});
+
 describe("smallSignalNetlist", () => {
   it("binds a process MOSFET to the level-1 card and keeps W/L in microns", () => {
     const netlist = smallSignalNetlist(example("simulation-common-source"))!;

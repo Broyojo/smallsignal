@@ -62,10 +62,15 @@ export interface MosOperatingPoint {
   gm: number;
   gds: number;
   gmb: number;
+  vth: number;
+  vdsat: number;
+  reversed: boolean;
 }
 
 export interface BjtOperatingPoint {
   type: "npn" | "pnp";
+  region: string;
+  gmu: number;
   ic: number;
   ib: number;
   vbe: number;

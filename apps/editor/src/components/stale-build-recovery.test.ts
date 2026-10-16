@@ -178,3 +178,23 @@ describe("recovering from a build a page can no longer load", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 });
+
+describe("stale build recovery under a deploy base path", () => {
+  it("recognizes a retired chunk under /smallsignal/assets/", async () => {
+    vi.stubEnv("BASE_URL", "/smallsignal/");
+    vi.resetModules();
+    const { diagnoseModuleLoadFailure } =
+      await import("./stale-build-recovery");
+    const diagnosis = await diagnoseModuleLoadFailure(
+      new TypeError(
+        "Failed to fetch dynamically imported module: https://broyojo.com/smallsignal/assets/typeset-abc123.js",
+      ),
+      {
+        currentUrl: "https://broyojo.com/smallsignal/",
+        fetch: async () => new Response(null, { status: 404 }),
+      },
+    );
+    expect(diagnosis.kind).toBe("stale-build");
+    vi.unstubAllEnvs();
+  });
+});
