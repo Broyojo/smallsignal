@@ -23,8 +23,9 @@ export function nativeCandidateEdit(
 export class AuthoringDocument<T> {
   private current: T;
   private checkpoint: string;
-  private savedText?: string;
+  private savedText: string | undefined;
   private appliedText?: string;
+  private savedRemoved = false;
   private past: T[] = [];
   private future: T[] = [];
   private listeners = new Set<() => void>();
@@ -49,7 +50,9 @@ export class AuthoringDocument<T> {
     };
   };
   get dirty() {
-    return JSON.stringify(this.current) !== this.checkpoint;
+    return (
+      this.savedRemoved || JSON.stringify(this.current) !== this.checkpoint
+    );
   }
   clearHistory() {
     this.past = [];
@@ -90,11 +93,13 @@ export class AuthoringDocument<T> {
     this.notify();
   }
   markSaved(value: T = this.current) {
+    this.savedRemoved = false;
     this.checkpoint = JSON.stringify(value);
     this.savedText = this.checkpoint;
     this.notify();
   }
   markApplied() {
+    this.savedRemoved = false;
     this.checkpoint = JSON.stringify(this.current);
     this.appliedText = this.checkpoint;
     this.notify();
@@ -102,6 +107,13 @@ export class AuthoringDocument<T> {
   discard() {
     this.current = JSON.parse(this.checkpoint) as T;
     this.clearHistory();
+    this.notify();
+  }
+  forgetSaved() {
+    if (this.savedText === undefined) return;
+    this.savedText = undefined;
+    if (this.appliedText !== undefined) this.checkpoint = this.appliedText;
+    this.savedRemoved = this.appliedText === undefined;
     this.notify();
   }
   undo() {
@@ -160,6 +172,33 @@ export class ComponentAuthoringWorkspace {
   get operationPending() {
     return this.pending;
   }
+  get storageIdentity() {
+    // Storage ownership remains valid while candidate validation is pending.
+    return {
+      draftId: this.target.draftId,
+      ...this.commands.get(this.active)?.value.context,
+    };
+  }
+  private managedCheckpoint?: {
+    sourceId: string;
+    before: string;
+    value: string;
+  };
+  acceptsManagedCheckpoint(sourceId: string, before: string, current: string) {
+    return (
+      this.managedCheckpoint?.sourceId === sourceId &&
+      this.managedCheckpoint.before === before &&
+      this.managedCheckpoint.value === current
+    );
+  }
+  acknowledgeSourceCheckpoint(checkpoint: {
+    sourceId: string;
+    before: string;
+    value: string;
+  }) {
+    this.managedCheckpoint = checkpoint;
+    this.invalidate();
+  }
   setOperationPending(value: boolean) {
     if (this.pending !== value) {
       this.pending = value;
@@ -217,6 +256,11 @@ export class ComponentAuthoringWorkspace {
   discardCurrent() {
     if (this.active === "circuit") this.circuit?.discard();
     else this.definition?.discard();
+  }
+  forgetSaved() {
+    this.circuit?.forgetSaved();
+    this.definition?.forgetSaved();
+    this.invalidate();
   }
   setComposing(value: boolean) {
     this.composing = value;

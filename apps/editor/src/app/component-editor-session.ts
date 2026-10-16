@@ -15,6 +15,7 @@ export interface ComponentEditorSession {
   entry?: SharedComponent;
   publicationIntent?: "new" | "update";
   draft?: ComponentAuthoringDraft;
+  externalSourceId?: string | undefined;
   externalDefinitionId?: string | undefined;
   variant?: ReturnType<typeof prepareComponentVariant> & {
     baseRevision: number;

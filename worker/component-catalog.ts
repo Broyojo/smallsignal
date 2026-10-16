@@ -117,6 +117,7 @@ export class ComponentCatalog {
       catalog.authorId ?? null,
       catalog.order,
       !!body.deleted,
+      body.ownerOnly ? body.userId : null,
     ]);
     let cursor: ReturnType<typeof Cursor.parse> | undefined;
     if (body.cursor) {
@@ -168,6 +169,10 @@ export class ComponentCatalog {
       "instr(lower(name), ?) > 0",
     ];
     const bindings: (string | number | null)[] = [search];
+    if (body.ownerOnly) {
+      where.push("author_id=?");
+      bindings.push(String(body.userId));
+    }
     if (catalog.type === "with-circuit") where.push("rank=0");
     else if (catalog.type !== "all") {
       where.push("capability=?");

@@ -302,6 +302,7 @@ export abstract class AgentSessionResources extends AgentSessionTransport {
           "update",
           "authoring-apply",
           "authoring-save",
+          "delete-drafts",
         ].includes(request.request.action)) ||
       request.operation === "replace-project-code" ||
       request.operation === "replace-netlist" ||

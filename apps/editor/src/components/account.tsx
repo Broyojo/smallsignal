@@ -75,9 +75,10 @@ export async function fetchSessionUser(
 /** A failed revalidation does not establish that an existing user signed out. */
 export async function readSessionUser(
   fetchLike: typeof fetch = fetch,
+  fresh = false,
 ): Promise<SessionUserResult> {
   const cached = sessionRequests.get(fetchLike);
-  if (cached && cached.expiresAt > Date.now()) return cached.request;
+  if (!fresh && cached && cached.expiresAt > Date.now()) return cached.request;
   const request = (async (): Promise<SessionUserResult> => {
     try {
       const response = await fetchLike("/api/auth/me", {

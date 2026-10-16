@@ -128,6 +128,7 @@ export const ProjectStructureEditSchema = z.discriminatedUnion("kind", [
     sourceId: z.string().min(1),
     expectedRevision: z.number().int().nonnegative(),
     expectedDraft: ModelSourceDraftSchema,
+    definitionIds: z.array(z.string().min(1)).min(1).max(256).optional(),
   }),
   z.strictObject({
     kind: z.literal("save_component_authoring_draft"),
@@ -704,7 +705,24 @@ function applyProjectTransaction(
           "EDIT_PRECONDITION",
           "The model draft changed; reread before discarding.",
         );
-      delete source.draft;
+      if (edit.definitionIds) {
+        const selected = new Set(edit.definitionIds);
+        if (
+          selected.size !== edit.definitionIds.length ||
+          edit.definitionIds.some(
+            (id) =>
+              !source.draft?.authoring?.some((d) => d.definitionId === id),
+          )
+        )
+          return rejectProjectTransaction(
+            project,
+            "EDIT_PRECONDITION",
+            "The authoring draft selection changed; reread before deleting.",
+          );
+        source.draft!.authoring = source.draft!.authoring!.filter(
+          (d) => !selected.has(d.definitionId),
+        );
+      } else delete source.draft;
       structuralChange = true;
       continue;
     }

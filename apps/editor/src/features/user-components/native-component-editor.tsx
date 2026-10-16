@@ -15,6 +15,7 @@ import type { ComponentAuthoringSnapshot } from "@icm/agent-adapter/component-re
 
 export interface CircuitComponentAuthoring {
   project: CircuitProject;
+  sourceId?: string | undefined;
   definitionId?: string | undefined;
   symbolId?: string | undefined;
   pendingRepair?: boolean;
@@ -97,6 +98,7 @@ export function NativeComponentEditor({
         legacyDefinition={legacyDefinition}
         canPlace={!authoring.pendingRepair && !authoring.pendingVariant}
         initialSymbolId={authoring.symbolId}
+        initialSourceId={authoring.sourceId}
         allowOwnerChange={!!authoring.pendingRepair}
         project={authoring.project}
         definition={definition}

@@ -221,11 +221,12 @@ export async function readSharedComponentPreview(
 export async function readSharedComponentRecord(
   entry: Pick<ComponentLibrarySummary, "id" | "revision" | "status">,
   signal?: AbortSignal,
+  fetchLibrary: typeof fetch = fetch,
 ) {
   const payload = await libraryJson(
     `/api/components/${encodeURIComponent(entry.id)}${entry.status === "deleted" ? "?status=deleted" : ""}`,
     {},
-    fetch,
+    fetchLibrary,
     signal,
   );
   const metadata = parseSharedComponentMetadata(payload.entry);
@@ -338,13 +339,43 @@ export async function loadSharedComponents(
 export async function readSharedComponent(
   id: string,
   fetchLibrary: typeof fetch = fetch,
+  allowDeleted = false,
 ): Promise<SharedComponent> {
   const payload = await libraryJson(
     `/api/components/${encodeURIComponent(id)}`,
     {},
     fetchLibrary,
   );
-  return parseSharedComponentEntry(payload.entry);
+  const entry = parseSharedComponentEntry(payload.entry);
+  if (entry.status === "deleted" && !allowDeleted)
+    throw new ComponentLibraryError(
+      "This component was removed from the library.",
+      404,
+    );
+  return entry;
+}
+/** Identity-only management also works for malformed historical definitions. */
+export async function changeComponentLifecycle(
+  entry: { id: string; revision: number },
+  action: "delete" | "restore",
+  fetchLibrary: typeof fetch = fetch,
+) {
+  const payload = await libraryJson(
+    `/api/components/${encodeURIComponent(entry.id)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: entry.revision, action }),
+    },
+    fetchLibrary,
+  );
+  return {
+    entry: parseSharedComponentMetadata(payload.entry),
+    outcome:
+      payload.outcome === "unchanged"
+        ? ("unchanged" as const)
+        : ("changed" as const),
+  };
 }
 export interface ComponentPublicationReceipt {
   entry: SharedComponent;

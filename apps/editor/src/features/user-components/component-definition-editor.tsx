@@ -1049,9 +1049,11 @@ export default function ComponentDefinitionEditor(
               <button
                 type="button"
                 disabled={busy}
+                aria-label="Back to library"
+                title="Back to library"
                 onClick={() => requestLeave(props.onBackToLibrary!, "back")}
               >
-                Back to library
+                ←
               </button>
               {confirmation("back")}
             </div>

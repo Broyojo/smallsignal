@@ -1,3 +1,4 @@
+import { deleteComponentDrafts } from "../features/user-components/component-draft-management";
 import { prepareComponentCapture } from "../features/user-components/component-placement";
 import { componentLibraryAssociation } from "../features/user-components/component-library-origin";
 import { componentDraftCheckpoint } from "../features/user-components/component-draft-checkpoint";
@@ -8,6 +9,7 @@ import type { SharedDefinitionPayload } from "../features/user-components/compon
 import {
   lazy,
   useRef,
+  useMemo,
   Suspense,
   type Dispatch,
   type RefObject,
@@ -15,6 +17,8 @@ import {
 } from "react";
 import {
   prepareComponentVariant,
+  componentDraftCatalog,
+  planComponentDraftDeletion,
   executeProjectTransaction,
   planComponentDefinitionApply,
   type ProjectStructureEdit,
@@ -115,6 +119,23 @@ export function EditorComponentEditor({
   editorCommands: ReturnType<typeof createEditorCommandRouter>;
 }) {
   const returnToLibrary = useRef(false);
+  const draftCatalog = useMemo(
+    () => (userComponentsOpen ? componentDraftCatalog(project) : undefined),
+    [
+      userComponentsOpen,
+      project.componentAuthoringDrafts,
+      project.modelSources,
+    ],
+  );
+  function savedDraftPrecondition() {
+    if (!componentEditor) return null;
+    const id = componentEditor.draft?.id ?? componentEditor.key;
+    return definitionProjectRef.current.project.componentAuthoringDrafts?.some(
+      (draft) => draft.id === id,
+    )
+      ? (componentEditor.draft?.text ?? null)
+      : null;
+  }
   async function insertSharedComponent(entry: SharedComponent): Promise<void> {
     returnToLibrary.current = false;
     try {
@@ -563,6 +584,7 @@ export function EditorComponentEditor({
               project: componentEditor.variant?.project ?? project,
               pendingVariant: !!componentEditor.variant,
               definitionId: componentEditor.externalDefinitionId,
+              sourceId: componentEditor.externalSourceId,
               symbolId:
                 componentEditor.variant?.symbolId ??
                 componentEditor.target?.instance.symbolId,
@@ -782,7 +804,7 @@ export function EditorComponentEditor({
                   {
                     kind: "save_component_authoring_draft",
                     draft,
-                    expectedText: componentEditor.draft?.text ?? null,
+                    expectedText: savedDraftPrecondition(),
                   },
                 ],
                 draft.id,
@@ -811,7 +833,7 @@ export function EditorComponentEditor({
                   {
                     kind: "save_component_authoring_draft",
                     draft,
-                    expectedText: componentEditor.draft?.text ?? null,
+                    expectedText: savedDraftPrecondition(),
                   },
                 ],
                 draft.id,
@@ -862,7 +884,7 @@ export function EditorComponentEditor({
                   {
                     kind: "save_component_authoring_draft",
                     draft,
-                    expectedText: componentEditor.draft?.text ?? null,
+                    expectedText: savedDraftPrecondition(),
                   },
                 ],
                 draft.id,
@@ -908,42 +930,73 @@ export function EditorComponentEditor({
           <UserComponentsLibrary
             open={userComponentsOpen}
             refresh={componentLibraryRefresh}
-            drafts={[
-              ...(project.componentAuthoringDrafts ?? []).map((draft) => ({
-                id: draft.id,
-                label: isLibraryAuthoringDraft(draft)
-                  ? (() => {
-                      try {
-                        return (
-                          "Library draft " +
-                          readLibraryAuthoringDraft(draft).definition.symbol
-                            .name
-                        );
-                      } catch {
-                        return "Invalid library draft " + draft.id.slice(0, 8);
-                      }
-                    })()
-                  : (isComponentVariantDraft(draft.text)
-                      ? "Variant draft "
-                      : "Artwork draft ") + draft.id.slice(0, 8),
-              })),
-              ...(project.modelSources ?? []).flatMap(
-                (source) =>
-                  source.draft?.authoring?.map((draft) => ({
-                    id: draft.definitionId,
-                    label: "Circuit draft " + (draft.entry || source.entry),
-                  })) ?? [],
-              ),
-            ]}
-            onOpenDraft={(id) => {
+            {...(draftCatalog ? { drafts: draftCatalog } : {})}
+            previewDraftDeletion={(targets) =>
+              planComponentDraftDeletion(
+                definitionProjectRef.current.project,
+                targets,
+              ).reclaimBytes
+            }
+            onDeleteDrafts={(targets) => {
+              try {
+                const current = definitionProjectRef.current;
+                deleteComponentDrafts(
+                  current.project,
+                  current.projectSessionId,
+                  targets,
+                  (edits) => {
+                    const result = dispatchProjectTransaction({
+                      transactionId: crypto.randomUUID(),
+                      projectId: current.project.id,
+                      expectedStructureRevision:
+                        current.project.structureRevision,
+                      actor: { kind: "human", id: "component-drafts" },
+                      edits,
+                    });
+                    return result.ok ? null : result.error.message;
+                  },
+                );
+                return null;
+              } catch (error) {
+                return error instanceof Error ? error.message : String(error);
+              }
+            }}
+            onOpenDraft={(target) => {
+              const id =
+                target.kind === "component"
+                  ? target.draftId
+                  : target.kind === "circuit"
+                    ? target.definitionId
+                    : definitionProjectRef.current.project.externalSubcircuitDefinitions.find(
+                        (d) => d.implementation?.sourceId === target.sourceId,
+                      )?.id;
+              if (!id && target.kind === "source") {
+                returnToLibrary.current = true;
+                setComponentEditor({
+                  key: crypto.randomUUID(),
+                  projectSessionId,
+                  mode: "new",
+                  definition: newComponentDefinition(),
+                  externalSourceId: target.sourceId,
+                });
+                return;
+              }
               returnToLibrary.current = true;
               const current = definitionProjectRef.current.project;
-              const draft = current.componentAuthoringDrafts?.find(
-                (draft) => draft.id === id,
-              );
+              const draft =
+                target.kind === "component"
+                  ? current.componentAuthoringDrafts?.find(
+                      (draft) => draft.id === id,
+                    )
+                  : undefined;
               if (!draft) {
                 const candidate = current.modelSources
-                  ?.flatMap((source) => source.draft?.authoring ?? [])
+                  ?.filter(
+                    (source) =>
+                      target.kind !== "component" &&
+                      source.id === target.sourceId,
+                  )
+                  .flatMap((source) => source.draft?.authoring ?? [])
                   .find((candidate) => candidate.definitionId === id);
                 const legacy = candidate?.legacyRepair;
                 const document =

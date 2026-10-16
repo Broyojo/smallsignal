@@ -121,8 +121,9 @@ owns visual authority.
   Applied definitions remain the executable authority. Agent calls and
   permissions are in [authoring](../agent/shared/authoring.md#external-model-sources).
 - Back, Close and definition-type changes leave untouched, applied or saved candidates directly.
-  Unsaved input offers Save draft & leave, Discard and Keep editing beside the
-  clicked trigger without moving focus; Escape cancels the pending exit.
+  Unsaved input offers Save draft & leave, Discard changes and Keep editing in
+  an anchored menu beside the return arrow or clicked trigger, without resizing
+  the editor. Outside press or Escape cancels; Escape returns focus to the trigger.
   Save must succeed before leaving. Discard preserves earlier saved/applied
   checkpoints. Publish is independent of leaving. Use Agent reuses the page's
   connection inside the editor.
@@ -130,8 +131,19 @@ owns visual authority.
   non-executable drafts at its fixed library revision, never replacing
   drawing captures; destination and write rules are in
   [publication](component-publication.md).
-- Discovery derives capability from the validated definition (**With circuit**,
-  **Symbol only**, **Needs repair**; none certifies an engine).
+- Project drafts have typed component/source/candidate identities. GUI and Agent
+  share their catalog, existing limits (characters, bytes and counts) and atomic
+  Undoable deletion planner. Shared source bodies count once; deleting a candidate
+  keeps its shared source and original base revision as a source draft, available
+  to open or explicitly remove even without an external definition.
+  Applied sources and definitions stay intact. No automatic eviction occurs.
+  Removing an open candidate's saved checkpoint keeps its raw input, invalidates
+  old Agent revisions and marks it unsaved. Overlapping publication refuses deletion.
+- Discovery derives capability from the validated definition (**Circuit**,
+  **Symbol only**, **Invalid**; none certifies an engine). Cards place these compact
+  tags beside the title and retain the author below; artwork occupies its own fitted
+  preview. Details and other actions use a top-right anchored menu; authorized
+  removal uses a separate × and a compact confirmation.
   Invalid historical records stay visible but unplaceable and never block
   valid ones; summaries carry no executable source; selection
   re-reads the full record and checks its revision.
