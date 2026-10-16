@@ -63,6 +63,24 @@ consume.
 
 ## Writes and recovery
 
+- Library deletion is reversible withdrawal, independent of Project captures.
+  Authors may delete their own records; administrators may delete all. Definition
+  parsing is not a prerequisite. Permanent purge and historical deduplication are
+  outside this operation.
+- PATCH `{revision,action:"delete"|"restore"}` uses stored ownership and server
+  authentication. Authors restore only their own withdrawals; administrator and
+  legacy removals require an administrator. Restore keeps the ID and restores
+  the recorded prior status, including official; only administrators may otherwise
+  change official status. Legacy administrator status PATCH remains supported.
+- Lifecycle transitions increment revision atomically. Repeating the last identical
+  actor/action/expected-revision returns `unchanged`; stale competing writes refuse.
+  Deleted discovery, previews and records are visible only to their author and
+  administrators. Public discovery and new insertion exclude deleted records.
+  Catalog revisions, author totals and duplicate lookup reflect each transition.
+- GUI card actions and Agent `delete`/`restore` share this authority; cards offer
+  deletion only to authorized users. Deleted view is opt-in; restore feedback and
+  management menus do not change Project Undo history.
+
 - An identical update returns `unchanged` (no revision or time change).
   Duplicate new publications: HTTP 409 `COMPONENT_ALREADY_PUBLISHED` with
   `existing:{id,revision}`; GUI offers Use existing or Continue editing.

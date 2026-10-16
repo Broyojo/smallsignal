@@ -50,10 +50,17 @@ export function isReadOnlyProjectRequest(
     request.operation === "read-project-code" ||
     request.operation === "read-netlist" ||
     (request.operation === "components" &&
-      (["list", "browse", "read", "inspect", "authoring-read"].includes(
-        request.request.action,
-      ) ||
-        (request.request.action === "authoring-apply" &&
+      ([
+        "list",
+        "browse",
+        "read",
+        "record",
+        "inspect",
+        "authoring-read",
+        "drafts",
+      ].includes(request.request.action) ||
+        ((request.request.action === "authoring-apply" ||
+          request.request.action === "delete-drafts") &&
           request.request.dryRun))) ||
     (request.operation === "workspace" && request.request.action === "list")
   );

@@ -24,6 +24,7 @@ export interface SharedComponent {
   authorId: string;
   author: string;
   status: ComponentLibraryStatus;
+  deletion?: { by: "author" | "admin"; previousStatus: "shared" | "official" };
   createdAt: string;
   updatedAt: string;
   definition: ComponentDefinition;

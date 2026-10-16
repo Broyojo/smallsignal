@@ -5,7 +5,11 @@ import {
   type AgentProjectResourceResponse,
   componentAuthoringCapability,
 } from "@icm/agent-adapter";
-import { buildCircuitComponentPackage } from "@icm/edit-engine";
+import {
+  buildCircuitComponentPackage,
+  componentDraftCatalog,
+} from "@icm/edit-engine";
+import { deleteComponentDrafts } from "../features/user-components/component-draft-management";
 import type { CircuitProject } from "@icm/model";
 import { externalSubcircuitSymbolId } from "@icm/symbols";
 import {
@@ -13,6 +17,8 @@ import {
   loadSharedComponents,
   loadSharedComponentSummaries,
   readSharedComponent,
+  changeComponentLifecycle,
+  readSharedComponentRecord,
 } from "../features/user-components/component-library-client";
 import {
   parseSharedComponentPayload,
@@ -51,7 +57,10 @@ class ComponentOperationError extends Error {
 }
 function expectProject(
   project: CircuitProject,
-  action: Extract<AgentComponentLibraryAction, { projectId: string }>,
+  action: Extract<
+    AgentComponentLibraryAction,
+    { projectId: string; expectedStructureRevision: number }
+  >,
 ) {
   if (project.id !== action.projectId)
     throw new ComponentOperationError(
@@ -127,6 +136,85 @@ export async function handleAgentComponents(
   try {
     assertBound();
     const action = request.request;
+    if (action.action === "delete" || action.action === "restore") {
+      const result = await changeComponentLifecycle(
+        { id: action.componentId, revision: action.expectedLibraryRevision },
+        action.action,
+        fetchLibrary,
+      );
+      assertBound();
+      return {
+        ...base,
+        ok: true,
+        result: { action: action.action, ...result },
+      };
+    }
+    if (action.action === "record") {
+      const record = await readSharedComponentRecord(
+        {
+          id: action.componentId,
+          revision: action.expectedLibraryRevision,
+          status: action.deleted ? "deleted" : "shared",
+        },
+        undefined,
+        fetchLibrary,
+      );
+      assertBound();
+      return { ...base, ok: true, result: { action: "record", record } };
+    }
+    if (action.action === "drafts" || action.action === "delete-drafts") {
+      const project = options.getProject();
+      if (
+        action.projectId !== project.id ||
+        action.projectSessionId !== options.getProjectSessionId()
+      )
+        throw new ComponentOperationError(
+          "PROJECT_REPLACED",
+          "Read the current Project session.",
+          "refresh",
+        );
+      let reclaimBytes = 0;
+      if (action.action === "delete-drafts") {
+        expectProject(project, action);
+        reclaimBytes = deleteComponentDrafts(
+          project,
+          action.projectSessionId,
+          action.targets,
+          (edits) => {
+            assertBound();
+            const result = options.dispatchProjectTransaction({
+              transactionId: request.requestId,
+              projectId: project.id,
+              expectedStructureRevision: action.expectedStructureRevision,
+              actor: { kind: "agent", id: "component-drafts" },
+              edits,
+            });
+            return result.ok ? null : result.error.message;
+          },
+          action.dryRun,
+        );
+      }
+      const current = options.getProject();
+      const result = {
+        projectId: current.id,
+        projectSessionId: action.projectSessionId,
+        structureRevision: current.structureRevision,
+        catalog: componentDraftCatalog(current),
+      };
+      return {
+        ...base,
+        ok: true,
+        result:
+          action.action === "drafts"
+            ? { action: "drafts", ...result }
+            : {
+                action: "delete-drafts",
+                ...result,
+                reclaimBytes,
+                dryRun: action.dryRun,
+              },
+      };
+    }
     if (action.action === "authoring-read") {
       const workspace = currentComponentAuthoring(
         options.getProjectSessionId(),
@@ -200,7 +288,7 @@ export async function handleAgentComponents(
       const page = await loadSharedComponentSummaries(
         action.query ?? "",
         action.cursor ?? null,
-        false,
+        action.deleted ?? false,
         undefined,
         fetchLibrary,
         action.catalog,
@@ -407,7 +495,11 @@ export async function handleAgentComponents(
         association: "not-requested",
       };
     } else {
-      entry = await readSharedComponent(action.componentId, fetchLibrary);
+      entry = await readSharedComponent(
+        action.componentId,
+        fetchLibrary,
+        action.action === "read",
+      );
       assertBound();
       if (action.action === "insert") {
         expectLibrary(entry, action.expectedLibraryRevision);

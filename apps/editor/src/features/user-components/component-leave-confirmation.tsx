@@ -1,3 +1,5 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import { ComponentPopover } from "./component-popover";
 /** Kept beside the clicked exit; showing it never moves the user's focus. */
 export function ComponentLeaveConfirmation({
   onSave,
@@ -8,28 +10,35 @@ export function ComponentLeaveConfirmation({
   onDiscard(): void;
   onKeepEditing(): void;
 }) {
+  const marker = useRef<HTMLSpanElement>(null);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setAnchor(
+      marker.current?.parentElement?.querySelector<HTMLElement>(
+        "button,select",
+      ) ?? null,
+    );
+  }, []);
   return (
-    <div
-      className="component-leave-confirmation"
-      role="group"
-      aria-label="Leave component editor"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.stopPropagation();
-          onKeepEditing();
-        }
-      }}
-    >
-      <span>Unapplied changes.</span>
-      <button type="button" onClick={onSave}>
-        Save draft &amp; leave
-      </button>
-      <button type="button" onClick={onDiscard}>
-        Discard
-      </button>
-      <button type="button" onClick={onKeepEditing}>
-        Keep editing
-      </button>
-    </div>
+    <>
+      <span ref={marker} hidden />
+      {anchor ? (
+        <ComponentPopover
+          anchor={anchor}
+          label="Leave component editor"
+          onClose={onKeepEditing}
+        >
+          <button type="button" onClick={onSave}>
+            Save draft &amp; leave
+          </button>
+          <button type="button" onClick={onDiscard}>
+            Discard changes
+          </button>
+          <button type="button" onClick={onKeepEditing}>
+            Keep editing
+          </button>
+        </ComponentPopover>
+      ) : null}
+    </>
   );
 }

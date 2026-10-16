@@ -433,6 +433,31 @@ validation is ready, then send `authoring-apply` with the new revision and
 user inspect it in the same editor. Place captures the applied definition;
 public publishing remains a separate action.
 
+Use `read` to inspect an accessible valid definition, including an owned or
+administrator-managed deleted record. `record` reads the raw record at
+`componentId` and `expectedLibraryRevision`; set `deleted:true` for a deleted
+selection. It remains available for malformed definitions without validating or
+applying their circuit. Both reads use the same server permissions as GUI Details.
+
+Manage Project checkpoints with `user_components` `drafts` and the current
+`projectId`/`projectSessionId`. It returns typed targets, capacity limits and
+`structureRevision`. `delete-drafts` takes those exact `targets`, the same session
+and `expectedStructureRevision`; `dryRun:true` returns reclaimable bytes without
+writing. Committed deletion is one Project Undo step; it keeps applied circuit
+facts and current unsaved input. Shared source bodies are retained until explicitly
+selected as a source draft. Read the open candidate again after deletion.
+`discard_model_source_draft` with `definitionIds` removes only those authoring
+candidates after checking `expectedDraft`; it preserves the source text and
+original `baseRevision`. Omit `definitionIds` only to discard the whole draft.
+
+Library `delete`/`restore` take `componentId` and `expectedLibraryRevision`;
+`browse` with `deleted:true` lists manageable removals. They require
+`components.publish`, use authenticated ownership, and return metadata even for
+malformed definitions. Authors may restore their own withdrawals; administrator
+removals require an administrator. Library lifecycle never changes placed copies.
+Draft reads and dry runs require `circuit.snapshot`; committed draft deletion uses
+the same Project edit scopes as authoring-save.
+
 `advanced_transact` `structureEdits` `apply_model_source` defines a
 Project-owned SPICE or Spectre source (files, entry, pinned dependencies) and
 `definitions:[{definitionId,entry,portMap?}]`; optional

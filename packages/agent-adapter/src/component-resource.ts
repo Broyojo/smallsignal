@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  ComponentDraftTargetSchema,
+  ComponentDraftCatalogSchema,
+} from "@icm/edit-engine/component-drafts";
+import {
   ComponentAuthoringActions,
   ComponentAuthoringResults,
 } from "./component-authoring.js";
@@ -63,18 +67,43 @@ export const AgentComponentLibraryActionSchema = z.discriminatedUnion(
   [
     ...ComponentAuthoringActions,
     z.strictObject({
+      action: z.literal("drafts"),
+      projectId: Id,
+      projectSessionId: Id,
+    }),
+    z.strictObject({
+      action: z.literal("delete-drafts"),
+      projectId: Id,
+      projectSessionId: Id,
+      expectedStructureRevision: Revision,
+      targets: z.array(ComponentDraftTargetSchema).min(1).max(512),
+      dryRun: z.boolean().default(false),
+    }),
+    z.strictObject({
+      action: z.enum(["delete", "restore"]),
+      componentId: LibraryId,
+      expectedLibraryRevision: Revision.min(1),
+    }),
+    z.strictObject({
       action: z.literal("list"),
       query: z.string().max(100).optional(),
       cursor: z.string().max(2048).optional(),
     }),
     z.strictObject({
       action: z.literal("browse"),
+      deleted: z.boolean().optional(),
       query: z.string().max(100).optional(),
       cursor: z.string().max(2048).optional(),
       catalog: ComponentCatalogQuerySchema.optional(),
       ifCatalogRevision: Revision.optional(),
     }),
     z.strictObject({ action: z.literal("read"), componentId: LibraryId }),
+    z.strictObject({
+      action: z.literal("record"),
+      componentId: LibraryId,
+      expectedLibraryRevision: Revision.min(1),
+      deleted: z.boolean().optional(),
+    }),
     z.strictObject({ action: z.literal("inspect"), ...ProjectSelection }),
     z.strictObject({
       action: z.literal("publish"),
@@ -118,6 +147,12 @@ const AgentSharedComponentSchema = z.strictObject({
   authorId: Id,
   author: z.string(),
   status: z.enum(["shared", "official", "deleted"]),
+  deletion: z
+    .strictObject({
+      by: z.enum(["author", "admin"]),
+      previousStatus: z.enum(["shared", "official"]),
+    })
+    .optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   definition: ComponentDefinitionSchema,
@@ -144,6 +179,12 @@ export const ComponentLibrarySummarySchema = z.strictObject({
   authorId: Id,
   author: z.string(),
   status: z.enum(["shared", "official", "deleted"]),
+  deletion: z
+    .strictObject({
+      by: z.enum(["author", "admin"]),
+      previousStatus: z.enum(["shared", "official"]),
+    })
+    .optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   name: z.string(),
@@ -166,6 +207,34 @@ export const AgentComponentLibraryResultSchema = z.discriminatedUnion(
   "action",
   [
     ...ComponentAuthoringResults,
+    z.strictObject({
+      action: z.literal("record"),
+      record: z.record(z.string(), z.unknown()),
+    }),
+    z.strictObject({
+      action: z.enum(["delete", "restore"]),
+      entry: AgentSharedComponentSchema.omit({
+        definition: true,
+        circuit: true,
+      }),
+      outcome: z.enum(["changed", "unchanged"]),
+    }),
+    z.strictObject({
+      action: z.literal("drafts"),
+      projectId: Id,
+      projectSessionId: Id,
+      structureRevision: Revision,
+      catalog: ComponentDraftCatalogSchema,
+    }),
+    z.strictObject({
+      action: z.literal("delete-drafts"),
+      projectId: Id,
+      projectSessionId: Id,
+      structureRevision: Revision,
+      catalog: ComponentDraftCatalogSchema,
+      reclaimBytes: Revision,
+      dryRun: z.boolean(),
+    }),
     z.strictObject({
       action: z.literal("browse"),
       entries: z.array(ComponentLibrarySummarySchema),

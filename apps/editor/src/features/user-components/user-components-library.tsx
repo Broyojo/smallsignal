@@ -11,9 +11,15 @@ import {
   readSharedComponentRecord,
   ComponentLibraryError,
   checkSharedComponentRevision,
+  changeComponentLifecycle,
 } from "./component-library-client";
 import { LibraryCache } from "./library-cache";
-import { LibraryPreview } from "./library-preview";
+import { ComponentLibraryCard } from "./component-library-card";
+import { ComponentDraftList } from "./component-draft-list";
+import type {
+  ComponentDraftCatalog,
+  ComponentDraftTarget,
+} from "@icm/edit-engine";
 import { loadComponentCatalog as loadCatalog } from "./component-catalog-loading";
 import { ComponentCatalogControls } from "./component-catalog-controls";
 import type { ComponentCatalogQuery } from "./component-library-contract";
@@ -32,7 +38,9 @@ export default function UserComponentsLibrary({
   onEdit,
   onInsert,
   refresh,
-  drafts = [],
+  drafts,
+  onDeleteDrafts,
+  previewDraftDeletion,
   onOpenDraft,
 }: {
   open: boolean;
@@ -44,10 +52,14 @@ export default function UserComponentsLibrary({
   ): void | Promise<void>;
   onInsert(entry: SharedComponent): void | Promise<void>;
   refresh: number;
-  drafts?: { id: string; label: string }[];
-  onOpenDraft?(id: string): void;
+  drafts?: ComponentDraftCatalog;
+  onOpenDraft?(target: ComponentDraftTarget): void;
+  onDeleteDrafts?(targets: ComponentDraftTarget[]): string | null;
+  previewDraftDeletion?(targets: ComponentDraftTarget[]): number;
 }) {
   const [user, setUser] = useState<SessionUser | null>(null);
+  const accountIdentity = useRef<string | null>(null);
+  accountIdentity.current = user?.id ?? null;
   const [authReady, setAuthReady] = useState(false);
   const [query, setQuery] = useState("");
   const [deleted, setDeleted] = useState(false);
@@ -58,6 +70,9 @@ export default function UserComponentsLibrary({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [restorable, setRestorable] = useState<
+    Awaited<ReturnType<typeof changeComponentLifecycle>>["entry"] | null
+  >(null);
   const [attempt, setAttempt] = useState(0);
   const [catalog, setCatalog] = useState<ComponentCatalogQuery>({
     version: 1,
@@ -136,19 +151,23 @@ export default function UserComponentsLibrary({
   useEffect(() => {
     cache.current.clear();
     details.current.clear();
+    selection.current?.abort();
+    setDetail(null);
     retained.current = null;
     bufferedRefresh.current = null;
+    setRestorable(null);
+    setNotice(null);
   }, [user?.id]);
   useEffect(() => {
     if (!open) return;
     let active = true;
     const refreshVisible = () => {
       if (document.visibilityState !== "visible") return;
-      void readSessionUser().then((result) => {
+      void readSessionUser(fetch, true).then((result) => {
         if (!active) return;
         if (result.available) {
           setUser(result.user);
-          if (!result.user?.isAdmin) setDeleted(false);
+          if (!result.user) setDeleted(false);
         }
         if (!request.current) setAttempt((value) => value + 1);
       });
@@ -165,11 +184,11 @@ export default function UserComponentsLibrary({
     if (!open) return;
     let active = true;
     const frame = requestAnimationFrame(() => search.current?.focus());
-    void readSessionUser().then((result) => {
+    void readSessionUser(fetch, true).then((result) => {
       if (active) {
         if (result.available) {
           setUser(result.user);
-          if (!result.user?.isAdmin) setDeleted(false);
+          if (!result.user) setDeleted(false);
         }
         setAuthReady(true);
       }
@@ -185,7 +204,6 @@ export default function UserComponentsLibrary({
     const controller = new AbortController();
     request.current = controller;
     setError(null);
-    setNotice(null);
     setBusy(false);
     const cached = !deleted
       ? (cache.current.get(key) ??
@@ -351,14 +369,37 @@ export default function UserComponentsLibrary({
             >
               Create Component…
             </button>
-            <button type="button" onClick={onClose}>
-              Close
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              title="Close"
+            >
+              ×
             </button>
           </div>
         </header>
         {notice ? (
           <p role="status" className="component-definition-note">
             {notice}
+            {restorable ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void changeComponentLifecycle(restorable, "restore")
+                    .then(() => {
+                      cache.current.clear();
+                      retained.current = null;
+                      setRestorable(null);
+                      setNotice("Restored to library.");
+                      setAttempt((value) => value + 1);
+                    })
+                    .catch((e) => setNotice(String(e)));
+                }}
+              >
+                Restore
+              </button>
+            ) : null}
           </p>
         ) : null}
         {detail ? (
@@ -452,7 +493,7 @@ export default function UserComponentsLibrary({
                 </button>
               ) : null}
             </div>
-            {user?.isAdmin ? (
+            {user ? (
               <button
                 type="button"
                 className="user-components-deleted-toggle"
@@ -500,138 +541,40 @@ export default function UserComponentsLibrary({
               }}
             >
               {page.entries.map((entry) => (
-                <article
-                  className="user-component-tile"
+                <ComponentLibraryCard
                   key={entry.id + ":" + entry.revision}
-                  data-testid={
-                    entry.capability === "needs-repair"
-                      ? "rejected-user-component"
-                      : undefined
+                  entry={entry}
+                  user={user}
+                  busy={busy}
+                  choose={(action) => void choose(entry, action)}
+                  filter={() =>
+                    setCatalog({ ...catalog, authorId: entry.authorId })
                   }
-                >
-                  {entry.capability === "needs-repair" ? (
-                    <div className="user-component-caption">
-                      <strong title={entry.name}>{entry.name}</strong>
-                      <button
-                        type="button"
-                        className="user-component-author"
-                        aria-label={"Filter by author " + entry.author}
-                        onClick={() =>
-                          setCatalog({ ...catalog, authorId: entry.authorId })
-                        }
-                      >
-                        {entry.author || "Unknown author"}
-                      </button>
-                      <small>Needs repair</small>
-                      <small title={entry.diagnostic}>{entry.diagnostic}</small>
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="user-component-place"
-                        disabled={deleted || busy}
-                        aria-label={"Place " + entry.name}
-                        title={entry.name + " · " + entry.author}
-                        onClick={() => void choose(entry, "place")}
-                      >
-                        <LibraryPreview entry={entry} />
-                        <span className="user-component-caption">
-                          <strong title={entry.name}>{entry.name}</strong>
-                        </span>
-                      </button>
-                      <div className="user-component-caption">
-                        <button
-                          type="button"
-                          className="user-component-author"
-                          title={entry.author}
-                          aria-label={"Filter by author " + entry.author}
-                          onClick={() =>
-                            setCatalog({ ...catalog, authorId: entry.authorId })
-                          }
-                        >
-                          {entry.author.trim() || "Unknown author"}
-                        </button>
-                        {entry.status === "official" ? (
-                          <small>Official</small>
-                        ) : null}
-                        {capabilityLabel(entry) ? (
-                          <small>{capabilityLabel(entry)}</small>
-                        ) : null}
-                      </div>
-                    </>
-                  )}
-                  <div className="user-component-actions">
-                    {entry.capability === "needs-repair" ? (
-                      <button
-                        type="button"
-                        className="user-component-edit"
-                        aria-label={"Copy raw record for " + entry.name}
-                        disabled={busy}
-                        onClick={() => void choose(entry, "raw")}
-                      >
-                        Copy raw record
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="user-component-edit"
-                          aria-label={"Details for " + entry.name}
-                          disabled={busy}
-                          onClick={() => void choose(entry, "details")}
-                        >
-                          Details
-                        </button>
-                        <details className="user-component-menu">
-                          <summary aria-label={"Actions for " + entry.name}>
-                            •••
-                          </summary>
-                          <div>
-                            {entry.authorId === user?.id &&
-                            entry.status === "shared" ? (
-                              <button
-                                type="button"
-                                className="user-component-edit"
-                                aria-label={
-                                  "Edit " + entry.name + " definition"
-                                }
-                                disabled={busy}
-                                onClick={() => void choose(entry, "update")}
-                              >
-                                Edit
-                              </button>
-                            ) : null}
-                            {!deleted ? (
-                              <button
-                                type="button"
-                                className="user-component-edit"
-                                aria-label={"Create from " + entry.name}
-                                disabled={busy}
-                                onClick={() => void choose(entry, "new")}
-                              >
-                                Create from…
-                              </button>
-                            ) : null}
-                            {user?.isAdmin ? (
-                              <button
-                                type="button"
-                                className="user-component-edit"
-                                aria-label={
-                                  (deleted ? "Review " : "Manage ") + entry.name
-                                }
-                                disabled={busy}
-                                onClick={() => void choose(entry, "update")}
-                              >
-                                {deleted ? "Review" : "Manage (admin)"}
-                              </button>
-                            ) : null}
-                          </div>
-                        </details>
-                      </>
-                    )}
-                  </div>
-                </article>
+                  manage={async (action) => {
+                    const account = accountIdentity.current;
+                    const result = await changeComponentLifecycle(
+                      entry,
+                      action,
+                    );
+                    if (accountIdentity.current !== account) return;
+                    request.current?.abort();
+                    details.current.clear();
+                    cache.current.clear();
+                    retained.current = null;
+                    bufferedRefresh.current = null;
+                    setPage((current) => ({
+                      ...current,
+                      entries: current.entries.filter((e) => e.id !== entry.id),
+                    }));
+                    setNotice(
+                      action === "delete"
+                        ? "Removed from library. Placed copies are unchanged."
+                        : "Restored to library.",
+                    );
+                    setRestorable(action === "delete" ? result.entry : null);
+                    setAttempt((value) => value + 1);
+                  }}
+                />
               ))}
               {!loading && !page.entries.length && !error ? (
                 <p className="user-components-empty">
@@ -648,22 +591,16 @@ export default function UserComponentsLibrary({
           </>
         )}
         <footer className="user-components-footer">
-          {drafts.length ? (
-            <details>
-              <summary>Project drafts ({drafts.length})</summary>
-              {drafts.map((draft) => (
-                <button
-                  type="button"
-                  key={draft.id}
-                  onClick={() => {
-                    onClose();
-                    onOpenDraft?.(draft.id);
-                  }}
-                >
-                  {draft.label}
-                </button>
-              ))}
-            </details>
+          {drafts ? (
+            <ComponentDraftList
+              catalog={drafts}
+              onOpen={(target) => {
+                onClose();
+                onOpenDraft?.(target);
+              }}
+              onDelete={onDeleteDrafts}
+              previewDeletion={previewDraftDeletion}
+            />
           ) : null}
           {loading || busy ? (
             <small role="status">

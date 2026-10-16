@@ -3,7 +3,6 @@
   position: relative;
   flex: 0 0 auto;
 }
-.component-leave-confirmation,
 .component-agent-menu {
   z-index: 5;
   display: flex;
@@ -13,32 +12,6 @@
   border-radius: var(--icm-radius-sm);
   background: var(--icm-surface);
   box-shadow: var(--icm-shadow-md);
-}
-.component-leave-confirmation {
-  flex: 1 1 24rem;
-  min-width: 0;
-  max-width: 32rem;
-  flex-wrap: wrap;
-  align-items: center;
-  box-shadow: none;
-}
-.component-leave-confirmation > span {
-  flex-basis: 100%;
-}
-.component-exit:has(.component-leave-confirmation) {
-  display: flex;
-  flex: 1 1 28rem;
-  gap: var(--icm-space-2);
-  flex-wrap: wrap;
-  align-items: center;
-  max-width: 100%;
-}
-.component-definition-dialog > header:has(.component-leave-confirmation) {
-  flex-wrap: wrap;
-}
-.component-definition-actions:has(.component-leave-confirmation) {
-  flex: 1 1 100%;
-  max-width: 100%;
 }
 .component-agent-controls summary {
   cursor: pointer;
@@ -229,6 +202,8 @@
   background: var(--icm-surface-muted);
 }
 .user-component-tile {
+  position: relative;
+  padding-top: 1.6rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -256,14 +231,13 @@
   background: var(--icm-accent-soft);
 }
 .user-component-preview {
-  flex: 0 0 5.25rem;
-  height: 5.25rem;
+  flex: 0 0 6.5rem;
+  height: 6.5rem;
   display: grid;
   place-items: center;
   min-width: 0;
   padding: 0.4rem;
   overflow: hidden;
-  border-bottom: 1px solid var(--icm-border);
 }
 .user-component-art {
   display: block;
@@ -297,24 +271,6 @@
   white-space: nowrap;
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
-}
-.user-component-actions {
-  flex: 0 0 auto;
-  display: flex;
-  border-top: 1px solid var(--icm-border);
-}
-.user-component-menu {
-  min-width: 2rem;
-}
-.user-component-menu > summary {
-  cursor: pointer;
-  padding: 0.25rem 0.5rem;
-  list-style: none;
-  color: var(--icm-text-muted);
-}
-.user-component-menu > div {
-  display: flex;
-  flex-direction: column;
 }
 .user-component-detail {
   flex: 1;
@@ -765,4 +721,104 @@
   flex-wrap: wrap;
   gap: 0.3rem;
   margin-top: 0.3rem;
+}
+
+.component-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  overflow: auto;
+  padding: 0.4rem;
+  border: 1px solid var(--icm-border-strong);
+  border-radius: var(--icm-radius-sm);
+  color: var(--icm-text);
+  background: var(--icm-surface);
+  box-shadow: var(--icm-shadow-md);
+}
+.component-popover:not(:popover-open) {
+  display: none;
+}
+.component-popover > button {
+  text-align: left;
+}
+.component-card-tools {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.2rem;
+  display: flex;
+  gap: 0.1rem;
+}
+.component-card-tools button {
+  width: 1.65rem;
+  height: 1.65rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--icm-text-muted);
+  font-size: 1.1rem;
+}
+.component-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.component-card-title strong {
+  flex: 1;
+  min-width: 0;
+}
+.component-card-title small {
+  flex: none;
+  padding: 0.05rem 0.25rem;
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-surface-muted);
+  font-size: 0.65rem;
+}
+.component-card-invalid {
+  height: 6.5rem;
+  display: grid;
+  place-items: center;
+  color: var(--icm-text-muted);
+}
+.component-project-drafts {
+  min-width: 0;
+  width: 100%;
+}
+.component-project-drafts summary {
+  cursor: pointer;
+}
+.component-draft-summary,
+.component-draft-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.component-draft-summary {
+  justify-content: space-between;
+}
+.component-draft-rows {
+  max-height: 9rem;
+  overflow: auto;
+}
+.component-draft-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.component-draft-row small {
+  color: var(--icm-text-muted);
+  white-space: nowrap;
+}
+.component-draft-row > button:last-child {
+  flex: none;
 }

@@ -86,6 +86,7 @@ export function ExternalModelSourceEditor({
   customSymbols = false,
   canPlace = true,
   initialSymbolId,
+  initialSourceId,
   allowOwnerChange = false,
   onApply,
   onSaveDraft,
@@ -112,6 +113,7 @@ export function ExternalModelSourceEditor({
   initialLocation?: SimulationSourceLocation | undefined;
   customSymbols?: boolean;
   canPlace?: boolean;
+  initialSourceId?: string | undefined;
   initialSymbolId?: string | undefined;
   allowOwnerChange?: boolean;
   onApply(edit: ApplyModelSourceEdit): ExternalDefinitionResult;
@@ -136,7 +138,7 @@ export function ExternalModelSourceEditor({
   const definition = forking || changingOwner ? undefined : initialDefinition;
   const binding = definition?.implementation;
   const [sourceId, setSourceId] = useState(
-    () => binding?.sourceId ?? createId("model-source"),
+    () => binding?.sourceId ?? initialSourceId ?? createId("model-source"),
   );
   const existing = project.modelSources?.find((s) => s.id === sourceId);
   const revealApplied =
@@ -286,7 +288,14 @@ export function ExternalModelSourceEditor({
   const stale = Boolean(existing && baseRevision !== existing.revision);
   const currentCheckpoint = JSON.stringify(existing?.draft ?? null);
   const expectedCheckpoint = useRef({ sourceId, value: currentCheckpoint });
-  if (expectedCheckpoint.current.sourceId !== sourceId)
+  if (
+    expectedCheckpoint.current.sourceId !== sourceId ||
+    workspace?.acceptsManagedCheckpoint(
+      sourceId,
+      expectedCheckpoint.current.value,
+      currentCheckpoint,
+    )
+  )
     expectedCheckpoint.current = { sourceId, value: currentCheckpoint };
   const checkpointConflict =
     workspace && expectedCheckpoint.current.value !== currentCheckpoint
