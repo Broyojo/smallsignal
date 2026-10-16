@@ -1,0 +1,107 @@
+.small-signal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--icm-space-3, 12px);
+  padding: var(--icm-space-2, 8px);
+  color: var(--icm-text);
+  font-size: var(--icm-font-md);
+  overflow: auto;
+}
+.small-signal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.small-signal-header h2,
+.small-signal-quantity h3 {
+  margin: 0;
+  font-size: var(--icm-font-md);
+  font-weight: 700;
+}
+.small-signal-muted {
+  margin: 0;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+.small-signal-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.small-signal-controls label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  flex: 1 1 120px;
+  gap: 6px;
+  min-width: 0;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 600;
+}
+.small-signal-controls select,
+.small-signal-controls input:not([type="checkbox"]) {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--icm-border);
+  border-radius: 6px;
+  background: var(--icm-surface);
+  color: var(--icm-text);
+  font: inherit;
+}
+.small-signal-controls .small-signal-check {
+  display: flex;
+  flex: 0 0 auto;
+}
+.small-signal-quantity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-sm, 6px);
+  background: var(--icm-surface);
+}
+.small-signal-formula {
+  display: block;
+  max-width: 100%;
+  font-size: 18px;
+  object-fit: contain;
+  object-position: left center;
+}
+.small-signal-latex-source,
+.small-signal-netlist pre {
+  display: block;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--icm-font-xs);
+}
+.small-signal-values,
+.small-signal-op table {
+  border-collapse: collapse;
+  font-size: var(--icm-font-xs);
+  font-variant-numeric: tabular-nums;
+}
+.small-signal-values th,
+.small-signal-op th {
+  padding-right: 12px;
+  color: var(--icm-text-muted);
+  font-weight: 600;
+  text-align: left;
+}
+.small-signal-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+.small-signal-panel details summary {
+  cursor: pointer;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 600;
+}

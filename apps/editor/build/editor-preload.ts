@@ -14,9 +14,13 @@ import { EXAMPLE_HOSTS, LOCAL_GALLERY_REPLICA } from "../src/gallery-source";
  * it at once on any route, so those preload it too.
  */
 export function editorPreload(): Plugin {
+  let base = "/";
   return {
     name: "editor-route-preload",
     apply: "build",
+    configResolved(config) {
+      base = config.base;
+    },
     transformIndexHtml: {
       order: "post",
       handler(html, context) {
@@ -81,16 +85,16 @@ export function editorPreload(): Plugin {
           }
           visit(entryName);
           return [...scripts]
-            .map((name) => ["modulepreload", "/" + name])
+            .map((name) => ["modulepreload", base + name])
             .concat(
-              [...styles, ...fonts].map((name) => ["preload", "/" + name]),
+              [...styles, ...fonts].map((name) => ["preload", base + name]),
             );
         }
         // The page's own entry, the modules it already preloads and its
         // stylesheet load anyway: asked for again, each was fetched twice
         // (2026-10-14).
         const inPage = new Set(
-          [...html.matchAll(/\b(?:href|src)="(\/assets\/[^"]+)"/gu)].map(
+          [...html.matchAll(/\b(?:href|src)="([^"]*\/assets\/[^"]+)"/gu)].map(
             (match) => match[1],
           ),
         );
@@ -99,7 +103,8 @@ export function editorPreload(): Plugin {
         const editorResources = notInPage(resourcesFor(editorEntry.fileName));
         const galleryResources = notInPage(resourcesFor(galleryEntry.fileName));
         const agentResources = notInPage(resourcesFor(agentRuntime.fileName));
-        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const agentResources = ${JSON.stringify(agentResources).replaceAll("<", "\\u003c")}; let phone = false; try { phone = sessionStorage.getItem(${JSON.stringify(PHONE_EDITOR_KEY)}) !== "1" && matchMedia(${JSON.stringify(PHONE_QUERY)}).matches; } catch {} const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const routeResources = /^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? (phone ? [] : editorResources) : []; let agentNeeded = false; try { agentNeeded = new URLSearchParams(location.search).get("agent") === "pair" || sessionStorage.getItem(${JSON.stringify(AGENT_SESSION_RECOVERY_STORAGE_KEY)}) !== null; } catch {} const resources = agentNeeded ? routeResources.concat(agentResources.filter(([, href]) => !routeResources.some((resource) => resource[1] === href))) : routeResources; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = href.endsWith(".css") ? "style" : "font"; document.head.appendChild(link); }</script>`;
+        // Under a project path (a static Pages build) every page is the editor.
+        const script = `<script>const galleryResources = ${JSON.stringify(galleryResources).replaceAll("<", "\\u003c")}; const editorResources = ${JSON.stringify(editorResources).replaceAll("<", "\\u003c")}; const agentResources = ${JSON.stringify(agentResources).replaceAll("<", "\\u003c")}; let phone = false; try { phone = sessionStorage.getItem(${JSON.stringify(PHONE_EDITOR_KEY)}) !== "1" && matchMedia(${JSON.stringify(PHONE_QUERY)}).matches; } catch {} const localExamples = ${JSON.stringify(EXAMPLE_HOSTS)}.includes(location.hostname) && window.${LOCAL_GALLERY_REPLICA} !== true; const routeResources = ${base === "/" ? "" : "true ? (phone ? [] : editorResources) : "}/^\\/?$/.test(location.pathname) ? (localExamples ? [] : galleryResources) : (/^\\/editor\\/?$/.test(location.pathname) || /^\\/g\\/[A-Za-z0-9-]{1,64}\\/?$/.test(location.pathname)) ? (phone ? [] : editorResources) : []; let agentNeeded = false; try { agentNeeded = new URLSearchParams(location.search).get("agent") === "pair" || sessionStorage.getItem(${JSON.stringify(AGENT_SESSION_RECOVERY_STORAGE_KEY)}) !== null; } catch {} const resources = agentNeeded ? routeResources.concat(agentResources.filter(([, href]) => !routeResources.some((resource) => resource[1] === href))) : routeResources; for (const [rel, href] of resources) { const link = document.createElement("link"); link.rel = rel; link.href = href; link.crossOrigin = "anonymous"; if (rel === "preload") link.as = href.endsWith(".css") ? "style" : "font"; document.head.appendChild(link); }</script>`;
         const first = html.search(
           /<(?:link\b[^>]*\brel="stylesheet"|script\b[^>]*\btype="module")/u,
         );

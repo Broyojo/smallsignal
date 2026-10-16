@@ -58,7 +58,14 @@ function versionStaticServiceWorker(): Plugin {
 
 export default defineConfig({
   // The Worker serves the editor from a domain root, so assets are absolute.
-  base: "/",
+  // A static Pages build under a project path sets ICM_BASE (e.g. /smallsignal/).
+  base: process.env.ICM_BASE ?? "/",
+  // ICM_STATIC_PAGES=1 builds for a host without the backend (GitHub Pages).
+  define: {
+    "import.meta.env.ICM_STATIC_PAGES": JSON.stringify(
+      process.env.ICM_STATIC_PAGES === "1",
+    ),
+  },
   plugins: [
     isolateDevDependencyCache(),
     react(),

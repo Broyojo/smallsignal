@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/small-signal.tsbuildinfo",
+    "types": ["vite/client"]
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -152,6 +152,9 @@ importers:
       "@icm/simulation-service":
         specifier: workspace:*
         version: link:../../packages/simulation-service
+      "@icm/small-signal":
+        specifier: workspace:*
+        version: link:../../packages/small-signal
       "@icm/spice":
         specifier: workspace:*
         version: link:../../packages/spice
@@ -462,6 +465,15 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/small-signal:
+    dependencies:
+      "@icm/model":
+        specifier: workspace:*
+        version: link:../model
+      "@icm/netlist":
+        specifier: workspace:*
+        version: link:../netlist
 
   packages/spice:
     dependencies:

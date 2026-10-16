@@ -14,7 +14,7 @@ export interface DrawingToolbarProps {
   communityEnabled?: boolean;
   leftPanelMode: "examples" | "library";
   libraryPanelOpen: boolean;
-  projectPanel: "netlist" | "project-code" | null;
+  projectPanel: "netlist" | "project-code" | "small-signal" | null;
   leftPanelsDisabled?: boolean;
   tool: EditorTool;
   styleProfileId: string;
@@ -26,6 +26,7 @@ export interface DrawingToolbarProps {
   onToggleLibrary: () => void;
   onToggleNetlist: () => void;
   onToggleProjectCode: () => void;
+  onToggleSmallSignal?: () => void;
   onActivateTool: (tool: EditorTool) => void;
   onAddText: () => void;
   onOpenDocumentSettings: () => void;
@@ -144,6 +145,7 @@ export function DrawingToolbar({
   onToggleLibrary,
   onToggleNetlist,
   onToggleProjectCode,
+  onToggleSmallSignal,
   onActivateTool,
   onAddText,
   onOpenDocumentSettings,
@@ -220,6 +222,21 @@ export function DrawingToolbar({
           <ToolIcon name="project-code" />
           <span>Project Code</span>
         </ImmediatePanelButton>
+        {onToggleSmallSignal ? (
+          <ImmediatePanelButton
+            testId="small-signal-toggle"
+            label="Small-Signal"
+            tooltip={
+              projectPanel === "small-signal"
+                ? "Hide small-signal analysis"
+                : "Solve gain, input and output impedance symbolically"
+            }
+            pressed={projectPanel === "small-signal"}
+            onClick={onToggleSmallSignal}
+          >
+            <span>Small-Signal</span>
+          </ImmediatePanelButton>
+        ) : null}
       </div>
       <span className="draw-toolbar-divider" aria-hidden="true" />
       <button

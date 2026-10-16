@@ -559,8 +559,8 @@ export function EditorMenuBar({
         leftPanelMode,
         libraryPanelOpen: visibleLibraryPanelOpen,
         projectPanel:
-          projectPanel === "project-code"
-            ? "project-code"
+          projectPanel === "project-code" || projectPanel === "small-signal"
+            ? projectPanel
             : projectPanel
               ? "netlist"
               : null,
@@ -582,6 +582,7 @@ export function EditorMenuBar({
         onToggleLibrary: toggleLibraryPanel,
         onToggleNetlist: () => toggleProjectPanel("netlist"),
         onToggleProjectCode: () => toggleProjectPanel("project-code"),
+        onToggleSmallSignal: () => toggleProjectPanel("small-signal"),
         onActivateTool: (nextTool) =>
           editorCommands.execute({
             id: "tool.activate",

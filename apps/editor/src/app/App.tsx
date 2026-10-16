@@ -7,6 +7,7 @@ import {
 import { resolveAnnotationName } from "@icm/derived";
 import { InstanceCodePanel } from "../features/properties/instance-code-panel";
 import { NetlistCodePanel } from "../features/netlist-export/netlist-code-panel";
+import { SmallSignalPanel } from "../features/small-signal/small-signal-panel";
 import { NetlistProfileCode } from "../features/netlist-export/netlist-profile-code";
 import { useNetlistExportPreferences } from "../features/netlist-export/netlist-export-preferences";
 import {
@@ -5506,6 +5507,12 @@ function WorkspaceEditor({
                         }
                       : {})}
                     configurationError={netlistPreferences.error}
+                  />
+                ) : projectPanel === "small-signal" ? (
+                  <SmallSignalPanel
+                    key={projectSessionId}
+                    project={project}
+                    rootDocumentId={document.id}
                   />
                 ) : projectPanel === "instances" ? (
                   <InstanceCodePanel

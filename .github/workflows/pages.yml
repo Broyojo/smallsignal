@@ -1,0 +1,77 @@
+name: Pages
+
+# The smallsignal fork's static editor + small-signal solver at
+# https://broyojo.com/smallsignal/ (GitHub Pages project site).
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'Broyojo/smallsignal'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Build solver WASM
+        run: |
+          if [ -d crates/smallsignal-wasm ]; then
+            wasm-pack build crates/smallsignal-wasm --target web --release \
+              --out-dir ../../packages/small-signal/wasm
+          else
+            echo "crates/smallsignal-wasm not present; the panel uses its stub"
+          fi
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          # The desktop app's Electron runtime is not part of the web build.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Build editor dependencies
+        run: pnpm --filter "@icm/editor^..." --if-present build
+      - name: Build static editor
+        env:
+          ICM_BASE: /smallsignal/
+          ICM_STATIC_PAGES: "1"
+        run: pnpm --filter @icm/editor build
+      - name: Single-page fallback
+        # Pages serves 404.html for unknown paths, so any /smallsignal/* opens the editor.
+        run: |
+          cp apps/editor/dist/index.html apps/editor/dist/404.html
+          touch apps/editor/dist/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/editor/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

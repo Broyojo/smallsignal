@@ -32,6 +32,8 @@ concurrency:
 jobs:
   deploy:
     name: Deploy Worker
+    # Forks (e.g. the smallsignal GitHub Pages fork) have no Cloudflare secrets.
+    if: github.repository == 'cascode-ai/analog-canvas'
     runs-on: ubuntu-latest
     environment:
       name: cloudflare-production

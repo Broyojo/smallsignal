@@ -18,6 +18,7 @@
     "@codemirror/state": "6.7.4",
     "@codemirror/view": "6.43.11",
     "@icm/simulation-service": "workspace:*",
+    "@icm/small-signal": "workspace:*",
     "@fontsource-variable/google-sans-code": "^5.3.0",
     "@icm/agent-adapter": "workspace:*",
     "@icm/devices": "workspace:*",
