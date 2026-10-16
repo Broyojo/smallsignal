@@ -421,14 +421,22 @@ export function SmallSignalPanel({
       ? output
       : preferredOutput(nets, sourceNodes, netlist?.supplies ?? []);
   const chosenReference = nets.includes(reference) ? reference : "0";
+  // Ground and supply rails are AC ground: if nothing else exists, there is
+  // nothing to measure (e.g. the output is drawn on ground).
+  const noOutput = Boolean(netlist) && chosenOutput === "0";
 
   // An open pin makes every number meaningless: refuse rather than guess.
   const unconnected = netlist?.unconnected ?? [];
+  const noDcPath = netlist?.noDcPath ?? [];
   const unknownBias = netlist?.unknownBias ?? [];
   // Without every bias value there is no operating point: hand analysis.
   const handAnalysis = assumeSaturation || unknownBias.length > 0;
   const request: SmallSignalRequest | null =
-    netlist && chosenInput && !unconnected.length
+    netlist &&
+    chosenInput &&
+    !unconnected.length &&
+    !noDcPath.length &&
+    !noOutput
       ? {
           input: chosenInput,
           output: chosenOutput,
@@ -464,12 +472,11 @@ export function SmallSignalPanel({
     // requestKey covers the netlist text and every request field.
   }, [requestKey]);
 
+  const blocked = unconnected.length > 0 || noDcPath.length > 0 || noOutput;
   const result =
-    response && !isSmallSignalError(response) && !unconnected.length
-      ? response
-      : null;
+    response && !isSmallSignalError(response) && !blocked ? response : null;
   const error =
-    response && isSmallSignalError(response) && !unconnected.length
+    response && isSmallSignalError(response) && !blocked
       ? response.error
       : null;
   const inputSource = sources.find((source) => source.name === chosenInput);
@@ -572,6 +579,24 @@ export function SmallSignalPanel({
                 </p>
                 <small>
                   Touching parts aren&apos;t connected. Draw a wire to it (W).
+                </small>
+              </div>
+            ) : noOutput ? (
+              <div className="small-signal-alert is-error" role="alert">
+                <p>There is no output node to measure.</p>
+                <small>
+                  Every net is ground or a supply. Check that the output
+                  isn&apos;t wired to ground.
+                </small>
+              </div>
+            ) : noDcPath.length ? (
+              <div className="small-signal-alert is-error" role="alert">
+                <p>
+                  Nothing sets the voltage of <b>{noDcPath.join(", ")}</b>.
+                </p>
+                <small>
+                  Only gates or capacitors connect to it. Wire it to the
+                  circuit, or mark it with a Pin to use it as an input.
                 </small>
               </div>
             ) : error ? (

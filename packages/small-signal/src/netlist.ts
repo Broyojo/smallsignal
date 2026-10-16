@@ -26,6 +26,9 @@ export const DEFAULT_SUPPLY_VOLTAGE = 1.8;
 /** Symbols that mark a supply: VDD Rail (a global Net) and VDD (a Cell Pin). */
 const SUPPLY_SYMBOLS = new Set(["vdd", "vdd-port"]);
 
+/** Undriven nets named like a positive supply rail. */
+const SUPPLY_NAME = /^(a|d)?v(dd|cc|pp)[a-z0-9_]*$/iu;
+
 /** Global rails held at 0 V rather than the supply voltage. */
 const GROUND_RAIL = /^(v?ss|gnd|agnd|dgnd)/iu;
 
@@ -64,6 +67,12 @@ export interface SmallSignalNetlist {
    * exists, so the analysis is symbolic (transistors taken as saturated).
    */
   unknownBias: string[];
+  /**
+   * Nets nothing sets the voltage of: reached only by gates, capacitors or
+   * current sources, with no Pin to drive them. There is no operating point,
+   * so the panel refuses to analyze until they are connected or driven.
+   */
+  noDcPath: string[];
 }
 
 export interface SmallSignalNetlistOptions {
@@ -130,8 +139,27 @@ function micron(value: string): string {
 }
 
 /** SPICE identifiers: the drawing's names may carry characters SPICE splits on. */
-function identifier(name: string): string {
-  return name.replace(/[^A-Za-z0-9_]/gu, "_");
+/**
+ * SPICE-safe names that never merge two different drawn names: `Vin+` and
+ * `Vin−` must stay two nets (`Vinp`, `Vinn`), so a sanitized name already
+ * taken by another original gets a suffix.
+ */
+export function createIdentifier(): (name: string) => string {
+  const byOriginal = new Map<string, string>();
+  const taken = new Set<string>();
+  return (name: string) => {
+    const known = byOriginal.get(name);
+    if (known !== undefined) return known;
+    const base = name
+      .replace(/\+/gu, "p")
+      .replace(/[-−]/gu, "n")
+      .replace(/[^A-Za-z0-9_]/gu, "_");
+    let id = base;
+    for (let n = 2; taken.has(id.toLowerCase()); n += 1) id = `${base}_${n}`;
+    byOriginal.set(name, id);
+    taken.add(id.toLowerCase());
+    return id;
+  };
 }
 
 /**
@@ -183,6 +211,9 @@ function translate(
   supplyVoltage: number,
   pinBias: Readonly<Record<string, number>>,
 ): SmallSignalNetlist {
+  // Net and element names are separate SPICE namespaces.
+  const identifier = createIdentifier();
+  const partIdentifier = createIdentifier();
   const cellsByName = new Map(ir.cells.map((cell) => [cell.name, cell]));
   const behavioral = new Set(
     (ir.generatedDefinitions ?? [])
@@ -212,9 +243,14 @@ function translate(
     )?.symbolId;
 
   function uniqueName(letter: string, reference: string, suffix: string) {
-    const body = identifier(reference.replace(/^X(?=[A-Za-z])/iu, ""));
-    let name = body.toUpperCase().startsWith(letter) ? body : letter + body;
-    if (suffix) name += `_${suffix}`;
+    const body = partIdentifier(reference.replace(/^X(?=[A-Za-z])/iu, ""));
+    const plain = body.toUpperCase().startsWith(letter) ? body : letter + body;
+    // A part inside a placed Cell keeps its own name (M1, so g_{m1}) unless
+    // that name is taken; only then does it carry the instance suffix.
+    const name =
+      suffix && usedNames.has(plain.toLowerCase())
+        ? `${plain}_${suffix}`
+        : plain;
     let unique = name;
     for (let n = 2; usedNames.has(unique.toLowerCase()); n += 1)
       unique = `${name}_${n}`;
@@ -276,7 +312,7 @@ function translate(
           const outer = nodes[index];
           if (port && outer) childPorts.set(port.netName, outer);
         });
-        const childSuffix = identifier(
+        const childSuffix = partIdentifier(
           [instance.reference.replace(/^X/iu, ""), suffix]
             .filter(Boolean)
             .join("_"),
@@ -324,6 +360,7 @@ function translate(
         lines.push(
           `${name} ${out} 0 ${plus} ${minus} ${gain ?? IDEAL_OPAMP_GAIN}`,
         );
+        dcPath.add(out);
         continue;
       }
 
@@ -448,6 +485,17 @@ function translate(
 
   if (top) emitCell(top, "", new Map(), new Map(), 0);
 
+  // The editor's power Nets (a supply label or rail) and undriven nets
+  // named like a supply are rails too.
+  if (top) {
+    for (const net of top.nets) {
+      const name = identifier(net.name);
+      if (name === "0" || !nets.has(name)) continue;
+      if (net.id.startsWith("net-power-") || SUPPLY_NAME.test(net.name))
+        supplyNets.add(name);
+    }
+  }
+
   // A VDD symbol in the top Cell is a Cell Pin there (Plain Pin symbols such
   // as an output label are not): nothing outside drives it, so it is a rail.
   if (top) {
@@ -505,6 +553,7 @@ function translate(
     const volts = GROUND_RAIL.test(supply) ? 0 : supplyVoltage;
     const name = uniqueName("V", `SUP_${supply}`, "");
     lines.push(`${name} ${supply} 0 DC ${volts}`);
+    dcPath.add(supply);
     supplies.push(supply);
     notes.push(`${supply} has no source: held at ${volts} V DC (AC ground)`);
   }
@@ -529,5 +578,8 @@ function translate(
     supplies,
     unconnected,
     unknownBias,
+    noDcPath: [...nets].filter(
+      (net) => net !== "0" && !dcPath.has(net) && !/^nc\d+$/u.test(net),
+    ),
   };
 }

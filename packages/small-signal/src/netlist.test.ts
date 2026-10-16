@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
-import { smallSignalNetlist } from "./netlist.js";
+import { createIdentifier, smallSignalNetlist } from "./netlist.js";
 
 const example = (name: string) =>
   parseProject(
@@ -73,6 +73,33 @@ describe("textbook drawings with Pins instead of sources", () => {
   });
 });
 
+describe("net names", () => {
+  it("keeps Vin+ and Vin− as two nets", () => {
+    const netlist = smallSignalNetlist(
+      example("fully-differential-two-stage-op-amp"),
+    )!;
+    const pins = netlist.sources.filter((source) => source.pin);
+    expect(pins.map((source) => source.pin).sort()).toEqual(
+      expect.arrayContaining(["Vin+"]),
+    );
+    const gateNets = netlist.text
+      .split("\n")
+      .filter((line) => /^M[5-8] /u.test(line))
+      .map((line) => line.split(" ")[2]);
+    // M5..M8 are driven by two different inputs, never one merged net.
+    expect(new Set(gateNets).size).toBe(2);
+  });
+
+  it("never merges names that sanitize alike", () => {
+    const id = createIdentifier();
+    const names = ["Vin+", "Vin-", "Vin_", "Vinp", "a.b", "a_b", "A_B"];
+    const ids = names.map(id);
+    expect(new Set(ids.map((x) => x.toLowerCase())).size).toBe(names.length);
+    expect(id("Vin+")).toBe(ids[0]);
+    expect(ids.every((x) => /^[A-Za-z0-9_]+$/u.test(x))).toBe(true);
+  });
+});
+
 describe("smallSignalNetlist", () => {
   it("binds a process MOSFET to the level-1 card and keeps W/L in microns", () => {
     const netlist = smallSignalNetlist(example("simulation-common-source"))!;
@@ -95,14 +122,12 @@ describe("smallSignalNetlist", () => {
     expect(netlist.missing).toEqual([]);
   });
 
-  it("flattens a child Cell through its ports", () => {
+  it("flattens a child Cell through its ports, keeping part names when unique", () => {
     const netlist = smallSignalNetlist(example("five-transistor-ota-sky130"))!;
     const lines = netlist.text.split("\n");
+    expect(lines).toContain("M1 nleft_DUT vinp tail_DUT 0 nmos_l1 W=96u L=1u");
     expect(lines).toContain(
-      "M1_DUT nleft_DUT vinp tail_DUT 0 nmos_l1 W=96u L=1u",
-    );
-    expect(lines).toContain(
-      "M3_DUT nleft_DUT nleft_DUT vdd vdd pmos_l1 W=64u L=1u",
+      "M3 nleft_DUT nleft_DUT vdd vdd pmos_l1 W=64u L=1u",
     );
     expect(lines).toContain("IBIAS vdd ibias DC 15u");
     expect(netlist.nets).toContain("vout");
@@ -136,6 +161,6 @@ describe("ideal blocks", () => {
     const netlist = smallSignalNetlist(example("two-stage-op-amp"))!;
     const lines = netlist.text.split("\n");
     expect(lines).toContain("EX1 net0 0 Vin Vout 1e6");
-    expect(lines).toContain("ECORE_2 Vout 0 net0 0 1");
+    expect(lines).toContain("ECORE Vout 0 net0 0 1");
   });
 });
