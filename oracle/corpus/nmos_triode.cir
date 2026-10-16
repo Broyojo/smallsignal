@@ -1,0 +1,7 @@
+NMOS deep in triode
+VDD vdd 0 1.8
+VIN in 0 DC 1.8 AC 1
+RD vdd out 20k
+M1 out in 0 0 nch W=10u L=1u
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.end

@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": "a", "freqs": [1000], "rin": true, "rout": true,
+ "description": "Input source between two non-ground nodes; output measured against node a.",
+ "hand": {}}

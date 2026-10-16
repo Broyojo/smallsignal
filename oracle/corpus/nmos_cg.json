@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": true, "rout": true,
+ "description": "Signal enters the source through RSIG.",
+ "hand": {"rin": "RSIG + (ro + RD)/(1 + gm ro)", "gain": "(1 + gm ro) RD / (ro + RD + RSIG (1 + gm ro)) at low f"}}

@@ -1,0 +1,60 @@
+{
+  "name": "nmos_cs_body",
+  "netlist": "nmos_cs_body.cir",
+  "input": "VIN",
+  "output": "out",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vdd": 1.8,
+      "in": 1.0,
+      "out": 1.169747835957626,
+      "s": 0.126050432787179
+    },
+    "devices": {
+      "m1": {
+        "type": "nmos",
+        "region": "saturation",
+        "reverse": false,
+        "id": 0.0001260504328084747,
+        "vgs": 0.873949567212821,
+        "vds": 1.0436974031704471,
+        "vbs": -0.126050432787179,
+        "vov": 0.33784299722891187,
+        "gm": 0.0007462071662352508,
+        "gds": 1.141378907766145e-05,
+        "gmb": 0.0002052561330166897
+      }
+    },
+    "vsource_currents": {
+      "vdd": -0.000126050432808475,
+      "vin": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": -1.8470967881714,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 4858.736460169605,
+        "im": 0.0
+      }
+    ]
+  }
+}

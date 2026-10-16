@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 3183098.86, 1e8], "rin": true, "rout": true,
+ "description": "VCCS G1 pulls gm*v(in) out of node out.",
+ "hand": {"gain": "-G1 RL / (1 + s RL CL) = -10 at DC"}}

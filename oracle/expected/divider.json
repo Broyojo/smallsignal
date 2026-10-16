@@ -1,0 +1,52 @@
+{
+  "name": "divider",
+  "netlist": "divider.cir",
+  "input": "VIN",
+  "output": "out",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "in": 1.0,
+      "out": 0.75
+    },
+    "devices": {},
+    "vsource_currents": {
+      "vin": -2.5e-05
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 0.75,
+        "im": 0.0
+      }
+    ]
+  },
+  "rin": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 40000.0,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 7500.0,
+        "im": 0.0
+      }
+    ]
+  }
+}

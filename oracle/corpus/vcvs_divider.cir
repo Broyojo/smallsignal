@@ -1,0 +1,7 @@
+VCVS buffer after a divider
+VIN in 0 DC 1 AC 1
+R1 in a 1k
+R2 a 0 1k
+E1 out 0 a 0 10
+RL out 0 1k
+.end

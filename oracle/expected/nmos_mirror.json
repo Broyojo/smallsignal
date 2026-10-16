@@ -1,0 +1,80 @@
+{
+  "name": "nmos_mirror",
+  "netlist": "nmos_mirror.cir",
+  "input": "IREF",
+  "output": "out",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vdd": 1.8,
+      "x": 0.7160073360837532,
+      "out": 1.273966107313905
+    },
+    "devices": {
+      "m1": {
+        "type": "nmos",
+        "region": "saturation",
+        "reverse": false,
+        "id": 5.000000000000002e-05,
+        "vgs": 0.7160073360837532,
+        "vds": 0.7160073360837532,
+        "vbs": 0.0,
+        "vov": 0.21600733608375322,
+        "gm": 0.0004629472396242815,
+        "gds": 4.665916924199951e-06,
+        "gmb": 0.0
+      },
+      "m2": {
+        "type": "nmos",
+        "region": "saturation",
+        "reverse": false,
+        "id": 0.0001052067785372191,
+        "vgs": 0.7160073360837532,
+        "vds": 1.273966107313905,
+        "vbs": 0.0,
+        "vov": 0.21600733608375322,
+        "gm": 0.0009741037543757589,
+        "gds": 9.331833848399902e-06,
+        "gmb": 0.0
+      }
+    },
+    "vsource_currents": {
+      "vdd": -0.000155206778537219
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": -9951.37786801931,
+        "im": 0.0
+      }
+    ]
+  },
+  "rin": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 2138.519812785,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 4777.104282760129,
+        "im": 0.0
+      }
+    ]
+  }
+}

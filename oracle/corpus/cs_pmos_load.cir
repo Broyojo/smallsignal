@@ -1,0 +1,10 @@
+NMOS CS with PMOS current-source load
+VDD vdd 0 1.8
+VIN in 0 DC 0.6789 AC 1
+M1 out in 0 0 nch W=10u L=1u
+M2 out vbp vdd vdd pch W=20u L=1u
+VBP vbp 0 1.1
+CL out 0 0.5p
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.model pch PMOS (LEVEL=1 KP=80u VTO=-0.5 LAMBDA=0.1)
+.end

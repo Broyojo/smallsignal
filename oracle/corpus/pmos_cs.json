@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "PMOS CS; VTO is negative for PMOS in SPICE.",
+ "hand": {"gain": "-gm (RD || ro)"}}

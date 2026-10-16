@@ -1,0 +1,2 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": false, "rout": true,
+ "description": "Switch-like device in triode; gm small, gds large.", "hand": {}}

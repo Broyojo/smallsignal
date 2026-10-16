@@ -1,0 +1,7 @@
+Series RLC, output across C
+VIN in 0 DC 0 AC 1
+R1 in a 10
+L1 a out 10u
+C1 out 0 1n
+RL out 0 100k
+.end

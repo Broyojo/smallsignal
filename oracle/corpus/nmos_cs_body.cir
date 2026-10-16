@@ -1,0 +1,8 @@
+NMOS CS with degeneration and body effect (body at ground)
+VDD vdd 0 1.8
+VIN in 0 DC 1.0 AC 1
+RD vdd out 5k
+M1 out in s 0 nchb W=10u L=1u
+RS s 0 1k
+.model nchb NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.5 PHI=0.7)
+.end

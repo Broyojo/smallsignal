@@ -1,0 +1,8 @@
+PNP common emitter with degeneration
+VCC vcc 0 5
+VIN in 0 DC 4.2 AC 1
+Q1 c in e qp
+RE vcc e 500
+RC c 0 4k
+.model qp PNP (IS=1e-15 BF=80 VAF=40)
+.end

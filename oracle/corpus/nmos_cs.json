@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": true, "rout": true,
+ "description": "Textbook CS stage. rin is infinite (gate only).",
+ "hand": {"gain": "-gm (RD || ro) / (1 + s CL (RD || ro))", "rout": "RD || ro"}}

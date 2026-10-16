@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e5, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "Single-ended drive on the + input; output sits at V(x) by symmetry.",
+ "hand": {"gain": "approx gm1/2 * (ro2 || ro4) * 2 = gm1 (ro2 || ro4) for differential input; here single-ended drive"}}

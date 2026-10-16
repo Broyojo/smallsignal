@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": false, "rout": true,
+ "description": "Source above ground with body grounded, so gmb matters.",
+ "hand": {"gain": "-gm RD / (1 + (gm+gmb) RS + (RD+RS)/ro)", "rout": "RD || (ro + RS + (gm+gmb) ro RS)"}}

@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [10, 1000, 159154.943, 1e6, 1e8], "rin": true, "rout": true,
+ "description": "First-order RC lowpass, fc = 1/(2 pi R C) = 159.15 kHz.",
+ "hand": {"gain": "1/(1 + s R1 C1)", "rin": "R1 + 1/(s C1)", "rout": "R1/(1 + s R1 C1)"}}

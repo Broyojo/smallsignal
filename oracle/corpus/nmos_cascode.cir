@@ -1,0 +1,10 @@
+NMOS cascode with resistor load
+VDD vdd 0 3
+VIN in 0 DC 0.8 AC 1
+M1 x in 0 0 nchb W=10u L=1u
+M2 out vb x 0 nchb W=10u L=1u
+VB vb 0 1.6
+RD vdd out 10k
+CL out 0 1p
+.model nchb NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.3 PHI=0.7)
+.end

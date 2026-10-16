@@ -1,0 +1,59 @@
+{
+  "name": "diode_rd",
+  "netlist": "diode_rd.cir",
+  "input": "VIN",
+  "output": "a",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "in": 1.0,
+      "a": 0.8951719338740007
+    },
+    "devices": {
+      "d1": {
+        "type": "diode",
+        "id": 0.0001048280661259996,
+        "gd": 0.002701937044843011,
+        "vd": 0.8951719338740007
+      }
+    },
+    "vsource_currents": {
+      "vin": -0.000104828066125999
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 0.2701288508925487,
+        "im": 0.0
+      }
+    ]
+  },
+  "rin": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 1370.1048482638143,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 270.1288508925487,
+        "im": 0.0
+      }
+    ]
+  }
+}

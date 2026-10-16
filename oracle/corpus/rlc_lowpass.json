@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1591549.43, 3e6, 1e8], "rin": true, "rout": true,
+ "description": "Second-order lowpass, f0 = 1/(2 pi sqrt(L C)) = 1.59 MHz, light load.",
+ "hand": {"gain": "approx 1/(1 + s R1 C1 + s^2 L1 C1) for RL -> inf"}}

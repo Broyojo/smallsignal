@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "Follower; gain < 1 because of gmb and ro.",
+ "hand": {"gain": "gm / (gm + gmb + 1/ro + 1/RS) at low f", "rout": "1/(gm + gmb + 1/ro + 1/RS)"}}

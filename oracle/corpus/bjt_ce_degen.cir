@@ -1,0 +1,10 @@
+BJT common emitter with emitter degeneration
+VCC vcc 0 10
+VIN in 0 DC 1.0 AC 1
+RB in b 1k
+Q1 c b e qn
+RE e 0 500
+RC vcc c 4k
+CL c 0 10p
+.model qn NPN (IS=1e-15 BF=100 VAF=50)
+.end

@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": true, "rout": true,
+ "description": "F1 mirrors 50x the current through VSENSE into node out.",
+ "hand": {"gain": "F1 RL / R1 = 100", "rin": "R1", "rout": "RL"}}

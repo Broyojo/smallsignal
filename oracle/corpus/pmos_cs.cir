@@ -1,0 +1,8 @@
+PMOS common source, resistor load to ground
+VDD vdd 0 1.8
+VIN in 0 DC 1.0 AC 1
+M1 out in vdd vdd pch W=20u L=1u
+RD out 0 10k
+CL out 0 1p
+.model pch PMOS (LEVEL=1 KP=80u VTO=-0.5 LAMBDA=0.1)
+.end

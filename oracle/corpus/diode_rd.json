@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "a", "ref": null, "freqs": [1000], "rin": true, "rout": true,
+ "description": "Divider of R1 and the diode's rd = N Vt / Id.",
+ "hand": {"gain": "rd/(R1 + rd)"}}

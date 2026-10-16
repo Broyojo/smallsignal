@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "o2", "ref": "o1", "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "Single-ended drive on M1, differential output o2 - o1.",
+ "hand": {"gain": "gm (RD || ro) at low f (ideal tail)", "rout": "2 (RD || ro) differential"}}

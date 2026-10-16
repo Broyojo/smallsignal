@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": true, "rout": true,
+ "description": "V2 is a floating DC source (AC short).",
+ "hand": {}}

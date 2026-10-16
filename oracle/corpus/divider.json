@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": true, "rout": true,
+ "description": "Two-resistor divider.",
+ "hand": {"gain": "R2/(R1+R2) = 0.75", "rin": "R1+R2 = 40k", "rout": "R1||R2 = 7.5k"}}

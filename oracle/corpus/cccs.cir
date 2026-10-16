@@ -1,0 +1,7 @@
+Current-controlled current source
+VIN in 0 DC 0 AC 1
+R1 in a 1k
+VSENSE a 0 DC 0
+F1 0 out VSENSE 50
+RL out 0 2k
+.end

@@ -1,0 +1,9 @@
+BJT emitter follower
+VCC vcc 0 5
+VIN in 0 DC 2 AC 1
+RB in b 1k
+Q1 vcc b out qn
+RE out 0 2k
+CL out 0 5p
+.model qn NPN (IS=1e-15 BF=100 VAF=50)
+.end

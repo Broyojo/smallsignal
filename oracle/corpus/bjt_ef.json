@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": true, "rout": true,
+ "description": "Emitter follower.",
+ "hand": {"rout": "approx (RB + rpi)/(beta+1) || RE"}}

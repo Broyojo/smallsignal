@@ -1,0 +1,8 @@
+NMOS current mirror driven by its reference current
+VDD vdd 0 1.8
+IREF vdd x DC 50u AC 1
+M1 x x 0 0 nch W=10u L=1u
+M2 out x 0 0 nch W=20u L=1u
+RL vdd out 5k
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.end

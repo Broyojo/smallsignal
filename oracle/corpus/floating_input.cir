@@ -1,0 +1,7 @@
+Floating input source with a differential output
+R1 0 a 1k
+VIN a b DC 0 AC 1
+R2 b out 1k
+R3 out 0 1k
+R4 a out 3k
+.end

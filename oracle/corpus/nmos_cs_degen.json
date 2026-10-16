@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "CS with RS; body tied to source node voltage? no: body at ground and GAMMA=0, so no body effect.",
+ "hand": {"gain": "-gm RD / (1 + gm RS + (RD+RS)/ro) (exact for gmb=0)", "rout": "RD || (ro + RS + gm ro RS)"}}

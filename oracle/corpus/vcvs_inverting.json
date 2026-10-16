@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": true, "rout": true,
+ "description": "Ideal-ish op-amp (E1, gain A) in inverting configuration.",
+ "hand": {"gain": "-(R2/R1) / (1 + (1 + R2/R1)/A) ~ -10", "rin": "R1 + R2/(1+A) ~ 1k"}}

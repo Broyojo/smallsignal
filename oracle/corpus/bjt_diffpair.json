@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "c2", "ref": "c1", "freqs": [1000], "rin": true, "rout": true,
+ "description": "Single-ended drive, differential output c2 - c1.",
+ "hand": {"gain": "gm (RC || ro) approx", "rin": "2 rpi"}}

@@ -1,0 +1,7 @@
+Current-controlled voltage source (transresistance)
+VIN in 0 DC 0 AC 1
+R1 in a 2k
+VSENSE a 0 DC 0
+H1 out 0 VSENSE 1k
+RL out 0 10k
+.end

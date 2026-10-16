@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "High-gain stage; VIN tuned so out sits mid-rail.",
+ "hand": {"gain": "-gm1 (ro1 || ro2) / (1 + s CL (ro1 || ro2))", "rout": "ro1 || ro2"}}

@@ -1,0 +1,59 @@
+{
+  "name": "nmos_triode",
+  "netlist": "nmos_triode.cir",
+  "input": "VIN",
+  "output": "out",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vdd": 1.8,
+      "in": 1.8,
+      "out": 0.03429216509546367
+    },
+    "devices": {
+      "m1": {
+        "type": "nmos",
+        "region": "triode",
+        "reverse": false,
+        "id": 8.828539174522702e-05,
+        "vgs": 1.8,
+        "vds": 0.03429216509546367,
+        "vbs": 0.0,
+        "vov": 1.3,
+        "gm": 6.881952070831438e-05,
+        "gds": 0.002548894809882633,
+        "gmb": 0.0
+      }
+    },
+    "vsource_currents": {
+      "vdd": -8.82853917452268e-05,
+      "vin": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": -0.0264803024900714,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 384.7789437869806,
+        "im": 0.0
+      }
+    ]
+  }
+}

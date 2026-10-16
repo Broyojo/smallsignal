@@ -1,0 +1,10 @@
+NMOS common gate
+VDD vdd 0 1.8
+VIN in 0 DC 0.1 AC 1
+RSIG in s 200
+M1 out g s 0 nch W=20u L=1u
+VG g 0 1.0
+RD vdd out 4k
+CL out 0 1p
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.end

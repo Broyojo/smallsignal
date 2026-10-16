@@ -1,0 +1,8 @@
+Floating DC source inside a resistor ladder
+VIN in 0 DC 1 AC 1
+R1 in a 1k
+V2 a b DC 0.5
+R2 b out 2k
+R3 out 0 3k
+R4 a 0 4k
+.end

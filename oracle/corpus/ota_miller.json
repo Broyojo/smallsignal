@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [10, 1000, 1e5, 1e6, 1e7, 1e8, 1e9], "rin": false, "rout": true,
+ "description": "Two-stage OTA; Miller cap CC with nulling resistor RZ.",
+ "hand": {"gbw": "approx gm1/(2 pi CC)"}}

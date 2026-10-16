@@ -1,0 +1,53 @@
+{
+  "name": "floating_input",
+  "netlist": "floating_input.cir",
+  "input": "VIN",
+  "output": "out",
+  "ref": "a",
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "a": 0.0,
+      "b": 0.0,
+      "out": 0.0
+    },
+    "devices": {},
+    "vsource_currents": {
+      "vin": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": -0.545454545454546,
+        "im": 0.0
+      }
+    ]
+  },
+  "rin": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 2199.9999999999977,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 545.4545454545455,
+        "im": 0.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+Transconductor into a load
+VIN in 0 DC 0 AC 1
+RS in 0 1meg
+G1 out 0 in 0 2m
+RL out 0 5k
+CL out 0 10p
+.end

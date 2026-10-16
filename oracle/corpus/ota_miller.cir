@@ -1,0 +1,18 @@
+Two-stage Miller OTA with nulling resistor
+VDD vdd 0 1.8
+VCM cm 0 1.0
+VIN inp cm DC 0 AC 1
+M1 x inp tail 0 nch W=10u L=1u
+M2 o1 cm tail 0 nch W=10u L=1u
+M3 x x vdd vdd pch W=20u L=1u
+M4 o1 x vdd vdd pch W=20u L=1u
+M5 tail vbn 0 0 nch W=10u L=1u
+M6 out o1 vdd vdd pch W=40u L=1u
+M7 out vbn 0 0 nch W=10u L=1u
+VBN vbn 0 0.7
+RZ o1 z 2k
+CC z out 0.5p
+CL out 0 2p
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.model pch PMOS (LEVEL=1 KP=80u VTO=-0.5 LAMBDA=0.1)
+.end

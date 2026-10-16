@@ -1,0 +1,9 @@
+[project]
+name = "smallsignal-oracle"
+version = "0.1.0"
+description = "ngspice reference results and comparison harness for the smallsignal solver"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
