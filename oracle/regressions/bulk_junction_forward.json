@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n2",
+ "ref": null,
+ "freqs": [
+  117.235,
+  2676.77,
+  16804.3
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "minimized fuzz regression (bulkfwd) from wildmos_101_041.cir"
+}

@@ -9,7 +9,24 @@ uv run compare.py                     # smallsignal CLI vs expected/, pass/fail 
 uv run compare.py -v nmos_cs ota_5t   # selected circuits, every failing quantity
 uv run random_circuits.py --kind mos --seed 1 --count 50   # random/ + expected_random/
 uv run compare.py --corpus random --expected expected_random
+uv run textbook.py -v                 # symbolic results vs hand-derived KCL/textbook formulas
+uv run fuzz.py --seeds 100-107 --kinds wildmos,wildbjt,wildmixed,mixed,linear   # parallel fuzz in fuzz/
+uv run triage.py "$SMALLSIGNAL_BIN"   # sort fuzz failures into root-cause buckets
+uv run minimize.py fuzz/<batch>/c/<name>.cir --kind nan|nonconv|acmismatch|bulkfwd|opmismatch --out regressions/<name>
+uv run compare.py -v --corpus regressions --expected regressions/expected   # minimized known failures
 ```
+
+- `textbook.py` / `textbook_cases.py`: each case's value-less netlist is solved
+  symbolically. Its exact num/den must equal a hand KCL derivation in SymPy as
+  a rational-function identity, and each quoted closed form must equal the KCL
+  result as well. Numeric runs must show the ∥ notation and match the hand
+  formula evaluated at the solver's operating point.
+- `random_circuits.py --wild`: up to 8 nodes and 6 devices in any region
+  (triode, cutoff, reverse mode), PMOS/PNP-heavy, plus L, diodes, floating
+  sources and E/G/F/H. Circuits within 50 mV of a level-1 region boundary, or
+  with device currents above 1 A, are rejected.
+- ngspice runs time out after 30 s; some pathological circuits make it loop forever.
+- `regressions/`: minimized failures with their diagnoses (see its README).
 
 `compare.py` runs `$SMALLSIGNAL_BIN` if set, else builds `smallsignal-cli` with
 cargo. The default tolerance is `--rtol 1e-6` on complex magnitude, with small

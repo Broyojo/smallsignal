@@ -1,0 +1,7 @@
+BJT in reverse-active region (base-collector forward, base-emitter reverse)
+VCC vcc 0 DC 5
+VIN in 0 DC 0.75 AC 1
+Q1 n1 in vcc qn
+RC n1 0 10k
+.model qn NPN (IS=1e-15 BF=100 VAF=50)
+.end

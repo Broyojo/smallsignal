@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n2",
+ "ref": null,
+ "freqs": [
+  764.038,
+  10747.2,
+  131089000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "minimized fuzz regression (nonconv) from wildmos_102_002.cir"
+}

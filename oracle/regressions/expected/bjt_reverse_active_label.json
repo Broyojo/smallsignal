@@ -1,0 +1,67 @@
+{
+  "name": "bjt_reverse_active_label",
+  "netlist": "bjt_reverse_active_label.cir",
+  "input": "VIN",
+  "output": "n1",
+  "ref": null,
+  "freqs": [
+    1000.0
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vcc": 5.0,
+      "in": 0.75,
+      "n1": 0.1600489173161921
+    },
+    "devices": {
+      "q1": {
+        "type": "npn",
+        "region": "reverse-active",
+        "ic": -1.60048917317793e-05,
+        "ib": 8.04993654928e-06,
+        "vbe": -4.25,
+        "vce": -4.8399510826838075,
+        "gm": -0.000307396731921524,
+        "gpi": 1.000000002138844e-15,
+        "go": 0.0003073967319215242,
+        "gmu": 0.0003112299394484157
+      }
+    },
+    "vsource_currents": {
+      "vcc": -7.95495518249934e-06,
+      "vin": -8.04993654928002e-06
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000.0,
+        "re": 0.860845688054735,
+        "im": 0.0
+      }
+    ]
+  },
+  "rin": {
+    "values": [
+      {
+        "f": 1000.0,
+        "re": 23089.895291788074,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000.0,
+        "re": 1391.543119452649,
+        "im": 0.0
+      }
+    ]
+  }
+}

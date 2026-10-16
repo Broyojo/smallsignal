@@ -1,0 +1,9 @@
+{
+ "input": "VIN",
+ "output": "n1",
+ "ref": null,
+ "freqs": [1000.0],
+ "rin": true,
+ "rout": true,
+ "description": "BJT region label: ngspice harness says reverse-active, solver says cutoff"
+}

@@ -45,6 +45,9 @@ def ngspice_version() -> str:
     return m.group(1) if m else "unknown"
 
 
+NGSPICE_TIMEOUT_S = 30
+
+
 def run_deck(deck: str, keep: Path | None, tag: str) -> dict[str, complex | float]:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / f"{tag}.cir"
@@ -52,7 +55,12 @@ def run_deck(deck: str, keep: Path | None, tag: str) -> dict[str, complex | floa
         if keep:
             keep.mkdir(parents=True, exist_ok=True)
             (keep / f"{tag}.cir").write_text(deck)
-        proc = subprocess.run(["ngspice", "-b", str(path)], capture_output=True, text=True, cwd=tmp)
+        try:
+            # ngspice can loop forever on some pathological circuits.
+            proc = subprocess.run(["ngspice", "-b", str(path)], capture_output=True, text=True, cwd=tmp,
+                                  timeout=NGSPICE_TIMEOUT_S)
+        except subprocess.TimeoutExpired as exc:
+            raise NgspiceError(f"{tag}: ngspice timed out after {NGSPICE_TIMEOUT_S}s") from exc
     text = proc.stdout + proc.stderr
     if keep:
         (keep / f"{tag}.log").write_text(text)

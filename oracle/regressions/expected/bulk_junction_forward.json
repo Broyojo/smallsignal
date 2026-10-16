@@ -1,0 +1,103 @@
+{
+  "name": "bulk_junction_forward",
+  "netlist": "bulk_junction_forward.cir",
+  "input": "V2",
+  "output": "n2",
+  "ref": null,
+  "freqs": [
+    117.235,
+    2676.77,
+    16804.3
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vdd": 2.72,
+      "in": 0.414,
+      "n2": 0.6480410761908999
+    },
+    "devices": {
+      "m5": {
+        "type": "nmos",
+        "region": "cutoff",
+        "reverse": true,
+        "id": -0.000760631029298497,
+        "vgs": 0.0,
+        "vds": -0.6480410761908999,
+        "vbs": 0.0,
+        "vov": -0.09895892380909999,
+        "gm": 0.0,
+        "gds": 0.0,
+        "gmb": 0.0
+      }
+    },
+    "vsource_currents": {
+      "v1": -0.000760631029298495,
+      "v2": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 117.235,
+        "re": 0.0,
+        "im": 0.0
+      },
+      {
+        "f": 2676.77,
+        "re": 0.0,
+        "im": 0.0
+      },
+      {
+        "f": 16804.3,
+        "re": 0.0,
+        "im": 0.0
+      }
+    ]
+  },
+  "rin": {
+    "values": [
+      {
+        "f": 117.235,
+        "re": null,
+        "im": null,
+        "inf": true
+      },
+      {
+        "f": 2676.77,
+        "re": null,
+        "im": null,
+        "inf": true
+      },
+      {
+        "f": 16804.3,
+        "re": null,
+        "im": null,
+        "inf": true
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 117.235,
+        "re": 33.58529565534185,
+        "im": 0.0
+      },
+      {
+        "f": 2676.77,
+        "re": 33.58529565534185,
+        "im": 0.0
+      },
+      {
+        "f": 16804.3,
+        "re": 33.58529565534185,
+        "im": 0.0
+      }
+    ]
+  }
+}

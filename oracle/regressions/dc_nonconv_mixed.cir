@@ -1,0 +1,12 @@
+random wild mixed circuit
+V2 in 0 DC 8.224 AC 1
+R1 n1 0 4.923e+04
+R4 n5 0 1.932e+04
+R6 n6 n3 3.409e+04
+M1 n2 in n6 n6 nch W=16.26u L=1u
+Q1 n2 in in qn
+Q3 n1 n2 n8 qn
+G1 n5 n3 n8 n6 -0.0007241
+.model nch NMOS (LEVEL=1 KP=5.94e-05 VTO=0.4078 LAMBDA=0.08432 GAMMA=0 PHI=0.7)
+.model qn NPN (IS=1.509e-16 BF=38.02 VAF=22.47)
+.end

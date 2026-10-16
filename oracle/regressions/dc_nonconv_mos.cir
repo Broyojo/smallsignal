@@ -1,0 +1,9 @@
+random wild mos circuit
+V2 in 0 DC 0.893 AC 1
+R1 n3 m1 5286
+R2 n2 vdd 639.8
+M1 vdd in n1 n1 pch W=11.97u L=0.5u
+V3 m1 in DC 0
+H1 n3 n1 V3 10.54
+.model pch PMOS (LEVEL=1 KP=0.0003912 VTO=-0.4293 LAMBDA=0.02821 GAMMA=0.7669 PHI=0.7)
+.end

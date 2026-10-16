@@ -2,3 +2,4 @@
 random/
 expected_random/
 __pycache__/
+fuzz/

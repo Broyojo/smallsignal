@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n3",
+ "ref": null,
+ "freqs": [
+  1368.51,
+  1775.1,
+  406993.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "minimized fuzz regression (nan) from wildbjt_103_040.cir"
+}

@@ -1,0 +1,11 @@
+random wild bjt circuit
+V1 vdd 0 DC 6.0
+V2 in 0 DC 0.169 AC 1
+R1 n3 in 1.831e+04
+R3 n2 in 741.2
+Q1 n3 in vdd qn
+Q3 n3 in 0 qn
+Q4 in n3 0 qn
+Q5 n2 0 n3 qn
+.model qn NPN (IS=2.056e-16 BF=69.29 VAF=100.7)
+.end
