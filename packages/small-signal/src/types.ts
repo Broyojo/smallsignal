@@ -36,6 +36,10 @@ export interface SmallSignalExpression {
   latex: string | null;
   /** Simplified forms only: worst relative error against the exact form. */
   maxRelError?: number;
+  /** Simplified forms only: nothing was dropped, so it is exact. */
+  same?: boolean;
+  /** The plain sum-of-products form when `latex` uses ∥ notation. */
+  latexExpanded?: string | null;
 }
 
 export interface SmallSignalQuantity {

@@ -113,12 +113,25 @@ function Formula({ latex }: { latex: string }) {
   );
 }
 
+/** A unitless value (a voltage gain) as a plain number: -3.85, 1.2e-5. */
+export function formatPlain(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  const magnitude = Math.abs(value);
+  return magnitude !== 0 && (magnitude < 1e-3 || magnitude >= 1e6)
+    ? value.toExponential(3)
+    : String(Number(value.toPrecision(4)));
+}
+
+function formatValue(value: number, unit: string): string {
+  return unit ? formatEngineering(value, unit) : formatPlain(value);
+}
+
 function pointText(point: ComplexPoint, unit: string): string {
   if (point.inf || point.re === null || point.im === null) return "∞";
-  const suffix = unit ? ` ${unit}` : "";
-  return point.im === 0
-    ? formatEngineering(point.re, unit)
-    : `${magnitudePhase(point.re, point.im)}${suffix}`;
+  if (point.im === 0) return formatValue(point.re, unit);
+  const magnitude = Math.hypot(point.re, point.im);
+  const phase = (Math.atan2(point.im, point.re) * 180) / Math.PI;
+  return `${formatValue(magnitude, unit)} ∠ ${phase.toFixed(1)}°`;
 }
 
 /** Poles/zeros in Hz, e.g. "−16.3 MHz" or "−1 ± j2 kHz". */
@@ -144,12 +157,6 @@ function RootsRow({
   );
 }
 
-function magnitudePhase(re: number, im: number): string {
-  const magnitude = Math.hypot(re, im);
-  const phase = (Math.atan2(im, re) * 180) / Math.PI;
-  return `${formatEngineering(magnitude)} ∠ ${phase.toFixed(1)}°`;
-}
-
 function ExactFormula({
   symbol,
   quantity,
@@ -167,6 +174,11 @@ function ExactFormula({
   return <Formula latex={`${symbol} = ${quantity.exact.latex}`} />;
 }
 
+function formatPercent(fraction: number): string {
+  const percent = fraction * 100;
+  return percent < 0.01 ? "<0.01%" : `${percent.toPrecision(2)}%`;
+}
+
 function QuantityView({
   title,
   symbol,
@@ -178,7 +190,12 @@ function QuantityView({
   quantity: SmallSignalQuantity;
   unit: string;
 }) {
-  const simplified = quantity.simplified;
+  // Show the approximation only when it dropped terms; otherwise the
+  // simplified form is the exact expression.
+  const simplified =
+    quantity.simplified && !quantity.simplified.same
+      ? quantity.simplified
+      : null;
   return (
     <section className="small-signal-quantity" aria-label={title}>
       <h3>{title}</h3>
@@ -187,9 +204,9 @@ function QuantityView({
           <Formula latex={`${symbol} \\approx ${simplified.latex}`} />
           {simplified.maxRelError !== undefined ? (
             <p className="small-signal-muted">
-              Simplified · within{" "}
-              {(simplified.maxRelError * 100).toPrecision(2)}% of the exact
-              result
+              Approximation: drops small terms and stays within{" "}
+              {formatPercent(simplified.maxRelError)} of the exact expression
+              from 1 Hz to 100 GHz
             </p>
           ) : null}
           <details>
@@ -255,6 +272,14 @@ function OperatingPoint({ result }: { result: SmallSignalResult }) {
       </table>
     </details>
   );
+}
+
+/** `v_{out}` for a net named Vout or out, `i_{1}` for a source named I1. */
+export function signalLabel(letter: "v" | "i", name: string): string {
+  const body = new RegExp(`^${letter}(?=.)`, "iu").test(name)
+    ? name.slice(1)
+    : name;
+  return `${letter}_{${body.replace(/_/gu, "\\_")}}`;
 }
 
 function preferredOutput(nets: string[], sourceNodes: Set<string>) {
@@ -362,12 +387,12 @@ export function SmallSignalPanel({
   const inputSource = sources.find((source) => source.name === chosenInput);
   const outputLabel =
     chosenReference === "0"
-      ? `v_{${chosenOutput}}`
-      : `v_{${chosenOutput}} - v_{${chosenReference}}`;
-  const inputLabel =
-    inputSource?.kind === "current"
-      ? `i_{${chosenInput}}`
-      : `v_{${chosenInput}}`;
+      ? signalLabel("v", chosenOutput)
+      : `${signalLabel("v", chosenOutput)} - ${signalLabel("v", chosenReference)}`;
+  const inputLabel = signalLabel(
+    inputSource?.kind === "current" ? "i" : "v",
+    chosenInput ?? "",
+  );
 
   return (
     <section
@@ -480,6 +505,13 @@ export function SmallSignalPanel({
           {response && isSmallSignalError(response) ? (
             <p role="alert">{response.error}</p>
           ) : null}
+          {result?.warnings?.length ? (
+            <ul className="small-signal-warnings" aria-label="Solver warnings">
+              {result.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          ) : null}
           {result?.gain ? (
             <QuantityView
               title="Gain"
@@ -503,13 +535,6 @@ export function SmallSignalPanel({
               quantity={result.rout}
               unit="Ω"
             />
-          ) : null}
-          {result?.warnings?.length ? (
-            <ul className="small-signal-notes" aria-label="Solver warnings">
-              {result.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
           ) : null}
           {result ? <OperatingPoint result={result} /> : null}
           {netlist.notes.length ? (

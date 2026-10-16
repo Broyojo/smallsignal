@@ -105,3 +105,12 @@
   font-size: var(--icm-font-xs);
   font-weight: 600;
 }
+
+.small-signal-warnings {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border-left: 3px solid var(--icm-warning);
+  border-radius: 4px;
+  background: rgb(var(--icm-warning-rgb) / 0.1);
+  font-size: var(--icm-font-xs);
+}
