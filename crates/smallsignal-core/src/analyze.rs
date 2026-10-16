@@ -41,6 +41,36 @@ pub struct Request {
 
 /// Exact LaTeX is emitted only up to this many terms (UI readability).
 const LATEX_TERM_LIMIT: usize = 400;
+/// The symbolic determinant handles at most 64 unknowns.
+const MAX_UNKNOWNS: usize = 64;
+const MAX_FREQS: usize = 10_000;
+/// Determinant terms × unknowns above which `verify` is skipped.
+const VERIFY_WORK_LIMIT: usize = 20_000_000;
+
+/// Unknowns the small-signal system has at least: node classes once every
+/// voltage source except the input is shorted, minus ground. Checked before
+/// the DC solve so an oversized circuit fails fast.
+fn unknowns_lower_bound(net: &Netlist, input: usize) -> usize {
+    let mut uf: Vec<usize> = (0..net.nodes.len()).collect();
+    fn find(uf: &mut [usize], x: usize) -> usize {
+        let mut r = x;
+        while uf[r] != r {
+            r = uf[r];
+        }
+        uf[x] = r;
+        r
+    }
+    for (ei, e) in net.elements.iter().enumerate() {
+        if ei != input && matches!(e.kind, Kind::V { .. }) {
+            let (a, b) = (find(&mut uf, e.nodes[0]), find(&mut uf, e.nodes[1]));
+            uf[a.max(b)] = a.min(b);
+        }
+    }
+    let mut roots: Vec<usize> = (0..net.nodes.len()).map(|n| find(&mut uf, n)).collect();
+    roots.sort_unstable();
+    roots.dedup();
+    roots.len() - 1
+}
 
 pub fn analyze_json(netlist: &str, request: &str) -> String {
     let out = serde_json::from_str::<Request>(request)
@@ -79,6 +109,15 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     } else {
         req.freqs.clone()
     };
+    if freqs.len() > MAX_FREQS {
+        return Err(format!("too many frequencies ({}; limit {MAX_FREQS})", freqs.len()));
+    }
+    let bound = unknowns_lower_bound(&net, input);
+    if bound > MAX_UNKNOWNS {
+        return Err(format!(
+            "circuit too large for exact analysis: at least {bound} small-signal unknowns (limit {MAX_UNKNOWNS})"
+        ));
+    }
 
     let symbolic = req.symbolic || !net.missing.is_empty();
     let op = if symbolic { None } else { Some(operating_point(&net)?) };
@@ -115,6 +154,16 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         return Err("small-signal circuit is singular (floating node or source loop)".to_string());
     }
     let n_out = sub(&node_num(&gsys, out, max_terms)?, &node_num(&gsys, rf, max_terms)?);
+    if n_out.is_zero() {
+        let at = match &req.reference {
+            Some(r) if !r.trim().is_empty() => format!("{} (relative to {})", req.output, r.trim()),
+            _ => req.output.clone(),
+        };
+        warnings.push(format!(
+            "no signal reaches {at} from {}: the gain is exactly zero",
+            req.input
+        ));
+    }
     let numeric_gain = |s: Complex64| {
         let (x, err) = solve_at(&gsys, &ss, s)?;
         let v = xnode(&gsys, &x, out) - xnode(&gsys, &x, rf);
@@ -166,11 +215,21 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
 
     if req.verify {
-        let r = crate::verify::kcl(&gsys, ss.params.len(), ss.reactive_mask, max_terms)?;
-        if !r.ok {
-            warnings.push("KCL identity check FAILED".to_string());
+        // One determinant per unknown: skip (and say so) when that would take
+        // far longer than the analysis itself. Never report a skipped check
+        // as passed.
+        if d.len().saturating_mul(gsys.dim) > VERIFY_WORK_LIMIT {
+            resp.insert(
+                "verify".into(),
+                json!({ "kcl": null, "skipped": "too large for the exact KCL check" }),
+            );
+        } else {
+            let r = crate::verify::kcl(&gsys, ss.params.len(), ss.reactive_mask, max_terms)?;
+            if !r.ok {
+                warnings.push("KCL identity check FAILED".to_string());
+            }
+            resp.insert("verify".into(), json!({ "kcl": r.ok, "trials": r.trials }));
         }
-        resp.insert("verify".into(), json!({ "kcl": r.ok, "trials": r.trials }));
     }
     resp.insert("warnings".into(), json!(warnings));
     Ok(Value::Object(resp))
@@ -351,17 +410,15 @@ impl Quantities<'_> {
         }
         let exact = Expr::from_rational(num, den, params, self.ss.inv_mask, self.ss.reactive_mask);
         if self.symbolic {
-            let small = exact.term_count() <= LATEX_TERM_LIMIT;
-            let (en, ed) = exact.plain(params);
-            let expanded = exact.latex(params);
-            let latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
-            let ex = json!({
-                "latex": if small { json!(latex) } else { Value::Null },
-                "latexExpanded": if small { json!(expanded) } else { Value::Null },
-                "num": if small { json!(en) } else { Value::Null },
-                "den": if small { json!(ed) } else { Value::Null },
-                "terms": { "num": exact.num.len(), "den": exact.den.len() },
-            });
+            let terms = json!({ "num": exact.num.len(), "den": exact.den.len() });
+            let ex = if exact.term_count() <= LATEX_TERM_LIMIT {
+                let (en, ed) = exact.plain(params);
+                let expanded = exact.latex(params);
+                let latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
+                json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed, "terms": terms })
+            } else {
+                json!({ "latex": null, "latexExpanded": null, "num": null, "den": null, "terms": terms })
+            };
             return json!({ "unit": unit, "exact": ex, "simplified": Value::Null, "values": [], "poles": [], "zeros": [] });
         }
         let values: Vec<Value> = self
@@ -388,6 +445,16 @@ impl Quantities<'_> {
             for &f in &grid {
                 if let Some((hn, lu_rel)) = numeric(jw(f)) {
                     let (h, bound) = exact.eval_with_bound(jw(f));
+                    let finite = |z: Complex64| z.re.is_finite() && z.im.is_finite();
+                    // A NaN/inf symbolic value where the direct solve is finite
+                    // is a failure, never a skipped point.
+                    if !finite(h) {
+                        if finite(hn) {
+                            check_ok = false;
+                            max_diff = f64::INFINITY;
+                        }
+                        continue;
+                    }
                     let scale = hn.norm().max(h.norm());
                     if scale > 0.0 {
                         let diff = (h - hn).norm() / scale;
@@ -433,39 +500,46 @@ impl Quantities<'_> {
         let (nc, dc) = exact.s_coeffs();
         let poles: Vec<Value> = roots(&dc).iter().map(hz).collect();
         let zeros: Vec<Value> = roots(&nc).iter().map(hz).collect();
-        let (en, ed) = exact.plain(params);
+        // Text forms only for expressions small enough to read; building them
+        // for a huge expression would cost more than the solve.
         let small = exact.term_count() <= LATEX_TERM_LIMIT;
-        let (sn, sd) = simplified.plain(params);
-        let expanded = exact.latex(params);
-        let exact_latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
+        let simp_small = simplified.term_count() <= LATEX_TERM_LIMIT;
         let same = simplified.term_count() == exact.term_count();
-        let simp_expanded = simplified.latex(params);
-        let (smn, smd) = simplified.to_mna(self.ss.inv_mask);
-        let simp_latex = if same {
-            exact_latex.clone()
+        let exact_json = if small {
+            let (en, ed) = exact.plain(params);
+            let expanded = exact.latex(params);
+            let latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
+            json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed })
         } else {
-            structured(&smn, &smd, self.ss).unwrap_or_else(|| simp_expanded.clone())
+            json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
+        };
+        let simp_json = if same {
+            exact_json.clone()
+        } else if simp_small {
+            let (sn, sd) = simplified.plain(params);
+            let expanded = simplified.latex(params);
+            let (smn, smd) = simplified.to_mna(self.ss.inv_mask);
+            let latex = structured(&smn, &smd, self.ss).unwrap_or_else(|| expanded.clone());
+            json!({ "latex": latex, "latexExpanded": expanded, "num": sn, "den": sd })
+        } else {
+            json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
+        };
+        let with = |mut v: Value, extra: Value| {
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            v
         };
         json!({
             "unit": unit,
-            "exact": {
-                "latex": if small { json!(exact_latex) } else { Value::Null },
-                "latexExpanded": if small { json!(expanded) } else { Value::Null },
-                "num": if small { json!(en) } else { Value::Null },
-                "den": if small { json!(ed) } else { Value::Null },
-                "terms": { "num": exact.num.len(), "den": exact.den.len() },
-            },
-            "simplified": {
-                "latex": simp_latex,
-                "latexExpanded": simp_expanded,
+            "exact": with(exact_json, json!({ "terms": { "num": exact.num.len(), "den": exact.den.len() } })),
+            "simplified": with(simp_json, json!({
                 // True when nothing was dropped: the simplified form is exact.
                 "same": same,
-                "num": sn,
-                "den": sd,
                 "maxRelError": simp_err,
                 "tolerance": self.tol,
                 "terms": { "num": simplified.num.len(), "den": simplified.den.len() },
-            },
+            })),
             "values": values,
             "poles": poles,
             "zeros": zeros,

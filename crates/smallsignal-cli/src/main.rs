@@ -5,7 +5,7 @@ use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
-[--freq f1,f2,...] [--rin] [--rout] [--tol x] [--verify] [--symbolic] [--max-terms n] [--pretty]";
+[--freq f1,f2,...] [--rin] [--rout] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -37,6 +37,7 @@ fn run() -> Result<(), String> {
         symbolic: false,
     };
     let mut pretty = false;
+    let mut certificate = false;
     let mut it = args[2..].iter();
     let value =
         |it: &mut std::slice::Iter<String>, flag: &str| it.next().cloned().ok_or(format!("{flag} needs a value"));
@@ -66,13 +67,20 @@ fn run() -> Result<(), String> {
             "--verify" => req.verify = true,
             "--symbolic" => req.symbolic = true,
             "--pretty" => pretty = true,
+            "--certificate" => certificate = true,
             other => return Err(format!("unknown flag {other}\n{USAGE}")),
         }
     }
     if req.input.is_empty() || req.output.is_empty() {
         return Err(USAGE.to_string());
     }
-    let v = analyze(&text, &req)?;
+    // --certificate: the gain system's elements and exact solution, for the
+    // Lean checker (lean/gen_cert.py).
+    let v = if certificate {
+        smallsignal_core::certificate::certificate(&text, &req)?
+    } else {
+        analyze(&text, &req)?
+    };
     if pretty {
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {

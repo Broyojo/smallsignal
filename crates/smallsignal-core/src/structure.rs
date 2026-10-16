@@ -159,7 +159,13 @@ fn sum(ts: &[DTerm], params: &[Param], abs: bool) -> String {
 }
 
 impl Structured {
+    /// The parallel group in parentheses, `(r_o ∥ R)`.
     fn z_latex(&self, params: &[Param]) -> String {
+        format!("\\left({}\\right)", self.z_items(params))
+    }
+
+    /// The parallel group alone, `r_o ∥ R`.
+    fn z_items(&self, params: &[Param]) -> String {
         let items: Vec<String> = self
             .parallel
             .iter()
@@ -172,7 +178,7 @@ impl Structured {
                 }
             })
             .collect();
-        format!("\\left({}\\right)", items.join(" \\parallel "))
+        items.join(" \\parallel ")
     }
 
     fn render(&self, params: &[Param]) -> String {
@@ -193,6 +199,10 @@ impl Structured {
         };
         let sign = if self.negate { "-" } else { "" };
         if self.den.is_empty() {
+            // Just the parallel group: Z = r_o ∥ R_1, no parentheses.
+            if numer == z {
+                return format!("{sign}{}", self.z_items(params));
+            }
             return format!("{sign}{numer}");
         }
         // Denominator: 1 + Σ (D_k / g·m) · Z · s^k, grouped by power of s.

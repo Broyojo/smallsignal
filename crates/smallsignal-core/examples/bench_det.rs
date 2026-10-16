@@ -5,6 +5,8 @@ use smallsignal_core::det::det;
 use smallsignal_core::poly::Poly;
 use std::time::Instant;
 
+type Put<'a> = &'a mut dyn FnMut(&mut Vec<Vec<Poly>>, Option<usize>, Option<usize>, u32, i128);
+
 fn main() {
     let mut seed: u64 = 42;
     let mut rnd = |k: usize| {
@@ -22,17 +24,12 @@ fn main() {
             }
         };
         let node = |k: usize| if k == 0 { None } else { Some(k - 1) };
-        let adm =
-            |a: &mut Vec<Vec<Poly>>,
-             x: usize,
-             y: usize,
-             p: u32,
-             put: &mut dyn FnMut(&mut Vec<Vec<Poly>>, Option<usize>, Option<usize>, u32, i128)| {
-                put(a, node(x), node(x), p, 1);
-                put(a, node(y), node(y), p, 1);
-                put(a, node(x), node(y), p, -1);
-                put(a, node(y), node(x), p, -1);
-            };
+        let adm = |a: &mut Vec<Vec<Poly>>, x: usize, y: usize, p: u32, put: Put| {
+            put(a, node(x), node(x), p, 1);
+            put(a, node(y), node(y), p, 1);
+            put(a, node(x), node(y), p, -1);
+            put(a, node(y), node(x), p, -1);
+        };
         for _ in 0..m {
             let d = rnd(n + 1);
             let mut g = rnd(n + 1);

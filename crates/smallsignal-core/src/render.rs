@@ -12,9 +12,11 @@ pub struct Term {
     /// Displayed factors (resistances as R, not 1/R).
     pub mask: Mono,
     pub spow: u32,
-    /// |coeff| · Π factor values (excluding s).
-    pub mag: f64,
-    pub signed: f64,
+    /// ln(|coeff| · Π |factor values|), excluding s: kept in log form because
+    /// products of resistances like 1e15 Ω (gmin-level rπ) overflow f64.
+    pub lmag: f64,
+    /// Sign of coeff · Π factor values.
+    pub sign: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -24,36 +26,83 @@ pub struct Expr {
 }
 
 fn gcd(a: i128, b: i128) -> i128 {
-    let (mut a, mut b) = (a.abs(), b.abs());
+    let (mut a, mut b) = (a.unsigned_abs(), b.unsigned_abs());
     while b != 0 {
         (a, b) = (b, a % b);
     }
-    a
+    a as i128
 }
 
 fn term(coeff: i128, mask: Mono, spow: u32, params: &[Param]) -> Term {
+    let mut lmag = (coeff.unsigned_abs() as f64).ln();
     // Parameter values can be negative (e.g. an inverting controlled source).
-    let mut signed = coeff as f64;
+    let mut sign = coeff.signum() as f64;
+    let mut symbolic = false;
     let mut m = mask;
     while m != 0 {
         let i = m.trailing_zeros() as usize;
-        signed *= params[i].value;
+        let v = params[i].value;
+        if v.is_nan() {
+            symbolic = true;
+        } else {
+            lmag += v.abs().ln();
+            if v < 0.0 {
+                sign = -sign;
+            }
+        }
         m &= m - 1;
     }
-    // Symbolic-only parameters have NaN values; order those terms by
-    // coefficient alone.
-    let mag = if signed.is_nan() {
-        coeff.unsigned_abs() as f64
-    } else {
-        signed.abs()
-    };
+    if symbolic {
+        // Symbolic-only parameters have no values; order those terms by
+        // coefficient alone, and give them no numeric value.
+        lmag = (coeff.unsigned_abs() as f64).ln();
+        sign = f64::NAN;
+    }
     Term {
         coeff,
         mask,
         spow,
-        mag,
-        signed,
+        lmag,
+        sign,
     }
+}
+
+/// Σ terms at s, as (sum, Σ|terms|) scaled by e^(−shift), and the shift.
+fn scaled_sum(ts: &[Term], s: Complex64) -> (Complex64, f64, f64) {
+    let ls = s.norm().ln();
+    let arg = s.arg();
+    let log_of = |t: &Term| {
+        if t.spow == 0 {
+            t.lmag
+        } else {
+            t.lmag + t.spow as f64 * ls
+        }
+    };
+    let shift = ts
+        .iter()
+        .map(log_of)
+        .filter(|l| l.is_finite())
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !shift.is_finite() {
+        return (Complex64::new(0.0, 0.0), 0.0, 0.0);
+    }
+    let mut sum = Complex64::new(0.0, 0.0);
+    let mut abs = 0.0;
+    for t in ts {
+        let m = (log_of(t) - shift).exp();
+        sum += Complex64::from_polar(m, t.spow as f64 * arg) * t.sign;
+        abs += m;
+    }
+    (sum, abs, shift)
+}
+
+/// (n·e^a) / (d·e^b) without overflowing the intermediate factors.
+fn scaled_ratio(n: Complex64, a: f64, d: Complex64, b: f64) -> Complex64 {
+    let r = n / d;
+    if r.norm() == 0.0 || !r.norm().is_finite() {
+        return r;
+    }
+    Complex64::from_polar((r.norm().ln() + a - b).exp(), r.arg())
 }
 
 impl Expr {
@@ -88,7 +137,7 @@ impl Expr {
         let flip = self
             .den
             .iter()
-            .max_by(|a, b| a.mag.total_cmp(&b.mag))
+            .max_by(|a, b| a.lmag.total_cmp(&b.lmag))
             .map(|t| t.coeff < 0)
             .unwrap_or(false);
         let fix = |ts: &mut Vec<Term>| {
@@ -99,7 +148,7 @@ impl Expr {
             ts.sort_by(|a, b| {
                 a.spow
                     .cmp(&b.spow)
-                    .then(b.mag.total_cmp(&a.mag))
+                    .then(b.lmag.total_cmp(&a.lmag))
                     .then(b.mask.count_ones().cmp(&a.mask.count_ones()))
                     .then(a.mask.cmp(&b.mask))
             });
@@ -127,43 +176,37 @@ impl Expr {
     }
 
     pub fn eval(&self, s: Complex64) -> Complex64 {
-        let ev = |ts: &[Term]| ts.iter().map(|t| t.signed * s.powu(t.spow)).sum::<Complex64>();
-        ev(&self.num) / ev(&self.den)
+        self.eval_with_bound(s).0
     }
 
     /// Value plus a relative error bound for its floating-point evaluation:
     /// γ·(Σ|terms| / |Σ terms|) for numerator and denominator.
     pub fn eval_with_bound(&self, s: Complex64) -> (Complex64, f64) {
-        let ev = |ts: &[Term]| {
-            let mut sum = Complex64::new(0.0, 0.0);
-            let mut abs = 0.0;
-            for t in ts {
-                let v = t.signed * s.powu(t.spow);
-                sum += v;
-                abs += v.norm();
+        let gamma = (self.num.len().max(self.den.len()) as f64 * 2.0 + 4.0) * f64::EPSILON;
+        let bound = |sum: Complex64, abs: f64| {
+            if sum.norm() > 0.0 {
+                gamma * abs / sum.norm()
+            } else {
+                f64::INFINITY
             }
-            let gamma = (ts.len() as f64 + 2.0 + self.num.len().max(self.den.len()) as f64) * f64::EPSILON;
-            (
-                sum,
-                if sum.norm() > 0.0 {
-                    gamma * abs / sum.norm()
-                } else {
-                    f64::INFINITY
-                },
-            )
         };
-        let (n, bn) = ev(&self.num);
-        let (d, bd) = ev(&self.den);
-        (n / d, bn + bd)
+        let (n, an, sn) = scaled_sum(&self.num, s);
+        let (d, ad, sd) = scaled_sum(&self.den, s);
+        (scaled_ratio(n, sn, d, sd), bound(n, an) + bound(d, ad))
     }
 
-    /// Coefficients of s^k (k ascending) for num and den.
+    /// Coefficients of s^k (k ascending) for num and den, each polynomial
+    /// scaled by a common positive factor (which leaves its roots unchanged)
+    /// so they stay representable.
     pub fn s_coeffs(&self) -> (Vec<f64>, Vec<f64>) {
         let co = |ts: &[Term]| {
             let deg = ts.iter().map(|t| t.spow).max().unwrap_or(0) as usize;
+            let shift = ts.iter().map(|t| t.lmag).fold(f64::NEG_INFINITY, f64::max);
             let mut c = vec![0.0; deg + 1];
-            for t in ts {
-                c[t.spow as usize] += t.signed;
+            if shift.is_finite() {
+                for t in ts {
+                    c[t.spow as usize] += t.sign * (t.lmag - shift).exp();
+                }
             }
             c
         };
@@ -180,15 +223,18 @@ impl Expr {
                 let sp = ts[k].spow;
                 let mut grp: Vec<&Term> = ts[k..].iter().take_while(|t| t.spow == sp).collect();
                 k += grp.len();
-                grp.sort_by(|a, b| b.mag.total_cmp(&a.mag));
-                let mut kept_sum: f64 = grp.iter().map(|t| t.signed).sum();
+                grp.sort_by(|a, b| b.lmag.total_cmp(&a.lmag));
+                // Magnitudes relative to the group's largest term.
+                let top = grp[0].lmag;
+                let val = |t: &Term| t.sign * (t.lmag - top).exp();
+                let mut kept_sum: f64 = grp.iter().map(|t| val(t)).sum();
                 let mut dropped = 0.0;
                 let mut n = grp.len();
                 while n > 1 {
                     let t = grp[n - 1];
-                    let rest = kept_sum - t.signed;
-                    if dropped + t.mag <= eps * rest.abs() {
-                        dropped += t.mag;
+                    let (v, rest) = (val(t), kept_sum - val(t));
+                    if dropped + v.abs() <= eps * rest.abs() {
+                        dropped += v.abs();
                         kept_sum = rest;
                         n -= 1;
                     } else {
@@ -214,7 +260,7 @@ impl Expr {
                 .iter()
                 .map(|t| Term {
                     coeff: -t.coeff,
-                    signed: -t.signed,
+                    sign: -t.sign,
                     ..t.clone()
                 })
                 .collect()

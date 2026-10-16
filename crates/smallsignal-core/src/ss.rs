@@ -107,8 +107,23 @@ pub struct SsCircuit {
     pub reactive_mask: Mono,
 }
 
+/// Escapes TeX specials so a name like `R{x}` or `R\\x` renders as text
+/// and can never inject a macro.
 fn esc(s: &str) -> String {
-    s.replace('_', "\\_")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '_' | '{' | '}' | '$' | '&' | '#' | '%' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\\' => out.push_str("\\backslash "),
+            '^' => out.push_str("\\hat{}"),
+            '~' => out.push_str("\\sim "),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// `R_{D}` from `RD`; `R` alone stays `R`.
@@ -218,12 +233,125 @@ fn add_mos_symbolic(
     Ok(())
 }
 
+/// Relative size below which a bulk junction conductance is left out.
+pub const JUNCTION_REL: f64 = 1e-6;
+
+/// Adds MOS bulk-junction conductances that matter: those above JUNCTION_REL
+/// of the other DC conductance at either of their nodes, and any that is the
+/// only connection of part of the circuit (else that part would float). A
+/// reverse-biased junction (about gmin) is negligible next to a channel or a
+/// resistor and would only clutter the expressions; a forward-biased one, or
+/// one holding an otherwise floating node, is kept. Nodes on a voltage-type
+/// element count as infinitely stiff.
+fn add_junctions(
+    net: &Netlist,
+    params: &mut Vec<Param>,
+    stamps: &mut Vec<Stamp>,
+    junctions: &[(usize, usize, usize, f64, &str)],
+) -> Result<(), String> {
+    let mut g = vec![0.0f64; net.nodes.len()];
+    g[0] = f64::INFINITY;
+    for st in stamps.iter() {
+        match *st {
+            Stamp::Adm { a, b, p } if !params[p].reactive => {
+                let v = params[p].mna_value().abs();
+                g[a] += v;
+                g[b] += v;
+            }
+            Stamp::Vccs { op, on, p, .. } => {
+                let v = params[p].value.abs();
+                g[op] += v;
+                g[on] += v;
+            }
+            Stamp::VSrc { a, b, .. }
+            | Stamp::Vcvs { a, b, .. }
+            | Stamp::Ccvs { a, b, .. }
+            | Stamp::Ind { a, b, .. } => {
+                g[a] = f64::INFINITY;
+                g[b] = f64::INFINITY;
+            }
+            _ => {}
+        }
+    }
+    // Nodes already joined by an element (any admittance or branch).
+    let mut uf: Vec<usize> = (0..net.nodes.len()).collect();
+    fn root(uf: &mut [usize], mut x: usize) -> usize {
+        while uf[x] != x {
+            uf[x] = uf[uf[x]];
+            x = uf[x];
+        }
+        x
+    }
+    let join = |uf: &mut Vec<usize>, a: usize, b: usize| {
+        let (ra, rb) = (root(uf, a), root(uf, b));
+        uf[ra.max(rb)] = ra.min(rb);
+        ra != rb
+    };
+    for st in stamps.iter() {
+        if let Stamp::Adm { a, b, .. }
+        | Stamp::VSrc { a, b, .. }
+        | Stamp::Vcvs { a, b, .. }
+        | Stamp::Ccvs { a, b, .. }
+        | Stamp::Ind { a, b, .. } = *st
+        {
+            join(&mut uf, a, b);
+        }
+    }
+    let mut chosen: Vec<bool> = junctions
+        .iter()
+        .map(|&(_, x, y, gj, _)| {
+            if gj <= 0.0 || x == y {
+                return false;
+            }
+            let weakest = g[x].min(g[y]);
+            // Between two stiff nodes it carries no signal.
+            !(weakest.is_finite() && gj <= JUNCTION_REL * weakest) && !(weakest.is_infinite() && g[x] == g[y])
+        })
+        .collect();
+    for (k, &(_, x, y, _, _)) in junctions.iter().enumerate() {
+        if chosen[k] {
+            join(&mut uf, x, y);
+        }
+    }
+    // Largest first, keep any junction that bridges two separate parts.
+    let mut order: Vec<usize> = (0..junctions.len())
+        .filter(|&k| !chosen[k] && junctions[k].3 > 0.0)
+        .collect();
+    order.sort_by(|&a, &b| junctions[b].3.total_cmp(&junctions[a].3));
+    for k in order {
+        let (_, x, y, _, _) = junctions[k];
+        if x != y && join(&mut uf, x, y) {
+            chosen[k] = true;
+        }
+    }
+    for (k, &(ei, x, y, gj, which)) in junctions.iter().enumerate() {
+        if !chosen[k] {
+            continue;
+        }
+        let nm = &net.elements[ei].name;
+        let p = add(
+            params,
+            format!("r{which}_{nm}"),
+            dev_latex("r", which, nm),
+            1.0 / gj,
+            Role::DeviceR,
+            "Ω",
+            nm,
+        )?;
+        stamps.push(Stamp::Adm { a: x, b: y, p });
+    }
+    Ok(())
+}
+
 /// With `op = None` the analysis is purely symbolic: every MOSFET is taken
 /// as saturated and every BJT as forward-active, and all values are NaN.
 pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
     let mut params: Vec<Param> = Vec::new();
     let mut stamps = Vec::new();
     let mut warnings = Vec::new();
+    // MOS bulk junctions (element, bulk, other terminal, conductance, which),
+    // added after the other elements once node conductances are known.
+    let mut junctions: Vec<(usize, usize, usize, f64, &str)> = Vec::new();
     for (ei, e) in net.elements.iter().enumerate() {
         let n = &e.nodes;
         let nm = e.name.as_str();
@@ -418,10 +546,10 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                         p,
                     });
                 }
-                if m.gbs.max(m.gbd) > 1e-9 {
-                    warnings.push(format!(
-                        "{nm}: a bulk junction is forward biased; its conductance is not modeled"
-                    ));
+                junctions.push((ei, b, s, m.gbs, "bs"));
+                junctions.push((ei, b, d, m.gbd, "bd"));
+                if m.gbs.max(m.gbd) > 1e-6 {
+                    warnings.push(format!("{nm}: a bulk junction is forward biased"));
                 }
                 if m.region == MosRegion::Triode {
                     warnings.push(format!("{nm} is in triode; r_o here is its channel resistance"));
@@ -547,6 +675,7 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
             }
         }
     }
+    add_junctions(net, &mut params, &mut stamps, &junctions)?;
     // Disambiguate colliding LaTeX names (e.g. M1 and Q1 both give g_{m1}).
     let mut seen: HashMap<String, usize> = HashMap::new();
     for p in &params {
@@ -646,7 +775,7 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
     let mut col_of_rep: HashMap<usize, usize> = HashMap::new();
     let mut node_col = vec![None; nnodes];
     let mut dim = 0;
-    for n in 1..nnodes {
+    for (n, col) in node_col.iter_mut().enumerate().skip(1) {
         let r = find(&mut uf, n);
         if r == 0 {
             continue;
@@ -655,7 +784,7 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             dim += 1;
             dim - 1
         });
-        node_col[n] = Some(c);
+        *col = Some(c);
     }
     let mut branch_col = HashMap::new();
     for s in &ss.stamps {
@@ -793,5 +922,22 @@ impl System {
             row[col] = Poly::constant(self.b[r]);
         }
         crate::det::det(&a, max_terms)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_are_escaped_for_tex() {
+        assert_eq!(elem_latex("RD"), "R_{D}");
+        assert_eq!(elem_latex("R_load"), "R_{\\_load}");
+        assert_eq!(elem_latex("R{x}"), "R_{\\{x\\}}");
+        assert_eq!(elem_latex("R\\href"), "R_{\\backslash href}");
+        assert_eq!(elem_latex("R$1^2"), "R_{\\$1\\hat{}2}");
+        assert_eq!(dev_latex("g", "m", "M1"), "g_{m1}");
+        assert_eq!(dev_latex("g", "m", "Min"), "g_{m,in}");
+        assert_eq!(dev_latex("g", "m", "M{"), "g_{m,\\{}");
     }
 }

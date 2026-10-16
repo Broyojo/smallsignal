@@ -2,10 +2,28 @@
 
 use num_complex::Complex64;
 
+/// Below this (rows scaled to unit max), a pivot is treated as zero: the
+/// matrix is singular to working precision, and a "solution" from it would
+/// depend on rounding (and so on the order of the netlist lines).
+pub const PIVOT_TOL: f64 = 1e-13;
+
+/// Solves A·x = b, rows equilibrated, partial pivoting. None when A is
+/// singular to working precision.
 pub fn solve_real(n: usize, mut a: Vec<f64>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+    for r in 0..n {
+        let m = a[r * n..(r + 1) * n].iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        if m == 0.0 || !m.is_finite() {
+            return None;
+        }
+        for v in &mut a[r * n..(r + 1) * n] {
+            *v /= m;
+        }
+        b[r] /= m;
+    }
     for k in 0..n {
         let p = (k..n).max_by(|&i, &j| a[i * n + k].abs().total_cmp(&a[j * n + k].abs()))?;
-        if a[p * n + k] == 0.0 {
+        let piv = a[p * n + k].abs();
+        if piv.is_nan() || piv <= PIVOT_TOL {
             return None;
         }
         if p != k {

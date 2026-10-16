@@ -147,10 +147,11 @@ fn logical_lines(text: &str) -> (String, Vec<Line>) {
                 continue;
             }
         }
-        lines.push(Line {
-            no: i + 1,
-            toks: tokenize(l),
-        });
+        // A line of only separators, e.g. "(" or ",", has no tokens.
+        let toks = tokenize(l);
+        if !toks.is_empty() {
+            lines.push(Line { no: i + 1, toks });
+        }
     }
     (title, lines)
 }
@@ -225,17 +226,18 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
     }
 
     let mut nodes: Vec<String> = vec!["0".to_string()];
+    let mut node_index: HashMap<String, usize> = HashMap::new();
     let mut node_of = |name: &str| -> usize {
         let k = name.to_ascii_lowercase();
         if is_ground(&k) {
             return 0;
         }
-        if let Some(i) = nodes.iter().position(|n| n.eq_ignore_ascii_case(&k)) {
-            return i;
-        }
-        nodes.push(name.to_string());
-        nodes.len() - 1
+        *node_index.entry(k).or_insert_with(|| {
+            nodes.push(name.to_string());
+            nodes.len() - 1
+        })
     };
+    let mut names: HashMap<String, usize> = HashMap::new();
 
     // Pass 2: elements. F/H controls resolve after all elements are known.
     let mut elements: Vec<Element> = Vec::new();
@@ -270,7 +272,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
         }
         let name = t[0].clone();
         let key = name.to_ascii_lowercase();
-        if elements.iter().any(|e| e.name.eq_ignore_ascii_case(&key)) {
+        if names.insert(key.clone(), elements.len()).is_some() {
             return Err(format!("line {no}: duplicate element name {name}"));
         }
         let letter = key.chars().next().unwrap();
@@ -515,9 +517,8 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
     }
 
     for (ei, ctrl, no) in pending_ctrl {
-        let ci = elements
-            .iter()
-            .position(|e| e.name.eq_ignore_ascii_case(&ctrl))
+        let ci = *names
+            .get(&ctrl.to_ascii_lowercase())
             .ok_or_else(|| format!("line {no}: controlling source '{ctrl}' not found"))?;
         if !elements[ci].has_branch() {
             return Err(format!(

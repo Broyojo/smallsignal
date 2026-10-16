@@ -1,0 +1,339 @@
+//! Explicit edge cases: degenerate requests, singular circuits, parser
+//! details, device regions and unusual inputs/outputs.
+
+mod common;
+
+use common::{close, request, run, run_err, value};
+use serde_json::{json, Value};
+use smallsignal_core::Request;
+
+fn req(v: Value) -> Request {
+    serde_json::from_value(v).unwrap()
+}
+
+const CS: &str = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
+
+// ---- Requests ---------------------------------------------------------------
+
+#[test]
+fn output_equal_to_reference_is_an_error() {
+    let mut r = request("VIN", "out");
+    r.reference = Some("OUT".into());
+    assert!(run_err(CS, &r).contains("same node"));
+}
+
+#[test]
+fn output_at_ground_is_an_error() {
+    for out in ["0", "gnd", "GND"] {
+        assert!(run_err(CS, &request("VIN", out)).contains("same node"), "{out}");
+    }
+}
+
+#[test]
+fn output_on_a_supply_is_exactly_zero() {
+    // vdd is AC ground (its source is shorted in small-signal).
+    let r = run(CS, &req(json!({ "input": "VIN", "output": "vdd", "rout": true })));
+    assert_eq!(value(&r, "gain", 0), (0.0, 0.0));
+    assert_eq!(r["gain"]["exact"]["latex"], "0");
+    assert_eq!(value(&r, "rout", 0), (0.0, 0.0));
+}
+
+#[test]
+fn unknown_names_are_clean_errors() {
+    assert!(run_err(CS, &request("VX", "out")).contains("not found"));
+    assert!(run_err(CS, &request("VIN", "nowhere")).contains("not found"));
+    assert!(run_err(CS, &request("RD", "out")).contains("must be an independent V or I source"));
+    let mut r = request("VIN", "out");
+    r.reference = Some("nope".into());
+    assert!(run_err(CS, &r).contains("reference node 'nope' not found"));
+}
+
+#[test]
+fn blank_reference_means_ground() {
+    let mut r = request("VIN", "out");
+    r.reference = Some("  ".into());
+    let a = run(CS, &r);
+    let b = run(CS, &request("VIN", "out"));
+    assert_eq!(value(&a, "gain", 0), value(&b, "gain", 0));
+}
+
+// ---- Singular circuits ------------------------------------------------------
+
+#[test]
+fn shorted_input_source_is_a_clean_error() {
+    let net = "t\nVIN in 0 1\nV2 in 0 2\nR1 in 0 1k\n";
+    assert!(run_err(net, &request("VIN", "in")).contains("singular"));
+}
+
+#[test]
+fn loop_of_voltage_sources_is_a_clean_error() {
+    let net = "t\nVIN a 0 1\nV2 a b 1\nV3 b 0 1\nR1 a 0 1k\nR2 b 0 1k\n";
+    assert!(run_err(net, &request("VIN", "b")).contains("singular"));
+}
+
+#[test]
+fn voltage_source_parallel_to_an_inductor_is_a_clean_error() {
+    let net = "t\nVIN in 0 AC 1\nL1 in 0 1u\nR1 in out 1k\nR2 out 0 1k\n";
+    assert!(run_err(net, &request("VIN", "out")).contains("singular"));
+}
+
+#[test]
+fn loop_of_inductors_is_a_clean_error() {
+    let net = "t\nVIN in 0 AC 1\nR1 in a 1k\nL1 a b 1u\nL2 b a 2u\nR2 b 0 1k\n";
+    assert!(run_err(net, &request("VIN", "b")).contains("singular"));
+}
+
+#[test]
+fn floating_subcircuit_is_a_clean_error() {
+    // n1-n2 connect to nothing else: no DC path to ground.
+    let net = "t\nVIN in 0 1\nR1 in 0 1k\nR2 n1 n2 1k\n";
+    assert!(run_err(net, &request("VIN", "n1")).contains("singular"));
+    // A node reached only through a capacitor has no DC path either.
+    let net = "t\nVIN in 0 1\nR1 in 0 1k\nC1 in out 1p\n";
+    assert!(run_err(net, &request("VIN", "out")).contains("singular"));
+}
+
+#[test]
+fn zero_capacitor_is_ignored() {
+    let a = run(
+        "t\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\nC1 out 0 0\n",
+        &request("VIN", "out"),
+    );
+    let b = run("t\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n", &request("VIN", "out"));
+    assert_eq!(value(&a, "gain", 0), value(&b, "gain", 0));
+    assert_eq!(a["gain"]["exact"]["latex"], b["gain"]["exact"]["latex"]);
+}
+
+#[test]
+fn zero_resistance_is_rejected() {
+    assert!(run_err("t\nVIN in 0 1\nR1 in 0 0\n", &request("VIN", "in")).contains("zero resistance"));
+}
+
+#[test]
+fn hitting_the_term_limit_is_a_clean_error() {
+    let mut net = String::from("dense\nVIN n0 0 AC 1\n");
+    for i in 0..6 {
+        for j in i + 1..6 {
+            net.push_str(&format!("R{i}{j} n{i} n{j} {}k\n", 1 + i + j));
+        }
+    }
+    let r = req(json!({ "input": "VIN", "output": "n3", "maxTerms": 50 }));
+    assert!(run_err(&net, &r).contains("too large"));
+}
+
+// ---- Controlled sources -----------------------------------------------------
+
+#[test]
+fn current_controlled_sources_follow_e_h_and_l_branches() {
+    // E1 drives 2·V(in) into 1k, sourcing 2 mA/V out of its + terminal, so
+    // its branch current (+ → − inside, as for a V source) is −2 mA/V. F1
+    // carries that from its n+ (0) to n− (f), pulling 2 mA/V out of f:
+    // V(f) = −2·V(in). H1 turns L1's current (V(in)/1k at DC) into 500 Ω·I.
+    let net = "t\nVIN in 0 AC 1\nE1 e 0 in 0 2\nRE e 0 1k\nF1 0 f E1 1\nRF f 0 1k\n\
+               R1 in l 1k\nL1 l 0 1n\nH1 h 0 L1 500\nRH h 0 1k\n";
+    let f = run(net, &req(json!({ "input": "VIN", "output": "f", "freqs": [0] })));
+    assert!(
+        close(value(&f, "gain", 0), (-2.0, 0.0), 1e-12),
+        "{}",
+        f["gain"]["values"]
+    );
+    let h = run(net, &req(json!({ "input": "VIN", "output": "h", "freqs": [0] })));
+    assert!(
+        close(value(&h, "gain", 0), (0.5, 0.0), 1e-12),
+        "{}",
+        h["gain"]["values"]
+    );
+}
+
+// ---- Parser details ---------------------------------------------------------
+
+#[test]
+fn parser_is_case_insensitive_and_handles_continuations_and_comments() {
+    let net = "Title line, not an element\n\
+               * full-line comment\n\
+               vin IN 0 dc 0.7 ac 1 ; inline comment\n\
+               Vdd VDD 0 1.8 $ another comment\n\
+               rd vdd OUT 10K\n\
+               m1 out in 0 0 NM\n\
+               + w=10U\n\
+               + L = 1u\n\
+               .MODEL nm NMOS (LEVEL=1 KP=200U VTO=0.5 LAMBDA=0.1)\n\
+               .END\n\
+               R99 this line is after .end and ignored\n";
+    let a = run(net, &request("VIN", "out"));
+    let b = run(CS, &request("VIN", "out"));
+    assert!(close(value(&a, "gain", 0), value(&b, "gain", 0), 1e-15));
+}
+
+#[test]
+fn first_line_is_always_the_title() {
+    // A netlist without a title loses its first element, like SPICE.
+    let r = run_err("VIN in 0 1\nR1 in 0 1k\n", &request("VIN", "in"));
+    assert!(r.contains("not found"), "{r}");
+}
+
+#[test]
+fn control_blocks_and_analysis_cards_are_ignored() {
+    let net = "t\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n.op\n.ac dec 10 1 1g\n.control\nrun\nplot v(out)\n.endc\n";
+    let r = run(net, &request("VIN", "out"));
+    assert!(close(value(&r, "gain", 0), (0.5, 0.0), 1e-15));
+}
+
+#[test]
+fn unsupported_features_are_clean_errors() {
+    for (net, what) in [
+        ("t\nX1 a b sub\n", "subcircuit"),
+        ("t\n.subckt foo a b\n.ends\n", "subcircuits"),
+        ("t\n.param r=1k\n", ".param"),
+        ("t\nE1 a 0 poly(1) b 0 1 2\n", "linear"),
+        ("t\nM1 d g s b m\n.model m nmos level=3\n", "LEVEL=1"),
+    ] {
+        let e = run_err(net, &request("V1", "a"));
+        assert!(e.contains(what), "{what}: {e}");
+    }
+}
+
+#[test]
+fn transient_source_specs_keep_their_dc_and_ac_values() {
+    let net = "t\nVIN in 0 DC 0.5 SIN(0 1 1k) AC 2\nR1 in 0 1k\n";
+    let r = run(net, &request("VIN", "in"));
+    assert_eq!(r["op"]["nodes"]["in"].as_f64(), Some(0.5));
+}
+
+// ---- Devices ----------------------------------------------------------------
+
+/// A MOSFET is symmetric: swapping its drain and source names (so it runs in
+/// reverse mode) must give the same operating point and small-signal results.
+#[test]
+fn reverse_mode_mosfet_equals_the_swapped_device() {
+    let base = "rev\nVDD vdd 0 1.8\nVIN in 0 DC 1.2 AC 1\nRL out 0 20k\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 gamma=0.4)\n";
+    let fwd = format!("{base}M1 vdd in out 0 nm W=10u L=1u\n");
+    let rev = format!("{base}M1 out in vdd 0 nm W=10u L=1u\n");
+    let rq = req(json!({ "input": "VIN", "output": "out", "rout": true, "verify": true }));
+    let (a, b) = (run(&fwd, &rq), run(&rev, &rq));
+    assert_eq!(b["op"]["devices"]["M1"]["reversed"], true);
+    assert_eq!(a["op"]["devices"]["M1"]["reversed"], false);
+    assert!((a["op"]["nodes"]["out"].as_f64().unwrap() - b["op"]["nodes"]["out"].as_f64().unwrap()).abs() < 1e-12);
+    assert!(close(value(&a, "gain", 0), value(&b, "gain", 0), 1e-10));
+    assert!(close(value(&a, "rout", 0), value(&b, "rout", 0), 1e-10));
+    assert_eq!(b["verify"]["kcl"], true);
+}
+
+#[test]
+fn cutoff_device_contributes_nothing() {
+    let net = "t\nVDD vdd 0 1.8\nVIN in 0 DC 0.2 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\nRL out 0 10k\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let r = run(net, &request("VIN", "out"));
+    assert_eq!(r["op"]["devices"]["M1"]["region"], "cutoff");
+    assert_eq!(value(&r, "gain", 0), (0.0, 0.0));
+    assert!(r["warnings"].to_string().contains("cutoff"));
+}
+
+#[test]
+fn triode_device_is_flagged() {
+    let net = "t\nVDD vdd 0 1.8\nVIN in 0 DC 1.8 AC 1\nRD vdd out 20k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
+    let r = run(net, &request("VIN", "out"));
+    assert_eq!(r["op"]["devices"]["M1"]["region"], "triode");
+    assert!(r["warnings"].to_string().contains("triode"));
+}
+
+/// gm and gmb stay continuous across vbs = 0, where ngspice switches to its
+/// forward-body-bias formula for the threshold.
+#[test]
+fn body_effect_is_continuous_through_zero_body_bias() {
+    let op = |vb: f64| {
+        let net = format!(
+            "t\nVDD vdd 0 1.8\nVIN in 0 DC 1.0 AC 1\nVB b 0 {vb}\nVS s 0 0.2\nRD vdd out 10k\nM1 out in s b nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 gamma=0.4)\n"
+        );
+        run(&net, &request("VIN", "out"))["op"]["devices"]["M1"].clone()
+    };
+    let (lo, hi) = (op(0.2 - 1e-7), op(0.2 + 1e-7));
+    for k in ["gm", "gmb", "id"] {
+        let (a, b) = (lo[k].as_f64().unwrap(), hi[k].as_f64().unwrap());
+        assert!((a - b).abs() <= 1e-5 * a.abs(), "{k}: {a} vs {b}");
+    }
+    // And a forward-biased body (vbs > 0) still solves.
+    let fwd = op(0.5);
+    assert!(fwd["vbs"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn pmos_pnp_and_diode_bias_correctly() {
+    let net = "t\nVDD vdd 0 3\nVIN in 0 DC 2 AC 1\nM1 out in vdd vdd pm W=10u L=1u\nRD out 0 10k\n\
+               VB b 0 2.35\nQ1 c b vdd qp\nRC c 0 2k\nVD a 0 0.7\nD1 a 0 dm\n\
+               .model pm pmos (kp=100u vto=-0.5 lambda=0.05)\n.model qp pnp (is=1e-15 bf=80 vaf=40)\n.model dm d (is=1e-14)\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "verify": true })));
+    let d = &r["op"]["devices"];
+    assert_eq!(d["M1"]["region"], "saturation");
+    assert!(
+        d["M1"]["id"].as_f64().unwrap() < 0.0,
+        "PMOS drain current flows out of the drain"
+    );
+    assert_eq!(d["Q1"]["region"], "forward-active");
+    assert!(
+        d["Q1"]["ic"].as_f64().unwrap() < 0.0,
+        "PNP collector current flows out of the collector"
+    );
+    let id = d["D1"]["id"].as_f64().unwrap();
+    let want = 1e-14 * ((0.7 / smallsignal_core::devices::vt()).exp() - 1.0) + 1e-12 * 0.7;
+    assert!((id - want).abs() <= 1e-12 * want, "{id} vs {want}");
+    assert!(value(&r, "gain", 0).0 < 0.0, "a PMOS CS with a load to ground inverts");
+}
+
+// ---- Inputs and outputs -----------------------------------------------------
+
+#[test]
+fn current_source_input_gives_a_transimpedance() {
+    // 1 A into node in, 2k to ground ‖ 2k: Z = 1k.
+    let net = "t\nIIN 0 in AC 1\nR1 in 0 2k\nR2 in 0 2k\n";
+    let r = run(net, &req(json!({ "input": "IIN", "output": "in", "rin": true })));
+    assert_eq!(r["gain"]["unit"], "V/A");
+    assert!(close(value(&r, "gain", 0), (1000.0, 0.0), 1e-14));
+    assert!(close(value(&r, "rin", 0), (1000.0, 0.0), 1e-14));
+    // Reversed source direction flips the gain sign but not the impedance.
+    let flip = run(
+        "t\nIIN in 0 AC 1\nR1 in 0 2k\nR2 in 0 2k\n",
+        &req(json!({ "input": "IIN", "output": "in", "rin": true })),
+    );
+    assert!(close(value(&flip, "gain", 0), (-1000.0, 0.0), 1e-14));
+    assert!(close(value(&flip, "rin", 0), (1000.0, 0.0), 1e-14));
+}
+
+#[test]
+fn differential_output_of_a_balanced_pair() {
+    let net = "dp\nVDD vdd 0 1.8\nVIN inp inn DC 0 AC 1\nVCM inn 0 0.9\nIT tail 0 100u\n\
+               M1 op inp tail 0 nm W=10u L=1u\nM2 on inn tail 0 nm W=10u L=1u\nR1 vdd op 10k\nR2 vdd on 10k\n\
+               .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+    let rq = req(json!({ "input": "VIN", "output": "on", "ref": "op", "verify": true }));
+    let r = run(net, &rq);
+    // Balanced pair: v(on) − v(op) = gm·(R ∥ ro)·v_id (inverting at op).
+    let m = &r["op"]["devices"]["M1"];
+    let (gm, ro) = (m["gm"].as_f64().unwrap(), 1.0 / m["gds"].as_f64().unwrap());
+    let want = gm * (10e3 * ro / (10e3 + ro));
+    assert!(
+        close(value(&r, "gain", 0), (want, 0.0), 1e-9),
+        "{} vs {want}",
+        r["gain"]["values"]
+    );
+}
+
+#[test]
+fn infinite_input_impedance_is_reported_as_infinite() {
+    let r = run(
+        CS,
+        &req(json!({ "input": "VIN", "output": "out", "rin": true, "freqs": [0, 1e3] })),
+    );
+    assert_eq!(r["rin"]["infinite"], true);
+    assert_eq!(r["rin"]["values"][0]["inf"], true);
+    assert!(r["rin"]["values"][0]["re"].is_null());
+}
+
+#[test]
+fn values_at_dc_with_a_pole_at_dc_are_null_not_garbage() {
+    // A current into a capacitor integrates: infinite gain at f = 0.
+    let net = "t\nIIN 0 out AC 1\nC1 out 0 1p\nRBIG out 0 1e15\n";
+    let r = run(net, &req(json!({ "input": "IIN", "output": "out", "freqs": [0, 1e3] })));
+    let v1 = value(&r, "gain", 1);
+    assert!(v1.0.is_finite() && v1.1.is_finite());
+    let s = serde_json::to_string(&r).unwrap();
+    assert!(!s.contains("NaN") && !s.contains("inf\""), "{s}");
+}

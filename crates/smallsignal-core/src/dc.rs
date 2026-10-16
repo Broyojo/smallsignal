@@ -234,6 +234,157 @@ impl Ctx<'_> {
         }
     }
 
+    /// Linearized MNA system at `x` (device states updated in `st`). With
+    /// `limit`, junction and FET voltages are step-limited from their previous
+    /// states; returns whether any limiting happened.
+    fn assemble(&self, x: &[f64], st: &mut [St], scale: f64, gshunt: f64, use_init: bool, limit: bool) -> (Asm, bool) {
+        let net = self.net;
+        let lay = &self.lay;
+        let gmin = net.gmin;
+        let vt = vt();
+        let mut asm = Asm::new(lay.dim);
+        self.stamp_linear(&mut asm, scale);
+        if gshunt > 0.0 {
+            for i in 0..lay.nn {
+                asm.add(Some(i), Some(i), gshunt);
+            }
+        }
+        let mut limited = false;
+        for (ei, e) in net.elements.iter().enumerate() {
+            match &e.kind {
+                Kind::M { model, w, l, mult } => {
+                    let ty = model.ty;
+                    let (d, g, s, b) = (e.nodes[0], e.nodes[1], e.nodes[2], e.nodes[3]);
+                    let (vd, vg, vs, vb) = (volt(x, d), volt(x, g), volt(x, s), volt(x, b));
+                    let (mut vgs, mut vds, mut vbs) = (ty * (vg - vs), ty * (vd - vs), ty * (vb - vs));
+                    if let St::Mos {
+                        vgs: og,
+                        vds: od,
+                        vbs: ob,
+                        von,
+                    } = st[ei]
+                    {
+                        if use_init {
+                            (vgs, vds, vbs) = (og, od, ob);
+                        } else if limit {
+                            let (lg, ld, lb) = limit_mos(vgs, vds, vbs, og, od, ob, von, model.is * mult);
+                            if (lg, ld, lb) != (vgs, vds, vbs) {
+                                limited = true;
+                            }
+                            (vgs, vds, vbs) = (lg, ld, lb);
+                        }
+                    }
+                    let beta = model.kp * w / l * mult;
+                    let ev = mos_eval(model, beta, vgs, vds, vbs);
+                    let vbd = vbs - vds;
+                    let (cbs, gbs) = bulk_junction(model.is * mult, vbs, gmin);
+                    let (cbd, gbd) = bulk_junction(model.is * mult, vbd, gmin);
+                    let (ed, es, vgs_e, vds_e, vbs_e) = if ev.mode > 0 {
+                        (d, s, vgs, vds, vbs)
+                    } else {
+                        (s, d, vgs - vds, -vds, vbs - vds)
+                    };
+                    stamp_nl(
+                        &mut asm,
+                        lay,
+                        ed,
+                        es,
+                        ty * ev.cdrain,
+                        &[
+                            (ev.gm, g, es, ty * vgs_e),
+                            (ev.gds, ed, es, ty * vds_e),
+                            (ev.gmbs, b, es, ty * vbs_e),
+                        ],
+                    );
+                    stamp_nl(&mut asm, lay, b, s, ty * cbs, &[(gbs, b, s, ty * vbs)]);
+                    stamp_nl(&mut asm, lay, b, d, ty * cbd, &[(gbd, b, d, ty * vbd)]);
+                    st[ei] = St::Mos {
+                        vgs,
+                        vds,
+                        vbs,
+                        von: ev.von,
+                    };
+                }
+                Kind::Q { model, area } => {
+                    let ty = model.ty;
+                    let (c, bn, en) = (e.nodes[0], e.nodes[1], e.nodes[2]);
+                    let (vc, vb, ve) = (volt(x, c), volt(x, bn), volt(x, en));
+                    let (mut vbe, mut vbc) = (ty * (vb - ve), ty * (vb - vc));
+                    if let St::Bjt { vbe: ob, vbc: oc } = st[ei] {
+                        if use_init {
+                            (vbe, vbc) = (ob, oc);
+                        } else if limit {
+                            let vc_ = vcrit(model.is * area, vt);
+                            let (lb, lc) = (pnjlim(vbe, ob, vt, vc_), pnjlim(vbc, oc, vt, vc_));
+                            if (lb, lc) != (vbe, vbc) {
+                                limited = true;
+                            }
+                            (vbe, vbc) = (lb, lc);
+                        }
+                    }
+                    let ev = bjt_eval(model, *area, vbe, vbc, gmin);
+                    stamp_nl(
+                        &mut asm,
+                        lay,
+                        c,
+                        en,
+                        ty * ev.cc,
+                        &[(ev.dcc_dvbe(), bn, en, ty * vbe), (ev.dcc_dvbc(), bn, c, ty * vbc)],
+                    );
+                    stamp_nl(
+                        &mut asm,
+                        lay,
+                        bn,
+                        en,
+                        ty * ev.cb,
+                        &[(ev.gpi, bn, en, ty * vbe), (ev.gmu, bn, c, ty * vbc)],
+                    );
+                    st[ei] = St::Bjt { vbe, vbc };
+                }
+                Kind::D { model, area } => {
+                    let (a, k) = (e.nodes[0], e.nodes[1]);
+                    let mut vd = volt(x, a) - volt(x, k);
+                    if let St::Dio { vd: od } = st[ei] {
+                        if use_init {
+                            vd = od;
+                        } else if limit {
+                            let vte = model.n * vt;
+                            let lv = pnjlim(vd, od, vte, vcrit(model.is * area, vte));
+                            if lv != vd {
+                                limited = true;
+                            }
+                            vd = lv;
+                        }
+                    }
+                    let (id, gd) = diode_eval(model, *area, vd, gmin);
+                    stamp_nl(&mut asm, lay, a, k, id, &[(gd, a, k, vd)]);
+                    st[ei] = St::Dio { vd };
+                }
+                _ => {}
+            }
+        }
+        (asm, limited)
+    }
+
+    /// KCL/branch-equation residual of `x` relative to the size of the terms
+    /// it sums, worst over all rows, with an absolute floor of
+    /// KCL_TOL·RESIDUAL_FLOOR (1e-15 A or V) so femtoamp leakage nodes are not
+    /// judged on roundoff. At the linearization point the companion model is
+    /// exact, so A(x)·x − z(x) is the true residual.
+    fn residual(&self, x: &[f64], st: &[St]) -> f64 {
+        let mut st = st.to_vec();
+        let (asm, _) = self.assemble(x, &mut st, 1.0, 0.0, false, false);
+        let n = self.lay.dim;
+        (0..n)
+            .map(|r| {
+                let row = &asm.a[r * n..(r + 1) * n];
+                let lhs: f64 = row.iter().zip(x).map(|(a, v)| a * v).sum();
+                let size: f64 = row.iter().zip(x).map(|(a, v)| (a * v).abs()).sum::<f64>() + asm.z[r].abs();
+                (lhs - asm.z[r]).abs() / (size + RESIDUAL_FLOOR)
+            })
+            .fold(0.0, f64::max)
+    }
+
     /// One Newton solve from `x`; returns the converged solution and states.
     fn newton(
         &self,
@@ -243,143 +394,42 @@ impl Ctx<'_> {
         mut st: Vec<St>,
         mut use_init: bool,
     ) -> Result<(Vec<f64>, Vec<St>, usize), String> {
-        let net = self.net;
         let lay = &self.lay;
-        let gmin = net.gmin;
-        let vt = vt();
         let mut polish = 0;
         for iter in 0..300 {
-            let mut asm = Asm::new(lay.dim);
-            self.stamp_linear(&mut asm, scale);
-            if gshunt > 0.0 {
-                for i in 0..lay.nn {
-                    asm.add(Some(i), Some(i), gshunt);
-                }
-            }
-            let mut limited = false;
-            for (ei, e) in net.elements.iter().enumerate() {
-                match &e.kind {
-                    Kind::M { model, w, l, mult } => {
-                        let ty = model.ty;
-                        let (d, g, s, b) = (e.nodes[0], e.nodes[1], e.nodes[2], e.nodes[3]);
-                        let (vd, vg, vs, vb) = (volt(&x, d), volt(&x, g), volt(&x, s), volt(&x, b));
-                        let (mut vgs, mut vds, mut vbs) = (ty * (vg - vs), ty * (vd - vs), ty * (vb - vs));
-                        if let St::Mos {
-                            vgs: og,
-                            vds: od,
-                            vbs: ob,
-                            von,
-                        } = st[ei]
-                        {
-                            if use_init {
-                                (vgs, vds, vbs) = (og, od, ob);
-                            } else {
-                                let (lg, ld, lb) = limit_mos(vgs, vds, vbs, og, od, ob, von, model.is * mult);
-                                if (lg, ld, lb) != (vgs, vds, vbs) {
-                                    limited = true;
-                                }
-                                (vgs, vds, vbs) = (lg, ld, lb);
-                            }
-                        }
-                        let beta = model.kp * w / l * mult;
-                        let ev = mos_eval(model, beta, vgs, vds, vbs);
-                        let vbd = vbs - vds;
-                        let (cbs, gbs) = bulk_junction(model.is * mult, vbs, gmin);
-                        let (cbd, gbd) = bulk_junction(model.is * mult, vbd, gmin);
-                        let (ed, es, vgs_e, vds_e, vbs_e) = if ev.mode > 0 {
-                            (d, s, vgs, vds, vbs)
-                        } else {
-                            (s, d, vgs - vds, -vds, vbs - vds)
-                        };
-                        stamp_nl(
-                            &mut asm,
-                            lay,
-                            ed,
-                            es,
-                            ty * ev.cdrain,
-                            &[
-                                (ev.gm, g, es, ty * vgs_e),
-                                (ev.gds, ed, es, ty * vds_e),
-                                (ev.gmbs, b, es, ty * vbs_e),
-                            ],
-                        );
-                        stamp_nl(&mut asm, lay, b, s, ty * cbs, &[(gbs, b, s, ty * vbs)]);
-                        stamp_nl(&mut asm, lay, b, d, ty * cbd, &[(gbd, b, d, ty * vbd)]);
-                        st[ei] = St::Mos {
-                            vgs,
-                            vds,
-                            vbs,
-                            von: ev.von,
-                        };
-                    }
-                    Kind::Q { model, area } => {
-                        let ty = model.ty;
-                        let (c, bn, en) = (e.nodes[0], e.nodes[1], e.nodes[2]);
-                        let (vc, vb, ve) = (volt(&x, c), volt(&x, bn), volt(&x, en));
-                        let (mut vbe, mut vbc) = (ty * (vb - ve), ty * (vb - vc));
-                        if let St::Bjt { vbe: ob, vbc: oc } = st[ei] {
-                            if use_init {
-                                (vbe, vbc) = (ob, oc);
-                            } else {
-                                let vc_ = vcrit(model.is * area, vt);
-                                let (lb, lc) = (pnjlim(vbe, ob, vt, vc_), pnjlim(vbc, oc, vt, vc_));
-                                if (lb, lc) != (vbe, vbc) {
-                                    limited = true;
-                                }
-                                (vbe, vbc) = (lb, lc);
-                            }
-                        }
-                        let ev = bjt_eval(model, *area, vbe, vbc, gmin);
-                        stamp_nl(
-                            &mut asm,
-                            lay,
-                            c,
-                            en,
-                            ty * ev.cc,
-                            &[(ev.dcc_dvbe(), bn, en, ty * vbe), (ev.dcc_dvbc(), bn, c, ty * vbc)],
-                        );
-                        stamp_nl(
-                            &mut asm,
-                            lay,
-                            bn,
-                            en,
-                            ty * ev.cb,
-                            &[(ev.gpi, bn, en, ty * vbe), (ev.gmu, bn, c, ty * vbc)],
-                        );
-                        st[ei] = St::Bjt { vbe, vbc };
-                    }
-                    Kind::D { model, area } => {
-                        let (a, k) = (e.nodes[0], e.nodes[1]);
-                        let mut vd = volt(&x, a) - volt(&x, k);
-                        if let St::Dio { vd: od } = st[ei] {
-                            if use_init {
-                                vd = od;
-                            } else {
-                                let vte = model.n * vt;
-                                let lv = pnjlim(vd, od, vte, vcrit(model.is * area, vte));
-                                if lv != vd {
-                                    limited = true;
-                                }
-                                vd = lv;
-                            }
-                        }
-                        let (id, gd) = diode_eval(model, *area, vd, gmin);
-                        stamp_nl(&mut asm, lay, a, k, id, &[(gd, a, k, vd)]);
-                        st[ei] = St::Dio { vd };
-                    }
-                    _ => {}
-                }
-            }
+            let (asm, limited) = self.assemble(&x, &mut st, scale, gshunt, use_init, true);
             let xn = solve_real(lay.dim, asm.a, asm.z).ok_or_else(|| {
                 "singular circuit matrix: a node may have no DC path to ground, or voltage sources form a loop"
                     .to_string()
             })?;
+            let mut xn = xn;
+            // Damped Newton once plain steps have had their chance: a node held
+            // only by a tiny conductance can otherwise be thrown volts away and
+            // cycle. It changes the path, not the fixed point.
+            if iter >= DAMP_AFTER {
+                let step = (0..lay.nn).map(|i| (xn[i] - x[i]).abs()).fold(0.0, f64::max);
+                let size = (0..lay.nn).map(|i| x[i].abs()).fold(0.0, f64::max);
+                let cap = MAX_STEP.max(0.5 * size);
+                if step > cap {
+                    let k = cap / step;
+                    for (v, old) in xn.iter_mut().zip(&x) {
+                        *v = old + k * (*v - old);
+                    }
+                }
+            }
+            let close = |tol: f64| {
+                xn.iter().zip(&x).enumerate().all(|(i, (a, b))| {
+                    let abstol = if i < lay.nn { 1e-12 } else { 1e-15 };
+                    (a - b).abs() <= tol * a.abs().max(b.abs()) + abstol * tol / 1e-10
+                })
+            };
+            // A node held only by leakage is fixed only to within rounding
+            // noise, so its steps never settle below 1e-10; there the circuit
+            // equations themselves decide: small steps and a KCL residual that
+            // passes the final check.
             let converged = !use_init
                 && !limited
-                && xn.iter().zip(&x).enumerate().all(|(i, (a, b))| {
-                    let abstol = if i < lay.nn { 1e-12 } else { 1e-15 };
-                    (a - b).abs() <= 1e-10 * a.abs().max(b.abs()) + abstol
-                });
+                && (close(1e-10) || (iter >= 20 && close(1e-6) && self.residual(&xn, &st) <= KCL_TOL));
             x = xn;
             use_init = false;
             if converged || polish > 0 {
@@ -419,6 +469,20 @@ fn limit_mos(vgs: f64, vds: f64, vbs: f64, og: f64, od: f64, ob: f64, von: f64, 
     (vgs, vds, vbs)
 }
 
+/// Newton iterations before node-voltage steps are capped at MAX_STEP volts
+/// (or half the largest node voltage, so a far-off iterate can come back).
+const DAMP_AFTER: usize = 10;
+const MAX_STEP: f64 = 0.5;
+/// Newton iterations allowed across one stepping strategy: 20k for small
+/// circuits, fewer as each dense solve gets costlier (about 2e10 flops).
+fn stepping_budget(dim: usize) -> usize {
+    (2e10 / (dim.max(1) as f64).powi(3)).clamp(300.0, 20_000.0) as usize
+}
+
+/// Largest relative KCL residual accepted for a DC solution.
+pub const KCL_TOL: f64 = 1e-9;
+const RESIDUAL_FLOOR: f64 = 1e-6;
+
 pub fn operating_point(net: &Netlist) -> Result<Op, String> {
     let ctx = Ctx {
         net,
@@ -433,35 +497,81 @@ pub fn operating_point(net: &Netlist) -> Result<Op, String> {
             Err(_) => return Err(first),
         },
     };
+    // Fail loudly rather than hand back a point that does not satisfy the
+    // circuit equations (e.g. a near-singular system solved through roundoff).
+    let res = ctx.residual(&x, &init);
+    if res.is_nan() || res > KCL_TOL {
+        return Err(format!(
+            "DC operating point failed the KCL check (relative residual {res:.1e}); the circuit may be ill-conditioned"
+        ));
+    }
     Ok(finish(net, &ctx.lay, x, method, iters))
 }
 
+/// Dynamic gmin stepping (as in ngspice): a shunt conductance on every node
+/// makes the problem easy; shrink it by `factor` after each success, and on a
+/// failure go back to the last solved point with a smaller factor.
 fn gmin_stepping(ctx: &Ctx, init: &[St]) -> Result<(Vec<f64>, usize, &'static str), String> {
-    let mut x = vec![0.0; ctx.lay.dim];
-    let mut st = init.to_vec();
-    let mut first = true;
-    let mut total = 0;
-    let mut g = 1e-2;
-    while g > 1e-13 {
-        let (nx, nst, it) = ctx.newton(1.0, g, x, st, first)?;
-        (x, st, first) = (nx, nst, false);
-        total += it;
-        g /= 10.0;
+    let mut g = 1e-3;
+    let (mut x, mut st, mut total) = loop {
+        match ctx.newton(1.0, g, vec![0.0; ctx.lay.dim], init.to_vec(), true) {
+            Ok(r) => break r,
+            Err(e) if g >= 1.0 => return Err(e),
+            Err(_) => g *= 10.0,
+        }
+    };
+    let mut factor: f64 = 10.0;
+    while total < stepping_budget(ctx.lay.dim) {
+        let next = if g / factor < 1e-13 { 0.0 } else { g / factor };
+        match ctx.newton(1.0, next, x.clone(), st.clone(), false) {
+            Ok((nx, nst, it)) => {
+                (x, st) = (nx, nst);
+                total += it;
+                if next == 0.0 {
+                    return Ok((x, total, "gmin stepping"));
+                }
+                g = next;
+                factor = (factor * factor.sqrt()).min(10.0);
+            }
+            Err(e) => {
+                factor = factor.sqrt().sqrt();
+                if factor < 1.00005 {
+                    return Err(e);
+                }
+                total += 300;
+            }
+        }
     }
-    let (x, _, it) = ctx.newton(1.0, 0.0, x, st, false)?;
-    Ok((x, total + it, "gmin stepping"))
+    Err("DC operating point did not converge (gmin stepping)".to_string())
 }
 
+/// Adaptive source stepping: ramp every independent source from 0 to its
+/// value, growing the step after successes and backing off after failures.
 fn source_stepping(ctx: &Ctx, init: &[St]) -> Result<(Vec<f64>, usize, &'static str), String> {
-    let mut x = vec![0.0; ctx.lay.dim];
-    let mut st = init.to_vec();
-    let mut total = 0;
-    for k in 0..=40 {
-        let (nx, nst, it) = ctx.newton(k as f64 / 40.0, 0.0, x, st, k == 0)?;
-        (x, st) = (nx, nst);
-        total += it;
+    let (mut x, mut st, mut total) = ctx.newton(0.0, 0.0, vec![0.0; ctx.lay.dim], init.to_vec(), true)?;
+    let (mut alpha, mut step) = (0.0f64, 0.05f64);
+    while total < stepping_budget(ctx.lay.dim) {
+        let next = (alpha + step).min(1.0);
+        match ctx.newton(next, 0.0, x.clone(), st.clone(), false) {
+            Ok((nx, nst, it)) => {
+                (x, st) = (nx, nst);
+                total += it;
+                if next >= 1.0 {
+                    return Ok((x, total, "source stepping"));
+                }
+                alpha = next;
+                step = (step * 1.5).min(0.25);
+            }
+            Err(e) => {
+                step /= 4.0;
+                if step < 1e-7 {
+                    return Err(e);
+                }
+                total += 300;
+            }
+        }
     }
-    Ok((x, total, "source stepping"))
+    Err("DC operating point did not converge (source stepping)".to_string())
 }
 
 fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterations: usize) -> Op {
@@ -504,12 +614,12 @@ fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterat
                     let ty = model.ty;
                     let (vbe, vbc) = (nv(1) - nv(2), nv(1) - nv(0));
                     let ev = bjt_eval(model, *area, ty * vbe, ty * vbc, gmin);
-                    let region = if ty * vbe < 0.4 {
-                        "cutoff"
-                    } else if ty * vbc > 0.4 {
-                        "saturation"
-                    } else {
-                        "forward-active"
+                    // Junction on above 0.4 V, as the oracle labels them.
+                    let region = match (ty * vbe > 0.4, ty * vbc > 0.4) {
+                        (true, false) => "forward-active",
+                        (true, true) => "saturation",
+                        (false, true) => "reverse-active",
+                        (false, false) => "cutoff",
                     };
                     Some(DevOp::Bjt(BjtOp {
                         ty,

@@ -5,6 +5,11 @@
 
 use crate::poly::{MonoMap, Poly};
 
+/// Upper bound on term products per determinant (about half a second of work), so
+/// a dense matrix fails cleanly instead of running away before the per-row
+/// term check sees it.
+pub const MAX_WORK: u64 = 200_000_000;
+
 pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
     let n = a.len();
     if n == 0 {
@@ -43,6 +48,10 @@ pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
         must[r] |= must[r - 1];
     }
 
+    let too_large = || {
+        format!("exact expression too large (over {max_terms} terms); simplify the circuit or analyze a smaller block")
+    };
+    let mut work: u64 = 0;
     let mut cur: MonoMap<Poly> = MonoMap::default();
     cur.insert(0, Poly::one());
     for (r, row) in rows.iter().enumerate() {
@@ -59,6 +68,10 @@ pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
                 }
                 let pos = (set & ((1u64 << c) - 1)).count_ones() as usize;
                 let sign = if (r + pos).is_multiple_of(2) { 1 } else { -1 };
+                work += (entry.len() * minor.len()) as u64 + 1;
+                if work > MAX_WORK {
+                    return Err(too_large());
+                }
                 next.entry(ns as u128)
                     .or_default()
                     .mul_acc(entry, minor, sign)
@@ -72,9 +85,7 @@ pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
             !p.is_zero()
         });
         if total > max_terms {
-            return Err(format!(
-                "exact expression too large (over {max_terms} terms); simplify the circuit or analyze a smaller block"
-            ));
+            return Err(too_large());
         }
         cur = next;
     }

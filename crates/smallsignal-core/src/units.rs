@@ -2,7 +2,12 @@
 
 /// Parses a SPICE value with an optional SI suffix. Trailing unit letters
 /// after the suffix are ignored, as in SPICE (`10kohm` is 10e3, `1.8v` is 1.8).
+/// Values that overflow (`1e400`) are rejected rather than read as infinity.
 pub fn parse_value(s: &str) -> Option<f64> {
+    parse_raw(s).filter(|v| v.is_finite())
+}
+
+fn parse_raw(s: &str) -> Option<f64> {
     let t = s.trim();
     let b = t.as_bytes();
     let mut i = 0;
@@ -90,6 +95,10 @@ mod tests {
         assert_eq!(p(".5p"), Some(0.5e-12));
         assert_eq!(p("100f"), Some(100e-15));
         assert_eq!(p("abc"), None);
+        assert_eq!(p("1e400"), None);
+        assert_eq!(p("-1e400"), None);
+        assert_eq!(p("1e308k"), None);
+        assert_eq!(p("1e-400"), Some(0.0));
         assert_eq!(p("."), None);
     }
 }
