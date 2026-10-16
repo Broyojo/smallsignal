@@ -9,5 +9,11 @@
  ],
  "rin": true,
  "rout": true,
- "description": "minimized fuzz regression (nan) from wildbjt_101_044.cir"
+ "description": "minimized fuzz regression (nan) from wildbjt_101_044.cir",
+ "reference_limits": {
+  "rin": {
+   "rtol": 1e-05,
+   "why": "Rin \u2248 2.2e14 \u03a9 is set by gmin-level conductances; an independent 60-digit MNA solve gives 219169503597514 \u03a9, which ours matches to 7.7e-12 while ngspice's double-precision LU is off by 3.5e-6."
+  }
+ }
 }

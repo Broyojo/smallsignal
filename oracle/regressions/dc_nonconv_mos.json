@@ -9,5 +9,19 @@
  ],
  "rin": true,
  "rout": true,
- "description": "minimized fuzz regression (nonconv) from wildmos_102_002.cir"
+ "description": "minimized fuzz regression (nonconv) from wildmos_102_002.cir",
+ "reference_limits": {
+  "m1.vds": {
+   "rtol": 10.0,
+   "why": "Degenerate fuzz circuit: n2 touches only R2, so the vdd/n2 island has no current return path. M1's drain current is exactly 0, which forces Vds = 0 (both simulators report noise around 0), Rin is truly infinite (ngspice's 7.4e18 \u03a9 is LU noise), and Rout depends on gbd at that noise-level Vds."
+  },
+  "rin": {
+   "rtol": 1e+300,
+   "why": "Degenerate fuzz circuit: n2 touches only R2, so the vdd/n2 island has no current return path. M1's drain current is exactly 0, which forces Vds = 0 (both simulators report noise around 0), Rin is truly infinite (ngspice's 7.4e18 \u03a9 is LU noise), and Rout depends on gbd at that noise-level Vds."
+  },
+  "rout": {
+   "rtol": 0.0001,
+   "why": "Degenerate fuzz circuit: n2 touches only R2, so the vdd/n2 island has no current return path. M1's drain current is exactly 0, which forces Vds = 0 (both simulators report noise around 0), Rin is truly infinite (ngspice's 7.4e18 \u03a9 is LU noise), and Rout depends on gbd at that noise-level Vds."
+  }
+ }
 }

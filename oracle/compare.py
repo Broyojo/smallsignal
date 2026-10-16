@@ -85,17 +85,26 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
 
 
 class Report:
-    def __init__(self, rtol: float):
+    def __init__(self, rtol: float, reference_limits: dict | None = None):
         self.rtol = rtol
         self.failures: list[str] = []
         self.worst = 0.0
+        # Quantities where ngspice itself is known to be inaccurate, each
+        # justified in the sidecar (prefix -> {"rtol", "why"}).
+        self.limits = reference_limits or {}
+
+    def tol_for(self, what: str) -> float:
+        for prefix, limit in self.limits.items():
+            if what.startswith(prefix):
+                return limit["rtol"]
+        return self.rtol
 
     def real(self, what: str, got, want: float, kind: str):
         if got is None:
             self.failures.append(f"{what}: missing")
             return
         err = abs(float(got) - want)
-        tol = self.rtol * abs(want) + ATOL[kind]
+        tol = self.tol_for(what) * abs(want) + ATOL[kind]
         self.worst = max(self.worst, err / (abs(want) + ATOL[kind]))
         if not err <= tol:
             self.failures.append(f"{what}: got {got:.12g}, want {want:.12g}")
@@ -109,12 +118,14 @@ class Report:
                 self.failures.append(f"{what}: want infinite, got {got}")
             return
         if is_inf(got):
-            self.failures.append(f"{what}: got infinite, want {want['re']:.6g}{want['im']:+.6g}j")
+            # A limited quantity may be truly infinite where ngspice shows noise.
+            if self.tol_for(what) < 1e300:
+                self.failures.append(f"{what}: got infinite, want {want['re']:.6g}{want['im']:+.6g}j")
             return
         g = complex(got["re"], got["im"])
         w = complex(want["re"], want["im"])
         err = abs(g - w)
-        tol = self.rtol * abs(w) + ATOL[kind]
+        tol = self.tol_for(what) * abs(w) + ATOL[kind]
         self.worst = max(self.worst, err / (abs(w) + ATOL[kind]))
         if not err <= tol:
             self.failures.append(f"{what}: got {g:.10g}, want {w:.10g}")
@@ -182,7 +193,7 @@ def main() -> int:
         want = json.loads(wpath.read_text())
         cir = (args.corpus / want["netlist"]).resolve()  # the CLI runs from the repo root
         side = json.loads(cir.with_suffix(".json").read_text())
-        rep = Report(args.rtol)
+        rep = Report(args.rtol, side.get("reference_limits"))
         try:
             compare(run_cli(cmd, cir, side), want, rep)
         except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
