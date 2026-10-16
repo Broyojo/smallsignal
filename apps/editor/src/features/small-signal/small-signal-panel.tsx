@@ -11,6 +11,7 @@ import {
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
   createSmallSignalClient,
+  DEFAULT_SUPPLY_VOLTAGE,
   isSmallSignalError,
   smallSignalNetlist,
   type ComplexPoint,
@@ -273,13 +274,15 @@ export function SmallSignalPanel({
   project: CircuitProject;
   rootDocumentId?: string;
 }) {
+  const [supply, setSupply] = useState(String(DEFAULT_SUPPLY_VOLTAGE));
+  const supplyVoltage = parseFrequencies(supply)[0] ?? DEFAULT_SUPPLY_VOLTAGE;
   const netlist = useMemo(
     () =>
-      smallSignalNetlist(
-        project,
-        rootDocumentId ? { rootDocumentId } : undefined,
-      ),
-    [project, rootDocumentId],
+      smallSignalNetlist(project, {
+        ...(rootDocumentId ? { rootDocumentId } : {}),
+        supplyVoltage,
+      }),
+    [project, rootDocumentId, supplyVoltage],
   );
   const [input, setInput] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
@@ -387,6 +390,17 @@ export function SmallSignalPanel({
       ) : (
         <>
           <div className="small-signal-controls">
+            {netlist.supplies.length ? (
+              <label title="DC value of the VDD symbols that no source drives">
+                <span>{netlist.supplies.join(", ")}</span>
+                <input
+                  aria-label="Supply voltage"
+                  value={supply}
+                  onChange={(event) => setSupply(event.currentTarget.value)}
+                />
+                <span>V</span>
+              </label>
+            ) : null}
             <label>
               <span>Input</span>
               <select

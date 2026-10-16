@@ -90,6 +90,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             net.missing.join(", ")
         ));
     }
+    warnings.extend(wiring_warnings(&net, op.as_ref()));
     let has_reactive = ss.reactive_mask != 0;
     let q = Quantities {
         ss: &ss,
@@ -173,6 +174,79 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
     resp.insert("warnings".into(), json!(warnings));
     Ok(Value::Object(resp))
+}
+
+/// Wiring that makes a result meaningless even though it solves: a node only
+/// one terminal touches (an open end), or a transistor that is on but carries
+/// no current (nothing completes its DC path).
+fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut touched: Vec<Vec<&str>> = vec![Vec::new(); net.nodes.len()];
+    for e in &net.elements {
+        for &n in &e.nodes {
+            touched[n].push(&e.name);
+        }
+    }
+    for (n, users) in touched.iter().enumerate().skip(1) {
+        if users.len() == 1 {
+            out.push(format!(
+                "node {} connects only to {}: that end is open, so {} carries no signal",
+                net.nodes[n], users[0], users[0]
+            ));
+        }
+    }
+    if let Some(op) = op {
+        for (ei, e) in net.elements.iter().enumerate() {
+            let (on, current) = match &op.dev[ei] {
+                Some(DevOp::Mos(m)) => (m.region != crate::devices::MosRegion::Cutoff, m.id),
+                Some(DevOp::Bjt(b)) => (b.region != "cutoff", b.ic),
+                _ => continue,
+            };
+            if on && current.abs() < 1e-12 {
+                out.push(format!(
+                    "{} is on but carries no DC current ({:.1e} A): check that its drain/collector has a DC path",
+                    e.name, current
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Conventional (∥) notation for num/den, kept only if it is the same
+/// function: checked at random parameter values and random complex s.
+fn structured(num: &Poly, den: &Poly, ss: &SsCircuit) -> Option<String> {
+    let st = crate::structure::structure(num, den, &ss.params, ss.reactive_mask)?;
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut rnd = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        0.5 + (seed % 1_000_000) as f64 / 1_000_000.0
+    };
+    for _ in 0..4 {
+        let vals: Vec<f64> = ss.params.iter().map(|_| rnd()).collect();
+        let s = Complex64::new(rnd() - 1.0, rnd());
+        let ev = |p: &Poly| {
+            let mut acc = Complex64::new(0.0, 0.0);
+            for (&m, &c) in &p.terms {
+                let mut v = c as f64;
+                for (i, p) in ss.params.iter().enumerate() {
+                    if m >> i & 1 == 1 {
+                        v *= if p.inverted { 1.0 / vals[i] } else { vals[i] };
+                    }
+                }
+                acc += v * s.powu((m & ss.reactive_mask).count_ones());
+            }
+            acc
+        };
+        let want = ev(num) / ev(den);
+        let got = st.eval(&ss.params, &vals, s);
+        if (got - want).norm() > 1e-10 * want.norm().max(1e-300) {
+            return None;
+        }
+    }
+    Some(st.latex)
 }
 
 fn node_num(sys: &System, node: usize, max_terms: usize) -> Result<Poly, String> {
@@ -279,8 +353,11 @@ impl Quantities<'_> {
         if self.symbolic {
             let small = exact.term_count() <= LATEX_TERM_LIMIT;
             let (en, ed) = exact.plain(params);
+            let expanded = exact.latex(params);
+            let latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
             let ex = json!({
-                "latex": if small { json!(exact.latex(params)) } else { Value::Null },
+                "latex": if small { json!(latex) } else { Value::Null },
+                "latexExpanded": if small { json!(expanded) } else { Value::Null },
                 "num": if small { json!(en) } else { Value::Null },
                 "den": if small { json!(ed) } else { Value::Null },
                 "terms": { "num": exact.num.len(), "den": exact.den.len() },
@@ -359,16 +436,30 @@ impl Quantities<'_> {
         let (en, ed) = exact.plain(params);
         let small = exact.term_count() <= LATEX_TERM_LIMIT;
         let (sn, sd) = simplified.plain(params);
+        let expanded = exact.latex(params);
+        let exact_latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
+        let same = simplified.term_count() == exact.term_count();
+        let simp_expanded = simplified.latex(params);
+        let (smn, smd) = simplified.to_mna(self.ss.inv_mask);
+        let simp_latex = if same {
+            exact_latex.clone()
+        } else {
+            structured(&smn, &smd, self.ss).unwrap_or_else(|| simp_expanded.clone())
+        };
         json!({
             "unit": unit,
             "exact": {
-                "latex": if small { json!(exact.latex(params)) } else { Value::Null },
+                "latex": if small { json!(exact_latex) } else { Value::Null },
+                "latexExpanded": if small { json!(expanded) } else { Value::Null },
                 "num": if small { json!(en) } else { Value::Null },
                 "den": if small { json!(ed) } else { Value::Null },
                 "terms": { "num": exact.num.len(), "den": exact.den.len() },
             },
             "simplified": {
-                "latex": simplified.latex(params),
+                "latex": simp_latex,
+                "latexExpanded": simp_expanded,
+                // True when nothing was dropped: the simplified form is exact.
+                "same": same,
                 "num": sn,
                 "den": sd,
                 "maxRelError": simp_err,

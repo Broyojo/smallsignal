@@ -108,6 +108,20 @@ impl Expr {
         fix(&mut self.den);
     }
 
+    /// Back to MNA (conductance) form, up to a common monomial factor, which
+    /// leaves the ratio unchanged.
+    pub fn to_mna(&self, inv: Mono) -> (Poly, Poly) {
+        let inv_all = self.num.iter().chain(&self.den).fold(0, |acc, t| acc | (t.mask & inv));
+        let conv = |ts: &[Term]| {
+            let mut p = Poly::zero();
+            for t in ts {
+                p.add_term((t.mask & !inv) | (inv_all & !t.mask), t.coeff);
+            }
+            p
+        };
+        (conv(&self.num), conv(&self.den))
+    }
+
     pub fn term_count(&self) -> usize {
         self.num.len() + self.den.len()
     }

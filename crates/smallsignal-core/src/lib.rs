@@ -15,6 +15,7 @@ pub mod poly;
 pub mod render;
 pub mod roots;
 pub mod ss;
+pub mod structure;
 pub mod units;
 pub mod verify;
 

@@ -20,6 +20,12 @@ export const SMALL_SIGNAL_MODEL_CARDS = {
 } as const;
 type ModelKind = keyof typeof SMALL_SIGNAL_MODEL_CARDS;
 
+/** DC value for supply symbols (VDD, VDD Rail) that no source drives. */
+export const DEFAULT_SUPPLY_VOLTAGE = 1.8;
+
+/** Global rails held at 0 V rather than the supply voltage. */
+const GROUND_RAIL = /^(v?ss|gnd|agnd|dgnd)/iu;
+
 export interface SmallSignalSource {
   name: string;
   kind: "voltage" | "current";
@@ -37,6 +43,14 @@ export interface SmallSignalNetlist {
   missing: string[];
   /** What the translation changed or left out, for the panel to show. */
   notes: string[];
+  /** Supply nets drawn with a VDD symbol and driven by an added DC source. */
+  supplies: string[];
+}
+
+export interface SmallSignalNetlistOptions {
+  rootDocumentId?: string;
+  /** DC value for undriven supply symbols; defaults to 1.8 V. */
+  supplyVoltage?: number;
 }
 
 const LETTER: Partial<Record<DesignNetlistInstance["deviceClass"], string>> = {
@@ -103,7 +117,7 @@ function identifier(name: string): string {
  */
 export function smallSignalNetlist(
   project: CircuitProject,
-  options: { rootDocumentId?: string } = {},
+  options: SmallSignalNetlistOptions = {},
 ): SmallSignalNetlist | null {
   const analysis = analyzeDesignNetlistForAuthoring(project, {
     format: "spice",
@@ -115,12 +129,17 @@ export function smallSignalNetlist(
   });
   const ir = analysis.ir;
   if (!ir) return null;
-  return translate(project, ir);
+  return translate(
+    project,
+    ir,
+    options.supplyVoltage ?? DEFAULT_SUPPLY_VOLTAGE,
+  );
 }
 
 function translate(
   project: CircuitProject,
   ir: DesignNetlistIR,
+  supplyVoltage: number,
 ): SmallSignalNetlist {
   const cellsByName = new Map(ir.cells.map((cell) => [cell.name, cell]));
   const behavioral = new Set(
@@ -136,6 +155,7 @@ function translate(
   const notes: string[] = [];
   const usedModels = new Set<ModelKind>();
   const usedNames = new Set<string>();
+  const supplyNets = new Set<string>();
   let floating = 0;
 
   const symbolOf = (cell: DesignNetlistCell, id: string) =>
@@ -169,6 +189,9 @@ function translate(
       ...cell.nets.filter((net) => net.scope === "global").map((n) => n.name),
     ]);
     const net = (name: string) => {
+      // Supply symbols (VDD, VDD Rail) become global nets; they are driven
+      // below if no source drives them.
+      if (name !== "0" && globals.has(name)) supplyNets.add(identifier(name));
       if (name.startsWith("<unconnected:")) {
         floating += 1;
         return `nc${floating}`;
@@ -366,6 +389,21 @@ function translate(
   }
 
   if (top) emitCell(top, "", new Map(), new Map(), 0);
+
+  // A supply rail with no voltage source on it is a fixed DC rail, which is
+  // AC ground in the small-signal circuit.
+  const supplies: string[] = [];
+  for (const supply of supplyNets) {
+    const driven = sources.some(
+      (source) => source.kind === "voltage" && source.nodes.includes(supply),
+    );
+    if (driven) continue;
+    const volts = GROUND_RAIL.test(supply) ? 0 : supplyVoltage;
+    const name = uniqueName("V", `SUP_${supply}`, "");
+    lines.push(`${name} ${supply} 0 DC ${volts}`);
+    supplies.push(supply);
+    notes.push(`${supply} has no source: held at ${volts} V DC (AC ground)`);
+  }
   if (floating)
     notes.push(
       `${floating} unconnected pin${floating === 1 ? "" : "s"} left floating`,
@@ -388,5 +426,6 @@ function translate(
     sources,
     missing,
     notes,
+    supplies,
   };
 }

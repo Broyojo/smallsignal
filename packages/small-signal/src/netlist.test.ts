@@ -49,6 +49,22 @@ describe("smallSignalNetlist", () => {
     expect(netlist.nets).toContain("vout");
   });
 
+  it("holds an undriven VDD symbol at a DC supply (AC ground)", () => {
+    const netlist = smallSignalNetlist(example("common-source-amplifier"))!;
+    expect(netlist.supplies).toEqual(["VDD"]);
+    expect(netlist.text.split("\n")).toContain("VSUP_VDD VDD 0 DC 1.8");
+    const at3v3 = smallSignalNetlist(example("common-source-amplifier"), {
+      supplyVoltage: 3.3,
+    })!;
+    expect(at3v3.text.split("\n")).toContain("VSUP_VDD VDD 0 DC 3.3");
+  });
+
+  it("leaves a supply that a source already drives alone", () => {
+    const netlist = smallSignalNetlist(example("simulation-common-source"))!;
+    expect(netlist.supplies).toEqual([]);
+    expect(netlist.text).not.toMatch(/^VSUP/mu);
+  });
+
   it("keeps a drawing without values symbolic", () => {
     const netlist = smallSignalNetlist(example("common-source-amplifier"))!;
     expect(netlist.missing).toEqual(expect.arrayContaining(["RD", "RS"]));
