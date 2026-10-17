@@ -15,6 +15,7 @@ import {
   modelTextEdited,
   modelValue,
   noiseBandRange,
+  noiseJobKey,
   parseFrequencies,
   parseSpiceNumber,
   preferredOutput,
@@ -239,6 +240,20 @@ describe("noise band", () => {
     expect(noiseBandRange("-1, 1, 10")).toBeNull();
     expect(noiseBandRange("1, x")).toBeNull();
     expect(noiseBandRange("1k 1meg")).toEqual([1e3, 1e6]);
+  });
+});
+
+describe("noiseJobKey", () => {
+  it("waits for the main solve of this very request", () => {
+    // The circuit changed and its main solve has not answered: whether the
+    // exact forms are over budget is not known yet.
+    expect(noiseJobKey(true, "new", "old", null, false)).toBeNull();
+    expect(noiseJobKey(true, "new", null, null, false)).toBeNull();
+    expect(noiseJobKey(false, "new", "new", null, false)).toBeNull();
+    expect(noiseJobKey(true, null, null, null, false)).toBeNull();
+    expect(JSON.parse(noiseJobKey(true, "new", "new", [1, 10], true)!)).toEqual(
+      ["new", [1, 10], true],
+    );
   });
 });
 
