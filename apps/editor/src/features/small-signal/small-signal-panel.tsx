@@ -127,25 +127,37 @@ const MODEL_TITLE: Record<ModelKind, string> = {
   diode: "Diode",
 };
 
-/** Allowed range per parameter (VTO is any sign; zero VAF means none). */
-const MODEL_RANGE: Record<string, "positive" | "nonnegative"> = {
-  KP: "positive",
-  LAMBDA: "nonnegative",
-  GAMMA: "nonnegative",
-  PHI: "positive",
-  IS: "positive",
-  BF: "positive",
-  VAF: "nonnegative",
-  N: "positive",
+/**
+ * The range each parameter accepts. Wider than any real device, narrow
+ * enough that the solver's exponentials and N·V_T stay finite. VTO takes
+ * either sign; VAF = 0 means no Early effect, LAMBDA = 0 no channel-length
+ * modulation, GAMMA = 0 no body effect.
+ */
+const MODEL_RANGE: Record<string, { min: number; max: number }> = {
+  KP: { min: 1e-12, max: 10 },
+  VTO: { min: -100, max: 100 },
+  LAMBDA: { min: 0, max: 10 },
+  GAMMA: { min: 0, max: 100 },
+  PHI: { min: 1e-3, max: 100 },
+  IS: { min: 1e-30, max: 1 },
+  BF: { min: 1e-3, max: 1e6 },
+  VAF: { min: 0, max: 1e6 },
+  N: { min: 0.01, max: 100 },
 };
 
 export function modelValue(name: string, text: string): number | null {
   const value = parseSpiceNumber(text);
-  if (value === null) return null;
   const range = MODEL_RANGE[name];
-  if (range === "positive" && !(value > 0)) return null;
-  if (range === "nonnegative" && !(value >= 0)) return null;
-  return value;
+  if (value === null || !range) return null;
+  return value >= range.min && value <= range.max ? value : null;
+}
+
+/** The accepted range, as a tooltip for a value outside it. */
+function rangeText(name: string): string | undefined {
+  const range = MODEL_RANGE[name];
+  return range
+    ? `${formatSpiceNumber(range.min)} to ${formatSpiceNumber(range.max)}`
+    : undefined;
 }
 
 /** Typed model parameters, by kind then name, kept as the user wrote them. */
@@ -240,7 +252,10 @@ function ModelFields({
                   <input
                     aria-label={`${MODEL_TITLE[kind]} ${name}`}
                     aria-invalid={invalid || undefined}
-                    inputMode="decimal"
+                    title={invalid ? rangeText(name) : undefined}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                     placeholder={formatSpiceNumber(fallback)}
                     value={typed}
                     onChange={(event) =>
@@ -1128,7 +1143,6 @@ export function SmallSignalPanel({
                             ? true
                             : undefined
                         }
-                        inputMode="decimal"
                         placeholder="V"
                         value={pinBiasText[pin] ?? ""}
                         onChange={(event) => {
@@ -1216,7 +1230,6 @@ export function SmallSignalPanel({
                     {netlist.supplies.join(", ")} (V)
                     <input
                       aria-label="Supply voltage"
-                      inputMode="decimal"
                       value={supply}
                       onChange={(event) => setSupply(event.currentTarget.value)}
                     />
@@ -1238,7 +1251,7 @@ export function SmallSignalPanel({
                 </details>
               </div>
             </details>
-            {netlist.models.length ? (
+            {netlist.models.length || modelTextEdited(modelText) ? (
               <details className="small-signal-options">
                 <summary>
                   {modelTextEdited(modelText) ? "Models (edited)" : "Models"}

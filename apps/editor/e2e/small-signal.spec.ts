@@ -137,38 +137,39 @@ async function formula(panel: Locator, name: string): Promise<string> {
 async function biasLine(panel: Locator, device: string) {
   const row = card(panel, "Bias point").locator(`tr[data-device="${device}"]`);
   await expect(row).toHaveCount(1);
-  const quantity = async (name: string, unit: string) => {
-    const text = await row.locator(`td[data-quantity="${name}"]`).innerText();
+  // One snapshot of the row, so every number comes from the same solve.
+  const cells = await row.evaluate((tr) => {
+    const text = (name: string) =>
+      tr.querySelector(`td[data-quantity="${name}"]`)?.textContent ?? "";
+    return {
+      id: text("id"),
+      gm: text("gm"),
+      ro: text("ro"),
+      // The region column only appears when some transistor is not saturated.
+      region:
+        tr.querySelector(".small-signal-region")?.textContent ?? "saturation",
+    };
+  });
+  const scale: Record<string, number> = {
+    n: 1e-9,
+    µ: 1e-6,
+    m: 1e-3,
+    "": 1,
+    k: 1e3,
+    M: 1e6,
+  };
+  const quantity = (name: "id" | "gm" | "ro", unit: string) => {
+    const text = cells[name];
+    if (name === "ro" && text.includes("∞")) return Infinity;
     const match = new RegExp(`([\\d.]+)\\s*([nµmkM]?)${unit}`, "u").exec(text);
     if (!match) throw new Error(`no ${name} in "${text}"`);
-    const scale: Record<string, number> = {
-      n: 1e-9,
-      µ: 1e-6,
-      m: 1e-3,
-      "": 1,
-      k: 1e3,
-      M: 1e6,
-    };
     return Number(match[1]) * scale[match[2] ?? ""]!;
   };
-  const current = /([\d.]+)\s*([nµm]?)A/u.exec(
-    await row.locator('td[data-quantity="id"]').innerText(),
-  );
-  if (!current) throw new Error("no drain current");
-  const amps =
-    Number(current[1]) *
-    ({ n: 1e-9, µ: 1e-6, m: 1e-3, "": 1 } as Record<string, number>)[
-      current[2] ?? ""
-    ]!;
-  // The region column only appears when some transistor is not saturated.
-  const chip = row.locator(".small-signal-region");
   return {
-    region: (await chip.count()) ? await chip.innerText() : "saturation",
-    id: amps,
-    gm: await quantity("gm", "S"),
-    ro: (await row.locator('td[data-quantity="ro"]').innerText()).includes("∞")
-      ? Infinity
-      : await quantity("ro", "Ω"),
+    region: cells.region,
+    id: quantity("id", "A"),
+    gm: quantity("gm", "S"),
+    ro: quantity("ro", "Ω"),
   };
 }
 
@@ -491,4 +492,24 @@ test("stored model values: malformed ones are dropped, every edit shows, Reset c
   expect(
     await page.evaluate(() => localStorage.getItem("smallsignal.models")),
   ).toBe("{}");
+});
+
+test("stored model edits stay reachable in a circuit without transistors", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { KP: "300u" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.rc);
+  const summary = panel.getByText(/^Models/u);
+  await expect(summary).toHaveText("Models (edited)");
+  await summary.click();
+  await expect(panel.getByLabel("NMOS KP")).toHaveValue("300u");
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(panel.getByText(/^Models/u)).toHaveCount(0);
 });

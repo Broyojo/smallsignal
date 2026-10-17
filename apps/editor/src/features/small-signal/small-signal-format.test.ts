@@ -163,6 +163,13 @@ describe("model parameters", () => {
     expect(modelValue("LAMBDA", "-0.1")).toBeNull();
     expect(modelValue("VAF", "0")).toBe(0);
     expect(modelValue("IS", "0")).toBeNull();
+    // Finite but beyond what the solver can represent: N·V_T underflows.
+    expect(modelValue("N", "5e-324")).toBeNull();
+    expect(modelValue("N", "1")).toBe(1);
+    expect(modelValue("KP", "1e300")).toBeNull();
+    expect(modelValue("IS", "1e-40")).toBeNull();
+    expect(modelValue("VTO", "-101")).toBeNull();
+    expect(modelValue("W", "1u")).toBeNull();
   });
 
   it("reads stored model text defensively", () => {
