@@ -135,14 +135,12 @@ async function formula(panel: Locator, name: string): Promise<string> {
 
 /** gm and ro as the Bias point card prints them for one transistor. */
 async function biasLine(panel: Locator, device: string) {
-  const line = card(panel, "Bias point")
-    .locator("li")
-    .filter({ has: panel.page().locator("b", { hasText: device }) });
-  await expect(line).toHaveCount(1);
-  const text = await line.innerText();
-  const quantity = (symbol: RegExp) => {
-    const match = symbol.exec(text);
-    if (!match) throw new Error(`no ${symbol} in "${text}"`);
+  const row = card(panel, "Bias point").locator(`tr[data-device="${device}"]`);
+  await expect(row).toHaveCount(1);
+  const quantity = async (name: string, unit: string) => {
+    const text = await row.locator(`td[data-quantity="${name}"]`).innerText();
+    const match = new RegExp(`([\\d.]+)\\s*([nµmkM]?)${unit}`, "u").exec(text);
+    if (!match) throw new Error(`no ${name} in "${text}"`);
     const scale: Record<string, number> = {
       n: 1e-9,
       µ: 1e-6,
@@ -153,10 +151,12 @@ async function biasLine(panel: Locator, device: string) {
     };
     return Number(match[1]) * scale[match[2] ?? ""]!;
   };
+  // The region column only appears when some transistor is not saturated.
+  const chip = row.locator(".small-signal-region");
   return {
-    region: await line.locator(".small-signal-region").innerText(),
-    gm: quantity(/gm\s*([\d.]+)\s*([nµmkM]?)S/u),
-    ro: quantity(/ro\s*([\d.]+)\s*([nµmkM]?)Ω/u),
+    region: (await chip.count()) ? await chip.innerText() : "saturation",
+    gm: await quantity("gm", "S"),
+    ro: await quantity("ro", "Ω"),
   };
 }
 

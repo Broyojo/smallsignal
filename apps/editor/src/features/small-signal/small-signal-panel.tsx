@@ -255,7 +255,7 @@ function MainFormula({
         </small>
       )}
       <details className="small-signal-exact">
-        <summary>With junction leakage</summary>
+        <summary>Exact</summary>
         <ExactFormula symbol={symbol} quantity={quantity} />
       </details>
     </>
@@ -308,7 +308,7 @@ function QuantityCard({
     (terms ? terms.num + terms.den > 6 : quantity.exact.latex.length > 160);
   const simplerNote = simpler?.assumption
     ? `assuming ${simpler.assumption}`
-    : `within ${formatPercent(simpler?.maxRelError ?? 0)} of the exact form`;
+    : `within ${formatPercent(simpler?.maxRelError ?? 0)} of exact`;
   const poleCount = quantity.poles?.length ?? 0;
   const poles = (quantity.poles ?? []).map(rootText).filter(Boolean);
   return (
@@ -369,54 +369,100 @@ function QuantityCard({
   );
 }
 
-function volts(value: number): string {
-  return formatEngineering(value, "V");
-}
-
-/** One line per transistor: its region and the numbers that set gm and ro. */
-function DeviceLine({
-  name,
-  device,
+/**
+ * The bias point as a table: per transistor its region and the three numbers
+ * the equations use (current, g_m, r_o; r_π too when there are BJTs).
+ */
+function BiasTable({
+  devices,
 }: {
-  name: string;
-  device: DeviceOperatingPoint;
+  devices: Array<[string, DeviceOperatingPoint]>;
 }) {
-  if (device.type === "nmos" || device.type === "pmos") {
-    const m = device as MosOperatingPoint;
-    // In the device's own frame (positive for a conducting PMOS too).
-    const sign = m.type === "pmos" ? -1 : 1;
-    const vov = sign * m.vgs - sign * m.vth;
-    return (
-      <li>
-        <b>{name}</b>{" "}
-        <span className={`small-signal-region is-${m.region}`}>{m.region}</span>
-        <span>
-          I<sub>D</sub> {formatEngineering(Math.abs(m.id), "A")} · V
-          <sub>ov</sub> {volts(vov)} · V<sub>DS</sub> {volts(sign * m.vds)} · g
-          <sub>m</sub> {formatEngineering(m.gm, "S")} · r<sub>o</sub>{" "}
-          {m.gds > 0 ? formatEngineering(1 / m.gds, "Ω") : "∞"}
-        </span>
-      </li>
-    );
+  interface Row {
+    name: string;
+    region: string;
+    current: number;
+    gm: number;
+    ro: number;
+    rpi: number | null;
   }
-  if (device.type === "npn" || device.type === "pnp") {
-    const q = device as BjtOperatingPoint;
-    const sign = q.type === "pnp" ? -1 : 1;
-    const region = q.region === "forward-active" ? "active" : q.region;
-    return (
-      <li>
-        <b>{name}</b>{" "}
-        <span className={`small-signal-region is-${region}`}>{region}</span>
-        <span>
-          I<sub>C</sub> {formatEngineering(Math.abs(q.ic), "A")} · V
-          <sub>CE</sub> {volts(sign * q.vce)} · g<sub>m</sub>{" "}
-          {formatEngineering(q.gm, "S")} · r<sub>π</sub>{" "}
-          {formatEngineering(1 / q.gpi, "Ω")}
-        </span>
-      </li>
-    );
-  }
-  return null;
+  const rows = devices.flatMap(([name, device]): Row[] => {
+    if (device.type === "nmos" || device.type === "pmos") {
+      const m = device as MosOperatingPoint;
+      return [
+        {
+          name,
+          region: m.region,
+          current: Math.abs(m.id),
+          gm: m.gm,
+          ro: m.gds > 0 ? 1 / m.gds : Infinity,
+          rpi: null,
+        },
+      ];
+    }
+    if (device.type === "npn" || device.type === "pnp") {
+      const q = device as BjtOperatingPoint;
+      return [
+        {
+          name,
+          region: q.region === "forward-active" ? "active" : q.region,
+          current: Math.abs(q.ic),
+          gm: q.gm,
+          ro: q.go > 0 ? 1 / q.go : Infinity,
+          rpi: 1 / q.gpi,
+        },
+      ];
+    }
+    return [];
+  });
+  const hasBjt = rows.some((row) => row.rpi !== null);
+  // The status line already says when every transistor is saturated
+  // (BJTs active); the column only appears when one is not.
+  const showRegion = rows.some(
+    (row) => row.region !== "saturation" && row.region !== "active",
+  );
+  const ohms = (value: number) =>
+    Number.isFinite(value) ? formatEngineering(value, "Ω") : "∞";
+  return (
+    <table className="small-signal-bias-table">
+      <thead>
+        <tr>
+          <th scope="col" />
+          {showRegion ? <th scope="col" /> : null}
+          <th scope="col">I</th>
+          <th scope="col">
+            g<sub>m</sub>
+          </th>
+          <th scope="col">
+            r<sub>o</sub>
+          </th>
+          {hasBjt ? (
+            <th scope="col">
+              r<sub>π</sub>
+            </th>
+          ) : null}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.name} data-device={row.name}>
+            <th scope="row">{row.name}</th>
+            {showRegion ? (
+              <td>
+                <span className={`small-signal-region is-${row.region}`}>
+                  {row.region}
+                </span>
+              </td>
+            ) : null}
+            <td>{formatEngineering(row.current, "A")}</td>
+            <td data-quantity="gm">{formatEngineering(row.gm, "S")}</td>
+            <td data-quantity="ro">{ohms(row.ro)}</td>
+            {hasBjt ? <td>{row.rpi === null ? "" : ohms(row.rpi)}</td> : null}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 /** `v_{out}` for a net named Vout or out, `i_{1}` for a source named I1. */
@@ -779,11 +825,9 @@ export function SmallSignalPanel({
               </div>
             ) : handAnalysis && result ? (
               <div className="small-signal-alert is-info" role="status">
-                <p>Hand analysis: transistors assumed saturated.</p>
+                <p>Hand analysis: all transistors saturated.</p>
                 {pinsNeedingBias.length || otherUnknown.length ? (
-                  <small>
-                    Enter bias voltages below for a real operating point.
-                  </small>
+                  <small>Add bias voltages for numbers.</small>
                 ) : null}
               </div>
             ) : allGood && devices.length ? (
@@ -888,11 +932,7 @@ export function SmallSignalPanel({
                 <header>
                   <span>Bias point</span>
                 </header>
-                <ul className="small-signal-devices">
-                  {devices.map(([name, device]) => (
-                    <DeviceLine key={name} name={name} device={device} />
-                  ))}
-                </ul>
+                <BiasTable devices={devices} />
               </section>
             ) : null}
 

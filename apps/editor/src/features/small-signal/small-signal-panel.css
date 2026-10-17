@@ -199,21 +199,29 @@
   text-align: left;
 }
 
-/* Bias: one line per transistor. */
-.small-signal-devices {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+/* Bias: a small table, one row per transistor. */
+.small-signal-bias-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: var(--icm-font-sm);
+  font-variant-numeric: tabular-nums;
 }
 
-.small-signal-devices li > span:last-child {
-  display: block;
+.small-signal-bias-table th,
+.small-signal-bias-table td {
+  padding: 3px 8px 3px 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.small-signal-bias-table thead th {
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
-  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.small-signal-bias-table tbody th {
+  font-weight: 650;
 }
 
 .small-signal-region {
