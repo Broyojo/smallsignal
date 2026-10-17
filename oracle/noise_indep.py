@@ -39,6 +39,10 @@ import mpmath as mp
 
 import indep
 import spice
+from run_ngspice import rel_diff
+
+# Two densities both below this (V²/Hz) agree exactly (compare.py's floor).
+FLOOR = 1e-40
 
 K = mp.mpf("1.38064852e-23")
 Q = mp.mpf("1.6021766208e-19")
@@ -147,7 +151,9 @@ def integrated(cir: Path, want: dict, f_low: float, f_high: float, dps: int = 30
         Ag, bg = system(s, "gain")
         xg = mp.lu_solve(Ag, bg)
         gain = at(xg, out_n) - at(xg, ref_n)
-        return total, total / abs(gain) ** 2
+        # No gain at this frequency: the input-referred density is unbounded
+        # unless there is no noise either.
+        return total, (total / abs(gain) ** 2 if gain != 0 else (mp.inf if total else mp.mpf(0)))
 
     lo, hi = mp.log10(f_low), mp.log10(f_high)
     edges = [lo + (hi - lo) * k / max(1, int(mp.ceil(hi - lo))) for k in range(int(mp.ceil(hi - lo)) + 1)]
@@ -164,7 +170,7 @@ def compare(ind: dict, ng: dict) -> list[tuple[str, float]]:
     rows = []
     for q in ("output", "input"):
         for a, b in zip(ind[q], ng[q]):
-            rows.append((f"{q}@{a['f']:g}", float(abs(a["v2"] - b["v2"]) / max(b["v2"], 1e-300))))
+            rows.append((f"{q}@{a['f']:g}", rel_diff(float(a["v2"]), b["v2"], FLOOR)))
     have = {(c["element"], c["source"]): c["values"] for c in ng["contributors"]}
     for (elem, src), vals in ind["contributors"].items():
         ngv = have.get((elem, src))
@@ -172,8 +178,7 @@ def compare(ind: dict, ng: dict) -> list[tuple[str, float]]:
             rows.append((f"{elem}.{src}: not in ngspice", math.inf))
             continue
         for a, b in zip(vals, ngv):
-            denom = max(b["v2"], 1e-300)
-            rows.append((f"{elem}.{src}@{a['f']:g}", float(abs(a["v2"] - b["v2"]) / denom) if b["v2"] or a["v2"] else 0.0))
+            rows.append((f"{elem}.{src}@{a['f']:g}", rel_diff(float(a["v2"]), b["v2"], FLOOR)))
     for (elem, src), vals in have.items():
         if src != "total" and (elem, src) not in ind["contributors"] and any(v["v2"] > 0 for v in vals):
             rows.append((f"{elem}.{src}: ngspice-only source", math.inf))

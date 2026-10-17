@@ -1,0 +1,190 @@
+{
+  "name": "noise_zero_output",
+  "netlist": "noise_zero_output.cir",
+  "input": "VIN",
+  "output": "out",
+  "ref": null,
+  "freqs": [
+    1000.0
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "in": 0.0,
+      "out": 0.0
+    },
+    "devices": {},
+    "vsource_currents": {
+      "vin": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000.0,
+        "re": 2.0,
+        "im": 0.0
+      }
+    ]
+  },
+  "noise": {
+    "units": "V^2/Hz (input: V^2/Hz for a V-source input, A^2/Hz for an I source)",
+    "output": [
+      {
+        "f": 10.0,
+        "v2": 0.0
+      },
+      {
+        "f": 1000.0,
+        "v2": 0.0
+      },
+      {
+        "f": 100000.0,
+        "v2": 0.0
+      }
+    ],
+    "input": [
+      {
+        "f": 10.0,
+        "v2": 0.0
+      },
+      {
+        "f": 1000.0,
+        "v2": 0.0
+      },
+      {
+        "f": 100000.0,
+        "v2": 0.0
+      }
+    ],
+    "contributors": [
+      {
+        "element": "r1",
+        "source": "1overf",
+        "values": [
+          {
+            "f": 10.0,
+            "v2": 0.0
+          },
+          {
+            "f": 1000.0,
+            "v2": 0.0
+          },
+          {
+            "f": 100000.0,
+            "v2": 0.0
+          }
+        ]
+      },
+      {
+        "element": "r1",
+        "source": "thermal",
+        "values": [
+          {
+            "f": 10.0,
+            "v2": 0.0
+          },
+          {
+            "f": 1000.0,
+            "v2": 0.0
+          },
+          {
+            "f": 100000.0,
+            "v2": 0.0
+          }
+        ]
+      },
+      {
+        "element": "r1",
+        "source": "total",
+        "values": [
+          {
+            "f": 10.0,
+            "v2": 0.0
+          },
+          {
+            "f": 1000.0,
+            "v2": 0.0
+          },
+          {
+            "f": 100000.0,
+            "v2": 0.0
+          }
+        ]
+      },
+      {
+        "element": "r2",
+        "source": "1overf",
+        "values": [
+          {
+            "f": 10.0,
+            "v2": 0.0
+          },
+          {
+            "f": 1000.0,
+            "v2": 0.0
+          },
+          {
+            "f": 100000.0,
+            "v2": 0.0
+          }
+        ]
+      },
+      {
+        "element": "r2",
+        "source": "thermal",
+        "values": [
+          {
+            "f": 10.0,
+            "v2": 0.0
+          },
+          {
+            "f": 1000.0,
+            "v2": 0.0
+          },
+          {
+            "f": 100000.0,
+            "v2": 0.0
+          }
+        ]
+      },
+      {
+        "element": "r2",
+        "source": "total",
+        "values": [
+          {
+            "f": 10.0,
+            "v2": 0.0
+          },
+          {
+            "f": 1000.0,
+            "v2": 0.0
+          },
+          {
+            "f": 100000.0,
+            "v2": 0.0
+          }
+        ]
+      }
+    ],
+    "integrated": {
+      "fLow": 1.0,
+      "fHigh": 1000000.0,
+      "ngspice_trapezoid": {
+        "outputV2": 0.0,
+        "inputV2": 0.0,
+        "richardson_correction": 0.0
+      },
+      "outputV2": 0.0,
+      "inputV2": 0.0,
+      "outputRms": 0.0,
+      "inputRms": 0.0,
+      "method": "adaptive quadrature of the 60-digit independent PSD",
+      "agreement": 0.0
+    }
+  }
+}

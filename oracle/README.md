@@ -61,6 +61,9 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   lists, and the ngspice sources it does not (beyond its 32 largest) through
   `omitted`: none larger than a listed one, their sum and count. It also
   fails a missing `contributors` list and `inputLowFreq.check.ok: false`.
+  Zero noise (noise_zero_output) is exact agreement with zero: a reference
+  of 0 passes only a value within 1e-40 V²/Hz (times the band width for an
+  integral).
   `noise_indep.py` recomputes every source with ngspice's formulas on the
   independent 60-digit rebuild. ngspice-47 level-1 MOS formulas: channel
   4kT·(2/3)·gm; flicker KF·gm²/(Cox·W·Leff·f^AF) — not SPICE2's

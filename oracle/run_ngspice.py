@@ -58,6 +58,17 @@ class NgspiceError(RuntimeError):
     pass
 
 
+def rel_diff(a: float, b: float, floor: float = 0.0) -> float:
+    """|a − b| relative to the reference b. Two values both within `floor` of
+    zero agree exactly (0/0 is no difference); when only b is zero, a beyond
+    `floor` is an infinite difference (the absolute-error path)."""
+    if abs(a) <= floor and abs(b) <= floor:
+        return 0.0
+    if b == 0:
+        return math.inf
+    return abs(a - b) / abs(b)
+
+
 def ngspice_version() -> str:
     out = subprocess.run(["ngspice", "--version"], capture_output=True, text=True).stdout
     m = re.search(r"ngspice-(\S+)", out)
@@ -434,7 +445,9 @@ def noise_band(net: spice.Netlist, side: dict, band: list[float], keep: Path | N
     o2, i2 = sweep(200)
     return {"fLow": f_low, "fHigh": f_high,
             "ngspice_trapezoid": {"outputV2": o2 + (o2 - o1) / 3, "inputV2": i2 + (i2 - i1) / 3,
-                                  "richardson_correction": abs(o2 - o1) / 3 / o2}}
+                                  # Two zero sweeps need no correction.
+                                  "richardson_correction": abs(o2 - o1) / 3 / o2 if o2 else
+                                  (0.0 if o1 == 0 else math.inf)}}
 
 
 # Integrated noise: the independent 60-digit quadrature must agree with the
@@ -484,8 +497,8 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
                          "outputRms": math.sqrt(exact["outputV2"]), "inputRms": math.sqrt(exact["inputV2"]),
                          "method": "adaptive quadrature of the 60-digit independent PSD"})
             tr = band["ngspice_trapezoid"]
-            band["agreement"] = max(abs(tr["outputV2"] - exact["outputV2"]) / exact["outputV2"],
-                                    abs(tr["inputV2"] - exact["inputV2"]) / exact["inputV2"])
+            band["agreement"] = max(rel_diff(tr["outputV2"], exact["outputV2"]),
+                                    rel_diff(tr["inputV2"], exact["inputV2"]))
             # The independent quadrature becomes the reference only if
             # ngspice's own spectrum confirms it.
             if not band["agreement"] <= AGREEMENT_RTOL:
