@@ -66,6 +66,28 @@ fn kind_of(name: &str, element: &str) -> String {
     }
 }
 
+/// The parameter kinds of `element` that belong to a device outside its
+/// intended region (the r_o of a MOSFET in triode or a BJT in saturation),
+/// sorted. Devices whose lists differ are in different regions.
+fn linear_kinds(ss: &SsCircuit, element: &str) -> Vec<String> {
+    let mut kinds: Vec<String> = ss
+        .params
+        .iter()
+        .filter(|p| p.element == element && p.linear)
+        .map(|p| kind_of(&p.name, element))
+        .collect();
+    kinds.sort();
+    kinds
+}
+
+/// "A and B", "A, B and C".
+fn name_list(names: &[String]) -> String {
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
+}
+
 /// TeX (base, subscript) for a device parameter kind.
 fn device_sub(kind: &str) -> Option<(&'static str, &'static str)> {
     Some(match kind {
@@ -178,6 +200,14 @@ pub fn symbols(
                 "{} are different kinds of element, not matched",
                 names.join(", ")
             ));
+            continue;
+        }
+        // One symbol per kind must stand for one region: a saturated
+        // device's r_o is taken to infinity in hand analysis, a triode
+        // one's is not.
+        let regions: Vec<Vec<String>> = names.iter().map(|n| linear_kinds(ss, n)).collect();
+        if regions.iter().any(|r| *r != regions[0]) {
+            warnings.push(format!("{} are in different regions, not matched", name_list(&names)));
             continue;
         }
         if symbolic {
@@ -326,8 +356,8 @@ fn disambiguate(syms: &mut [Sym]) {
 }
 
 /// Pairs worth offering as matched: same element type and model and the
-/// same geometry (W, L, M or area); passives with equal values; and in
-/// numeric mode the same small-signal values (to MATCH_REL).
+/// same geometry (W, L, M or area) and region; passives with equal values;
+/// and in numeric mode the same small-signal values (to MATCH_REL).
 pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(String, String, &'static str)> {
     let same = |a: f64, b: f64| a == b || (a - b).abs() <= MATCH_REL * a.abs().max(b.abs());
     let key = |i: usize| -> Option<(String, Vec<f64>, &'static str)> {
@@ -396,6 +426,10 @@ pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(
             return None;
         }
         let strength = topology(i, j)?;
+        // In symbolic mode too, where the region is known from the wiring.
+        if kind == "device" && linear_kinds(ss, &net.elements[i].name) != linear_kinds(ss, &net.elements[j].name) {
+            return None;
+        }
         if op.is_some() && kind == "device" {
             let (vi, vj) = (values(i), values(j));
             if vi.len() != vj.len() || !vi.iter().zip(&vj).all(|(a, b)| a.0 == b.0 && same(a.1, b.1)) {

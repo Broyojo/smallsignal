@@ -611,6 +611,44 @@ fn symbolic_keeps_triode_ro() {
     );
 }
 
+/// Matching never merges devices in different regions. A shared-gate stack
+/// of one model and geometry (outer saturated, inner in triode) is offered
+/// no match, and an explicit match is refused, so the inner device keeps its
+/// finite r_o in either element order. Before: matchAuto merged them into
+/// r_{o1,2}, which the outer one's region took to infinity, or kept finite
+/// when the inner one came first.
+#[test]
+fn matching_keeps_regions_apart() {
+    let stack = |a: &str, b: &str| {
+        format!(
+            "nn\nVDD vdd 0 1.8\nVIN in 0 DC 1.2 AC 1\n{a}\n{b}\n\
+             .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4 PHI=0.8)\n"
+        )
+    };
+    let (outer, inner) = ("M1 vdd in out 0 nch W=10u L=1u", "M2 out in 0 0 nch W=10u L=1u");
+    for net in [stack(outer, inner), stack(inner, outer)] {
+        let base = json!({ "input": "VIN", "output": "out", "symbolic": true });
+        let mut auto = base.clone();
+        auto["matchAuto"] = json!(true);
+        let r = run(&net, &req(auto));
+        assert_eq!(r["matchCandidates"], json!([]));
+        assert_eq!(r["warnings"], json!(["M2 is in triode"]));
+        let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
+        assert!(
+            simplified.contains("r_{o2}") && !simplified.contains("r_{o1"),
+            "{simplified}"
+        );
+        let mut explicit = base.clone();
+        explicit["match"] = json!([["M1", "M2"]]);
+        let r = run(&net, &req(explicit));
+        assert_eq!(
+            r["warnings"],
+            json!(["M2 is in triode", "M1 and M2 are in different regions, not matched"])
+        );
+        assert_eq!(r["gain"]["simplified"]["latex"], simplified);
+    }
+}
+
 /// An element with both ends on one node contributes nothing: it is named,
 /// and the result is the circuit's without it.
 #[test]

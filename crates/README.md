@@ -83,8 +83,10 @@ exceed `maxTerms` terms (default 2,000,000).
   r_{o1,2}, R_{D1,2}). Exact: merging happens after the multilinear solve, by
   mapping parameters onto symbols with exponents. In numeric mode a group
   merges only if its values agree to 1e-9 (else a warning says what differs);
-  symbolic mode assumes equality. `matchCandidates` lists pairs with the same
-  type, model and geometry (and, in numeric mode, small-signal values), plus
+  symbolic mode assumes equality. Devices in different regions (a triode r_o
+  against a saturated one) never merge ("M1 and M2 are in different regions,
+  not matched"). `matchCandidates` lists pairs with the same type, model,
+  geometry and region (and, in numeric mode, small-signal values), plus
   passives with equal values (`kind: "passive"`).
 - Common factors of numerator and denominator cancel (exact multivariate GCD),
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
