@@ -77,8 +77,15 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   coefficients are used only at their DC limit (`disto.dc_limit`: real parts
   at freq/10 that move ≤ 1e-9 from freq and agree with the DC-Taylor fit),
   else the fit is the reference. With `inputNeg` every method drives both
-  sources as `mode` does (±v/2, or +v each). compare.py checks the solver at
-  rtol 1e-6 + 3×uncertainty. An optional `"vsFreq": [f...]` adds HD2/HD3 at
+  sources as `mode` does (±v/2, or +v each). A transient that runs must
+  match harmonic balance's HD2, HD3 at every amplitude within
+  `tran_tol_hd2`/`tran_tol_hd3` (`distortion.transient_tolerance`:
+  (n²−1)(2π/ppp)²/4 relative for `linearize`, plus 4×the solve tolerance
+  reltol·Σ|v(node)| + vntol over |c1|), else generation fails ("not
+  quasi-static"); a transient that times out or fails is recorded in
+  `transient_error` and skipped. compare.py checks the solver at
+  rtol 1e-6 + 3×uncertainty, and the expected transient against its
+  tolerance. An optional `"vsFreq": [f...]` adds HD2/HD3 at
   each f from .disto's complex phasors (valid circuits only), checked at
   rtol 1e-6 with an absolute floor of 1e-15 (exact zeros). With a capacitor,
   set `"freq"` far below the poles so the static coefficients stay

@@ -295,6 +295,9 @@ def compare_distortion(got: dict, want: dict, rep: Report):
             rep.failures.append(f"distortion.{h}: missing")
         elif abs(g - w) > 1e-5 * w + 1e-15:
             rep.failures.append(f"distortion.{h}: got {g:.8e}, want {w:.8e}")
+    # The reference's own transient confirmation (distortion.py refuses to
+    # write a disagreeing one; this catches stale or edited expectations).
+    rep.failures += [f"expected distortion: {m}" for m in distortion.transient_disagreements(ref["points"])]
     # Frequency-dependent HD against .disto's complex Volterra phasors, which
     # match an exact 50-digit harmonic perturbation to ~4e-12 (textbook_nd).
     gv = {round(math.log10(r["f"]), 9): r for r in gd.get("vsFreq") or []}

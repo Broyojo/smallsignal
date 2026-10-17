@@ -16,7 +16,11 @@ where v_out = a1·v + a2·v² + a3·v³ + … around the bias. Three ngspice met
              ngspice's reltol (1e-9). Primary reference.
   transient  .tran with SIN(V0 A f), DFT over the last whole periods of a
              fixed-step waveform. Confirms the quasi-static assumption at f
-             (capacitors) and is the textbook HD measurement.
+             (capacitors) and is the textbook HD measurement: its HD2, HD3
+             must match harmonic balance's within the transient's
+             resolution (transient_tolerance), else generation fails. A
+             transient that times out or fails to run is recorded in
+             transient_error and skipped.
   taylor     least-squares polynomial (degree 7) of a dense DC sweep
              V0 ± 20 mV: a1, a2, a3 directly.
   disto      ngspice's .disto (Volterra series) with a unit DISTOF1: the
@@ -125,11 +129,20 @@ def harmonic_balance(net, side, amp: float, keep, name: str) -> list[float]:
     return [c for c, _ in _cos_series(samples, 1)]
 
 
-def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep, name: str) -> list[float]:
+def _tolerances() -> tuple[float, float]:
+    """(reltol, vntol) of the run options."""
+    opts = run_ngspice.current_options()
+    return tuple(float(re.search(rf"\b{k}\s*=\s*([-+\d.eE]+)", opts).group(1)) for k in ("reltol", "vntol"))
+
+
+def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep,
+              name: str) -> tuple[list[float], float]:
     """Harmonic magnitudes |c1|, |c2|, |c3| of a SIN(V0 A f) transient,
     from the last 4 whole periods of the waveform resampled (`linearize`) on
     a uniform grid of `ppp` points per period, with the step capped at that
-    grid so the interpolation is between solved points only."""
+    grid so the interpolation is between solved points only; and the solve
+    tolerance of v_out over that window, max over t of reltol·Σ|v(node)| +
+    vntol per node (each node converges to reltol·|v| + vntol)."""
     period = 1 / freq
     step = period / ppp
     body = _with_sources(net, side, lambda e, v0, w: f"{e.tokens[0]} {e.tokens[1]} {e.tokens[2]} DC {v0!r} "
@@ -141,7 +154,9 @@ def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep, 
                ".control", "set numdgt=15",
                f"tran {step!r} {periods * period!r} {t_from!r} {step!r}",
                "linearize " + " ".join(f"v({n})" for n in nodes),
-               f"let tw = {expr}", "wrdata tranout tw", ".endc", ".end"]
+               f"let tw = {expr}", *(f"let n{i} = v({n})" for i, n in enumerate(nodes)),
+               "set wr_singlescale", "wrdata tranout tw " + " ".join(f"n{i}" for i in range(len(nodes))),
+               ".endc", ".end"]
     deck = "\n".join([*body, *control]) + "\n"
     with tempfile.TemporaryDirectory() as tmp:
         (Path(tmp) / "d.cir").write_text(deck)
@@ -153,12 +168,42 @@ def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep, 
         out = next((Path(tmp) / n for n in ("tranout", "tranout.data") if (Path(tmp) / n).exists()), None)
         if out is None:
             raise run_ngspice.NgspiceError(f"{name}: transient wrote no data: {(proc.stdout + proc.stderr)[-200:]}")
-        rows = [tuple(map(float, l.split()[:2])) for l in out.read_text().splitlines() if l.strip()]
+        rows = [list(map(float, l.split())) for l in out.read_text().splitlines() if l.strip()]
     want = 4 * ppp
-    pts = [y for t, y in rows if t >= t_from - step / 2][:want]
-    if len(pts) < want:
-        raise run_ngspice.NgspiceError(f"{name}: transient grid has {len(pts)} of {want} points")
-    return [mag for _, mag in _cos_series(pts, 4)]
+    window = [r for r in rows if r[0] >= t_from - step / 2][:want]
+    if len(window) < want:
+        raise run_ngspice.NgspiceError(f"{name}: transient grid has {len(window)} of {want} points")
+    reltol, vntol = _tolerances()
+    solve = max(reltol * sum(abs(v) for v in r[2:]) + vntol * len(nodes) for r in window)
+    return [mag for _, mag in _cos_series([r[1] for r in window], 4)], solve
+
+
+def transient_tolerance(n: int, hd: float, c1: float, solve: float, ppp: int) -> float:
+    """How far the transient's HD_n may sit from harmonic balance's (hd, c1)
+    with a quasi-static circuit. Two parts:
+      - linearize: the grid sample between two timepoints at most h = T/ppp
+        apart is off by up to (h²/8)·|v''|, which scales harmonic k by up to
+        1 + (kωh)²/8, so HD_n moves by up to (n²−1)(2π/ppp)²/8 relative;
+        doubled for timepoints that drift against the grid.
+      - the solves: every sample of either waveform is within `solve` of the
+        exact v_out, so each c_k (a DFT with weights 2/N) is within 2·solve,
+        and the two waveforms' HD_n differ by up to 4·solve·(1 + HD_n)/|c1|.
+    A circuit with memory at f (f not far below its poles) misses it by
+    orders of magnitude."""
+    return (n * n - 1) * (2 * math.pi / ppp) ** 2 / 4 * hd + 4 * solve * (1 + hd) / abs(c1)
+
+
+def transient_disagreements(points: list[dict]) -> list[str]:
+    """Each transient HD that misses harmonic balance's by more than its
+    tolerance (points as analyze writes them)."""
+    out = []
+    for p in points:
+        for h in ("hd2", "hd3"):
+            t, tol = p.get(f"tran_{h}"), p.get(f"tran_tol_{h}")
+            if t is not None and not (tol is not None and abs(t - p[h]) <= tol):
+                out.append(f"transient {h} at A={p['A']:g}: {t:.8e} vs harmonic balance {p[h]:.8e} "
+                           f"(diff {abs(t - p[h]):.1e}, tolerance {tol if tol is None else f'{tol:.1e}'})")
+    return out
 
 
 def disto(net, side, freq: float, keep, name: str) -> dict:
@@ -290,9 +335,10 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     except (run_ngspice.NgspiceError, KeyError, ValueError) as exc:
         dis_out = {"error": str(exc)[:200], "valid": _disto_valid(net)}
     tr = {}
+    ppp = spec.get("points_per_period", 4000)
     try:
         for a in amps:
-            tr[a] = transient(net, side, a, freq, spec.get("periods", 10), spec.get("points_per_period", 4000), keep, name)
+            tr[a] = transient(net, side, a, freq, spec.get("periods", 10), ppp, keep, name)
     except (run_ngspice.NgspiceError, subprocess.TimeoutExpired) as exc:
         tr = {"error": str(exc)[:200]}
     points = []
@@ -300,9 +346,18 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
         c1, c2, c3 = hb[a]
         row = {"A": a, "c1": c1, "c2": c2, "c3": c3, "hd2": abs(c2 / c1), "hd3": abs(c3 / c1)}
         if a in tr:
-            t1, t2, t3 = tr[a]
-            row.update({"tran_hd2": t2 / t1, "tran_hd3": t3 / t1})
+            (t1, t2, t3), solve = tr[a]
+            row.update({"tran_hd2": t2 / t1, "tran_hd3": t3 / t1,
+                        "tran_tol_hd2": transient_tolerance(2, row["hd2"], c1, solve, ppp),
+                        "tran_tol_hd3": transient_tolerance(3, row["hd3"], c1, solve, ppp)})
         points.append(row)
+    # A transient that ran must confirm harmonic balance (the quasi-static
+    # assumption at f); only one that timed out or failed is optional.
+    # ValueError: run_ngspice's main() catches it whether or not it runs as
+    # __main__ (its NgspiceError is then a different class).
+    if bad := transient_disagreements(points):
+        raise ValueError(f"{name}: not quasi-static at {freq:g} Hz: " + "; ".join(bad[:2])
+                         + (f" (+{len(bad) - 2} more)" if len(bad) > 2 else ""))
     amp = amplitude(spec)
     # Frequency-dependent HD from .disto's complex Volterra phasors at each f:
     # the 2f output for a unit DISTOF1 is H2(jω,jω)/2, the 3f output
