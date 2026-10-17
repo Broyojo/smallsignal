@@ -215,3 +215,92 @@ fn distortion_warns_about_nonlinear_charges() {
     assert!(warned("TOX=10n CGDO=1e-9"));
     assert!(warned("CJ=1e-3"));
 }
+
+/// An open diode is left out whole: its C_j goes with r_d, so a diode with
+/// CJO and TT taken open is the circuit without it.
+#[test]
+fn an_open_diode_takes_its_capacitance_along() {
+    let with = |extra: &str| {
+        format!(
+            "d\n{OPTIONS}VIN in 0 DC 0.7 AC 1\nRS in a 1k\nR2 a 0 10k\nC1 a 0 1p\n{extra}\
+             .model dc D (IS=1e-14 CJO=2p TT=2n)\n"
+        )
+    };
+    let mut req = json!({ "input": "VIN", "output": "a", "freqs": [1e3, 1e8] });
+    req["assume"] = json!({ "ignore": [{ "element": "D1", "term": "open" }] });
+    let open = run(&with("D1 a 0 dc\n"), &serde_json::from_value(req).unwrap());
+    let none = run(&with(""), &at("VIN", "a", &[1e3, 1e8]));
+    let latex = open["gain"]["exact"]["latex"].as_str().unwrap();
+    assert!(!latex.contains("C_{j1}") && !latex.contains("r_{d1}"), "{latex}");
+    assert_eq!(latex, none["gain"]["exact"]["latex"].as_str().unwrap());
+}
+
+/// Two BJTs on a substrate node nothing else touches: ngspice holds it with
+/// each substrate junction's gmin and couples the collectors through C_cs1
+/// and C_cs2. V(sub) and v(c2) at 1 GHz as ngspice-47 prints them.
+#[test]
+fn a_substrate_only_bjts_share_couples_them() {
+    let net = format!(
+        "sub\n{OPTIONS}VCC vcc 0 5\nVIN in 0 DC 0.75 AC 1\nRB in b1 1k\nRC1 vcc c1 2k\nQ1 c1 b1 0 sub npns\n\
+         VB2 b2 0 0.7\nRC2 vcc c2 3k\nQ2 c2 b2 0 sub npns\n\
+         .model npns NPN (IS=1e-16 BF=100 VAF=50 CJS=2p MJS=0.3 VJS=0.7)\n"
+    );
+    let out = run(&net, &at("VIN", "c2", &[1e9]));
+    assert!(rel(out["op"]["nodes"]["sub"].as_f64().unwrap(), 4.540605723015512) < 1e-9);
+    for (q, want) in [("Q1", 2.235954947094471e-12), ("Q2", 1.810591633031092e-12)] {
+        assert!(rel(out["op"]["devices"][q]["caps"]["csub"].as_f64().unwrap(), want) < 1e-9);
+    }
+    assert!(close(
+        value(&out, "gain", 0),
+        (-1.48806727054347e+01, -4.77003681216876e-01),
+        1e-9
+    ));
+    // Named by one BJT alone, the substrate carries nothing.
+    let single = net.replace("Q2 c2 b2 0 sub npns", "Q2 c2 b2 0 npns");
+    let out = run(&single, &at("VIN", "c1", &[1e9]));
+    assert!(param(&out, "ccs_Q1").is_none());
+}
+
+/// Symbolic C_μ is TR·g_bc + CJC: TR alone gives it.
+#[test]
+fn symbolic_cmu_from_tr_alone() {
+    let net = "ce\nVCC vcc 0 5\nVIN in 0\nRS in b\nRC vcc c\nQ1 c b 0 qn\n.model qn NPN (IS=1e-16 BF=100 TR=10n)\n";
+    let out = run(net, &request("VIN", "c"));
+    assert_eq!(out["symbolic"], true);
+    assert!(param(&out, "cmu_Q1").is_some());
+    assert!(param(&out, "cpi_Q1").is_none());
+}
+
+/// A wide circuit with a thousand capacitors on one node: det's degree in s
+/// is bounded by the matrix order, so its orders and roots stay quick.
+#[test]
+fn many_parallel_capacitors_stay_fast() {
+    let mut net = format!("rc\n{OPTIONS}VIN in 0 AC 1\nR1 in out 1k\n");
+    for k in 0..1000 {
+        net.push_str(&format!("C{k} out 0 1p\n"));
+    }
+    let started = std::time::Instant::now();
+    let out = run(&net, &at("VIN", "out", &[1e3]));
+    assert_eq!(out["gain"]["skipped"], "too large for the exact closed form");
+    let poles = out["gain"]["poles"].as_array().unwrap();
+    assert_eq!(poles.len(), 1);
+    let want = -1.0 / (2.0 * std::f64::consts::PI * 1e3 * 1e-9);
+    assert!(rel(poles[0]["re"].as_f64().unwrap(), want) < 1e-9, "{poles:?}");
+    assert!(started.elapsed().as_secs_f64() < 10.0, "{:?}", started.elapsed());
+}
+
+/// ngspice-47 takes a diode's M and FC as given (no clamp at 0.9 or 0.95,
+/// which later ngspice adds): M = 0.95 reverse biased and FC = 0.97 on the
+/// linear extension, as ngspice-47's @d1[cd] prints them.
+#[test]
+fn diode_grading_is_unclamped_as_in_ngspice_47() {
+    for (dc, vj, want) in [(-2.0, 0.7, 5.547247686754293e-13), (0.75, 0.5, 4.816485978409817e-10)] {
+        let net = format!(
+            "d\n{OPTIONS}VIN in 0 DC {dc} AC 1\nRS in a 1k\nD1 a 0 dm\n\
+             .model dm D (IS=1e-14 CJO=2p VJ={vj} M=0.95 FC=0.97)\n"
+        );
+        let out = run(&net, &at("VIN", "a", &[1e6]));
+        let cj = out["op"]["devices"]["D1"]["caps"]["cj"].as_f64().unwrap();
+        assert!(rel(cj, want) < 1e-9, "{cj} {want}");
+    }
+}

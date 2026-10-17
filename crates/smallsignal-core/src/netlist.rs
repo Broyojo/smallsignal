@@ -50,12 +50,14 @@ pub enum Kind {
     /// current and conductance, gmin's included, times M. `sub`: the
     /// substrate node (ground when not given, as ngspice), or None when the
     /// named substrate connects to nothing else (its capacitance then leads
-    /// nowhere).
+    /// nowhere). `float_sub`: a substrate only BJTs share, held (as in
+    /// ngspice) by each substrate junction's gmin.
     Q {
         model: BjtModel,
         area: f64,
         mult: f64,
         sub: Option<usize>,
+        float_sub: bool,
     },
     /// `mult` (M=): as ngspice, the junction scales with area·M (gmin does
     /// not), and the flicker noise is M devices' sharing the current.
@@ -464,6 +466,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                         area: 1.0,
                         mult: 1.0,
                         sub: None,
+                        float_sub: false,
                     },
                     pos[..3].to_vec(),
                 )
@@ -599,6 +602,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                         area,
                         mult,
                         sub: Some(0),
+                        float_sub: false,
                     },
                     pos[..3].to_vec(),
                 )
@@ -666,17 +670,34 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
         }
     }
 
-    // A named substrate is a node only when something else connects to it;
-    // alone it floats (ngspice holds it with gmin), so its capacitance
-    // carries nothing.
-    for (ei, sname) in pending_sub {
-        let node = if is_ground(&sname) {
-            Some(0)
+    // A named substrate is a node when something else connects to it. One
+    // only BJTs share floats, held by each substrate junction's gmin (as in
+    // ngspice), and couples their collectors (bases, when lateral) through
+    // the substrate capacitances; one only a single BJT names carries
+    // nothing, so it is left out.
+    let shared = |name: &str| pending_sub.iter().filter(|(_, n)| n == name).count() > 1;
+    let mut floating: Vec<(String, usize)> = Vec::new();
+    for (ei, sname) in &pending_sub {
+        let (node, float) = if is_ground(sname) {
+            (Some(0), false)
+        } else if let Some(&k) = node_index.get(sname) {
+            (Some(k), false)
+        } else if shared(sname) {
+            let k = match floating.iter().find(|(n, _)| n == sname) {
+                Some(&(_, k)) => k,
+                None => {
+                    nodes.push(sname.clone());
+                    floating.push((sname.clone(), nodes.len() - 1));
+                    nodes.len() - 1
+                }
+            };
+            (Some(k), true)
         } else {
-            node_index.get(&sname).copied()
+            (None, false)
         };
-        if let Kind::Q { sub, .. } = &mut elements[ei].kind {
+        if let Kind::Q { sub, float_sub, .. } = &mut elements[*ei].kind {
             *sub = node;
+            *float_sub = float;
         }
     }
 

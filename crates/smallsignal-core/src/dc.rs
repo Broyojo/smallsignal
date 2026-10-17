@@ -358,6 +358,22 @@ impl Ctx<'_> {
                         ty * ev.cb,
                         &[(ev.gpi, bn, en, ty * vbe), (ev.gmu, bn, c, ty * vbc)],
                     );
+                    // A substrate only BJTs share: its junction's gmin (no
+                    // ISS) to the collector, or the base when lateral.
+                    if let Kind::Q {
+                        sub: Some(sn),
+                        float_sub: true,
+                        ..
+                    } = &e.kind
+                    {
+                        let con = if model.caps.subs > 0.0 { c } else { bn };
+                        let g = mult * gmin;
+                        let (p, q) = (lay.n(*sn), lay.n(con));
+                        asm.add(p, p, g);
+                        asm.add(q, q, g);
+                        asm.add(p, q, -g);
+                        asm.add(q, p, -g);
+                    }
                     st[ei] = St::Bjt { vbe, vbc };
                 }
                 Kind::D { model, area, mult } => {

@@ -263,7 +263,11 @@ pub fn resolve(net: &Netlist, full: &SsCircuit, op: Option<&Op>, req: &AssumeReq
 /// `restored`.
 pub fn apply(full: &SsCircuit, a: &Assume, restored: &[usize]) -> SsCircuit {
     let active = || a.applied.iter().enumerate().filter(|(i, _)| !restored.contains(i));
-    let drop: Vec<usize> = active().filter_map(|(_, x)| x.param).collect();
+    let mut drop: Vec<usize> = active().filter_map(|(_, x)| x.param).collect();
+    // An open element is left out whole: a diode's C_j goes with its r_d.
+    for (_, x) in active().filter(|(_, x)| x.term == Term::Open) {
+        drop.extend((0..full.params.len()).filter(|&i| full.params[i].element == x.element));
+    }
     let mut model = full.omit(&drop);
     for (_, x) in active() {
         if let Some((a, b)) = x.short {

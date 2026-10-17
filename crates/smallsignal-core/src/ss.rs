@@ -354,6 +354,13 @@ fn add_junctions(
     Ok(out)
 }
 
+fn mult_of(kind: &Kind) -> f64 {
+    match kind {
+        Kind::Q { mult, .. } | Kind::M { mult, .. } | Kind::D { mult, .. } => *mult,
+        _ => 1.0,
+    }
+}
+
 /// A device capacitance at the operating point: `kind` (the parameter
 /// name's prefix) between `a` and `b`, or with `ctrl` a transcapacitance
 /// s·value·(v_cp − v_cn) from `a` to `b`. Zero values included.
@@ -401,7 +408,12 @@ pub fn device_caps(e: &crate::netlist::Element, op: &Op, ei: usize) -> Vec<DevCa
                 cap("cbs", b, s, c.cbs),
             ]
         }
-        (Kind::Q { model, area, mult, sub }, Some(DevOp::Bjt(_))) => {
+        (
+            Kind::Q {
+                model, area, mult, sub, ..
+            },
+            Some(DevOp::Bjt(_)),
+        ) => {
             let (c, b, em) = (n[0], n[1], n[2]);
             let (ty, cm) = (model.ty, &model.caps);
             let sub_con = if cm.subs > 0.0 { c } else { b };
@@ -675,7 +687,9 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     add_cap(&mut params, &mut stamps, nm, c.kind, c.a, c.b, c.ctrl, c.value)?;
                 }
             }
-            Kind::Q { model, sub, .. } => {
+            Kind::Q {
+                model, sub, float_sub, ..
+            } => {
                 let (c, b, em) = (n[0], n[1], n[2]);
                 let cm = &model.caps;
                 // The substrate junction ends at the collector (vertical) or
@@ -734,8 +748,17 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                         None,
                         some(cm.cje != 0.0 || cm.tf != 0.0),
                     )?;
-                    add_cap(&mut params, &mut stamps, nm, "cmu", b, c, None, some(cm.cjc != 0.0))?;
-                    if let Some(sn) = sub {
+                    add_cap(
+                        &mut params,
+                        &mut stamps,
+                        nm,
+                        "cmu",
+                        b,
+                        c,
+                        None,
+                        some(cm.cjc != 0.0 || cm.tr != 0.0),
+                    )?;
+                    if let (Some(sn), false) = (sub, float_sub) {
                         add_cap(
                             &mut params,
                             &mut stamps,
@@ -804,6 +827,10 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     stamps.push(Stamp::Adm { a: c, b: em, p });
                 }
                 junctions.push((ei, b, c, q.gmu, "mu", "\\mu "));
+                if let (Some(sn), true) = (sub, float_sub) {
+                    // The substrate junction's gmin holds a floating substrate.
+                    junctions.push((ei, *sn, sub_con, mult_of(&e.kind) * net.gmin, "sub", "sub"));
+                }
                 for c in device_caps(e, op, ei) {
                     add_cap(&mut params, &mut stamps, nm, c.kind, c.a, c.b, c.ctrl, c.value)?;
                 }
