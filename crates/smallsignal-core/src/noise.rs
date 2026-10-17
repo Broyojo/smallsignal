@@ -30,7 +30,7 @@ use crate::ss::{dev_latex_sub, Role, SsCircuit, System};
 use crate::sym::{self, Sym, Symbols, XPoly, MATCH_REL};
 use num_complex::Complex64;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 
 pub const FOUR_KT: f64 = 4.0 * BOLTZ * TEMP;
 pub const TWO_Q: f64 = 2.0 * CHARGE;
@@ -266,7 +266,7 @@ pub struct Point {
 impl Numeric<'_> {
     /// Adjoint solution y with yᵀ·b = output for any right-hand side b, and
     /// the LU (for its condition number).
-    fn adjoint(&self, f: f64) -> Option<(Vec<Complex64>, LuComplex)> {
+    fn adjoint(&self, f: f64) -> Option<(Vec<Complex64>, ScaledLu)> {
         let n = self.sys.dim;
         let a = matrix_at(self.sys, self.ss, jw(f));
         let mut at = vec![Complex64::new(0.0, 0.0); n * n];
@@ -275,7 +275,7 @@ impl Numeric<'_> {
                 at[c * n + r] = a[r * n + c];
             }
         }
-        let lu = LuComplex::factor(n, at)?;
+        let lu = ScaledLu::factor(n, at)?;
         let mut c = vec![Complex64::new(0.0, 0.0); n];
         if let Some(k) = self.sys.node_col[self.out] {
             c[k] += 1.0;
@@ -320,7 +320,7 @@ impl Numeric<'_> {
     /// the LU of A₀ᵀ already factored. A zero is an exact floating-point zero,
     /// as for z₀ (a transfer that only rounds to zero counts as nonzero, so
     /// an unresolved case is ∞, never a dropped term).
-    fn dc_limits(&self, y0: &[Complex64], lu: &LuComplex, srcs: &[Source], z2: &[f64]) -> Vec<Option<f64>> {
+    fn dc_limits(&self, y0: &[Complex64], lu: &ScaledLu, srcs: &[Source], z2: &[f64]) -> Vec<Option<f64>> {
         let wanted = |k: usize| match srcs[k].flicker {
             Some((_, x)) if x > 0.0 && z2[k] == 0.0 => Some(x),
             _ => None,
@@ -384,6 +384,68 @@ impl Numeric<'_> {
     }
 }
 
+/// LU of D_r·A·D_c, with D_r and D_c powers of two that bring every row's
+/// and then every column's largest entry near 1 (exact scaling). Its κ₁ is
+/// the accuracy bound of the solve: an unscaled κ₁ also counts the spread
+/// of units (1e-15 S beside 1 for a source branch), which partial pivoting
+/// on the equilibrated matrix does not suffer from, and overstates the
+/// error by orders of magnitude (κ ~ 1e14 for a Q = 1e9 tank).
+pub(crate) struct ScaledLu {
+    lu: LuComplex,
+    row: Vec<f64>,
+    col: Vec<f64>,
+}
+
+impl ScaledLu {
+    fn factor(n: usize, mut a: Vec<Complex64>) -> Option<ScaledLu> {
+        // 2^-round(log2 m): exact, and 1 for an empty row or column (which
+        // leaves the matrix singular for the factorization to report).
+        let pow2 = |m: f64| {
+            if m > 0.0 && m.is_finite() {
+                (-m.log2().round()).exp2()
+            } else {
+                1.0
+            }
+        };
+        let row: Vec<f64> = (0..n)
+            .map(|r| pow2((0..n).map(|c| a[r * n + c].norm()).fold(0.0, f64::max)))
+            .collect();
+        for r in 0..n {
+            for c in 0..n {
+                a[r * n + c] *= row[r];
+            }
+        }
+        let col: Vec<f64> = (0..n)
+            .map(|c| pow2((0..n).map(|r| a[r * n + c].norm()).fold(0.0, f64::max)))
+            .collect();
+        for r in 0..n {
+            for c in 0..n {
+                a[r * n + c] *= col[c];
+            }
+        }
+        Some(ScaledLu {
+            lu: LuComplex::factor(n, a)?,
+            row,
+            col,
+        })
+    }
+
+    /// x with A·x = b.
+    fn solve(&self, b: &[Complex64]) -> Vec<Complex64> {
+        let rb: Vec<Complex64> = b.iter().zip(&self.row).map(|(&v, &r)| v * r).collect();
+        self.lu
+            .solve(&rb)
+            .into_iter()
+            .zip(&self.col)
+            .map(|(z, &c)| z * c)
+            .collect()
+    }
+
+    fn cond1(&self) -> f64 {
+        self.lu.cond1()
+    }
+}
+
 /// A(s) = Σ_d A_d s^d as dense real matrices A_0, A_1, … (row-major): each
 /// term's degree in s is its number of reactive parameters.
 fn s_coeffs(sys: &System, ss: &SsCircuit) -> Vec<Vec<f64>> {
@@ -427,8 +489,8 @@ pub fn output_psd(p: &Point, srcs: &[Source], f: f64) -> (f64, Vec<f64>) {
 pub struct Integral {
     /// ∫ output PSD, ∫ input-referred PSD over the band.
     pub value: [f64; 2],
-    /// Estimated absolute error of each (Richardson: |S₂ − S₁|/15 summed
-    /// over the adaptive Simpson panels).
+    /// Estimated absolute error of each (|S₂ − S₁| summed over the final
+    /// panels: 15× the Richardson estimate of the unextrapolated value).
     pub err: [f64; 2],
     pub evals: usize,
     pub converged: bool,
@@ -456,8 +518,10 @@ pub fn check_band([lo, hi]: [f64; 2]) -> Result<(), String> {
 
 /// ∫_{lo}^{hi} g(f) df for two integrands at once, by adaptive Simpson in
 /// u = ln(f/lo) (integrand g(f)·f), starting from 10 panels per decade plus
-/// the given breakpoints (pole and zero frequencies), refined until each
-/// panel's Richardson estimate is within its share of `rtol`·|integral|.
+/// the given breakpoints (pole and zero frequencies), refined globally: the
+/// panel with the largest Richardson error estimate is split until the
+/// summed estimate is within `rtol`·|integral| (`converged`), or MAX_EVALS
+/// is reached.
 /// u is measured from lo (u = ln1p((f − lo)/lo), f = lo + lo·expm1(u)), so a
 /// band narrower than the spacing of ln f near it (e.g. two adjacent doubles
 /// at 1e16 Hz) still has a positive width. A breakpoint is never merged
@@ -501,57 +565,147 @@ pub fn integrate_log(
         let v = g(f)?;
         Some([v[0] * f, v[1] * f])
     };
-    let simpson = |h: f64, a: [f64; 2], m: [f64; 2], b: [f64; 2]| [0, 1].map(|i| h / 6.0 * (a[i] + 4.0 * m[i] + b[i]));
-    // Coarse pass: panel values and a first estimate of the total.
-    let mut panels = Vec::new();
+    // Coarse pass: every panel's ends and midpoint, then its quarter points.
+    let mut panels: Vec<Panel> = Vec::new();
     let mut fa = eval(us[0], &mut evals)?;
-    let mut total = [0.0; 2];
     for w in us.windows(2) {
         let (a, b) = (w[0], w[1]);
         let fm = eval(0.5 * (a + b), &mut evals)?;
         let fb = eval(b, &mut evals)?;
-        let s = simpson(b - a, fa, fm, fb);
-        total[0] += s[0];
-        total[1] += s[1];
-        panels.push((a, b, fa, fm, fb, s));
+        panels.push(Panel::new(a, b, fa, fm, fb, &mut |u| eval(u, &mut evals))?);
         fa = fb;
     }
-    let mut value = [0.0; 2];
-    let mut err = [0.0; 2];
-    let mut converged = true;
-    for (a, b, fa, fm, fb, s) in panels {
-        let tol = [0, 1].map(|i| rtol * total[i].abs() * (b - a) / width);
-        // Explicit stack: (a, b, fa, fm, fb, whole, tol, depth).
-        let mut stack = vec![(a, b, fa, fm, fb, s, tol, 0u32)];
-        while let Some((a, b, fa, fm, fb, whole, tol, depth)) = stack.pop() {
-            let m = 0.5 * (a + b);
-            let fl = eval(0.5 * (a + m), &mut evals)?;
-            let fr = eval(0.5 * (m + b), &mut evals)?;
-            let left = simpson(m - a, fa, fl, fm);
-            let right = simpson(b - m, fm, fr, fb);
-            let diff = [0, 1].map(|i| left[i] + right[i] - whole[i]);
-            let ok = (0..2).all(|i| diff[i].abs() <= 15.0 * tol[i]);
-            if ok || depth >= 40 || evals > MAX_EVALS {
-                if !ok {
-                    converged = false;
-                }
-                for i in 0..2 {
-                    value[i] += left[i] + right[i] + diff[i] / 15.0;
-                    err[i] += diff[i].abs() / 15.0;
-                }
-            } else {
-                let half = tol.map(|t| t / 2.0);
-                stack.push((a, m, fa, fl, fm, left, half, depth + 1));
-                stack.push((m, b, fm, fr, fb, right, half, depth + 1));
+    // Global adaptive Simpson: split the panel with the largest error (each
+    // integrand's error relative to its coarse total) until the summed error
+    // is within rtol of the integral, or the evaluations run out.
+    let sum = |ps: &[Panel], done: &[Panel]| {
+        let (mut value, mut err) = ([0.0; 2], [0.0; 2]);
+        for p in ps.iter().chain(done) {
+            for i in 0..2 {
+                value[i] += p.value[i];
+                err[i] += p.err[i];
             }
         }
+        (value, err)
+    };
+    let within = |value: [f64; 2], err: [f64; 2]| (0..2).all(|i| err[i] <= rtol * value[i].abs());
+    let (mut value, mut err) = sum(&panels, &[]);
+    let scale = value.map(|v| if v.is_finite() && v != 0.0 { v.abs() } else { 1.0 });
+    let mut heap: BinaryHeap<ByErr> = panels.into_iter().map(|p| ByErr::new(p, scale)).collect();
+    // Panels too narrow to split (no double strictly inside their halves).
+    let mut done: Vec<Panel> = Vec::new();
+    loop {
+        if within(value, err) || !value.iter().chain(&err).all(|v| v.is_finite()) {
+            // The running sums drift by rounding as panels come and go:
+            // decide on exact sums.
+            let all: Vec<Panel> = heap.iter().map(|p| p.panel.clone()).collect();
+            (value, err) = sum(&all, &done);
+            if within(value, err) || !value.iter().chain(&err).all(|v| v.is_finite()) {
+                break;
+            }
+        }
+        if evals + 4 > MAX_EVALS {
+            break;
+        }
+        let Some(ByErr { panel: p, .. }) = heap.pop() else {
+            break;
+        };
+        let m = p.u[2];
+        if !(p.u[0] < p.u[1] && p.u[1] < m && m < p.u[3] && p.u[3] < p.u[4]) {
+            done.push(p);
+            continue;
+        }
+        let left = Panel::new(p.u[0], m, p.f[0], p.f[1], p.f[2], &mut |u| eval(u, &mut evals))?;
+        let right = Panel::new(m, p.u[4], p.f[2], p.f[3], p.f[4], &mut |u| eval(u, &mut evals))?;
+        for i in 0..2 {
+            value[i] += left.value[i] + right.value[i] - p.value[i];
+            err[i] += left.err[i] + right.err[i] - p.err[i];
+        }
+        heap.push(ByErr::new(left, scale));
+        heap.push(ByErr::new(right, scale));
     }
+    let all: Vec<Panel> = heap.into_iter().map(|p| p.panel).collect();
+    let (value, err) = sum(&all, &done);
     Some(Integral {
         value,
         err,
         evals,
-        converged,
+        converged: within(value, err),
     })
+}
+
+/// One Simpson panel [a, b] in u with its five samples (ends, quarter
+/// points, midpoint) and the Richardson-extrapolated value of its two
+/// halves, with |S₂ − S₁| as the error estimate.
+#[derive(Clone)]
+struct Panel {
+    u: [f64; 5],
+    f: [[f64; 2]; 5],
+    value: [f64; 2],
+    err: [f64; 2],
+}
+
+impl Panel {
+    fn new(
+        a: f64,
+        b: f64,
+        fa: [f64; 2],
+        fm: [f64; 2],
+        fb: [f64; 2],
+        eval: &mut dyn FnMut(f64) -> Option<[f64; 2]>,
+    ) -> Option<Panel> {
+        let m = 0.5 * (a + b);
+        let (ql, qr) = (0.5 * (a + m), 0.5 * (m + b));
+        let (fl, fr) = (eval(ql)?, eval(qr)?);
+        let simpson =
+            |h: f64, x: [f64; 2], y: [f64; 2], z: [f64; 2]| [0, 1].map(|i| h / 6.0 * (x[i] + 4.0 * y[i] + z[i]));
+        let whole = simpson(b - a, fa, fm, fb);
+        let halves = [simpson(m - a, fa, fl, fm), simpson(b - m, fm, fr, fb)];
+        let diff = [0, 1].map(|i| halves[0][i] + halves[1][i] - whole[i]);
+        Some(Panel {
+            u: [a, ql, m, qr, b],
+            f: [fa, fl, fm, fr, fb],
+            value: [0, 1].map(|i| halves[0][i] + halves[1][i] + diff[i] / 15.0),
+            // |S₂ − S₁| itself, not the /15 Richardson estimate of S₂'s
+            // error: a factor of safety, so that an isolated bad sample
+            // (0/0 at a notch shared by every transfer) is refined away
+            // rather than accepted as a small error.
+            err: diff.map(f64::abs),
+        })
+    }
+}
+
+/// A panel in the max-heap by its larger relative error.
+struct ByErr {
+    key: f64,
+    panel: Panel,
+}
+
+impl ByErr {
+    fn new(panel: Panel, scale: [f64; 2]) -> ByErr {
+        let key = (panel.err[0] / scale[0]).max(panel.err[1] / scale[1]);
+        ByErr { key, panel }
+    }
+}
+
+impl PartialEq for ByErr {
+    fn eq(&self, other: &Self) -> bool {
+        self.key.total_cmp(&other.key).is_eq()
+    }
+}
+
+impl Eq for ByErr {}
+
+impl PartialOrd for ByErr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ByErr {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key.total_cmp(&other.key)
+    }
 }
 
 /// The input-referred white (thermal + shot) PSD at s → 0 as exact

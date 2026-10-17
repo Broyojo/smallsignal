@@ -470,9 +470,10 @@ fn the_closed_form_check_allows_for_the_match_tolerance() {
 
 #[test]
 fn band_rel_error_comes_from_the_band_solves() {
-    // 100 F to ground: the MNA matrix is ill-conditioned at high frequency
-    // only (κ·eps ≈ 1e-4 at 1 GHz, ≈ 1e-11 below 10 Hz).
-    let net = "rc\nVIN in 0 DC 0 AC 1\nR1 in out 1k\nC1 out 0 100\n";
+    // 100 mF between two nodes each held by 1k: at high frequency the two
+    // rows nearly coincide, an ill-conditioning no scaling removes
+    // (κ·eps ≈ 1e-4 at 1 GHz, ≈ 1e-11 below 10 Hz).
+    let net = "rc\nVIN in 0 DC 0 AC 1\nR1 in a 1k\nC1 a out 100m\nR2 out 0 1k\n";
     let rel_err = |freqs: [f64; 1], band: [f64; 2]| {
         let r = run(
             net,
@@ -651,22 +652,58 @@ fn a_band_narrower_than_its_logarithm_still_integrates() {
     assert!(band.get("unavailable").is_none(), "{band}");
 }
 
+/// A parallel RLC of quality factor `q` across a 1 pF capacitor, resonant at
+/// `f0`: its output noise over a band wide around f0 is kT/C (to ~1/(πQ)).
+fn tank(q: f64, f0: f64) -> String {
+    let w0 = 2.0 * std::f64::consts::PI * f0;
+    let (l, r) = (1.0 / (w0 * w0 * 1e-12), q / (w0 * 1e-12));
+    format!("rlc\nVIN in 0 DC 0 AC 1\nR1 in out {r:e}\nL1 out 0 {l:e}\nC1 out 0 1p\n")
+}
+
 /// A parallel RLC of Q = 1e9 whose resonance lies 8e-8 (relative) above a
 /// starting grid point (the centre of a 40-decade band, where grid points
 /// within 9e-8 in ln f used to be merged), far beyond its linewidth (5e-10):
 /// the pole must stay a breakpoint, or the samples see only the tails (the
-/// integral came out 78% low). Over the band the output noise is kT/C, to
-/// about 1/(πQ).
+/// integral came out 78% low).
 #[test]
 fn a_pole_next_to_a_grid_point_stays_a_breakpoint() {
-    let (c, q) = (1e-12, 1e9);
-    let f0 = 1e6 * (1.0 + 8e-8);
-    let w0 = 2.0 * std::f64::consts::PI * f0;
-    let l = 1.0 / (w0 * w0 * c);
-    let r = q / (w0 * c);
-    let net = format!("rlc\nVIN in 0 DC 0 AC 1\nR1 in out {r:e}\nL1 out 0 {l:e}\nC1 out 0 1p\n");
     let rq = req(json!({ "input": "VIN", "output": "out", "noiseBand": [1e-14, 1e26] }));
-    let band = &run(&net, &rq)["noise"]["integrated"];
+    let band = &run(&tank(1e9, 1e6 * (1.0 + 8e-8)), &rq)["noise"]["integrated"];
     let got = band["outputV2"].as_f64().unwrap();
-    assert!(rel(got, K * T / c) < 1e-5, "{got} vs {}: {band}", K * T / c);
+    assert!(rel(got, K * T / 1e-12) < 1e-6, "{got} vs {}: {band}", K * T / 1e-12);
+}
+
+/// A resonance far narrower than its starting panel is refined where the
+/// error is, until the total error is within 1e-6 of the integral, and says
+/// so: converged, with relError the summed panel error plus the LU bound
+/// (κ ~ Q at resonance, where ω²LC − 1 cancels: about 1e-6 at Q = 1e9).
+/// (Each panel's tolerance used to shrink with its share of the band, so
+/// these reported converged: false and relError up to 5e3.)
+#[test]
+fn a_high_q_resonance_converges_with_an_honest_error() {
+    let rq = req(json!({ "input": "VIN", "output": "out", "noiseBand": [1e5, 1e7] }));
+    for (q, bound) in [(1e6, 1e-6), (1e9, 3e-6)] {
+        let band = &run(&tank(q, 1e6 * (1.0 + 2e-9)), &rq)["noise"]["integrated"];
+        assert_eq!(band["converged"], true, "Q = {q}: {band}");
+        let claimed = band["relError"].as_f64().unwrap();
+        assert!(claimed <= bound, "Q = {q}: {band}");
+        let err = rel(band["outputV2"].as_f64().unwrap(), K * T / 1e-12);
+        assert!(err <= claimed, "Q = {q}: error {err} above the claimed {claimed}");
+    }
+}
+
+/// Asked for more accuracy than doubles hold, the integrator stops at its
+/// evaluation cap and says it did not converge.
+#[test]
+fn an_unreachable_tolerance_does_not_converge() {
+    let mut g = |f: f64| Some([(-f).exp(), 1.0 / f]);
+    let r = smallsignal_core::noise::integrate_log(&mut g, 0.1, 10.0, &[], 1e-20).unwrap();
+    assert!(!r.converged);
+    assert!(r.evals <= 200_000, "{}", r.evals);
+    let want = (-0.1f64).exp() - (-10.0f64).exp();
+    assert!(rel(r.value[0], want) < 1e-12, "{}", r.value[0]);
+    // At an ordinary tolerance the same integrals converge.
+    let r = smallsignal_core::noise::integrate_log(&mut g, 0.1, 10.0, &[], 1e-6).unwrap();
+    assert!(r.converged);
+    assert!(rel(r.value[1], 100f64.ln()) < 1e-6);
 }

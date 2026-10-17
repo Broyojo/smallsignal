@@ -148,9 +148,11 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
   evaluations, converged}`. Adaptive Simpson in ln(f/fLow), so any valid band
   integrates however narrow (10 panels per decade plus the gain's pole and
-  zero frequencies as breakpoints, none merged away) to 1e-6;
-  `relError` is the Richardson estimate plus the LU rounding of the band's
-  solves. A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the band where the
+  zero frequencies as breakpoints, none merged away), refined globally (the
+  panel with the largest |S₂ − S₁| is split) until those differences sum to
+  ≤ 1e-6 of each integral (`converged`) or 200 000 evaluations. `relError` is
+  that sum relative to the integral plus κ₁·eps of the band's solves (on the
+  row- and column-equilibrated matrix). A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the band where the
   output noise does not vanish makes `inputV2`/`inputRms` null, with
   `unavailable`. (ngspice's own `inoise_total` can be off by percent; compare
   with an integral of its spectrum.)
