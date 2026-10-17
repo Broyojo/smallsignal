@@ -1,0 +1,12 @@
+BJT differential pair, differential drive
+VCC vcc 0 5
+VEE vee 0 -5
+VIP inp 0 DC 0
+VINN inn 0 DC 0
+Q1 c1 inp tail qn
+Q2 c2 inn tail qn
+ITAIL tail vee DC 1m
+RC1 vcc c1 5k
+RC2 vcc c2 5k
+.model qn NPN (IS=1e-15 BF=100 VAF=50)
+.end

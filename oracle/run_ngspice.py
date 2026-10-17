@@ -15,6 +15,8 @@ PMOS/PNP values): vgs = V(g) - V(s), id = current into the drain terminal, etc.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
 import json
 import math
 import re
@@ -27,6 +29,23 @@ import spice
 
 HERE = Path(__file__).resolve().parent
 OPTIONS = ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+# Per-thread override (the evidence tools run ngspice from several threads
+# with different gmin values; a shared global would race).
+_OPTIONS_OVERRIDE: contextvars.ContextVar[str | None] = contextvars.ContextVar("ngspice_options", default=None)
+
+
+def current_options() -> str:
+    return _OPTIONS_OVERRIDE.get() or OPTIONS
+
+
+@contextlib.contextmanager
+def options_override(options: str):
+    """Run ngspice with `options` in this thread only."""
+    token = _OPTIONS_OVERRIDE.set(options)
+    try:
+        yield
+    finally:
+        _OPTIONS_OVERRIDE.reset(token)
 
 MOS_PARAMS = ["id", "gm", "gds", "gmbs", "vgs", "vds", "vbs", "von", "vdsat"]
 BJT_PARAMS = ["ic", "ib", "gm", "gpi", "gmu", "go", "vbe", "vbc"]
@@ -85,11 +104,27 @@ def run_deck(deck: str, keep: Path | None, tag: str) -> dict[str, complex | floa
 
 
 def control(lines: list[str]) -> list[str]:
-    return [OPTIONS, ".control", "set numdgt=15", *lines, ".endc", ".end"]
+    return [current_options(), ".control", "set numdgt=15", *lines, ".endc", ".end"]
+
+
+def excitation(side: dict) -> tuple[str | None, str | None, dict[str, str] | None]:
+    """(inputNeg, mode, per-source AC specs) for a two-source input: the
+    differential mode drives ±1/2 (so v_in+ − v_in− = 1), the common mode
+    drives both with 1."""
+    neg = side.get("inputNeg")
+    if not neg:
+        return None, None, None
+    mode = side.get("mode") or "differential"
+    pos = side["input"].lower()
+    if mode == "differential":
+        return neg, mode, {pos: "0.5", neg.lower(): "0.5 180"}
+    return neg, mode, {pos: "1", neg.lower(): "1"}
 
 
 def op_and_ac(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
     inp = net.element(side["input"])
+    neg_name, mode, ac = excitation(side)
+    neg = net.element(neg_name) if neg_name else None
     out, ref = side["output"], side.get("ref")
     freqs = side.get("freqs", [])
     nodes = net.nodes()
@@ -105,7 +140,11 @@ def op_and_ac(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> d
         lines.append(f"ac lin 1 {f!r} {f!r}")
         lines.append(f"let gk{k} = {spice.vexpr(out, ref)}")
         lines.append(f"print gk{k}")
-        if inp.kind == "v":
+        if neg is not None:
+            if inp.kind == "v" and mode == "common":
+                lines.append(f"let ik{k} = i({inp.name})+i({neg.name})")
+                lines.append(f"print ik{k}")
+        elif inp.kind == "v":
             lines.append(f"let vk{k} = {spice.vexpr(inp.nodes[0], inp.nodes[1])}")
             lines.append(f"let ik{k} = i({inp.name})")
             lines.append(f"print vk{k}")
@@ -114,7 +153,7 @@ def op_and_ac(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> d
             # Current leaves an I source at its n- node and returns at n+.
             lines.append(f"let vk{k} = {spice.vexpr(inp.nodes[1], inp.nodes[0])}")
             lines.append(f"print vk{k}")
-    deck = spice.render(net, inp.name) + "\n".join(control(lines)) + "\n"
+    deck = spice.render(net, inp.name, ac=ac) + "\n".join(control(lines)) + "\n"
     v = run_deck(deck, keep, name)
 
     def get(key: str):
@@ -185,6 +224,12 @@ def op_and_ac(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> d
     for k, f in enumerate(freqs):
         g = complex(get(f"gk{k}"))
         gain.append(cval(f, g))
+        if neg is not None:
+            if inp.kind == "v" and mode == "common":
+                # Both inputs at 1 V: Z = 1 / (total current into the circuit).
+                i_into = -complex(get(f"ik{k}"))
+                zin.append(cval(f, 1 / i_into if abs(i_into) > 0 else None))
+            continue
         vk = complex(get(f"vk{k}"))
         if inp.kind == "v":
             # ngspice's i(V) flows into the + terminal, so the circuit draws -i(V).
@@ -209,6 +254,29 @@ def zout(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> list[d
     return [cval(f, complex(v[f"zk{k}"])) for k, f in enumerate(freqs)]
 
 
+def zin_differential(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> list[dict]:
+    """Impedance between the two inputs' + nodes with both sources open."""
+    inp, neg = net.element(side["input"]), net.element(side["inputNeg"])
+    p1, p2 = inp.nodes[0], neg.nodes[0]
+    freqs = side.get("freqs", [])
+    lines = []
+    for k, f in enumerate(freqs):
+        lines.append(f"ac lin 1 {f!r} {f!r}")
+        lines.append(f"let zk{k} = {spice.vexpr(p1, p2)}")
+        lines.append(f"print zk{k}")
+    deck = spice.render(net, None, [f"IZIN__ {p2} {p1} DC 0 AC 1"], ac={},
+                        open_sources=(inp.name, neg.name)) + "\n".join(control(lines)) + "\n"
+    v = run_deck(deck, keep, name + ".zin")
+    out = []
+    for k, f in enumerate(freqs):
+        z = complex(v[f"zk{k}"])
+        # A port the circuit leaves open reads as the two opening inductors in
+        # series (2·jωL): that is an infinite impedance, not a measurement.
+        z_open = 2 * 2 * math.pi * f * float(spice.OPEN_L)
+        out.append(cval(f, None if abs(z) > 1e-3 * z_open else z))
+    return out
+
+
 def cval(f: float, z: complex | None) -> dict:
     if z is None or not (math.isfinite(z.real) and math.isfinite(z.imag)):
         return {"f": f, "re": None, "im": None, "inf": True}
@@ -227,11 +295,16 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
         "output": side["output"],
         "ref": side.get("ref"),
         "freqs": side.get("freqs", []),
-        "generator": {"tool": "ngspice", "version": ngspice_version(), "options": OPTIONS},
+        "generator": {"tool": "ngspice", "version": ngspice_version(), "options": current_options()},
         "op": op,
         "gain": {"values": gain},
     }
+    for k in ("inputNeg", "mode", "match"):
+        if side.get(k):
+            result[k] = side[k]
     if side.get("rin"):
+        if side.get("inputNeg") and (side.get("mode") or "differential") == "differential":
+            zin = zin_differential(net, side, keep, name)
         result["rin"] = {"values": zin}
     if side.get("rout"):
         result["rout"] = {"values": zout(net, side, keep, name)}

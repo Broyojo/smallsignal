@@ -1,0 +1,23 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "differential",
+ "output": "c1",
+ "ref": "c2",
+ "freqs": [
+  1000
+ ],
+ "rin": true,
+ "rout": true,
+ "match": [
+  [
+   "Q1",
+   "Q2"
+  ],
+  [
+   "RC1",
+   "RC2"
+  ]
+ ],
+ "description": "A_d = -gm (ro || RC); Rin = 2 rpi"
+}

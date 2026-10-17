@@ -158,12 +158,28 @@ def source_line(e: Element, ac: float | None) -> str:
     return line
 
 
-def render(net: Netlist, ac_source: str | None, extra: list[str] | None = None) -> str:
-    """Netlist text with all AC specs stripped and AC 1 placed on `ac_source`."""
+# Series inductance that opens a voltage source for AC while keeping its DC
+# value: |Z| = 2π·f·1e12 Ω, about 6e15 Ω at 1 kHz.
+OPEN_L = "1e12"
+
+
+def render(net: Netlist, ac_source: str | None, extra: list[str] | None = None,
+           ac: dict[str, str] | None = None, open_sources: tuple[str, ...] = ()) -> str:
+    """Netlist text with all AC specs stripped and AC 1 placed on `ac_source`
+    (or the AC specs in `ac`, by lower-case source name). Sources in
+    `open_sources` keep their DC value behind a huge series inductor, so they
+    are open for AC."""
     out = [net.title]
+    opened = {n.lower() for n in open_sources}
     for e in net.elements:
         if e.kind in "vi":
-            out.append(source_line(e, 1 if ac_source and e.name == ac_source.lower() else None))
+            spec = (ac or {}).get(e.name) if ac is not None else (1 if ac_source and e.name == ac_source.lower() else None)
+            if e.name in opened:
+                inner = f"{e.tokens[1]}__open"
+                out.append(f"{e.tokens[0]} {inner} {e.tokens[2]} DC {source_dc(e)}")
+                out.append(f"LOPEN__{e.name} {e.tokens[1]} {inner} {OPEN_L}")
+            else:
+                out.append(source_line(e, spec))
         else:
             out.append(" ".join(e.tokens))
     out.extend(net.model_lines)

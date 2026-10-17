@@ -3,3 +3,5 @@ random/
 expected_random/
 __pycache__/
 fuzz/
+fuzz-gate/
+fuzz-gate.log

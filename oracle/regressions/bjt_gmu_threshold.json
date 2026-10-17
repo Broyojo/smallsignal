@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n5",
+ "ref": null,
+ "freqs": [
+  36.5047,
+  165089.0,
+  29960100.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "BJT g_mu below 1e-6*g_pi dropped; the collector is on the signal path, so the gain becomes exactly 0 (minimized from fuzz-gate wildmixed_504_011)"
+}

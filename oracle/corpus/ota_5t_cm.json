@@ -1,0 +1,24 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "common",
+ "output": "out",
+ "freqs": [
+  1000,
+  1000000.0,
+  100000000.0
+ ],
+ "rin": true,
+ "match": [
+  [
+   "M1",
+   "M2"
+  ],
+  [
+   "M3",
+   "M4"
+  ]
+ ],
+ "description": "A_cm, set by the tail's ro5",
+ "ref": null
+}

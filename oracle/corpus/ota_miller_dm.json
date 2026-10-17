@@ -1,0 +1,27 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "differential",
+ "output": "out",
+ "freqs": [
+  10,
+  1000,
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0
+ ],
+ "rout": true,
+ "match": [
+  [
+   "M1",
+   "M2"
+  ],
+  [
+   "M3",
+   "M4"
+  ]
+ ],
+ "description": "two-stage A_d ~ gm1 (ro2||ro4) gm6 (ro6||ro7)",
+ "ref": null
+}

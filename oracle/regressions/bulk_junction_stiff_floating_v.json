@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n1",
+ "ref": null,
+ "freqs": [
+  4468.34,
+  25013.3,
+  3955600.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "forward-biased drain-bulk junction dropped: its node sits on a floating DC source, counted as AC-stiff (minimized from fuzz-gate wildmos_507_024)"
+}

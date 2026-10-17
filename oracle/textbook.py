@@ -8,6 +8,9 @@ For each case in textbook_cases.py:
 - a textbook closed form, when given, must equal the hand KCL result too
   (this checks the hand derivation itself);
 - a textbook approximation, when given, is reported numerically;
+- the solver's symbolic `simplified` form (leading order as r_o → ∞) must
+  equal the case's textbook hand-analysis form (`lead`) exactly, or equal the
+  exact form when the circuit has no r_o;
 - numeric-mode runs must render the expected ∥ notation and agree with the
   hand formula evaluated at the solver's own operating-point values.
 The CLI is $SMALLSIGNAL_BIN if set, else target/release/smallsignal.
@@ -45,6 +48,12 @@ def run(netlist: str, case: Case, extra: list[str]) -> dict:
     try:
         out = case.output + (f":{case.ref}" if case.ref else "")
         args = [*cli(), "analyze", path, "--input", case.input, "--output", out, *extra]
+        if case.input_neg:
+            args += ["--input-neg", case.input_neg]
+        if case.mode:
+            args += ["--mode", case.mode]
+        if case.match:
+            args += ["--match", ";".join(",".join(g) for g in case.match)]
         for q in ("rin", "rout"):
             if getattr(case, q):
                 args.append(f"--{q}")
@@ -63,10 +72,10 @@ def parse(expr: str) -> sp.Expr:
     return sp.parse_expr(expr.replace("^", "**"), local_dict=names, evaluate=True)
 
 
-def ours(q: dict) -> sp.Expr:
+def ours(q: dict, form: str = "exact") -> sp.Expr:
     if q.get("infinite"):
         return sp.oo
-    e = q["exact"]
+    e = q[form]
     if e.get("num") is None:
         raise RuntimeError("exact expression too large to compare")
     return parse(e["num"]) / parse(e["den"])
@@ -112,6 +121,16 @@ def check_case(case: Case, verbose: bool) -> list[str]:
             closed = subs_matched(sp.sympify(q.closed()), q.matched)
             if not identical(closed, hand):
                 fails.append(f"{qname}: textbook closed form {closed} != hand KCL {hand} (derivation slip)")
+        if got != sp.oo:
+            simp = data[qname]["simplified"]
+            lead = subs_matched(ours(data[qname], "simplified"), q.matched)
+            if q.lead is not None:
+                want = subs_matched(sp.sympify(q.lead()), q.matched)
+                if not identical(lead, want):
+                    fails.append(f"{qname}: leading order {sp.simplify(lead)}  !=  textbook {sp.simplify(want)}")
+            elif not simp.get("same"):
+                fails.append(f"{qname}: no r_o, but the leading order differs from the exact form: {lead}")
+            notes.append(f"{qname}: simplified = {simp['latex']}")
         if q.approx is not None and got != sp.oo:
             vals = {x: typical(x) for x in got.free_symbols | sp.sympify(q.approx()).free_symbols if x != s}
             ratio = float((got / q.approx()).subs(vals).subs(s, 0))

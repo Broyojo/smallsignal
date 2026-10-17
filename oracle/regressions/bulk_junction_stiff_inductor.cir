@@ -1,0 +1,10 @@
+random wild mixed circuit
+V1 vdd 0 DC 3.4
+V2 in 0 DC 1.977 AC 1
+R3 n3 in 1434
+Q1 n5 in n4 qp
+M1 vdd n4 n1 n1 pch W=1.216u L=1u
+L1 n4 n1 3.033e-06
+.model pch PMOS (LEVEL=1 KP=0.0004465 VTO=-0.3373 LAMBDA=0.1052 GAMMA=0.4992 PHI=0.7)
+.model qp PNP (IS=1.048e-15 BF=116.5 VAF=35.83)
+.end

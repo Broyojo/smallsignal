@@ -6,9 +6,11 @@ The sidecar <netlist>.json supplies input/output/freqs. The input source line
 and model cards are never removed. Failure kinds:
   nan         solver returns non-finite gain/rin/rout values (no ngspice needed)
   nonconv     solver reports DC non-convergence while ngspice converges
+  singular    solver reports a singular matrix while ngspice converges
   acmismatch  operating points agree but some AC value differs (rtol 1e-6),
               ignoring gmin-level impedances (>= 1e12 ohm or infinite)
   bulkfwd     acmismatch while the solver warns of a forward-biased bulk junction
+  verdict     evidence.py gives the verdict named by --verdict (e.g. OMITTED_PHYSICS)
   opmismatch  some operating-point value differs (rtol 1e-6)
 Writes <out>.cir, <out>.json and, for ngspice-backed kinds, expected/<name>.json.
 The CLI is $SMALLSIGNAL_BIN.
@@ -23,7 +25,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+import physical
 import run_ngspice
+import spice
 from compare import Report, compare, run_cli
 
 HERE = Path(__file__).resolve().parent
@@ -50,11 +54,39 @@ def reference(text: str, side: dict) -> dict | None:
             return None
 
 
-def sane(ref: dict) -> bool:
-    return all(abs(d.get(k, 0)) < 1.0 for d in ref["op"]["devices"].values() for k in ("id", "ic", "ib"))
+def sane(ref: dict, text: str | None = None) -> bool:
+    """Usable as a reference: no junction current above 1 A (physical.py)."""
+    if text is None:
+        return all(abs(d.get(k, 0)) < 1.0 for d in ref["op"]["devices"].values() for k in ("id", "ic", "ib"))
+    return physical.physical(ref, text)
+
+
+WANT_VERDICT = None
+
+
+def evidence_verdict(text: str, side: dict) -> str | None:
+    import evidence
+    with tempfile.TemporaryDirectory() as tmp:
+        c = Path(tmp) / "c" / "m.cir"
+        c.parent.mkdir()
+        c.write_text(text)
+        c.with_suffix(".json").write_text(json.dumps(side))
+        try:
+            run_ngspice.process(c, Path(tmp) / "e", None)
+        except (run_ngspice.NgspiceError, KeyError, ValueError):
+            return None
+        ref = json.loads((Path(tmp) / "e" / "m.json").read_text())
+        if not sane(ref, text):
+            return None
+        try:
+            return evidence.verdict(os.environ["SMALLSIGNAL_BIN"], c)["verdict"]
+        except Exception:  # noqa: BLE001 - an unanalyzable candidate does not reproduce
+            return None
 
 
 def failing(kind: str, text: str, side: dict) -> bool:
+    if kind == "verdict":
+        return evidence_verdict(text, side) == WANT_VERDICT
     got = ours(text, side)
     if kind == "nan":
         if isinstance(got, str):
@@ -62,15 +94,15 @@ def failing(kind: str, text: str, side: dict) -> bool:
         return any(v.get("re") is None and not v.get("inf")
                    for q in ("gain", "rin", "rout") for v in (got.get(q) or {}).get("values", [])
                    if not (got.get(q) or {}).get("infinite"))
-    if kind == "nonconv":
-        if not (isinstance(got, str) and "converge" in got):
+    if kind in ("nonconv", "singular"):
+        if not (isinstance(got, str) and ("converge" if kind == "nonconv" else "singular") in got):
             return False
         ref = reference(text, side)
-        return ref is not None and sane(ref)
+        return ref is not None and sane(ref, text)
     if isinstance(got, str):
         return False
     ref = reference(text, side)
-    if ref is None or not sane(ref):
+    if ref is None or not sane(ref, text):
         return False
     rep = Report(1e-6)
     compare(got, ref, rep)
@@ -105,9 +137,12 @@ def protected(line: str, side: dict) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("netlist", type=Path)
-    ap.add_argument("--kind", required=True, choices=["nan", "nonconv", "acmismatch", "bulkfwd", "opmismatch"])
+    ap.add_argument("--kind", required=True, choices=["nan", "nonconv", "singular", "acmismatch", "bulkfwd", "opmismatch", "verdict"])
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--verdict", help="for --kind verdict")
     args = ap.parse_args()
+    global WANT_VERDICT
+    WANT_VERDICT = args.verdict
     side = json.loads(args.netlist.with_suffix(".json").read_text())
     lines = args.netlist.read_text().splitlines()
     title, body = lines[0], [l for l in lines[1:] if l.strip() and l.strip().lower() != ".end"]

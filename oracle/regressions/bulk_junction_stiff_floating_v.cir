@@ -1,0 +1,8 @@
+random wild mos circuit
+V1 vdd 0 DC 3.06
+V2 in 0 DC 1.305 AC 1
+R1 n1 in 299.1
+M4 n1 0 vdd vdd nch W=12.56u L=2u
+V3 n1 n2 DC -0.2164
+.model nch NMOS (LEVEL=1 KP=3.294e-05 VTO=0.5243 LAMBDA=0.02936 GAMMA=0 PHI=0.7)
+.end

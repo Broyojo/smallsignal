@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n2",
+ "ref": "n1",
+ "freqs": [
+  69235.8,
+  104528.0,
+  2595520.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "PMOS in reverse mode between ideal sources: DC limiting never reports converged (1-ulp recomposition in limit_mos) (minimized from fuzz-gate wildmos_509_021)"
+}

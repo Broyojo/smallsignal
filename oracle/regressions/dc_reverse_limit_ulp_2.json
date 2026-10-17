@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n1",
+ "ref": null,
+ "freqs": [
+  84324.0,
+  106989000.0,
+  144841000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "same root cause as dc_reverse_limit_ulp, with an inductor and a floating source (minimized from fuzz-gate wildmos_505_026)"
+}

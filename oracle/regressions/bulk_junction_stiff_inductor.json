@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n3",
+ "ref": null,
+ "freqs": [
+  763991.0,
+  1296500.0,
+  4703990.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "forward-biased drain-bulk junction dropped: its node sits on an inductor, counted as AC-stiff (minimized from fuzz-gate wildmixed_500_003)"
+}

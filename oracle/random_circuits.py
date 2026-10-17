@@ -22,6 +22,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import physical
 import run_ngspice
 import spice
 
@@ -300,10 +301,9 @@ def away_from_boundaries(result: dict) -> bool:
     boundary (cutoff or the triode/saturation edge), where the two solvers'
     1e-9-level bias differences flip the region. Circuits with device
     currents above 1 A (a junction forward-biased straight from a source) are
-    rejected: both simulators then subtract huge exponentials."""
+    rejected (in main, via physical.py) for both modes: both simulators then
+    subtract huge exponentials."""
     for d in result["op"]["devices"].values():
-        if any(abs(d.get(k, 0)) > 1.0 for k in ("id", "ic", "ib")):
-            return False
         if d["type"] in ("nmos", "pmos"):
             if abs(d["vov"]) < MARGIN:
                 return False
@@ -367,7 +367,9 @@ def main() -> int:
         except (run_ngspice.NgspiceError, KeyError, ValueError):
             continue
         accept = away_from_boundaries if args.wild else clearly_biased
-        if not accept(result) or not nontrivial(result):
+        # Both modes: reject junction currents above 1 A (physical.py), which
+        # includes MOS bulk junctions that ngspice's id leaves out.
+        if not physical.physical(result, text) or not accept(result) or not nontrivial(result):
             continue
         run_ngspice.process(cir, args.expected, None)
         kept += 1

@@ -1,0 +1,14 @@
+Five-transistor OTA, common-mode drive
+VDD vdd 0 1.8
+VIP inp 0 DC 1.0
+VINN inn 0 DC 1.0
+M1 x inp tail 0 nch W=10u L=1u
+M2 out inn tail 0 nch W=10u L=1u
+M3 x x vdd vdd pch W=20u L=1u
+M4 out x vdd vdd pch W=20u L=1u
+M5 tail vbn 0 0 nch W=10u L=1u
+VBN vbn 0 0.7
+CL out 0 1p
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.model pch PMOS (LEVEL=1 KP=80u VTO=-0.5 LAMBDA=0.1)
+.end

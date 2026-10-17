@@ -1,0 +1,14 @@
+random wild mixed circuit
+V1 vdd 0 DC 1.9
+V2 in 0 DC 0.238 AC 1
+R1 n5 vdd 2.98e+05
+R2 n2 in 1526
+R3 n6 0 308.1
+R4 n1 n2 2.754e+04
+R5 n4 in 5238
+R6 n3 n5 3.222e+04
+M1 n6 n3 n4 n4 nch W=14.51u L=1u
+M2 n5 n5 n1 n1 pch W=0.7879u L=0.35u
+.model nch NMOS (LEVEL=1 KP=2.045e-05 VTO=0.4992 LAMBDA=0.288 GAMMA=0 PHI=0.7)
+.model pch PMOS (LEVEL=1 KP=2.045e-05 VTO=-0.4992 LAMBDA=0.288 GAMMA=0 PHI=0.7)
+.end

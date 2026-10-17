@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n4",
+ "ref": null,
+ "freqs": [
+  5136350.0,
+  17935100.0,
+  810887000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "junction conductance below JUNCTION_REL=1e-6 of its node's other conductance dropped, moving Rin by 1.1e-6 (minimized from fuzz-gate wildmixed_506_028)"
+}

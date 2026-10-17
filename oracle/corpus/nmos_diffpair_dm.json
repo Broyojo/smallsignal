@@ -1,0 +1,30 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "differential",
+ "output": "o1",
+ "ref": "o2",
+ "freqs": [
+  1000,
+  1000000.0,
+  100000000.0,
+  1000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "match": [
+  [
+   "M1",
+   "M2"
+  ],
+  [
+   "RD1",
+   "RD2"
+  ],
+  [
+   "CL1",
+   "CL2"
+  ]
+ ],
+ "description": "differential gain A_d = -gm (ro || RD) / (1 + s CL (ro || RD))"
+}

@@ -1,0 +1,13 @@
+{
+ "input": "V2",
+ "output": "n3",
+ "ref": null,
+ "freqs": [
+  8747.4,
+  207839.0,
+  2387930.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "forward-biased drain-bulk junction on the input source's node dropped as 'between stiff nodes' (minimized from fuzz-gate wildmos_501_016)"
+}

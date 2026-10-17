@@ -27,6 +27,22 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   with device currents above 1 A, are rejected.
 - ngspice runs time out after 30 s; some pathological circuits make it loop forever.
 - `regressions/`: minimized failures with their diagnoses (see its README).
+- Evidence tools (all take the solver binary first):
+  - `triage.py`: a verdict for every fuzz failure, each from a check that can
+    fail. It calls:
+  - `prove.py`: gmin scaling (both simulators at gmin 1e-18), and physical
+    degeneracy (> 1 A junction in an ideal-source loop).
+  - `opcheck.py`: operating-point gaps, either multistability (ngspice
+    `.nodeset` at our solution) or gmin.
+  - `evidence.py`: AC gaps against `indep.py`, an independent 60-digit rebuild
+    of ngspice's own linearized circuit from the netlist (full, solver-like,
+    and solver-like plus dropped physics). It accounts for ngspice's numerics
+    (κ-bound), gmin, omitted physics, stamping, and parameter conditioning.
+  - `mpverify.py`: 60-digit solve of the solver's own `--certificate`.
+  - `physical.py`: junction-current sanity, used by both generators and the
+    minimizer.
+- `run_ngspice.options_override(...)` changes ngspice options per thread;
+  never assign `run_ngspice.OPTIONS` (the evidence tools run threads).
 
 `compare.py` runs `$SMALLSIGNAL_BIN` if set, else builds `smallsignal-cli` with
 cargo. The default tolerance is `--rtol 1e-6` on complex magnitude, with small

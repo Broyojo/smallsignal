@@ -63,6 +63,12 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         args.append("--rin")
     if side.get("rout"):
         args.append("--rout")
+    if side.get("inputNeg"):
+        args += ["--input-neg", side["inputNeg"]]
+    if side.get("mode"):
+        args += ["--mode", side["mode"]]
+    if side.get("match"):
+        args += ["--match", ";".join(",".join(g) for g in side["match"])]
     try:
         proc = subprocess.run(args, cwd=REPO, capture_output=True, text=True, timeout=120)
     finally:

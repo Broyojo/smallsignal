@@ -1,0 +1,23 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "common",
+ "output": "o1",
+ "freqs": [
+  1000
+ ],
+ "rin": true,
+ "rout": true,
+ "match": [
+  [
+   "M1",
+   "M2"
+  ],
+  [
+   "RD1",
+   "RD2"
+  ]
+ ],
+ "description": "common-mode gain at one output, finite tail",
+ "ref": null
+}

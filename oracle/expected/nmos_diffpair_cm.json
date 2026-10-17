@@ -1,0 +1,98 @@
+{
+  "name": "nmos_diffpair_cm",
+  "netlist": "nmos_diffpair_cm.cir",
+  "input": "VIP",
+  "output": "o1",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vdd": 1.8,
+      "inp": 1.0,
+      "inn": 1.0,
+      "o1": 1.522260880363428,
+      "tail": 0.2777391195275718,
+      "o2": 1.522260880363429
+    },
+    "devices": {
+      "m1": {
+        "type": "nmos",
+        "region": "saturation",
+        "reverse": false,
+        "id": 5.554782392731437e-05,
+        "vgs": 0.7222608804724282,
+        "vds": 1.2445217608358563,
+        "vbs": -0.2777391195275718,
+        "vov": 0.2222608804724282,
+        "gm": 0.0004998434614109513,
+        "gds": 4.939989898837902e-06,
+        "gmb": 0.0
+      },
+      "m2": {
+        "type": "nmos",
+        "region": "saturation",
+        "reverse": false,
+        "id": 5.554782392731437e-05,
+        "vgs": 0.7222608804724282,
+        "vds": 1.2445217608358572,
+        "vbs": -0.2777391195275718,
+        "vov": 0.2222608804724282,
+        "gm": 0.0004998434614109513,
+        "gds": 4.939989898837902e-06,
+        "gmb": 0.0
+      }
+    },
+    "vsource_currents": {
+      "vdd": -0.000111095647854629,
+      "vip": 0.0,
+      "vinn": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": -0.704279205656553,
+        "im": 0.0
+      }
+    ]
+  },
+  "inputNeg": "VINN",
+  "mode": "common",
+  "match": [
+    [
+      "M1",
+      "M2"
+    ],
+    [
+      "RD1",
+      "RD2"
+    ]
+  ],
+  "rin": {
+    "values": [
+      {
+        "f": 1000,
+        "re": null,
+        "im": null,
+        "inf": true
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 4922.337471564014,
+        "im": 0.0
+      }
+    ]
+  }
+}
