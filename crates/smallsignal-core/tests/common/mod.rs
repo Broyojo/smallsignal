@@ -126,6 +126,18 @@ pub fn numeric_matches_exact(name: &str, exact: &Value, numeric: &Value, rel: f6
             failures.push(format!("{name} {q}: infinite {} vs {}", e["infinite"], n["infinite"]));
             continue;
         }
+        // Counted as the exact path counts them (the degree in s), here
+        // with no common factor cancelled; an infinite quantity has none.
+        let counted: &[(&str, &str)] = if n["infinite"] == true {
+            &[]
+        } else {
+            &[("poleCount", "poles"), ("zeroCount", "zeros")]
+        };
+        for &(count, list) in counted {
+            if n[count].as_u64() != n[list].as_array().map(|l| l.len() as u64) {
+                failures.push(format!("{name} {q}: {count} {} vs {}", n[count], n[list]));
+            }
+        }
         let floor = if q == "gain" { 1e-12 } else { 1e-9 };
         let lu = e["check"]["maxRelDiff"].as_f64().unwrap_or(0.0);
         let values = |v: &Value| v["values"].as_array().cloned().unwrap_or_default();

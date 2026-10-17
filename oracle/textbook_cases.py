@@ -67,9 +67,10 @@ class Quantity:
     approx: Callable[[], sp.Expr] | None = None
     """Textbook approximation, reported numerically, not asserted."""
     lead: Callable[[], sp.Expr] | None = None
-    """Textbook hand-analysis form (r_o → ∞), asserted equal to the solver's
-    symbolic `simplified` (leading-order) result. None: the circuit has no
-    r_o, so the simplified form must be the exact one."""
+    """Textbook hand-analysis form (r_o → ∞ for saturated devices, then
+    g_mb → 0 unless that leaves a pure number), asserted equal to the
+    solver's symbolic `simplified` (leading-order) result. None: the circuit
+    has no r_o, so the simplified form must be the exact one."""
 
 
 @dataclass
@@ -81,8 +82,9 @@ class Noise:
     closed: Callable[[], tuple[sp.Expr, sp.Expr]] | None = None
     """Textbook closed form, when it is exact."""
     lead: Callable[[], tuple[sp.Expr, sp.Expr]] | None = None
-    """Textbook hand-analysis form (r_o → ∞), asserted equal to the solver's
-    `simplified` form. None: the exact form, with r_o → ∞ taken as a limit."""
+    """Textbook hand-analysis form (r_o → ∞, g_mb → 0), asserted equal to the
+    solver's `simplified` form. None: the exact form, with r_o → ∞ taken as a
+    limit."""
     matched: dict[str, str] = field(default_factory=dict)
 
 
@@ -168,6 +170,20 @@ def sf_gain():
 def sf_rout():
     vo = sp.Symbol("vo")
     return solve([mos("M1", 0, 0, vo, 0) + 1 - vo / sym("RL")], [vo], vo)
+
+
+def sf_isrc(vin, inject):
+    """Follower into an NMOS current source (M2, gate at AC ground)."""
+    vo = sp.Symbol("vo")
+    return solve([mos("M1", 0, vin, vo, 0) - mos("M2", vo, 0, 0) + inject], [vo], vo)
+
+
+def stack(vin, inject):
+    """Two NMOS on one gate: M2 (outer) on M1, whose drain is M2's source."""
+    vx, vo = sp.symbols("vx vo")
+    i1 = mos("M1", vx, vin, 0)
+    i2 = mos("M2", vo, vin, vx, 0)
+    return solve([i1 - i2, vo / RD + i2 - inject], [vx, vo], vo)
 
 
 def cascode(vin, inject, load_r=True):
@@ -527,9 +543,9 @@ CASES: list[Case] = [
         "cs degen\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in sn 0\nRS sn 0\n",
         "VIN", "out",
         gain=Quantity(degen_gain, closed=lambda: -g * RD * ro / (RD + RS + ro + (g + gmb) * RS * ro),
-                      lead=lambda: -g * RD / (1 + (g + gmb) * RS)),
+                      lead=lambda: -g * RD / (1 + g * RS)),
         rout=Quantity(degen_rout, closed=lambda: par(RD, ro + RS + (g + gmb) * ro * RS), lead=lambda: RD),
-        noise=Noise(degen_noise, lead=lambda: (2 / (3 * g) + RS * (g + gmb)**2 / g**2 + (1 + (g + gmb) * RS)**2 / (g**2 * RD), 0)),
+        noise=Noise(degen_noise, lead=lambda: (2 / (3 * g) + RS + (1 + g * RS)**2 / (g**2 * RD), 0)),
         dist=Dist(dist_net("VDD vdd 0 5\nVIN in 0 DC 1.0 AC 1\nRD vdd out 5k\nM1 out in sn sn nm W=10u L=1u\nRS sn 0 1k\n"),
                   ["M1"], degen_dist,
                   closed=lambda: (-g * RD / (1 + T_DEG), -K2G * RD / (1 + T_DEG)**3, 2 * K2G**2 * RS * RD / (1 + T_DEG)**5)),
@@ -538,17 +554,17 @@ CASES: list[Case] = [
         "cg",
         "cg\nVIN in 0\nRS in src\nVB g 0\nVDD vdd 0\nRD vdd out\nM1 out g src 0\n",
         "VIN", "out",
-        gain=Quantity(lambda: cg_gain_rin()[0], lead=lambda: (g + gmb) * RD / (1 + (g + gmb) * RS)),
+        gain=Quantity(lambda: cg_gain_rin()[0], lead=lambda: g * RD / (1 + g * RS)),
         rin=Quantity(lambda: cg_gain_rin()[1], closed=lambda: RS + (ro + RD) / (1 + (g + gmb) * ro),
-                     lead=lambda: RS + 1 / (g + gmb)),
+                     lead=lambda: RS + 1 / g),
     ),
     Case(
         "sf",
         "sf\nVDD vdd 0\nVIN in 0\nM1 vdd in out 0\nRL out 0\n",
         "VIN", "out",
-        gain=Quantity(sf_gain, closed=lambda: g / (g + gmb + 1 / ro + 1 / RL), lead=lambda: g / (g + gmb + 1 / RL)),
+        gain=Quantity(sf_gain, closed=lambda: g / (g + gmb + 1 / ro + 1 / RL), lead=lambda: g / (g + 1 / RL)),
         rin=Quantity(lambda: sp.oo),
-        rout=Quantity(sf_rout, closed=lambda: par(1 / g, 1 / gmb, ro, RL), lead=lambda: par(1 / g, 1 / gmb, RL)),
+        rout=Quantity(sf_rout, closed=lambda: par(1 / g, 1 / gmb, ro, RL), lead=lambda: par(1 / g, RL)),
         parallel=["gain", "rout"],
         numeric_netlist="sf\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN in 0 1.2\nM1 vdd in out 0 nm W=10u L=1u\nRL out 0 10k\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.4)\n",
@@ -569,9 +585,26 @@ CASES: list[Case] = [
         "cascode ideal load\nVIN in 0\nVB vb 0\nVDD vdd 0\nIB vdd out\nM1 x in 0 0\nM2 out vb x 0\n",
         "VIN", "out",
         gain=Quantity(lambda: cascode(1, 0, load_r=False), closed=lambda: -g * ro1 * (1 + (g2 + gmb2) * ro2),
-                      lead=lambda: -g * (g2 + gmb2) * ro1 * ro2),
+                      lead=lambda: -g * g2 * ro1 * ro2),
         rout=Quantity(lambda: cascode(0, 1, load_r=False), closed=lambda: ro1 + ro2 + (g2 + gmb2) * ro1 * ro2,
-                      lead=lambda: (g2 + gmb2) * ro1 * ro2),
+                      lead=lambda: g2 * ro1 * ro2),
+    ),
+    Case(
+        "sf_isrc",
+        "sf current-source load\nVDD vdd 0\nVIN in 0\nVB vb 0\nM1 vdd in out 0\nM2 out vb 0 0\n",
+        "VIN", "out",
+        # Without g_mb the gain would be the pure number 1: body effect alone
+        # sets it, so it stays. Zout drops it.
+        gain=Quantity(lambda: sf_isrc(1, 0), closed=lambda: g / (g + gmb + 1 / ro + 1 / ro2), lead=lambda: g / (g + gmb)),
+        rout=Quantity(lambda: sf_isrc(0, 1), closed=lambda: par(1 / g, 1 / gmb, ro, ro2), lead=lambda: 1 / g),
+    ),
+    Case(
+        "stack_shared_gate",
+        "stacked nmos\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 0\n",
+        "VIN", "out",
+        # M1 is in triode whenever M2 conducts: its r_o stays.
+        gain=Quantity(lambda: stack(1, 0), lead=lambda: -g2 * RD * (1 + g * ro1) / (1 + g2 * ro1)),
+        rout=Quantity(lambda: stack(0, 1), lead=lambda: RD),
     ),
     Case(
         "cs_pmos_load",

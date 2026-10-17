@@ -449,6 +449,13 @@ function pointText(point: ComplexPoint, unit: string): string {
   return `${formatValue(magnitude, unit)} ∠ ${phase.toFixed(1)}°`;
 }
 
+/** "2 poles, 1 zero"; "" when there are none. */
+export function countText(poles = 0, zeros = 0): string {
+  const part = (n: number, one: string) =>
+    n ? `${n} ${one}${n === 1 ? "" : "s"}` : "";
+  return [part(poles, "pole"), part(zeros, "zero")].filter(Boolean).join(", ");
+}
+
 /** Poles/zeros in Hz, e.g. "−16.3 MHz" or "−1 ± j2 kHz". */
 function rootText(root: Root): string {
   if (root.im === 0) return formatEngineering(root.re, "Hz");
@@ -551,6 +558,10 @@ function QuantityCard({
     : `within ${formatPercent(simpler?.maxRelError ?? 0)} of exact`;
   const poleCount = quantity.poles?.length ?? 0;
   const poles = (quantity.poles ?? []).map(rootText).filter(Boolean);
+  // Symbolic mode has no root values, only their number.
+  const rootCount = quantity.values?.length
+    ? ""
+    : countText(quantity.poleCount, quantity.zeroCount);
   return (
     <section className="small-signal-card" aria-label={title}>
       <header>
@@ -609,6 +620,8 @@ function QuantityCard({
         <small className="small-signal-muted">
           {poleCount === 1 ? "Pole" : "Poles"} {poles.join(", ")}
         </small>
+      ) : rootCount ? (
+        <small className="small-signal-muted">{rootCount}</small>
       ) : null}
     </section>
   );

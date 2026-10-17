@@ -30,7 +30,8 @@ pub struct Sym {
     pub unit: &'static str,
     pub elements: Vec<String>,
     /// A device output resistance (r_o, r_μ, bulk junction): the quantities
-    /// hand analysis takes to infinity.
+    /// hand analysis takes to infinity. Not the r_o of a device outside
+    /// saturation (MOS triode, BJT saturation), which is small.
     pub output_r: bool,
     /// Junction leakage (r_bs, r_bd, r_μ): present only through gmin-level
     /// junction conductance; the `display` form drops it.
@@ -270,7 +271,7 @@ pub fn symbols(
                 role: p.role,
                 unit: p.unit,
                 elements,
-                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
                 leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd"),
             });
         }
@@ -294,7 +295,7 @@ pub fn unmerged(ss: &SsCircuit) -> Symbols {
             role: p.role,
             unit: p.unit,
             elements: vec![p.element.clone()],
-            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
             leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd"),
         })
         .collect();
@@ -924,12 +925,24 @@ pub fn spow(e: &[u8], syms: &[Sym]) -> u32 {
 /// as r_o/ε (its conductance as ε·g_o), keep, for each power of s, only the
 /// terms of lowest order in ε.
 pub fn leading_order(p: &XPoly, syms: &[Sym]) -> XPoly {
+    lowest_order(p, syms, |s| s.output_r)
+}
+
+/// Hand-analysis limit g_mb ≪ g_m: the same with every g_mb scaled as ε·g_mb
+/// (taken after r_o → ∞, as 1/r_o ≪ g_mb).
+pub fn body_order(p: &XPoly, syms: &[Sym]) -> XPoly {
+    lowest_order(p, syms, |s| s.role == Role::Gmb)
+}
+
+/// For each power of s, the terms of lowest total degree in the symbols with
+/// `small`.
+fn lowest_order(p: &XPoly, syms: &[Sym], small: fn(&Sym) -> bool) -> XPoly {
     // Σ e[k] over the symbols with `flag`, as e.iter().zip(syms).filter(..).
     let sum_of = |flag: fn(&Sym) -> bool| {
         let idx: Vec<usize> = (0..syms.len()).filter(|&k| flag(&syms[k])).collect();
         move |e: &[u8]| -> u32 { idx.iter().filter_map(|&k| e.get(k)).map(|&x| x as u32).sum() }
     };
-    let (spow, order) = (sum_of(|s| s.reactive), sum_of(|s| s.output_r));
+    let (spow, order) = (sum_of(|s| s.reactive), sum_of(small));
     let keys: Vec<(u32, u32)> = p.terms.iter().map(|(e, _)| (spow(e), order(e))).collect();
     // Lowest order per power of s (few powers: a short list).
     let mut best: Vec<(u32, u32)> = Vec::new();

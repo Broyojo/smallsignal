@@ -188,6 +188,22 @@ impl Structured {
     }
 
     fn render(&self, syms: &[Sym]) -> String {
+        let sign = if self.negate { "-" } else { "" };
+        // a·b·k (1/a ∥ 1/b) = k/(1/a + 1/b): two transconductances in series
+        // (a follower into a common gate), read without the products.
+        if let ([t], [a, b], true) = (&self.num[..], &self.parallel[..], self.den.is_empty()) {
+            if [a, b].iter().all(|&&i| !syms[i].inverted && t.e[i] > 0) {
+                let mut k = DTerm {
+                    coeff: t.coeff,
+                    e: t.e.clone(),
+                    spow: t.spow,
+                };
+                k.e[*a] -= 1;
+                k.e[*b] -= 1;
+                let inv = |i: usize| format!("\\frac{{1}}{{{}}}", syms[i].latex);
+                return format!("{sign}\\frac{{{}}}{{{} + {}}}", mono(&k, syms, true), inv(*a), inv(*b));
+            }
+        }
         let z = self.z_latex(syms);
         // Numerator: N' · Z, written "g_m (r_o ∥ R)" or "(a + b s) (r_o ∥ R)".
         let numer = match self.num.len() {
@@ -205,7 +221,6 @@ impl Structured {
             }
             _ => format!("\\left({}\\right) {z}", sum(&self.num, syms, self.negate)),
         };
-        let sign = if self.negate { "-" } else { "" };
         if self.den.is_empty() {
             return format!("{sign}{numer}");
         }

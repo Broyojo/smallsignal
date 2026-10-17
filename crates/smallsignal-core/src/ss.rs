@@ -35,6 +35,9 @@ pub struct Param {
     pub role: Role,
     pub unit: &'static str,
     pub element: String,
+    /// An output resistance of a device outside saturation (MOS triode,
+    /// BJT saturation): small, so hand analysis keeps it finite.
+    pub linear: bool,
 }
 
 impl Param {
@@ -183,6 +186,7 @@ fn add(
         role,
         unit,
         element: elem.to_string(),
+        linear: false,
     });
     Ok(params.len() - 1)
 }
@@ -279,6 +283,12 @@ fn add_junctions(
 /// With `op = None` the analysis is purely symbolic: every MOSFET is taken
 /// as saturated and every BJT as forward-active, and all values are NaN.
 pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
+    build_with(net, op, &[])
+}
+
+/// `build`, with `linear` the elements known (in symbolic mode) not to be
+/// saturated or forward-active: their r_o is marked `linear`.
+pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<SsCircuit, String> {
     let mut params: Vec<Param> = Vec::new();
     let mut stamps = Vec::new();
     let mut warnings = Vec::new();
@@ -422,6 +432,10 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                 let (d, g, s, b) = (n[0], n[1], n[2], n[3]);
                 let Some(op) = op else {
                     add_mos_symbolic(&mut params, &mut stamps, nm, d, g, s, b)?;
+                    if linear.contains(&ei) {
+                        let ro = format!("ro_{nm}");
+                        params.iter_mut().filter(|p| p.name == ro).for_each(|p| p.linear = true);
+                    }
                     continue;
                 };
                 let Some(DevOp::Mos(m)) = &op.dev[ei] else {
@@ -459,6 +473,7 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                         "Ω",
                         nm,
                     )?;
+                    params[p].linear = m.region == MosRegion::Triode;
                     stamps.push(Stamp::Adm { a: ed, b: es, p });
                 }
                 if m.gmb > 0.0 && b != es {
@@ -526,6 +541,7 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                         "Ω",
                         nm,
                     )?;
+                    params[p].linear = linear.contains(&ei);
                     stamps.push(Stamp::Adm { a: c, b: em, p });
                     continue;
                 };
@@ -580,6 +596,7 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                         "Ω",
                         nm,
                     )?;
+                    params[p].linear = q.region == "saturation";
                     stamps.push(Stamp::Adm { a: c, b: em, p });
                 }
                 junctions.push((ei, b, c, q.gmu, "mu", "\\mu "));

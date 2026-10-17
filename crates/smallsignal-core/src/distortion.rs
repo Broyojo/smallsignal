@@ -1692,12 +1692,12 @@ fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &S
         _ => &be,
     };
     let mut pruned: Option<(Expr, f64)> = None;
-    for eps in [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001] {
+    for eps in Expr::prune_levels(tol) {
         let p = start.prune(eps, syms);
         if p.term_count() < start.term_count() {
             let v = value(Some(&p));
             if rel((shape.map)(v)) <= tol {
-                pruned = Some((p, v));
+                pruned = Some((p.cancelled(syms), v));
                 break;
             }
         }

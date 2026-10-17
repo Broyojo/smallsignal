@@ -372,7 +372,9 @@ impl Expr {
     }
 
     /// Drops, within each power of s, the smallest terms whose combined
-    /// magnitude stays below `eps` times the remaining coefficient.
+    /// magnitude stays within `eps` times that exact coefficient, so each
+    /// coefficient of the numerator and the denominator moves by at most
+    /// `eps` relative on its own (errors in the two cannot cancel).
     pub fn prune(&self, eps: f64, syms: &[Sym]) -> Expr {
         let pr = |ts: &[Term]| -> Vec<Term> {
             let mut out = Vec::new();
@@ -385,16 +387,23 @@ impl Expr {
                 // Magnitudes relative to the group's largest term.
                 let top = grp[0].lmag;
                 let val = |t: &Term| t.sign * (t.lmag - top).exp();
-                let mut kept_sum: f64 = grp.iter().map(|t| val(t)).sum();
+                let budget = eps * grp.iter().map(|t| val(t)).sum::<f64>().abs();
                 let mut dropped = 0.0;
                 let mut n = grp.len();
                 while n > 1 {
-                    let t = grp[n - 1];
-                    let (v, rest) = (val(t), kept_sum - val(t));
-                    if dropped + v.abs() <= eps * rest.abs() {
-                        dropped += v.abs();
-                        kept_sum = rest;
-                        n -= 1;
+                    // Terms of equal size (matched twins) go together, so a
+                    // symmetric circuit keeps a symmetric form.
+                    let low = grp[n - 1].lmag;
+                    let ties = grp[..n]
+                        .iter()
+                        .rev()
+                        .take_while(|t| t.lmag - low <= 1e-9)
+                        .count()
+                        .max(1);
+                    let v: f64 = grp[n - ties..n].iter().map(|t| val(t).abs()).sum();
+                    if ties < n && dropped + v <= budget {
+                        dropped += v;
+                        n -= ties;
                     } else {
                         break;
                     }
@@ -409,6 +418,31 @@ impl Expr {
         };
         e.normalize(syms);
         e
+    }
+
+    /// The same function with the common factors of numerator and
+    /// denominator cancelled: what is left after pruning can share one the
+    /// full form did not, e.g. (1 + g_m R_E) once the r_o terms are gone.
+    pub fn cancelled(self, syms: &[Sym]) -> Expr {
+        let (n, d) = self.to_mna(syms);
+        let (cn, cd) = crate::analyze::cancel(&n, &d);
+        if cn.terms.len() + cd.terms.len() < n.terms.len() + d.terms.len() {
+            Expr::from_mna(&cn, &cd, syms)
+        } else {
+            self
+        }
+    }
+
+    /// `prune` levels for a tolerance, coarsest first. None is above `tol`
+    /// (or 1), so a pruned coefficient never moves by more than the
+    /// tolerance even where the overall error would allow it.
+    pub fn prune_levels(tol: f64) -> impl Iterator<Item = f64> {
+        let top = tol.min(1.0);
+        std::iter::once(top).chain(
+            [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4]
+                .into_iter()
+                .filter(move |&e| e < top),
+        )
     }
 
     pub fn latex(&self, syms: &[Sym]) -> String {

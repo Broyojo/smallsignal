@@ -75,8 +75,6 @@ export interface SmallSignalQuantity {
   exact: SmallSignalExpression | null;
   /** Why there is no exact form: "too large for the exact closed form". */
   skipped?: string;
-  /** The exact form against an independent LU solve; null without one. */
-  check?: { ok: boolean; maxRelDiff: number } | null;
   /**
    * The exact form without gmin-level junction leakage (r_bs, r_bd, r_μ),
    * with its measured error against the full model; `same` when there was
@@ -87,8 +85,16 @@ export interface SmallSignalQuantity {
   leakageMatters?: boolean;
   simplified?: SmallSignalExpression | null;
   values?: ComplexPoint[];
+  /** In Hz; empty in symbolic mode (no values). */
   poles?: Root[];
   zeros?: Root[];
+  /** Number of poles and zeros: the degree in s of the denominator and
+   * numerator (also in symbolic mode). */
+  poleCount?: number;
+  zeroCount?: number;
+  /** Symbolic against direct numeric solve (numeric mode); null when the
+   * exact form is over budget. */
+  check?: { ok: boolean; maxRelDiff: number } | null;
 }
 
 export interface MosOperatingPoint {
