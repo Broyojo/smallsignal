@@ -32,6 +32,9 @@ pub struct AssumeRequest {
     /// Regions to check against the operating point.
     #[serde(default)]
     pub regions: Vec<RegionRequest>,
+    /// Feedback capacitances split by the Miller approximation (`miller`).
+    #[serde(default)]
+    pub miller: Vec<crate::miller::MillerRequest>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -186,6 +189,8 @@ pub struct Assume {
     /// the body on the source, r_bs of a junction with no conductance).
     pub absent: Vec<(String, Term)>,
     pub regions: Vec<RegionCheck>,
+    /// Capacitances to split (`miller`).
+    pub miller: Vec<crate::miller::Target>,
 }
 
 /// Validates the request against the netlist and maps each term onto the
@@ -227,6 +232,7 @@ pub fn resolve(net: &Netlist, full: &SsCircuit, op: Option<&Op>, req: &AssumeReq
             short,
         });
     }
+    out.miller = crate::miller::resolve(net, full, &req.miller, &seen)?;
     for item in &req.regions {
         let ei = net
             .element(&item.element)
