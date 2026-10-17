@@ -29,9 +29,7 @@
           {
             "direction": "inout",
             "id": "terminal-e625360ab37c189a",
-            "interfaceInstanceIds": [
-              "vdd"
-            ],
+            "interfaceInstanceIds": ["vdd"],
             "name": "VDD",
             "netId": "net-cell-pin-e625360ab37c189a"
           }
@@ -58,10 +56,7 @@
           "type": "current-source",
           "name": "I1",
           "id": "i1",
-          "coordinate": [
-            300,
-            140
-          ],
+          "coordinate": [300, 140],
           "rotation": 90,
           "parameters": {
             "dc": "42u"
@@ -73,35 +68,19 @@
           "labels": [
             {
               "anchor": {
-                "fallback": [
-                  300,
-                  160
-                ],
-                "offset": [
-                  0,
-                  20
-                ]
+                "fallback": [300, 160],
+                "offset": [0, 20]
               },
               "bind": "name",
               "format": {
                 "runs": [
                   {
-                    "children": [
-                      "I"
-                    ],
-                    "styles": [
-                      "italic",
-                      "bold"
-                    ]
+                    "children": ["I"],
+                    "styles": ["italic", "bold"]
                   },
                   {
-                    "children": [
-                      "1"
-                    ],
-                    "styles": [
-                      "subscript",
-                      "bold"
-                    ]
+                    "children": ["1"],
+                    "styles": ["subscript", "bold"]
                   }
                 ]
               },
@@ -116,10 +95,7 @@
           "name": "M1",
           "id": "m1",
           "variant": "textbook-3terminal",
-          "coordinate": [
-            290,
-            260
-          ],
+          "coordinate": [290, 260],
           "parameters": {
             "l": "1u",
             "m": "1",
@@ -134,35 +110,19 @@
             {
               "alignment": "start",
               "anchor": {
-                "fallback": [
-                  305,
-                  265
-                ],
-                "offset": [
-                  15,
-                  5
-                ]
+                "fallback": [305, 265],
+                "offset": [15, 5]
               },
               "bind": "name",
               "format": {
                 "runs": [
                   {
-                    "children": [
-                      "M"
-                    ],
-                    "styles": [
-                      "italic",
-                      "bold"
-                    ]
+                    "children": ["M"],
+                    "styles": ["italic", "bold"]
                   },
                   {
-                    "children": [
-                      "1"
-                    ],
-                    "styles": [
-                      "subscript",
-                      "bold"
-                    ]
+                    "children": ["1"],
+                    "styles": ["subscript", "bold"]
                   }
                 ]
               },
@@ -180,10 +140,7 @@
           "type": "voltage-source",
           "name": "V1",
           "id": "v1",
-          "coordinate": [
-            160,
-            320
-          ],
+          "coordinate": [160, 320],
           "parameters": {
             "acMagnitude": "1",
             "amplitude": "1",
@@ -209,35 +166,19 @@
             {
               "alignment": "start",
               "anchor": {
-                "fallback": [
-                  175,
-                  325
-                ],
-                "offset": [
-                  15,
-                  5
-                ]
+                "fallback": [175, 325],
+                "offset": [15, 5]
               },
               "bind": "name",
               "format": {
                 "runs": [
                   {
-                    "children": [
-                      "V"
-                    ],
-                    "styles": [
-                      "italic",
-                      "bold"
-                    ]
+                    "children": ["V"],
+                    "styles": ["italic", "bold"]
                   },
                   {
-                    "children": [
-                      "1"
-                    ],
-                    "styles": [
-                      "subscript",
-                      "bold"
-                    ]
+                    "children": ["1"],
+                    "styles": ["subscript", "bold"]
                   }
                 ]
               },
@@ -250,38 +191,23 @@
         {
           "type": "ground",
           "id": "gnd1",
-          "coordinate": [
-            160,
-            400
-          ]
+          "coordinate": [160, 400]
         },
         {
           "type": "ground",
           "id": "gnd2",
-          "coordinate": [
-            300,
-            340
-          ]
+          "coordinate": [300, 340]
         },
         {
           "type": "vdd-port",
           "id": "vdd",
-          "coordinate": [
-            320,
-            90
-          ],
+          "coordinate": [320, 90],
           "labels": [
             {
               "alignment": "start",
               "anchor": {
-                "fallback": [
-                  340,
-                  100
-                ],
-                "offset": [
-                  20,
-                  10
-                ]
+                "fallback": [340, 100],
+                "offset": [20, 10]
               },
               "bind": {
                 "kind": "cell-terminal-name",
@@ -290,22 +216,12 @@
               "format": {
                 "runs": [
                   {
-                    "children": [
-                      "V"
-                    ],
-                    "styles": [
-                      "italic",
-                      "bold"
-                    ]
+                    "children": ["V"],
+                    "styles": ["italic", "bold"]
                   },
                   {
-                    "children": [
-                      "DD"
-                    ],
-                    "styles": [
-                      "subscript",
-                      "bold"
-                    ]
+                    "children": ["DD"],
+                    "styles": ["subscript", "bold"]
                   }
                 ]
               },
@@ -320,18 +236,12 @@
       "routes": [
         {
           "end": {
-            "terminal": [
-              "i1",
-              "+"
-            ]
+            "terminal": ["i1", "+"]
           },
           "id": "wire-1b0b20d9-ff6d-4b14-95e1-69079c3a85d0-route",
           "legId": "route-leg-33d5b03ae99a42ad",
           "start": {
-            "terminal": [
-              "vdd",
-              "P"
-            ]
+            "terminal": ["vdd", "P"]
           }
         },
         {
@@ -339,25 +249,16 @@
           "legs": [
             {
               "bend": "route-bend-99d008bb6604d69f",
-              "coordinate": [
-                280,
-                240
-              ],
+              "coordinate": [280, 240],
               "id": "route-leg-99d008bb6604d69f"
             },
             {
               "id": "route-leg-99d007bb6604d4ec",
-              "terminal": [
-                "m1",
-                "D"
-              ]
+              "terminal": ["m1", "D"]
             }
           ],
           "start": {
-            "terminal": [
-              "i1",
-              "-"
-            ]
+            "terminal": ["i1", "-"]
           }
         },
         {
@@ -365,57 +266,36 @@
           "legs": [
             {
               "bend": "route-bend-b685d368b475d938",
-              "coordinate": [
-                270,
-                300
-              ],
+              "coordinate": [270, 300],
               "id": "route-leg-b685d368b475d938"
             },
             {
               "id": "route-leg-b685d468b475daeb",
-              "terminal": [
-                "m1",
-                "G"
-              ]
+              "terminal": ["m1", "G"]
             }
           ],
           "start": {
-            "terminal": [
-              "v1",
-              "+"
-            ]
+            "terminal": ["v1", "+"]
           }
         },
         {
           "end": {
-            "terminal": [
-              "gnd1",
-              "0"
-            ]
+            "terminal": ["gnd1", "0"]
           },
           "id": "wire-0031a045-5bac-4cff-9639-dff8255c1bc2-route",
           "legId": "route-leg-ae7c2912dcc06e87",
           "start": {
-            "terminal": [
-              "v1",
-              "-"
-            ]
+            "terminal": ["v1", "-"]
           }
         },
         {
           "end": {
-            "terminal": [
-              "gnd2",
-              "0"
-            ]
+            "terminal": ["gnd2", "0"]
           },
           "id": "wire-7c979f65-e2b2-4a91-b8c1-7d084546f029-route",
           "legId": "route-leg-c137f602e453a7a0",
           "start": {
-            "terminal": [
-              "m1",
-              "S"
-            ]
+            "terminal": ["m1", "S"]
           }
         }
       ],
@@ -424,16 +304,10 @@
         "unrouted": [
           [
             {
-              "terminal": [
-                "gnd1",
-                "0"
-              ]
+              "terminal": ["gnd1", "0"]
             },
             {
-              "terminal": [
-                "m1",
-                "B"
-              ]
+              "terminal": ["m1", "B"]
             }
           ]
         ]
@@ -441,46 +315,31 @@
       "nets": [
         {
           "at": {
-            "terminal": [
-              "gnd1",
-              "0"
-            ]
+            "terminal": ["gnd1", "0"]
           },
           "id": "net-power-gnd1"
         },
         {
           "at": {
-            "terminal": [
-              "gnd2",
-              "0"
-            ]
+            "terminal": ["gnd2", "0"]
           },
           "id": "net-power-gnd2"
         },
         {
           "at": {
-            "terminal": [
-              "i1",
-              "+"
-            ]
+            "terminal": ["i1", "+"]
           },
           "id": "net-cell-pin-e625360ab37c189a"
         },
         {
           "at": {
-            "terminal": [
-              "m1",
-              "D"
-            ]
+            "terminal": ["m1", "D"]
           },
           "id": "wire-b1473af2-6521-4cae-8ee3-a6d7985185ec-net"
         },
         {
           "at": {
-            "terminal": [
-              "m1",
-              "G"
-            ]
+            "terminal": ["m1", "G"]
           },
           "id": "wire-50fcccd1-062d-49d1-90d9-2547ef152d69-net"
         }
@@ -508,22 +367,12 @@
           "format": {
             "runs": [
               {
-                "children": [
-                  "V"
-                ],
-                "styles": [
-                  "italic",
-                  "bold"
-                ]
+                "children": ["V"],
+                "styles": ["italic", "bold"]
               },
               {
-                "children": [
-                  "out"
-                ],
-                "styles": [
-                  "subscript",
-                  "bold"
-                ]
+                "children": ["out"],
+                "styles": ["subscript", "bold"]
               }
             ]
           },
@@ -593,15 +442,10 @@
           "supportsValueAnnotation": false
         },
         "deviceClass": "net-marker",
-        "dialects": [
-          "spice",
-          "spectre"
-        ],
+        "dialects": ["spice", "spectre"],
         "id": "ground",
         "parameters": [],
-        "pinOrder": [
-          "0"
-        ],
+        "pinOrder": ["0"],
         "referencePrefix": null,
         "symbolId": "ground",
         "targetPolicy": "none"
@@ -709,10 +553,7 @@
           "supportsValueAnnotation": true
         },
         "deviceClass": "mos",
-        "dialects": [
-          "spice",
-          "spectre"
-        ],
+        "dialects": ["spice", "spectre"],
         "id": "nmos",
         "mosBulkClass": "nmos",
         "parameters": [
@@ -759,17 +600,9 @@
             "required": false
           }
         ],
-        "pinOrder": [
-          "D",
-          "G",
-          "S",
-          "B"
-        ],
+        "pinOrder": ["D", "G", "S", "B"],
         "referencePrefix": "M",
-        "seriesInsertionPinPair": [
-          "D",
-          "S"
-        ],
+        "seriesInsertionPinPair": ["D", "S"],
         "symbolId": "nmos",
         "targetPolicy": "required-model"
       },
@@ -835,18 +668,9 @@
           {
             "kind": "polyline",
             "points": [
-              [
-                -4.244186,
-                -6.976744
-              ],
-              [
-                10,
-                -6.976744
-              ],
-              [
-                10,
-                -20
-              ]
+              [-4.244186, -6.976744],
+              [10, -6.976744],
+              [10, -20]
             ],
             "style": {
               "lineCap": "butt",
@@ -858,18 +682,9 @@
             "kind": "polyline",
             "part": "source-arrow-host",
             "points": [
-              [
-                -4.244186,
-                6.976744
-              ],
-              [
-                10,
-                6.976744
-              ],
-              [
-                10,
-                20
-              ]
+              [-4.244186, 6.976744],
+              [10, 6.976744],
+              [10, 20]
             ],
             "style": {
               "lineCap": "butt",
@@ -882,22 +697,10 @@
             "kind": "polygon",
             "part": "gate-bar",
             "points": [
-              [
-                -11.802326,
-                -9.593023
-              ],
-              [
-                -11.802326,
-                9.593023
-              ],
-              [
-                -8.895349,
-                9.593023
-              ],
-              [
-                -8.895349,
-                -9.593023
-              ]
+              [-11.802326, -9.593023],
+              [-11.802326, 9.593023],
+              [-8.895349, 9.593023],
+              [-8.895349, -9.593023]
             ],
             "stroke": "none"
           },
@@ -906,22 +709,10 @@
             "kind": "polygon",
             "part": "gate-bar",
             "points": [
-              [
-                -6.569767,
-                -12.5
-              ],
-              [
-                -6.569767,
-                12.5
-              ],
-              [
-                -3.662791,
-                12.5
-              ],
-              [
-                -3.662791,
-                -12.5
-              ]
+              [-6.569767, -12.5],
+              [-6.569767, 12.5],
+              [-3.662791, 12.5],
+              [-3.662791, -12.5]
             ],
             "stroke": "none"
           },
@@ -980,18 +771,9 @@
             "kind": "polygon",
             "part": "bulk-lead",
             "points": [
-              [
-                10,
-                0
-              ],
-              [
-                16.395349,
-                -3.488372
-              ],
-              [
-                16.395349,
-                3.488372
-              ]
+              [10, 0],
+              [16.395349, -3.488372],
+              [16.395349, 3.488372]
             ],
             "stroke": "none"
           }
@@ -1004,18 +786,9 @@
                 "kind": "polyline",
                 "part": "source-arrow",
                 "points": [
-                  [
-                    -3.662791,
-                    6.976744
-                  ],
-                  [
-                    10,
-                    6.976744
-                  ],
-                  [
-                    10,
-                    20
-                  ]
+                  [-3.662791, 6.976744],
+                  [10, 6.976744],
+                  [10, 20]
                 ],
                 "style": {
                   "lineCap": "butt",
@@ -1028,18 +801,9 @@
                 "kind": "polygon",
                 "part": "source-arrow",
                 "points": [
-                  [
-                    10.581395,
-                    6.976744
-                  ],
-                  [
-                    1.27907,
-                    2.906977
-                  ],
-                  [
-                    1.27907,
-                    11.046512
-                  ]
+                  [10.581395, 6.976744],
+                  [1.27907, 2.906977],
+                  [1.27907, 11.046512]
                 ],
                 "stroke": "none"
               }
@@ -1061,13 +825,8 @@
                 }
               }
             ],
-            "hiddenPinNames": [
-              "B"
-            ],
-            "hiddenPrimitiveParts": [
-              "bulk-lead",
-              "source-arrow-host"
-            ],
+            "hiddenPinNames": ["B"],
+            "hiddenPrimitiveParts": ["bulk-lead", "source-arrow-host"],
             "id": "textbook-3terminal"
           }
         ],
@@ -1087,15 +846,10 @@
           "supportsValueAnnotation": false
         },
         "deviceClass": "net-marker",
-        "dialects": [
-          "spice",
-          "spectre"
-        ],
+        "dialects": ["spice", "spectre"],
         "id": "vdd-port",
         "parameters": [],
-        "pinOrder": [
-          "P"
-        ],
+        "pinOrder": ["P"],
         "referencePrefix": null,
         "symbolId": "vdd-port",
         "targetPolicy": "none"
@@ -1140,22 +894,10 @@
             "fill": "foreground",
             "kind": "polygon",
             "points": [
-              [
-                -10,
-                -0.88
-              ],
-              [
-                10,
-                -0.88
-              ],
-              [
-                10,
-                2.36
-              ],
-              [
-                -10,
-                2.36
-              ]
+              [-10, -0.88],
+              [10, -0.88],
+              [10, 2.36],
+              [-10, 2.36]
             ],
             "stroke": "none"
           }
@@ -1178,10 +920,7 @@
           "supportsValueAnnotation": true
         },
         "deviceClass": "voltage-source",
-        "dialects": [
-          "spice",
-          "spectre"
-        ],
+        "dialects": ["spice", "spectre"],
         "id": "voltage-source",
         "parameters": [
           {
@@ -1232,9 +971,7 @@
             "placeholder": "0s 0, 1ns 0, 2ns 1",
             "required": false,
             "unitHint": "s / V",
-            "visibleForSourceWaveforms": [
-              "pwl"
-            ]
+            "visibleForSourceWaveforms": ["pwl"]
           },
           {
             "displayRole": "none",
@@ -1266,9 +1003,7 @@
             "placeholder": "0",
             "required": false,
             "unitHint": "V",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ]
+            "visibleForSourceWaveforms": ["pulse"]
           },
           {
             "defaultValue": "1",
@@ -1280,9 +1015,7 @@
             "placeholder": "1",
             "required": false,
             "unitHint": "V",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ]
+            "visibleForSourceWaveforms": ["pulse"]
           },
           {
             "defaultValue": "0",
@@ -1294,10 +1027,7 @@
             "placeholder": "0",
             "required": false,
             "unitHint": "s",
-            "visibleForSourceWaveforms": [
-              "pulse",
-              "sin"
-            ]
+            "visibleForSourceWaveforms": ["pulse", "sin"]
           },
           {
             "defaultValue": "1ps",
@@ -1309,9 +1039,7 @@
             "placeholder": "1ps",
             "required": false,
             "unitHint": "s",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ]
+            "visibleForSourceWaveforms": ["pulse"]
           },
           {
             "defaultValue": "1ps",
@@ -1323,9 +1051,7 @@
             "placeholder": "1ps",
             "required": false,
             "unitHint": "s",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ]
+            "visibleForSourceWaveforms": ["pulse"]
           },
           {
             "defaultValue": "5ns",
@@ -1337,9 +1063,7 @@
             "placeholder": "5ns",
             "required": false,
             "unitHint": "s",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ]
+            "visibleForSourceWaveforms": ["pulse"]
           },
           {
             "defaultValue": "10ns",
@@ -1351,9 +1075,7 @@
             "placeholder": "10ns",
             "required": false,
             "unitHint": "s",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ]
+            "visibleForSourceWaveforms": ["pulse"]
           },
           {
             "defaultValue": "0",
@@ -1365,9 +1087,7 @@
             "placeholder": "0",
             "required": false,
             "unitHint": "V",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ]
+            "visibleForSourceWaveforms": ["sin"]
           },
           {
             "defaultValue": "1",
@@ -1379,9 +1099,7 @@
             "placeholder": "1",
             "required": false,
             "unitHint": "V",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ]
+            "visibleForSourceWaveforms": ["sin"]
           },
           {
             "defaultValue": "1k",
@@ -1393,9 +1111,7 @@
             "placeholder": "1k",
             "required": false,
             "unitHint": "Hz",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ]
+            "visibleForSourceWaveforms": ["sin"]
           },
           {
             "defaultValue": "0",
@@ -1407,9 +1123,7 @@
             "placeholder": "0",
             "required": false,
             "unitHint": "1/s",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ]
+            "visibleForSourceWaveforms": ["sin"]
           },
           {
             "defaultValue": "0",
@@ -1421,15 +1135,10 @@
             "placeholder": "0",
             "required": false,
             "unitHint": "deg",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ]
+            "visibleForSourceWaveforms": ["sin"]
           }
         ],
-        "pinOrder": [
-          "+",
-          "-"
-        ],
+        "pinOrder": ["+", "-"],
         "referencePrefix": "V",
         "sourceWaveformDefault": "dc",
         "symbolId": "voltage-source",
@@ -1580,10 +1289,7 @@
         "symbolId": "current-source",
         "deviceClass": "current-source",
         "referencePrefix": "I",
-        "pinOrder": [
-          "+",
-          "-"
-        ],
+        "pinOrder": ["+", "-"],
         "targetPolicy": "builtin",
         "sourceWaveformDefault": "dc",
         "parameters": [
@@ -1634,9 +1340,7 @@
             "unitHint": "s / A",
             "placeholder": "0s 0, 1ns 0, 2ns 1m",
             "help": "Comma-separated time/value pairs",
-            "visibleForSourceWaveforms": [
-              "pwl"
-            ],
+            "visibleForSourceWaveforms": ["pwl"],
             "displayRole": "none"
           },
           {
@@ -1668,9 +1372,7 @@
             "placeholder": "0",
             "help": "PULSE value before and between active pulses",
             "defaultValue": "0",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ],
+            "visibleForSourceWaveforms": ["pulse"],
             "displayRole": "none"
           },
           {
@@ -1682,9 +1384,7 @@
             "placeholder": "1m",
             "help": "PULSE active value",
             "defaultValue": "1m",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ],
+            "visibleForSourceWaveforms": ["pulse"],
             "displayRole": "none"
           },
           {
@@ -1696,10 +1396,7 @@
             "placeholder": "0",
             "help": "Time before the transient waveform begins",
             "defaultValue": "0",
-            "visibleForSourceWaveforms": [
-              "pulse",
-              "sin"
-            ],
+            "visibleForSourceWaveforms": ["pulse", "sin"],
             "displayRole": "none"
           },
           {
@@ -1711,9 +1408,7 @@
             "placeholder": "1ps",
             "help": "PULSE rising-edge duration",
             "defaultValue": "1ps",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ],
+            "visibleForSourceWaveforms": ["pulse"],
             "displayRole": "none"
           },
           {
@@ -1725,9 +1420,7 @@
             "placeholder": "1ps",
             "help": "PULSE falling-edge duration",
             "defaultValue": "1ps",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ],
+            "visibleForSourceWaveforms": ["pulse"],
             "displayRole": "none"
           },
           {
@@ -1739,9 +1432,7 @@
             "placeholder": "5ns",
             "help": "Time the PULSE source remains at its high value",
             "defaultValue": "5ns",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ],
+            "visibleForSourceWaveforms": ["pulse"],
             "displayRole": "none"
           },
           {
@@ -1753,9 +1444,7 @@
             "placeholder": "10ns",
             "help": "Time between PULSE rising edges",
             "defaultValue": "10ns",
-            "visibleForSourceWaveforms": [
-              "pulse"
-            ],
+            "visibleForSourceWaveforms": ["pulse"],
             "displayRole": "none"
           },
           {
@@ -1767,9 +1456,7 @@
             "placeholder": "0",
             "help": "SIN waveform offset",
             "defaultValue": "0",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ],
+            "visibleForSourceWaveforms": ["sin"],
             "displayRole": "none"
           },
           {
@@ -1781,9 +1468,7 @@
             "placeholder": "1m",
             "help": "SIN peak amplitude",
             "defaultValue": "1m",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ],
+            "visibleForSourceWaveforms": ["sin"],
             "displayRole": "none"
           },
           {
@@ -1795,9 +1480,7 @@
             "placeholder": "1k",
             "help": "SIN frequency",
             "defaultValue": "1k",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ],
+            "visibleForSourceWaveforms": ["sin"],
             "displayRole": "none"
           },
           {
@@ -1809,9 +1492,7 @@
             "placeholder": "0",
             "help": "SIN exponential damping factor",
             "defaultValue": "0",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ],
+            "visibleForSourceWaveforms": ["sin"],
             "displayRole": "none"
           },
           {
@@ -1823,16 +1504,11 @@
             "placeholder": "0",
             "help": "SIN phase in degrees",
             "defaultValue": "0",
-            "visibleForSourceWaveforms": [
-              "sin"
-            ],
+            "visibleForSourceWaveforms": ["sin"],
             "displayRole": "none"
           }
         ],
-        "dialects": [
-          "spice",
-          "spectre"
-        ],
+        "dialects": ["spice", "spectre"],
         "capabilities": {
           "supportsModel": false,
           "supportsBulkBinding": false,
@@ -1911,18 +1587,9 @@
           {
             "kind": "polygon",
             "points": [
-              [
-                0,
-                6.976744
-              ],
-              [
-                -4.651163,
-                -2.325581
-              ],
-              [
-                4.651163,
-                -2.325581
-              ]
+              [0, 6.976744],
+              [-4.651163, -2.325581],
+              [4.651163, -2.325581]
             ],
             "fill": "foreground",
             "stroke": "none"
@@ -1966,31 +1633,15 @@
           {
             "id": "diamond",
             "hiddenPinNames": [],
-            "hiddenPrimitiveParts": [
-              "body",
-              "lead-positive",
-              "lead-negative"
-            ],
+            "hiddenPrimitiveParts": ["body", "lead-positive", "lead-negative"],
             "additionalPrimitives": [
               {
                 "kind": "polygon",
                 "points": [
-                  [
-                    0,
-                    -12.5
-                  ],
-                  [
-                    12.5,
-                    0
-                  ],
-                  [
-                    0,
-                    12.5
-                  ],
-                  [
-                    -12.5,
-                    0
-                  ]
+                  [0, -12.5],
+                  [12.5, 0],
+                  [0, 12.5],
+                  [-12.5, 0]
                 ],
                 "fill": "none",
                 "stroke": "foreground",
