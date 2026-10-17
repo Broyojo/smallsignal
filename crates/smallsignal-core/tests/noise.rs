@@ -906,3 +906,39 @@ fn an_ill_conditioned_band_warns() {
     );
     assert!(!warns(&r, "ill-conditioned"), "{}", r["warnings"]);
 }
+
+/// Extreme but finite resistors: |Z|² alone underflows (1e-200 Ω: 1e-400)
+/// or overflows (1e200 Ω: 1e400) while |Z|²·4kT/R = 4kT·R is a double.
+/// A current input into R: output 4kT·R, input-referred 4kT/R. Through a
+/// 1k divider onto 1e-200 Ω the gain is 1e-203 (|gain|² underflows too):
+/// S_in = 4kT·(R1 + R1²/R2) to rounding.
+#[test]
+fn extreme_resistances_keep_representable_noise() {
+    for r in [1e-200, 1e200] {
+        let net = format!("r\nIIN 0 out DC 0 AC 1\nR1 out 0 {r:e}\n");
+        let out = run(
+            &net,
+            &req(json!({ "input": "IIN", "output": "out", "freqs": [1e3], "noise": true })),
+        );
+        let n = &out["noise"];
+        let v = n["output"][0]["v2"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("R = {r:e}: {}", n["output"]));
+        assert!(rel(v, FOUR_KT * r) < 1e-12, "R = {r:e}: {v:e} vs {:e}", FOUR_KT * r);
+        let i = n["input"][0]["v2"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("R = {r:e}: {}", n["input"]));
+        assert!(rel(i, FOUR_KT / r) < 1e-12, "R = {r:e}: {i:e}");
+        let fl = &n["contributors"][0]["sources"][0];
+        assert!(rel(fl["v2"].as_f64().unwrap(), FOUR_KT * r) < 1e-12, "{fl}");
+    }
+    let net = "d\nVIN in 0 DC 0 AC 1\nR1 in out 1k\nR2 out 0 1e-200\n";
+    let out = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [1e3], "noise": true })),
+    );
+    let i = out["noise"]["input"][0]["v2"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("{}", out["noise"]["input"]));
+    assert!(rel(i, FOUR_KT * (1e3 + 1e6 / 1e-200)) < 1e-12, "{i}");
+}

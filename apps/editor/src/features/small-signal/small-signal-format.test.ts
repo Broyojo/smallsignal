@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { SmallSignalSource } from "@icm/small-signal";
 import {
@@ -261,7 +262,48 @@ describe("noise values", () => {
       { label: "M1 thermal", fraction: null },
       { label: "R1 thermal", fraction: 0 },
     ]);
+    // An unbounded omitted bucket is "others: ∞", not dropped as 0.
+    expect(topContributions([source("R1", 0.5)], null, 4)).toEqual([
+      { label: "R1 thermal", fraction: 0.5 },
+      { label: "others", fraction: null },
+    ]);
   });
+
+  // The real solver, when its WASM is built (as end-to-end.test.ts).
+  const wasmDir = new URL(
+    "../../../../../packages/small-signal/wasm/",
+    import.meta.url,
+  );
+  it.skipIf(!existsSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)))(
+    "shows the omitted bucket of 34 flicker sources at 0 Hz as others: ∞",
+    async () => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const diodes = Array.from(
+        { length: 34 },
+        (_, k) => `D${k + 1} a 0 dd`,
+      ).join("\n");
+      const netlist = `flicker\nI1 0 a DC 1m AC 1\n${diodes}\n.model dd d (is=1e-14 kf=1e-15 af=1)\n`;
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist,
+          JSON.stringify({ input: "I1", output: "a", freqs: [0], noise: true }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      const at0 = result.noise.contributors[0];
+      expect(at0.sources).toHaveLength(32);
+      // 34 shot plus 34 flicker sources.
+      expect(at0.omitted.count).toBe(68 - 32);
+      expect(at0.omitted.fraction).toBeNull();
+      const rows = topContributions(at0.sources, at0.omitted.fraction);
+      expect(rows.at(-1)).toEqual({ label: "others", fraction: null });
+    },
+  );
 });
 
 describe("distortion numbers", () => {
