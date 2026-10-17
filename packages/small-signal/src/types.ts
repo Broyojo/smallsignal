@@ -257,6 +257,17 @@ export interface DistortionQuantity extends DistortionForm {
   skipped?: string;
 }
 
+/** HD2 and HD3 at one frequency; null when unavailable or infinite. */
+export interface DistortionVsFreqPoint {
+  f: number;
+  hd2: number | null;
+  hd3: number | null;
+  /** Present (true) only when HD2 is infinite (H1 = 0, H2 ≠ 0). */
+  hd2Infinite?: true;
+  /** Present (true) only when HD3 is infinite (H1 = 0, H3 ≠ 0). */
+  hd3Infinite?: true;
+}
+
 export interface SmallSignalDistortion {
   /** v_out = a1·v_in + a2·v_in² + a3·v_in³ around the bias. */
   coefficients: (DistortionQuantity & {
@@ -264,6 +275,11 @@ export interface SmallSignalDistortion {
     /** The value from the numeric expansion (the closed forms' check). */
     numeric: number | null;
   })[];
+  /**
+   * null when unavailable (order 2 for hd3/iip3, or 0/0 at DC). An infinite
+   * value (HD with a1 = 0, IIP3 with a3 = 0) is `latex: "\\infty"`,
+   * `value: null`, and so its display and simplified forms.
+   */
   hd2: DistortionQuantity | null;
   hd3: DistortionQuantity | null;
   iip3: DistortionQuantity | null;
@@ -273,7 +289,7 @@ export interface SmallSignalDistortion {
   nonlinear: string[];
   order: number;
   /** HD2 and HD3 at each frequency (Volterra kernels). */
-  vsFreq: { f: number; hd2: number | null; hd3: number | null }[];
+  vsFreq: DistortionVsFreqPoint[];
   /** The devices' Taylor coefficients, e.g. K_{2g,M1} = ½∂²I_D/∂v_GS². */
   symbols: {
     name: string;

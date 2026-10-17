@@ -503,13 +503,13 @@ impl Probe<'_> {
         Some([out(&x[0]) / k, out(&x[1]) / (k * k), out(&x[2]) / (k * k * k)])
     }
 
-    /// At DC, the size of the terms each a_n is the sum of: the two node
-    /// responses it is the difference of (|v_out| + |v_ref|, per input
-    /// unit^n) and each Taylor coefficient's part, Σ|K·∂a_n/∂K| (a_n is a
-    /// polynomial of degree ≤ 2 in the K, so a central difference with any
-    /// step is exact).
-    fn dc_terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64]) -> Option<[f64; 3]> {
-        let x = self.kernels(devs, coefs, vals, 0.0, true)?;
+    /// At f, the size of the terms each H_n (a_n at DC) is the sum of: the
+    /// two node responses it is the difference of (|v_out| + |v_ref|, per
+    /// input unit^n) and each Taylor coefficient's part, Σ|K·∂H_n/∂K|
+    /// (H_n is a polynomial of degree ≤ 2 in the K, so a central difference
+    /// with any step is exact).
+    fn terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64], f: f64) -> Option<[f64; 3]> {
+        let x = self.kernels(devs, coefs, vals, f, true)?;
         let mut terms = [0.0; 3];
         for n in 0..3 {
             let k = self.vid.abs().powi(n as i32 + 1);
@@ -520,10 +520,10 @@ impl Probe<'_> {
             if v == 0.0 {
                 continue;
             }
-            let at = |f: f64| {
+            let at = |scale: f64| {
                 let mut w = vals.to_vec();
-                w[i] = v * f;
-                self.volterra(devs, coefs, &w, 0.0, true)
+                w[i] = v * scale;
+                self.volterra(devs, coefs, &w, f, true)
             };
             let (up, down) = (at(1.5)?, at(0.5)?);
             for n in 0..3 {
@@ -536,7 +536,9 @@ impl Probe<'_> {
         Some(terms)
     }
 
-    /// The order-1..3 solutions at f (x3 all NaN unless `third`).
+    /// The order-1..3 solutions at f: x3 all NaN unless `third`, and x2
+    /// (x3) all NaN when the system at 2f (3f) is singular, so each
+    /// order fails alone. None only when the system at f is singular.
     fn kernels(
         &self,
         devs: &[NlDev],
@@ -570,10 +572,14 @@ impl Probe<'_> {
                 self.inject(&mut rhs2, o.a, o.b, v * pow_mono(&u1[c.dev], &c.mono));
             }
         }
-        let lu2 = if f == 0.0 { None } else { Some(self.lu(jw(2.0 * f))?) };
+        let nan = || vec![Complex64::new(f64::NAN, f64::NAN); n];
+        let lu2 = if f == 0.0 { None } else { self.lu(jw(2.0 * f)) };
+        if f != 0.0 && lu2.is_none() {
+            return Some([x1, nan(), nan()]);
+        }
         let x2 = lu2.as_ref().unwrap_or(&lu1).solve(&rhs2);
         if !third {
-            return Some([x1, x2, vec![Complex64::new(f64::NAN, f64::NAN); n]]);
+            return Some([x1, x2, nan()]);
         }
         let u2 = ctl(&x2);
         let mut rhs3 = vec![Complex64::default(); n];
@@ -589,7 +595,10 @@ impl Probe<'_> {
             };
             self.inject(&mut rhs3, o.a, o.b, v * i);
         }
-        let lu3 = if f == 0.0 { None } else { Some(self.lu(jw(3.0 * f))?) };
+        let lu3 = if f == 0.0 { None } else { self.lu(jw(3.0 * f)) };
+        if f != 0.0 && lu3.is_none() {
+            return Some([x1, x2, nan()]);
+        }
         let x3 = lu3.as_ref().unwrap_or(&lu1).solve(&rhs3);
         Some([x1, x2, x3])
     }
@@ -1293,6 +1302,17 @@ fn form(e: Option<&Expr>, syms: &[Sym], shape: &Shape) -> Value {
     json!({ "latex": latex, "plain": plain, "terms": terms, "value": num_or_null((shape.map)(value(e))) })
 }
 
+/// Relative size below which an a_n (H_n) is 0 to roundoff: of the size
+/// of the terms it is the sum of (`Probe::terms`).
+const ZERO_REL: f64 = 1e-12;
+
+/// An infinite quantity (HD with a1 = 0, IIP3 with a3 = 0): latex
+/// `\infty`, value null, and so its display and simplified forms.
+fn infinite() -> Value {
+    let f = json!({ "latex": "\\infty", "value": null });
+    json!({ "latex": "\\infty", "value": null, "display": f, "simplified": f })
+}
+
 /// A quantity's forms: exact (on `exact`, when it could be built),
 /// display (junction leakage dropped when that moves the value by at most
 /// LEAKAGE_REL; from `noleak`, a closed form on the leakage-free model, when
@@ -1305,6 +1325,11 @@ fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &S
     let undefined = |v: Option<View>| v.is_some_and(|v| v.num.is_zero() && v.den.is_zero());
     if reference.is_nan() || undefined(exact) || (exact.is_none() && undefined(noleak)) {
         return Value::Null;
+    }
+    // x/0 (a ratio over a1 = 0 with a nonzero numerator): infinite.
+    let over_zero = |v: Option<View>| v.is_some_and(|v| !v.num.is_zero() && v.den.is_zero());
+    if reference.is_infinite() || over_zero(exact) || (exact.is_none() && over_zero(noleak)) {
+        return infinite();
     }
     let rel = |a: f64| {
         if reference != 0.0 {
@@ -1593,7 +1618,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // compared relative to at least their size: a matched pair's a2 is 0
     // in closed form and roundoff of that size numerically. (κ₁(A)·eps is
     // no floor here: with gmin-sized conductances it reaches 1e-1.)
-    let terms = probe.dc_terms(&devs, &coefs, &all).unwrap_or([0.0; 3]);
+    let terms = probe.terms(&devs, &coefs, &all, 0.0).unwrap_or([0.0; 3]);
     let check = |cl: &Closed, model: &SsCircuit, msyms: &Symbols| -> Option<Check> {
         let merge = merge_effect(cl, model, msyms);
         let mut ck = Check {
@@ -1694,6 +1719,18 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         coefs_json.push(q);
     }
     resp.insert("coefficients".into(), json!(coefs_json));
+    // With a1 = 0 a ratio over it is infinite, or 0/0 (unavailable) when
+    // a_n is 0 too, to roundoff of its terms.
+    let zero = |n: usize| a(n).abs() <= ZERO_REL * terms[n];
+    let over_a1 = |n: usize, v: f64| {
+        if a(0) != 0.0 {
+            v
+        } else if zero(n) {
+            f64::NAN
+        } else {
+            f64::INFINITY
+        }
+    };
     let w2 = |l: &str| format!("\\frac{{A}}{{2}}\\left|{l}\\right|");
     let m2 = |x: f64| x.abs() * amp / 2.0;
     let (e, nl) = both(&|cl| cl.ratio(1), false);
@@ -1702,7 +1739,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         quantity(
             e,
             nl,
-            a(1).abs() * amp / (2.0 * a(0).abs()),
+            over_a1(1, a(1).abs() * amp / (2.0 * a(0).abs())),
             &Shape { wrap: &w2, map: &m2 },
             c.tol,
         ),
@@ -1716,13 +1753,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             quantity(
                 e,
                 nl,
-                a(2).abs() * amp * amp / (4.0 * a(0).abs()),
+                over_a1(2, a(2).abs() * amp * amp / (4.0 * a(0).abs())),
                 &Shape { wrap: &w3, map: &m3 },
                 c.tol,
             ),
         );
         let iip3 = if a(2) == 0.0 && a(0) != 0.0 {
-            json!({ "latex": "\\infty", "value": null })
+            infinite()
         } else {
             let wi = |l: &str| format!("\\sqrt{{\\frac{{4}}{{3}}\\left|{l}\\right|}}");
             let mi = |x: f64| (4.0 * x.abs() / 3.0).sqrt();
@@ -1730,7 +1767,11 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             quantity(
                 e,
                 nl,
-                (4.0 * a(0).abs() / (3.0 * a(2).abs())).sqrt(),
+                if a(0) == 0.0 && zero(2) {
+                    f64::NAN
+                } else {
+                    (4.0 * a(0).abs() / (3.0 * a(2).abs())).sqrt()
+                },
                 &Shape { wrap: &wi, map: &mi },
                 c.tol,
             )
@@ -1781,11 +1822,22 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .map(|&f| match probe.volterra(&devs, &coefs, &all, f, c.order >= 3) {
             Some(h) => {
                 let a1 = h[0].norm();
-                json!({
+                let mut p = json!({
                     "f": f,
                     "hd2": num_or_null(h[1].norm() * amp / (2.0 * a1)),
                     "hd3": if c.order >= 3 { num_or_null(h[2].norm() * amp * amp / (4.0 * a1)) } else { Value::Null },
-                })
+                });
+                // H1 = 0: HD_n is infinite unless H_n is 0 too (to roundoff
+                // of its terms), then unavailable.
+                if a1 == 0.0 {
+                    let t = probe.terms(&devs, &coefs, &all, f).unwrap_or([0.0; 3]);
+                    for (n, key) in [(1, "hd2Infinite"), (2, "hd3Infinite")] {
+                        if (n == 1 || c.order >= 3) && h[n].norm() > ZERO_REL * t[n] {
+                            p[key] = json!(true);
+                        }
+                    }
+                }
+                p
             }
             None => json!({ "f": f, "hd2": null, "hd3": null }),
         })

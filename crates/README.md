@@ -208,13 +208,20 @@ transfer cofactors. Response `distortion`:
 - `coefficients`: `[{order, value, numeric, latex, plain, terms, display, simplified}]`
   for a₁…a_order (`numeric` from the direct numeric solve, full model).
 - `hd2` = |a₂|A/(2|a₁|), `hd3` = |a₃|A²/(4|a₁|), `iip3` = √(4|a₁|/(3|a₃|)) (input
-  amplitude; `\infty` when a₃ = 0), each `{latex, value, display, simplified}`,
-  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`; `hd3` and
-  `iip3` are null for `order` 2, and any of the three is null where it is
-  0/0 at DC (a₁ = 0 with a₂ or a₃ = 0, e.g. an input blocked by a coupling
-  capacitor).
+  amplitude), each `{latex, value, display, simplified}`,
+  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`. Infinite
+  (HD with a₁ = 0 and the other a_n ≠ 0, IIP3 with a₃ = 0) is
+  `{latex: "\infty", value: null, display: {latex: "\infty", value: null},
+  simplified: (same)}`. Null means unavailable: `hd3` and `iip3` for
+  `order` 2, and any of the three where it is 0/0 at DC (a₁ = 0 with a₂ or
+  a₃ = 0, e.g. an input blocked by a coupling capacitor). An a_n counts as
+  0 here when within 1e-12 of the size of its terms (see `check`).
 - `vsFreq`: `[{f, hd2, hd3}]` at `freqs` from H₂(jω,jω) and H₃(jω,jω,jω)
-  (LU solves at ω, 2ω and, for `order` 3, 3ω on the full model).
+  (LU solves at ω, 2ω and, for `order` 3, 3ω on the full model; a singular
+  system at 2ω or 3ω leaves only that order null). A value is null when
+  unavailable or infinite; `hd2Infinite: true` (`hd3Infinite: true`) is
+  present only when it is infinite (H₁ = 0, H₂ (H₃) ≠ 0 by the same 1e-12
+  rule).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
   `symbols`: the K symbols used (`[]` when no closed form was built);
   `omissionError`; `check` `{ok, maxRelDiff, orders, matchBound}`: each

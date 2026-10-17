@@ -5,6 +5,7 @@ import { smallSignalNetlist } from "./netlist.js";
 import type {
   DistortionForm,
   DistortionQuantity,
+  DistortionVsFreqPoint,
   NoiseExpression,
   NoiseSource,
   SmallSignalDistortion,
@@ -323,6 +324,13 @@ const QUANTITY_KEYS = allKeys<DistortionQuantity>()([
   "simplified",
   "skipped",
 ] as const);
+const VS_FREQ_KEYS = allKeys<DistortionVsFreqPoint>()([
+  "f",
+  "hd2",
+  "hd3",
+  "hd2Infinite",
+  "hd3Infinite",
+] as const);
 const COEFFICIENT_KEYS = allKeys<Coefficient>()([
   ...QUANTITY_KEYS,
   "order",
@@ -390,7 +398,7 @@ describe.skipIf(!built)(
         declared(distortion[name]?.simplified, FORM_KEYS);
       }
       for (const point of distortion.vsFreq)
-        declared(point, ["f", "hd2", "hd3"]);
+        declared(point, VS_FREQ_KEYS);
     });
   },
 );

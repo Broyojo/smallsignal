@@ -738,11 +738,47 @@ fn order_two_needs_no_third_harmonic_solve() {
     let hd = r["distortion"]["hd2"]["value"].as_f64().unwrap();
     assert!(rel(vs["hd2"].as_f64().unwrap(), hd) < 1e-9, "{vs}");
     assert!(vs["hd3"].is_null());
-    // Order 3 does need 3f: no HD3 there (and the HD2 of that solve is
-    // still given).
+    // Order 3 does need 3f: no HD3 there, but the HD2 of that solve is
+    // still given (no capacitor reaches the stage: the memoryless value).
     let r = rq(3);
     let vs = &r["distortion"]["vsFreq"][0];
     assert!(vs["hd3"].is_null(), "{vs}");
+    assert!(rel(vs["hd2"].as_f64().unwrap(), hd) < 1e-9, "{vs}");
+}
+
+#[test]
+fn hd_over_a_vanishing_fundamental_is_infinite() {
+    // The tail node of a pair under differential drive: a1 = 0, a2 != 0
+    // (the tail moves at second order), a3 = 0 by symmetry.
+    let net = "tail\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail tail nm W=10u L=1u\n\
+M2 o2 inn tail tail nm W=10u L=1u\nITAIL tail 0 200u\nCT tail 0 1p\nVIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n\
+.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+    for matched in [true, false] {
+        let mut v = json!({ "input": "VIP", "inputNeg": "VINN", "mode": "differential", "output": "tail",
+                            "nonlinear": ["M1", "M2"], "freqs": [1e3, 1e8] });
+        if matched {
+            v["match"] = json!([["M1", "M2"], ["RD1", "RD2"]]);
+        }
+        let r = run(net, &req(v));
+        let d = &r["distortion"];
+        assert_eq!(d["coefficients"][0]["numeric"], 0.0);
+        assert!(d["coefficients"][1]["numeric"].as_f64().unwrap() > 0.1);
+        let hd2 = &d["hd2"];
+        assert_eq!(hd2["latex"], "\\infty", "{hd2}");
+        assert!(hd2["value"].is_null());
+        for form in ["display", "simplified"] {
+            assert_eq!(hd2[form]["latex"], "\\infty");
+            assert!(hd2[form]["value"].is_null());
+        }
+        // a3 is 0 as well (roundoff numerically): HD3 and IIP3 are 0/0.
+        assert!(d["hd3"].is_null() && d["iip3"].is_null(), "{} {}", d["hd3"], d["iip3"]);
+        for p in d["vsFreq"].as_array().unwrap() {
+            assert!(p["hd2"].is_null() && p["hd3"].is_null());
+            assert_eq!(p["hd2Infinite"], true, "{p}");
+            assert!(p.get("hd3Infinite").is_none(), "{p}");
+        }
+        assert_eq!(d["check"]["ok"], true);
+    }
 }
 
 /// A matched NMOS pair driven at the bulks (back gates), with forward body
