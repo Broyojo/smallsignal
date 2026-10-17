@@ -125,6 +125,9 @@
 /* Result cards: the Properties card. */
 .small-signal-card {
   display: grid;
+  /* One column no wider than the card, so a long formula scrolls inside
+     its own box instead of widening the column past the panel. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   min-width: 0;
   padding: 10px;
@@ -173,6 +176,7 @@
 
 .small-signal-simpler {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   padding-top: 6px;
   border-top: 1px solid var(--icm-border);
@@ -263,6 +267,7 @@
 
 .small-signal-options > div {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 0 10px 10px;
 }
