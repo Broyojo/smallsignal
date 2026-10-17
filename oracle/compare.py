@@ -328,8 +328,9 @@ def compare_distortion(got: dict, want: dict, rep: Report):
             rep.failures.append(f"distortion.{h}: got {g:.8e}, want {w:.8e}")
     # IIP3 = sqrt(4|a1|/(3|a3|)) over the reference's a1, a3 intervals (each
     # within the coefficient tolerance above); an a3 that may be 0 allows an
-    # infinite IIP3, which an exact 0 requires (latex \infty, value null),
-    # and a1 = a3 = 0 (distortion.zero_orders) requires null (0/0).
+    # infinite IIP3, which an exact 0 requires (latex \infty, value null).
+    # As the solver: a1 = a3 = 0 (distortion.zero_orders) requires null (0/0),
+    # and a1 = 0 with a3 != 0 requires exactly 0.
     (w1, t1), (w3, t3) = ((abs(c["value"]), coef_tol[c["order"]]) for c in ref["coefficients"] if c["order"] in (1, 3))
     zero = distortion.zero_orders(ref)
     gi = gd.get("iip3") or {}
@@ -339,6 +340,10 @@ def compare_distortion(got: dict, want: dict, rep: Report):
     if zero[0] and zero[2]:
         if gd.get("iip3") is not None:
             rep.failures.append(f"distortion.iip3: got {'infinite' if infinite(gi) else g}, want null (0/0: a1 = a3 = 0)")
+    elif zero[0]:
+        if g != 0 or infinite(gi):
+            rep.failures.append(f"distortion.iip3: got {'infinite' if infinite(gi) else g if gi else 'missing'}, "
+                                "want 0 (a1 = 0, a3 != 0)")
     elif w3 == 0:
         if not infinite(gi):
             rep.failures.append(f"distortion.iip3: got {g if g is not None else gi or 'missing'}, want infinite (a3 = 0)")

@@ -287,18 +287,14 @@ def transient_magnitude_tolerance(n: int, cn: float, solve: float, ppp: int) -> 
 def transient_disagreements(d: dict) -> list[str]:
     """Each transient result that misses harmonic balance's by more than its
     tolerance: HD2, HD3, or |c1..c3| where the fundamental is 0 (d as
-    analyze writes it). A point without one is a disagreement too, unless a
-    recorded transient failure covers it (`transient_failed_at` and every
-    amplitude after it)."""
+    analyze writes it). A point without one is a disagreement too, unless
+    its amplitude is in the recorded `transient_failed` list."""
     points = d["points"]
-    failed_at = d.get("transient_failed_at")
-    covered = len(points)
-    if d.get("transient_error") is not None and failed_at is not None:
-        covered = next((i for i, p in enumerate(points) if p["A"] == failed_at), len(points))
+    failed = set(d.get("transient_failed") or []) if d.get("transient_error") is not None else set()
     out = []
-    for i, p in enumerate(points):
-        if i >= covered:
-            break
+    for p in points:
+        if p["A"] in failed:
+            continue
         keys = ("hd2", "hd3") if p["hd2"] is not None else ("c1", "c2", "c3")
         for h in keys:
             t, tol = p.get(f"tran_{h}"), p.get(f"tran_tol_{h}")
@@ -500,15 +496,17 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     except (run_ngspice.NgspiceError, KeyError, ValueError) as exc:
         dis_out = _disto_unavailable(name, exc, net)
     tr = {}
-    tr_error = tr_failed_at = None
+    tr_errors, tr_failed = [], []
     ppp = spec.get("points_per_period", 4000)
     for a in amps:
-        # Each amplitude on its own: a later failure keeps the earlier runs.
+        # Each amplitude on its own: a failure is recorded for that amplitude
+        # only, and the others still run.
         try:
             tr[a] = transient(net, side, a, freq, spec.get("periods", 10), ppp, keep, name)
         except (run_ngspice.NgspiceError, subprocess.TimeoutExpired) as exc:
-            tr_error, tr_failed_at = f"A={a:g}: {exc}"[:200], a
-            break
+            tr_errors.append(f"A={a:g}: {exc}"[:200])
+            tr_failed.append(a)
+    tr_error = "; ".join(tr_errors) or None
     points = []
     for a in amps:
         (c1, c2, c3), res = hb[a]
@@ -532,7 +530,7 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     # assumption at f); only one that timed out or failed is optional.
     # ValueError: run_ngspice's main() catches it whether or not it runs as
     # __main__ (its NgspiceError is then a different class).
-    tr_record = {"points": points, "transient_error": tr_error, "transient_failed_at": tr_failed_at}
+    tr_record = {"points": points, "transient_error": tr_error, "transient_failed": tr_failed}
     if bad := transient_disagreements(tr_record):
         raise ValueError(f"{name}: not quasi-static at {freq:g} Hz: " + "; ".join(bad[:2])
                          + (f" (+{len(bad) - 2} more)" if len(bad) > 2 else ""))
@@ -585,8 +583,8 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
         "points": points,
         "transient_error": tr_error,
     }
-    if tr_failed_at is not None:
-        result["transient_failed_at"] = tr_failed_at
+    if tr_failed:
+        result["transient_failed"] = tr_failed
     if bad := harmonic_balance_disagreements(result):
         raise ValueError(f"{name}: harmonic balance disagrees with the reference: " + "; ".join(bad))
     return result
