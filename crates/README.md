@@ -37,7 +37,8 @@ with numeric values, poles and zeros, and the operating point.
    within each power of s, up to the coarsest pruning whose error over
    1 Hz–100 GHz stays within `tolerance`. Magnitude pruning (here, in noise
    and in distortion) moves no coefficient of a numerator or denominator by
-   more than `tolerance` of itself, drops terms of equal size together, and
+   more than 2·`tolerance` of itself (at most all of it), with the overall
+   error still within `tolerance`, drops terms of equal size together, and
    cancels the common factors left.
 
 ## Correctness checks

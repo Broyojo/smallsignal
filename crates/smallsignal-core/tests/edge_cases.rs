@@ -485,7 +485,7 @@ fn symbolic_leading_order_is_labelled() {
 }
 
 /// A numeric simplified form may not drop terms from the numerator and the
-/// denominator whose errors cancel: each coefficient stays within the
+/// denominator whose errors cancel: each coefficient stays within twice the
 /// tolerance on its own. Before, a transconductor with R1/R2 feedback
 /// (gm·RD = 2.3) showed R1/R2 (1, with R1 = 40k and R2 = 60k), which is no
 /// limit of the gain (exact 1.045), and a matched CMOS inverter showed
@@ -522,15 +522,25 @@ fn simplified_parts_are_each_within_tolerance() {
 }
 
 /// Terms of equal size are dropped together or not at all: a matched pair
-/// keeps a symmetric simplified form (before, r_{o2} but not r_{o1}).
+/// keeps a symmetric simplified form (before, r_{o2} but not r_{o1}). At a
+/// 3% tolerance the two twin terms (4.7% together) cannot both go, so
+/// neither does; at 5% both go, leaving the textbook g_m R_C.
 #[test]
 fn simplified_drops_equal_terms_together() {
     let pair = "bjt pair\nVCC vcc 0 5\nVEE vee 0 -5\nVCM cm 0 0\nVIN inp cm DC 0 AC 1\nQ1 c1 inp tail qn\n\
                 Q2 c2 cm tail qn\nITAIL tail vee DC 1m\nRC1 vcc c1 5k\nRC2 vcc c2 5k\n.model qn NPN (IS=1e-15 BF=100 VAF=50)\n";
-    let r = run(pair, &req(json!({ "input": "VIN", "output": "c2", "ref": "c1" })));
+    let r = run(
+        pair,
+        &req(json!({ "input": "VIN", "output": "c2", "ref": "c1", "tolerance": 0.03 })),
+    );
     assert_eq!(
         r["gain"]["simplified"]["latex"],
         "\\frac{g_{m1} g_{m2} r_{o1} r_{o2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} r_{o1} r_{o2} + g_{m2} r_{o1} r_{o2} + g_{m1} r_{o1} R_{C2} + g_{m2} r_{o2} R_{C1}}"
+    );
+    let r = run(pair, &req(json!({ "input": "VIN", "output": "c2", "ref": "c1" })));
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{g_{m1} g_{m2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} + g_{m2}}"
     );
 }
 

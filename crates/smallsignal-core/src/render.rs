@@ -434,11 +434,14 @@ impl Expr {
         }
     }
 
-    /// `prune` levels for a tolerance, coarsest first. None is above `tol`
-    /// (or 1), so a pruned coefficient never moves by more than the
-    /// tolerance even where the overall error would allow it.
+    /// `prune` levels for a tolerance, coarsest first. None is above
+    /// 2·`tol` (or 1), so a pruned coefficient never moves by more than
+    /// twice the tolerance even where the overall error would allow it.
+    /// Twice: a coefficient may move a little more than the result does
+    /// (another part can share the error), but never by the half it took
+    /// to make a form that is no limit of the exact one.
     pub fn prune_levels(tol: f64) -> impl Iterator<Item = f64> {
-        let top = tol.min(1.0);
+        let top = (2.0 * tol).min(1.0);
         std::iter::once(top).chain(
             [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4]
                 .into_iter()

@@ -1469,7 +1469,7 @@ impl Quantities<'_> {
 
         // Simplified form: the coarsest pruning of the display form whose
         // error (against the full model) stays in budget, with no single
-        // coefficient moved by more than the tolerance.
+        // coefficient moved by more than twice the tolerance.
         let mut simplified = display.clone();
         let mut simp_err = display_err;
         for eps in Expr::prune_levels(self.tol) {
