@@ -108,9 +108,12 @@ def _checked_spec(side: dict, name: str) -> tuple[dict, list[float]]:
     periods: an integer above WINDOW_PERIODS; points_per_period: an integer
     of at least MIN_POINTS_PER_PERIOD; vsFreq: a list of finite positive
     frequencies."""
-    spec = side.get("distortion")
-    if not isinstance(spec, dict):
-        raise ValueError(f"{name}: distortion must be an object, got {spec!r}")
+    try:
+        spec = run_ngspice.settings(side, "distortion")
+    except ValueError as exc:
+        raise ValueError(f"{name}: {exc}") from None
+    if spec is None:
+        raise ValueError(f"{name}: distortion is not requested (got {side.get('distortion')!r})")
 
     def bad(key, want):
         return ValueError(f"{name}: distortion.{key} must be {want}, got {spec.get(key)!r}")

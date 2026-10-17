@@ -21,7 +21,7 @@ from pathlib import Path
 
 import distortion
 import spice
-from run_ngspice import OPTIONS, requested, rel_diff
+from run_ngspice import OPTIONS, requested, settings, rel_diff
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -60,10 +60,10 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     net = with_options(cir)
     args = [*cmd, "analyze", str(net), "--input", side["input"], "--output", out, "--verify"]
     # The CLI takes one frequency list: the sidecar's freqs plus any noise.freqs.
-    noise_spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
+    noise_spec = settings(side, "noise") or {}
     freqs = sorted({float(f) for f in [*side.get("freqs", []), *noise_spec.get("freqs", [])]})
     # ... and distortion.vsFreq (the frequencies distortion.py ran .disto at).
-    dist_spec = side["distortion"] if isinstance(side.get("distortion"), dict) else {}
+    dist_spec = settings(side, "distortion") or {}
     freqs = sorted({*freqs, *(float(f) for f in dist_spec.get("vsFreq", []))})
     if freqs:
         args += ["--freq", ",".join(repr(f) for f in freqs)]
@@ -78,13 +78,13 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     if side.get("match"):
         args += ["--match", ";".join(",".join(g) for g in side["match"])]
     if requested(side, "noise"):
-        band = side["noise"].get("band") if isinstance(side["noise"], dict) else None
+        band = noise_spec.get("band")
         args += ["--noise-band", ",".join(repr(float(f)) for f in band)] if band else ["--noise"]
     if requested(side, "distortion"):
         # ngspice is fully nonlinear, so every transistor and diode is selected.
         devices = [e.tokens[0] for e in spice.parse(cir.read_text()).elements if e.kind in "mqd"]
         args += ["--nonlinear", ",".join(devices), "--order", "3",
-                 "--amplitude", repr(float(distortion.amplitude(side["distortion"])))]
+                 "--amplitude", repr(float(distortion.amplitude(dist_spec)))]
     try:
         proc = subprocess.run(args, cwd=REPO, capture_output=True, text=True, timeout=120)
     finally:
