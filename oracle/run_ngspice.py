@@ -292,14 +292,17 @@ def noise_input(net: spice.Netlist, side: dict) -> tuple[str, str]:
     noiseless controlled sources with the solver's weights: ±1/2 in
     differential mode, +1 each in common mode, so ngspice's input-referred
     noise divides by the same gain. A V input gets a VCVS in series, an I
-    input a VCCS in parallel (same direction)."""
+    input a VCCS in parallel (same direction). Every synthetic node and
+    element name avoids the netlist's own (fresh_name)."""
     neg = side.get("inputNeg")
     if not neg:
         return spice.render(net, side["input"]), side["input"]
     pos, neg = side["input"].lower(), neg.lower()
     differential = (side.get("mode") or "differential") == "differential"
     weight = {pos: 0.5, neg: -0.5} if differential else {pos: 1.0, neg: 1.0}
-    lines = [net.title, "VNIN__ nin__ 0 DC 0 AC 1"]
+    taken = {e.name for e in net.elements} | set(net.nodes()) | spice.GROUND
+    src, nin = fresh_name(taken, "VNIN__"), fresh_name(taken, "nin__")
+    lines = [net.title, f"{src} {nin} 0 DC 0 AC 1"]
     for e in net.elements:
         w = weight.get(e.name)
         if e.kind not in "vi":
@@ -307,14 +310,25 @@ def noise_input(net: spice.Netlist, side: dict) -> tuple[str, str]:
         elif w is None:
             lines.append(spice.source_line(e, None))
         elif e.kind == "v":
-            mid = f"{e.name}__in"
+            mid = fresh_name(taken, f"{e.name}__in")
             lines.append(f"{e.tokens[0]} {e.tokens[1]} {mid} DC {spice.source_dc(e)}")
-            lines.append(f"E__{e.name} {mid} {e.tokens[2]} nin__ 0 {w!r}")
+            lines.append(f"{fresh_name(taken, f'E__{e.name}')} {mid} {e.tokens[2]} {nin} 0 {w!r}")
         else:
             lines.append(spice.source_line(e, None))
-            lines.append(f"G__{e.name} {e.tokens[1]} {e.tokens[2]} nin__ 0 {w!r}")
+            lines.append(f"{fresh_name(taken, f'G__{e.name}')} {e.tokens[1]} {e.tokens[2]} {nin} 0 {w!r}")
     lines += net.model_lines + net.other_lines
-    return "\n".join(lines) + "\n", "VNIN__"
+    return "\n".join(lines) + "\n", src
+
+
+def fresh_name(taken: set[str], base: str) -> str:
+    """`base`, or `base` with the smallest numeric suffix, unused by any name
+    in `taken` (lower-case node and element names; SPICE ignores case), which
+    then reserves it. Keeps the first letter, so the element type."""
+    name, k = base, 1
+    while name.lower() in taken:
+        name, k = f"{base}{k}", k + 1
+    taken.add(name.lower())
+    return name
 
 
 def split_contributor(body: str, names: list[str]) -> tuple[str, str]:

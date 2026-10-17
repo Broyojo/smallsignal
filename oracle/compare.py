@@ -187,33 +187,59 @@ def compare_noise(got: dict, want: dict, rep: Report):
             rep.worst = max(rep.worst, err / max(w["v2"], 1e-300))
             if err > NOISE_RTOL * w["v2"] + 1e-40:
                 rep.failures.append(f"{what}: got {g['v2']:.10e}, want {w['v2']:.10e}")
-    # Per-source contributions: the solver lists them per frequency as
-    # [{f, sources: [{element, kind, v2}]}]; its kinds map to ngspice's.
+    # Per-source contributions: the solver lists the largest MAX_CONTRIBUTORS
+    # per frequency as [{f, sources: [{element, kind, v2}], omitted?}] and sums
+    # the rest in omitted {count, v2}; its kinds map to ngspice's. A source
+    # the solver lists is compared on its own; every other ngspice source
+    # must be no larger than the smallest listed one and is checked through
+    # omitted: their sum against omitted.v2, their count (every solver
+    # source not listed, as ngspice prints one value for each) against
+    # omitted.count.
     kind_map = {("r", "thermal"): "thermal", ("m", "thermal"): "id", ("m", "flicker"): "1overf",
                 ("q", "shot_c"): "ic", ("q", "shot_b"): "ib", ("q", "flicker"): "1overf",
                 ("d", "shot"): "id", ("d", "flicker"): "1overf"}
-    have = {}
-    for row in gn.get("contributors") or []:
-        for src in row.get("sources", []):
-            el = src.get("element", "").lower()
-            ng_src = kind_map.get((el[:1], src.get("kind")))
-            if ng_src:
-                have[(el, ng_src, round(math.log10(row["f"]), 9))] = src.get("v2")
+
+    def ng_key(src: dict) -> tuple[str, str | None]:
+        el = src.get("element", "").lower()
+        return el, kind_map.get((el[:1], src.get("kind")))
+
+    solver_sources = {ng_key(s_) for s_ in gn.get("sources") or []}
+    expect: dict[float, dict[tuple[str, str], float]] = {}
+    for c in want["noise"]["contributors"]:
+        if c["source"] != "total":
+            for w in c["values"]:
+                expect.setdefault(round(math.log10(w["f"]), 9), {})[(c["element"], c["source"])] = w["v2"]
+    rows = {round(math.log10(row["f"]), 9): row for row in gn.get("contributors") or []}
     if gn.get("contributors") is None:
         rep.failures.append("noise.contributors: missing")
-    else:
-        for c in want["noise"]["contributors"]:
-            if c["source"] == "total":
-                continue
-            for w in c["values"]:
-                if w["v2"] == 0:
-                    continue
-                g = have.get((c["element"], c["source"], round(math.log10(w["f"]), 9)))
-                what = f"noise.{c['element']}.{c['source']}@{w['f']:g}"
-                if g is None:
-                    rep.failures.append(f"{what}: missing (ngspice {w['v2']:.3e})")
-                elif abs(g - w["v2"]) > NOISE_RTOL * w["v2"] + 1e-40:
-                    rep.failures.append(f"{what}: got {g:.10e}, want {w['v2']:.10e}")
+        expect = {}
+    for lf, ng in expect.items():
+        f = 10 ** lf
+        row = rows.get(lf) or {}
+        listed = {k: s_.get("v2") for s_ in row.get("sources", []) if (k := ng_key(s_))[1]}
+        smallest = min((v for v in listed.values() if v is not None), default=0.0)
+        omitted = row.get("omitted")
+        rest_v2, rest_n = 0.0, 0
+        for (el, src), w in sorted(ng.items()):
+            what = f"noise.{el}.{src}@{f:g}"
+            g = listed.get((el, src))
+            if (el, src) in listed:
+                if g is None or abs(g - w) > NOISE_RTOL * w + 1e-40:
+                    rep.failures.append(f"{what}: got {g}, want {w:.10e}")
+            elif omitted is not None and (el, src) in solver_sources:
+                rest_v2 += w
+                rest_n += 1
+                if w > smallest * (1 + NOISE_RTOL) + 1e-40:
+                    rep.failures.append(f"{what}: {w:.3e} is among the largest but not listed")
+            elif w != 0:
+                rep.failures.append(f"{what}: missing (ngspice {w:.3e})")
+        if omitted is not None:
+            what = f"noise.omitted@{f:g}"
+            if omitted.get("count") != rest_n:
+                rep.failures.append(f"{what}.count: got {omitted.get('count')}, want {rest_n}")
+            g = omitted.get("v2")
+            if g is None or abs(g - rest_v2) > NOISE_RTOL * rest_v2 + 1e-40 * max(rest_n, 1):
+                rep.failures.append(f"{what}.v2: got {g}, want {rest_v2:.10e}")
     # Integrated noise over a band: the reference is an adaptive 60-digit
     # quadrature of the independently rebuilt PSD, confirmed by a Richardson
     # trapezoid of ngspice's own spectrum to ~1e-10 (not ngspice's

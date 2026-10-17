@@ -1,0 +1,45 @@
+NMOS CS with 36 parallel drain resistors: 40 noise sources
+VDD vdd 0 1.8
+VIN in 0 DC 0.8 AC 1
+RS in g 1k
+RG g 0 1Meg
+RD1 vdd out 110k
+RD2 vdd out 120k
+RD3 vdd out 130k
+RD4 vdd out 140k
+RD5 vdd out 150k
+RD6 vdd out 160k
+RD7 vdd out 170k
+RD8 vdd out 180k
+RD9 vdd out 190k
+RD10 vdd out 200k
+RD11 vdd out 210k
+RD12 vdd out 220k
+RD13 vdd out 230k
+RD14 vdd out 240k
+RD15 vdd out 250k
+RD16 vdd out 260k
+RD17 vdd out 270k
+RD18 vdd out 280k
+RD19 vdd out 290k
+RD20 vdd out 300k
+RD21 vdd out 310k
+RD22 vdd out 320k
+RD23 vdd out 330k
+RD24 vdd out 340k
+RD25 vdd out 350k
+RD26 vdd out 360k
+RD27 vdd out 370k
+RD28 vdd out 380k
+RD29 vdd out 390k
+RD30 vdd out 400k
+RD31 vdd out 410k
+RD32 vdd out 420k
+RD33 vdd out 430k
+RD34 vdd out 440k
+RD35 vdd out 450k
+RD36 vdd out 460k
+M1 out g 0 0 nchf W=10u L=1u
+CL out 0 1p
+.model nchf NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 KF=1e-25 AF=1)
+.end

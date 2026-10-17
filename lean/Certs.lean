@@ -31,6 +31,7 @@ import Certs.noise_diffpair_dm
 import Certs.noise_divider
 import Certs.noise_flicker_suffix
 import Certs.noise_flicker_zero_bias
+import Certs.noise_many_sources
 import Certs.noise_ota_5t
 import Certs.noise_rc
 import Certs.noise_sf

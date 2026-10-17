@@ -1,0 +1,20 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  10.0,
+  1000.0,
+  100000.0,
+  10000000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "noise": {
+  "band": [
+   1.0,
+   10000000.0
+  ]
+ },
+ "description": "More than 32 noise sources: the solver lists the 32 largest per frequency and sums the rest in omitted"
+}
