@@ -46,6 +46,17 @@ jobs:
                  <(cd "$results" && ls *.json | sed 's/\.json$//')
             test -n "$(ls "$circuits"/*.cir)"
           done
+          # compare.py runs the netlist a result names: it must be its own.
+          python3 - <<'EOF'
+          import json, pathlib, sys
+          bad = [
+              f"{path}: names {name}"
+              for results in ("expected", "regressions/expected")
+              for path in sorted(pathlib.Path(results).glob("*.json"))
+              if (name := json.loads(path.read_text())["netlist"]) != path.stem + ".cir"
+          ]
+          sys.exit("\n".join(bad) or None)
+          EOF
           uv run --locked compare.py
           uv run --locked compare.py --corpus regressions --expected regressions/expected
           uv run --locked textbook.py
@@ -62,7 +73,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack
-      - run: wasm-pack build crates/smallsignal-wasm --target web --release --out-dir ../../packages/small-signal/wasm -- --locked
+      - name: Build solver WASM
+        # As in Pages: without the solver crate, the panel runs on its stub.
+        run: |
+          if [ -d crates/smallsignal-wasm ]; then
+            wasm-pack build crates/smallsignal-wasm --target web --release \
+              --out-dir ../../packages/small-signal/wasm -- --locked
+          fi
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
