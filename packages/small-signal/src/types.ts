@@ -56,6 +56,14 @@ export interface SmallSignalQuantity {
   unit?: string;
   infinite?: boolean;
   exact: SmallSignalExpression;
+  /**
+   * The exact form without gmin-level junction leakage (r_bs, r_bd, r_μ),
+   * with its measured error against the full model; `same` when there was
+   * no leakage to drop.
+   */
+  display?: (SmallSignalExpression & { same?: boolean }) | null;
+  /** Junction leakage changes a value by more than 1e-3: it stays shown. */
+  leakageMatters?: boolean;
   simplified?: SmallSignalExpression | null;
   values?: ComplexPoint[];
   poles?: Root[];

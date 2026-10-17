@@ -184,6 +184,45 @@ function rootText(root: Root): string {
   return `${formatEngineering(root.re)} ± j${formatEngineering(root.im, "Hz")}`;
 }
 
+/** Below this the leakage-free form is indistinguishable at 4 digits. */
+const INVISIBLE_ERROR = 1e-6;
+
+/**
+ * The main equation: the exact form without gmin-level junction leakage when
+ * that leakage is negligible (said so when it is not invisible), else the
+ * full exact form.
+ */
+function MainFormula({
+  symbol,
+  quantity,
+}: {
+  symbol: string;
+  quantity: SmallSignalQuantity;
+}) {
+  const display = quantity.display;
+  if (!display || display.same || display.latex === null) {
+    return <ExactFormula symbol={symbol} quantity={quantity} />;
+  }
+  const error = display.maxRelError ?? 0;
+  const invisible = error < INVISIBLE_ERROR;
+  return (
+    <>
+      <Formula
+        latex={`${symbol} ${invisible ? "=" : "\\approx"} ${display.latex}`}
+      />
+      {invisible ? null : (
+        <small className="small-signal-muted">
+          neglecting junction leakage ({formatPercent(error)})
+        </small>
+      )}
+      <details className="small-signal-exact">
+        <summary>With junction leakage</summary>
+        <ExactFormula symbol={symbol} quantity={quantity} />
+      </details>
+    </>
+  );
+}
+
 function ExactFormula({
   symbol,
   quantity,
@@ -261,7 +300,7 @@ function QuantityCard({
         </>
       ) : (
         <>
-          <ExactFormula symbol={symbol} quantity={quantity} />
+          <MainFormula symbol={symbol} quantity={quantity} />
           {simpler ? (
             <div className="small-signal-simpler">
               <Formula latex={`\\approx ${simpler.latex}`} />
