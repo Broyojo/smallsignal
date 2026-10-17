@@ -1067,19 +1067,29 @@ pub fn closed(
         }
     };
     let mt = max_terms;
+    // Every stored polynomial within the budget: products check it
+    // themselves, sums and differences (up to twice their operands' terms)
+    // here, so an over-budget form fails exactly as a large product does.
+    let fit = |p: XPoly| -> Result<XPoly, String> {
+        if p.terms.len() > mt {
+            Err(format!("expression too large (over {mt} terms)"))
+        } else {
+            Ok(p)
+        }
+    };
     let mul = |a: &XPoly, b: &XPoly| a.mul(b, mt);
-    let sub = |a: &XPoly, b: &XPoly| a.sub(b);
+    let sub = |a: &XPoly, b: &XPoly| fit(a.sub(b)?);
     // Order-1 control voltages (numerators over D).
     let mut u1: Vec<Vec<XPoly>> = Vec::new();
     for dv in devs {
         let mut u = Vec::new();
         for &(p, q) in &dv.controls {
-            u.push(n1(p)?.sub_owned(n1(q)?)?);
+            u.push(fit(n1(p)?.sub_owned(n1(q)?)?)?);
         }
         u.resize(3, XPoly::default());
         u1.push(u);
     }
-    let na = n1(out)?.sub_owned(n1(rf)?)?;
+    let na = fit(n1(out)?.sub_owned(n1(rf)?)?)?;
     let kvar = |k: usize| XPoly::var(cidx[k].expect("kept"), nsym);
     let pow = |u: &[XPoly], m: &[u8; 3]| -> Result<XPoly, String> {
         let mut p = XPoly::constant(1, nsym);
@@ -1096,7 +1106,7 @@ pub fn closed(
         if cidx[k].is_some() && c.order() == 2 {
             let t = mul(&kvar(k), &pow(&u1[c.dev], &c.mono)?)?;
             let e = i2.entry((c.dev, c.out)).or_default();
-            *e = std::mem::take(e).add_owned(t)?;
+            *e = fit(std::mem::take(e).add_owned(t)?)?;
         }
     }
     // Response of node n to the order-2 currents: numerator over D³.
@@ -1105,8 +1115,8 @@ pub fn closed(
         for (&(dv, o), i) in cur {
             let ot = &devs[dv].outs[o];
             // The current leaves node a and enters node b.
-            let t = unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?;
-            acc = acc.add_owned(mul(&t, i)?)?;
+            let t = fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?)?;
+            acc = fit(acc.add_owned(mul(&t, i)?)?)?;
         }
         Ok(acc)
     };
@@ -1158,16 +1168,16 @@ pub fn closed(
                             .flat_map(|v| std::iter::repeat_n(v, c.mono[v] as usize))
                             .collect();
                         let (i, j) = (ix[0], ix[1]);
-                        mul(&u1[c.dev][i], &u2[c.dev][j])?.add_owned(mul(&u2[c.dev][i], &u1[c.dev][j])?)?
+                        fit(mul(&u1[c.dev][i], &u2[c.dev][j])?.add_owned(mul(&u2[c.dev][i], &u1[c.dev][j])?)?)?
                     }
                 };
                 v.insert(t);
             }
             let t = mul(&kvar(k), &prods[&(c.dev, c.mono)])?;
             let e = i3.entry((c.dev, c.out)).or_default();
-            *e = std::mem::take(e).add_owned(t)?;
+            *e = fit(std::mem::take(e).add_owned(t)?)?;
         }
-        num.push(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?);
+        num.push(fit(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?)?);
         powers.push(5);
     }
     let mut cl = Closed::new(syms, dx, num, powers, vid, max_terms);
