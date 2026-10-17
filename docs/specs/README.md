@@ -10,7 +10,7 @@ on. Each topic has one owner spec; others link to it.
 | [`edit-engine.md`](edit-engine.md)                                 | Typed edits, transactions, revisions, Undo (sole owner)                |
 | [`circuit-ir.md`](circuit-ir.md)                                   | Transient dialect-neutral import IR                                    |
 | [`symbol-dsl.md`](symbol-dsl.md)                                   | Symbol pins, variants, source-backed artwork, User Components          |
-| [`component-publication.md`](component-publication.md)             | User Component identity, exact content, destination, write recovery   |
+| [`component-publication.md`](component-publication.md)             | User Component identity, exact content, destination, write recovery    |
 | [`spice-frontend.md`](spice-frontend.md)                           | Lossless SPICE syntax, includes, dialect profiles, elaboration         |
 | [`simulation.md`](simulation.md)                                   | Source folders, configuration, compilation                             |
 | [`simulation-execution.md`](simulation-execution.md)               | Profiles, preparation, execution, artifacts                            |
@@ -30,10 +30,11 @@ on. Each topic has one owner spec; others link to it.
 | [`editor-interaction.md`](editor-interaction.md)                   | Gestures, selection, previews, controls (sole owner)                   |
 | [`community-gallery.md`](community-gallery.md)                     | Gallery feed, accounts, moderation                                     |
 | [`analog-arena.md`](analog-arena.md)                               | Contract with the AnalogArena Worker (cross-repo)                      |
+| [`small-signal-assumptions.md`](small-signal-assumptions.md)       | Per-device small-signal assumptions: limits, restore, full-model error |
 
 ## Writing a spec
 
-All specs are `accepted`. Add one only for a stable cross-module contract, from
+Specs are `accepted` unless marked `proposed`. Add one only for a stable cross-module contract, from
 [`spec.template.md`](spec.template.md): `pnpm docs:check` checks status
 (`accepted`/`proposed`), owner and that `Version:` appears only for an
 independently versioned protocol. When code disagrees with a spec, check
