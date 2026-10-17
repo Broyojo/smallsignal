@@ -1507,7 +1507,11 @@ export function SmallSignalPanel({
       ...all,
       [circuitKey]: [...update(new Set(all[circuitKey] ?? []))],
     }));
-  const [amplitudeText, setAmplitudeText] = useState("");
+  // Typed amplitude per input unit: "10m" for a voltage input must never
+  // become 10 mA when the input is a current source.
+  const [amplitudeByUnit, setAmplitudeByUnit] = useState<
+    Readonly<Record<"V" | "A", string>>
+  >({ V: "", A: "" });
   const [distortionResponse, setDistortionResponse] =
     useState<SmallSignalResponse | null>(null);
   const distortionGeneration = useRef(0);
@@ -1674,6 +1678,8 @@ export function SmallSignalPanel({
         source.name === (differential ? differential[0] : chosenInput),
     )?.kind === "current";
   const defaultAmplitude = currentInput ? 1e-6 : 0.01;
+  const amplitudeUnit = currentInput ? "A" : "V";
+  const amplitudeText = amplitudeByUnit[amplitudeUnit];
   const typedAmplitude = parseSpiceNumber(amplitudeText);
   // Blank means the default; anything else must be a positive number, or
   // nothing is solved (never numbers for an amplitude other than the shown).
@@ -2057,7 +2063,10 @@ export function SmallSignalPanel({
                           autoCorrect="off"
                           spellCheck={false}
                           onChange={(event) =>
-                            setAmplitudeText(event.currentTarget.value)
+                            setAmplitudeByUnit({
+                              ...amplitudeByUnit,
+                              [amplitudeUnit]: event.currentTarget.value,
+                            })
                           }
                         />
                       </label>
