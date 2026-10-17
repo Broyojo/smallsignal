@@ -1,7 +1,9 @@
 # oracle: ngspice reference results for the smallsignal solver
 
 ngspice (tested with ngspice-47) is the ground truth for operating points and
-small-signal numbers. Needs `ngspice` on PATH and `uv`.
+small-signal numbers. Needs `ngspice` on PATH and `uv`. `install-ngspice.sh`
+builds ngspice-47 from source; distributions ship older releases (Ubuntu
+24.04's ngspice-42 prints no `.disto` results).
 
 ```sh
 uv run run_ngspice.py                 # corpus/*.cir -> expected/*.json
