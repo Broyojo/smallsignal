@@ -833,3 +833,34 @@ C1 d out 1u\nRL out 0 10k\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 kf
     );
     assert!(r["noise"]["output"][0]["v2"].is_null(), "{}", r["noise"]["output"]);
 }
+
+/// M1 and M2 differ only in bulk-junction IS. The gain's model omits those
+/// junctions (proven negligible) and accepts the match; the noise closed form
+/// needs the full model, which rejects it. That warning belongs in the
+/// response, once (it was built into a throwaway list and dropped).
+#[test]
+fn full_model_symbol_warnings_reach_the_response() {
+    // Both off (gm = 0): their junction leakage is all M1 contributes.
+    let net = "w\nVIN in 0 DC 1 AC 1\nR1 in out 63k\nR0 b out 9.2Meg\nM1 out in in b nm1 W=10u L=1u\n\
+M2 vdd 0 vdd 0 nm2 W=10u L=1u\nR2 in vdd 1099\n\
+.model nm1 nmos (level=1 kp=200u vto=0.5 lambda=0.2 is=1e-14)\n\
+.model nm2 nmos (level=1 kp=200u vto=0.5 lambda=0.2 is=2e-14)\n";
+    let at = |noise: bool| {
+        run(
+            net,
+            &req(json!({ "input": "VIN", "output": "out", "noise": noise, "match": [["M1", "M2"]] })),
+        )
+    };
+    let count = |r: &Value| {
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| *w == "M1 and M2 differ, not matched")
+            .count()
+    };
+    let gain_only = at(false);
+    assert_eq!(count(&gain_only), 0, "{}", gain_only["warnings"]);
+    let with_noise = at(true);
+    assert_eq!(count(&with_noise), 1, "{}", with_noise["warnings"]);
+}

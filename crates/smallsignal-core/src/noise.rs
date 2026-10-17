@@ -1052,8 +1052,9 @@ pub struct Ctx<'a> {
     /// The analysis model (proven omissions applied) and its symbols.
     pub ss: &'a SsCircuit,
     pub symbols: &'a Symbols,
-    /// Symbols of `full`, built on demand (fallback for the closed form).
-    pub full_symbols: &'a dyn Fn() -> Symbols,
+    /// Symbols of `full` and their warnings, built on demand (fallback for
+    /// the closed form).
+    pub full_symbols: &'a dyn Fn() -> (Symbols, Vec<String>),
     pub excite: &'a crate::ss::Excite,
     pub out: usize,
     pub rf: usize,
@@ -1334,7 +1335,15 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 // for the noise: redo the closed form on the full model. If
                 // that fails, the reduced form is known wrong: give the reason
                 // instead.
-                v = match closed(c.full, &(c.full_symbols)()).and_then(|r| r) {
+                // Its symbols' warnings (e.g. a match the full model rejects)
+                // describe the form now given.
+                let (fs, fw) = (c.full_symbols)();
+                for w in fw {
+                    if !warnings.contains(&w) {
+                        warnings.push(w);
+                    }
+                }
+                v = match closed(c.full, &fs).and_then(|r| r) {
                     Ok(lf) => low_freq_json(&lf, dc_ref, c.tol),
                     Err(why) => json!({
                         "unavailable": format!(
