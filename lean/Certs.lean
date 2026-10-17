@@ -1,5 +1,6 @@
 import Certs.bjt_ce_degen
 import Certs.bjt_diffpair
+import Certs.bjt_diffpair_dm
 import Certs.bjt_ef
 import Certs.bjt_pnp_ce
 import Certs.cccs
@@ -16,11 +17,16 @@ import Certs.nmos_cs
 import Certs.nmos_cs_body
 import Certs.nmos_cs_degen
 import Certs.nmos_diffpair
+import Certs.nmos_diffpair_cm
+import Certs.nmos_diffpair_dm
 import Certs.nmos_mirror
 import Certs.nmos_sf
 import Certs.nmos_triode
 import Certs.ota_5t
+import Certs.ota_5t_cm
+import Certs.ota_5t_dm
 import Certs.ota_miller
+import Certs.ota_miller_dm
 import Certs.pmos_cs
 import Certs.rc_lowpass
 import Certs.rlc_lowpass
