@@ -61,19 +61,25 @@ const SPICE_EXPONENT: Record<string, number> = {
   a: -18,
 };
 
+const SPACE =
+  "[\\t-\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*";
+const SPICE_NUMBER = new RegExp(
+  `^${SPACE}([+-]?(?:\\d+\\.?\\d*|\\.\\d+))(?:[eE]([+-]?\\d+))?([A-Za-z\\u00b5\\u03bc\\u03a9]*)${SPACE}$`,
+  "u",
+);
+
 /**
  * One SPICE number, read as the solver's `parse_value` reads it: `-0.45`,
  * `200u`, `1.2meg`, `10kohm`, `1a`, `5mil`. It refuses more (spaces, stray
  * characters, overflow) but never reads a different value.
  */
 export function parseSpiceNumber(text: string): number | null {
-  const match =
-    /^([+-]?(?:\d+\.?\d*|\.\d+))(?:e([+-]?\d+))?([a-z\u00b5\u03bcΩ]*)$/iu.exec(
-      text.trim(),
-    );
+  // Rust's trim() set (Unicode White_Space), and ASCII-only case folding as
+  // in to_ascii_lowercase(): `/i` would also fold K (Kelvin) to k.
+  const match = SPICE_NUMBER.exec(text);
   if (!match) return null;
   const [, mantissa = "", exponent = "0", unit = ""] = match;
-  const letters = unit.toLowerCase();
+  const letters = unit.replace(/[A-Z]/gu, (letter) => letter.toLowerCase());
   const scale = letters.startsWith("meg")
     ? 6
     : (SPICE_EXPONENT[letters[0] ?? ""] ?? 0);

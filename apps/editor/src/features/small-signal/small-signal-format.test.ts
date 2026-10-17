@@ -127,6 +127,14 @@ describe("model parameters", () => {
       ["1 k", null],
       ["1,5", null],
       ["1k2", null],
+      // Only ASCII case folds, as in the solver's to_ascii_lowercase().
+      ["200\u039c", null],
+      ["1\u212a", null],
+      ["1\u017fec", null],
+      ["10\u03c9", null],
+      ["\u00a010k\u2003", 10e3],
+      ["\u008510k", 10e3],
+      ["\ufeff10k", null],
     ];
     for (const [text, value] of cases)
       expect([text, parseSpiceNumber(text)]).toEqual([text, value]);
