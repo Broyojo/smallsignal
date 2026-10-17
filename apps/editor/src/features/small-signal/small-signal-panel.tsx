@@ -605,8 +605,9 @@ const NOISE_KIND: Record<string, string> = {
   shot_b: "shot (b)",
 };
 
-/** √PSD as a spectral density, e.g. 3.88 nV/√Hz. */
-export function formatDensity(v2: number, unit: string): string {
+/** √PSD as a spectral density, e.g. 3.88 nV/√Hz; "—" where not finite. */
+export function formatDensity(v2: number | null, unit: string): string {
+  if (v2 === null || !Number.isFinite(v2)) return "—";
   const base = unit.startsWith("A") ? "A" : "V";
   return `${formatEngineering(Math.sqrt(v2), base)}/√Hz`;
 }
@@ -632,18 +633,47 @@ function sentence(text: string): string {
   return /[.!?]$/u.test(capital) ? capital : `${capital}.`;
 }
 
-/** The largest sources, then one row for the rest. */
+/**
+ * The largest sources, then one row for the rest (including any the solver
+ * already summed). Sources without a finite share are left out.
+ */
 export function topContributions(
   sources: readonly NoiseContribution[],
+  omittedFraction = 0,
   limit = 4,
 ): { label: string; fraction: number }[] {
-  const sorted = [...sources].sort((a, b) => b.fraction - a.fraction);
+  const sorted = sources
+    .filter((source): source is NoiseContribution & { fraction: number } =>
+      Number.isFinite(source.fraction),
+    )
+    .sort((a, b) => b.fraction - a.fraction);
   const rows = sorted.slice(0, limit).map((source) => ({
     label: `${source.element} ${NOISE_KIND[source.kind] ?? source.kind}`,
     fraction: source.fraction,
   }));
-  const rest = sorted.slice(limit).reduce((sum, s) => sum + s.fraction, 0);
+  const rest =
+    sorted.slice(limit).reduce((sum, s) => sum + s.fraction, 0) +
+    omittedFraction;
   return rest > 0 ? [...rows, { label: "others", fraction: rest }] : rows;
+}
+
+/** Warnings from a section's own solve that the main results don't show. */
+function ExtraWarnings({
+  warnings,
+  shown,
+}: {
+  warnings: readonly string[] | undefined;
+  shown: readonly string[] | undefined;
+}) {
+  const extra = (warnings ?? []).filter((text) => !shown?.includes(text));
+  if (!extra.length) return null;
+  return (
+    <div className="small-signal-alert is-warning" role="alert">
+      {extra.map((text) => (
+        <p key={text}>{sentence(text)}</p>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -668,9 +698,20 @@ function NoiseDetails({
     low?.simplified.latex && low.simplified.latex !== display?.latex
       ? low.simplified
       : null;
-  // The exact form, when the shown one differs from it (junction leakage).
-  const exact =
-    low?.exact.latex && low.exact.latex !== display?.latex ? low.exact : null;
+  // The exact form, when it differs from the display one (junction leakage
+  // dropped); null when it is too large to typeset.
+  const exactLatex = low?.exact.latex ?? null;
+  const displayIsExact = Boolean(
+    display && (display.same || exactLatex === display.latex),
+  );
+  const exactContent =
+    exactLatex && exactLatex !== display?.latex
+      ? exactLatex
+      : displayIsExact
+        ? display!.latex
+        : null;
+  const displayError = display?.relError ?? 0;
+  const displayEquals = displayIsExact || displayError < INVISIBLE_ERROR;
   // As on the result cards: a long form would bury the readable one.
   const long =
     !display?.latex ||
@@ -685,34 +726,43 @@ function NoiseDetails({
   );
   const sources = noise.contributors[0];
   const integrated = noise.integrated;
+  const exactDisclosure = (
+    <details className="small-signal-exact">
+      <summary>Exact</summary>
+      {exactContent ? (
+        <Formula latex={`${symbol} = ${exactContent}`} />
+      ) : (
+        <p className="small-signal-muted">
+          The exact expression is too large to typeset.
+        </p>
+      )}
+    </details>
+  );
   return (
     <>
       {leadSimpler ? (
         <>
           <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
           <small className="small-signal-muted">{simplerNote}</small>
-          <details className="small-signal-exact">
-            <summary>Exact</summary>
-            <Formula
-              latex={`${symbol} = ${(exact ?? display ?? simpler).latex}`}
-            />
-          </details>
+          {exactDisclosure}
         </>
       ) : display ? (
         <>
-          <Formula latex={`${symbol} = ${display.latex}`} />
+          <Formula
+            latex={`${symbol} ${displayEquals ? "=" : "\\approx"} ${display.latex}`}
+          />
+          {displayEquals ? null : (
+            <small className="small-signal-muted">
+              neglecting junction leakage ({formatPercent(displayError)})
+            </small>
+          )}
           {simpler ? (
             <div className="small-signal-simpler">
               <Formula latex={`\\approx ${simpler.latex}`} />
               <small>{simplerNote}</small>
             </div>
           ) : null}
-          {exact ? (
-            <details className="small-signal-exact">
-              <summary>Exact</summary>
-              <Formula latex={`${symbol} = ${exact.latex}`} />
-            </details>
-          ) : null}
+          {displayIsExact ? null : exactDisclosure}
         </>
       ) : null}
       {(leadSimpler || display) && flicker ? (
@@ -755,7 +805,10 @@ function NoiseDetails({
         <table className="small-signal-values" aria-label="Noise sources">
           <caption>Sources at {formatEngineering(sources.f, "Hz")}</caption>
           <tbody>
-            {topContributions(sources.sources).map((row) => (
+            {topContributions(
+              sources.sources,
+              sources.omitted?.fraction ?? 0,
+            ).map((row) => (
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>
                 <td>{formatPercent(row.fraction)}</td>
@@ -1191,13 +1244,16 @@ export function SmallSignalPanel({
   const noiseKey =
     noiseOpen && requestKey ? JSON.stringify([requestKey, band]) : null;
   useEffect(() => {
+    // A new job, or none: drop the old result and any solve in flight, so
+    // the section never shows numbers for a different circuit or band.
+    const current = ++noiseGeneration.current;
+    setNoiseResponse(null);
     if (!noiseKey) return;
     const [key, range] = JSON.parse(noiseKey) as [
       string,
       [number, number] | null,
     ];
     const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
-    const current = ++noiseGeneration.current;
     const timer = setTimeout(() => {
       extraClientRef.current ??= createSmallSignalClient();
       void extraClientRef.current
@@ -1474,12 +1530,18 @@ export function SmallSignalPanel({
                   ) : isSmallSignalError(noiseResponse) ? (
                     <p className="small-signal-muted">{noiseResponse.error}</p>
                   ) : noiseResponse.noise ? (
-                    <NoiseDetails
-                      noise={noiseResponse.noise}
-                      current={inputSource?.kind === "current"}
-                      band={noiseBand}
-                      onBand={setNoiseBand}
-                    />
+                    <>
+                      <ExtraWarnings
+                        warnings={noiseResponse.warnings}
+                        shown={result.warnings}
+                      />
+                      <NoiseDetails
+                        noise={noiseResponse.noise}
+                        current={inputSource?.kind === "current"}
+                        band={noiseBand}
+                        onBand={setNoiseBand}
+                      />
+                    </>
                   ) : null}
                 </div>
               </details>

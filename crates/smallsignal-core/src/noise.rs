@@ -793,6 +793,10 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     if let Some(band) = c.band {
         check_band(band)?;
     }
+    // A one-sided spectrum: flicker's f^-AF has no meaning below 0 Hz.
+    if let Some(f) = c.freqs.iter().find(|&&f| f < 0.0) {
+        return Err(format!("noise frequencies must be 0 Hz or more (got {f})"));
+    }
     let srcs = sources(c.net, c.op);
     let mult_of = |name: &str| {
         c.net
@@ -858,6 +862,10 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 input.push((f, Some(total / g2)));
                 let mut items: Vec<(usize, f64)> = parts.iter().copied().enumerate().collect();
                 items.sort_by(|a, b| b.1.total_cmp(&a.1));
+                // The largest sources; the rest as one count and share, so the
+                // output stays bounded with thousands of sources.
+                let rest = items.split_off(items.len().min(MAX_CONTRIBUTORS));
+                let rest_v2: f64 = rest.iter().map(|&(_, v)| v).sum();
                 let list: Vec<Value> = items
                     .iter()
                     .map(|&(k, v)| {
@@ -868,7 +876,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                         })
                     })
                     .collect();
-                contributors.push(json!({ "f": f, "sources": list }));
+                let mut point = json!({ "f": f, "sources": list });
+                if !rest.is_empty() {
+                    point["omitted"] = json!({
+                        "count": rest.len(), "v2": num_or_null(rest_v2),
+                        "fraction": num_or_null(if total > 0.0 { rest_v2 / total } else { 0.0 }),
+                    });
+                }
+                contributors.push(point);
             }
             None => {
                 output.push((f, None));
@@ -1002,6 +1017,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         "inputLowFreq": input_low,
     }))
 }
+
+/// Sources listed per frequency; any more are summed into `omitted`.
+pub const MAX_CONTRIBUTORS: usize = 32;
 
 /// 159.155 kHz.
 fn hz_text(f: f64) -> String {

@@ -485,3 +485,31 @@ fn band_rel_error_comes_from_the_band_solves() {
     // Well-conditioned spectrum point, ill-conditioned band.
     assert!(rel_err([1.0], [1e8, 1e9]) > 1e-5);
 }
+
+/// A one-sided spectrum: a negative frequency is an error, not a pole.
+#[test]
+fn negative_noise_frequencies_are_rejected() {
+    let r = req(json!({ "input": "VIN", "output": "out", "noise": true, "freqs": [-1.0, 1e3] }));
+    let err = analyze(CS, &r).unwrap_err();
+    assert!(err.contains("0 Hz or more"), "{err}");
+}
+
+/// Many sources: each frequency lists the 32 largest and sums the rest, so
+/// the output stays bounded; the shares still add up to one.
+#[test]
+fn contributors_are_bounded_per_frequency() {
+    let mut net = String::from("many\nVIN in 0 DC 0 AC 1\nRS in out 1k\n");
+    for k in 0..100 {
+        net.push_str(&format!("R{k} out 0 {}k\n", 100 + k));
+    }
+    let r = req(json!({ "input": "VIN", "output": "out", "noise": true, "freqs": [1e3, 1e6] }));
+    let out = run(&net, &r);
+    for point in out["noise"]["contributors"].as_array().unwrap() {
+        let listed = point["sources"].as_array().unwrap();
+        assert_eq!(listed.len(), 32);
+        assert_eq!(point["omitted"]["count"], 101 - 32);
+        let total: f64 = listed.iter().map(|s| s["fraction"].as_f64().unwrap()).sum::<f64>()
+            + point["omitted"]["fraction"].as_f64().unwrap();
+        assert!((total - 1.0).abs() < 1e-12, "{total}");
+    }
+}

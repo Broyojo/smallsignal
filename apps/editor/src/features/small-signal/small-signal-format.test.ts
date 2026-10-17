@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SmallSignalSource } from "@icm/small-signal";
 import {
   differentialPairs,
+  formatDensity,
   formatPlain,
   formatSpiceNumber,
   modelOverrides,
@@ -13,6 +14,7 @@ import {
   preferredOutput,
   readModelText,
   signalLabel,
+  topContributions,
 } from "./small-signal-panel";
 
 describe("formatPlain", () => {
@@ -217,5 +219,32 @@ describe("noise band", () => {
     expect(noiseBandRange("1a, 1t")).toEqual([1e-18, 1e12]);
     expect(noiseBandRange("1a, 1e30")).toBeNull();
     expect(noiseBandRange("1, 2, 3")).toBeNull();
+  });
+});
+
+describe("noise values", () => {
+  it("writes a density, or a dash where the PSD is not finite", () => {
+    expect(formatDensity(3.4969e-17, "V^2/Hz")).toBe("5.913 nV/√Hz");
+    expect(formatDensity(1e-24, "A^2/Hz")).toBe("1 pA/√Hz");
+    expect(formatDensity(null, "V^2/Hz")).toBe("—");
+  });
+
+  it("lists the largest sources and folds the rest, solver-omitted too", () => {
+    const source = (element: string, fraction: number | null) => ({
+      element,
+      kind: "thermal",
+      v2: fraction,
+      fraction,
+    });
+    expect(
+      topContributions(
+        [source("R1", 0.5), source("M1", null), source("R2", 0.3)],
+        0.2,
+        1,
+      ),
+    ).toEqual([
+      { label: "R1 thermal", fraction: 0.5 },
+      { label: "others", fraction: 0.5 },
+    ]);
   });
 });

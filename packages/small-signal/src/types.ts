@@ -130,16 +130,17 @@ export interface MatchCandidate {
 /** A PSD at one frequency, in the spectrum's unit (V²/Hz or A²/Hz). */
 export interface NoisePoint {
   f: number;
-  v2: number;
+  /** null where the PSD is not finite (flicker at 0 Hz, no gain). */
+  v2: number | null;
 }
 
 export interface NoiseContribution {
   element: string;
   /** thermal, flicker, shot, shot_c (collector) or shot_b (base). */
   kind: string;
-  /** Its share of the output PSD, in V²/Hz. */
-  v2: number;
-  fraction: number;
+  /** Its share of the output PSD, in V²/Hz (null when not finite). */
+  v2: number | null;
+  fraction: number | null;
 }
 
 /** One closed form of the input-referred white (thermal + shot) PSD. */
@@ -160,7 +161,12 @@ export interface SmallSignalNoise {
   outputUnit: string;
   output: NoisePoint[];
   input: NoisePoint[];
-  contributors: { f: number; sources: NoiseContribution[] }[];
+  /** The largest sources per frequency; the rest summed in `omitted`. */
+  contributors: {
+    f: number;
+    sources: NoiseContribution[];
+    omitted?: { count: number; v2: number | null; fraction: number | null };
+  }[];
   integrated: {
     fLow: number;
     fHigh: number;

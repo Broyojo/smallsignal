@@ -123,9 +123,9 @@ impl Exp for Arr {
     fn checked_add(&self, o: &Self) -> Option<Self> {
         let mut r = [0; ARR];
         let mut over = false;
-        for i in 0..ARR {
-            let (s, c) = self.0[i].overflowing_add(o.0[i]);
-            r[i] = s;
+        for (slot, (a, b)) in r.iter_mut().zip(self.0.iter().zip(&o.0)) {
+            let (s, c) = a.overflowing_add(*b);
+            *slot = s;
             over |= c;
         }
         (!over).then_some(Arr(r))
@@ -134,11 +134,7 @@ impl Exp for Arr {
         Arr(std::array::from_fn(|i| self.0[i].wrapping_add(o.0[i])))
     }
     fn any_below(&self, o: &Self) -> bool {
-        let mut below = false;
-        for i in 0..ARR {
-            below |= self.0[i] < o.0[i];
-        }
-        below
+        self.0.iter().zip(&o.0).any(|(a, b)| a < b)
     }
     fn minus(&self, o: &Self) -> Self {
         Arr(std::array::from_fn(|i| self.0[i] - o.0[i]))
