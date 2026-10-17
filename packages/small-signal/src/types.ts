@@ -106,6 +106,16 @@ export type DeviceOperatingPoint =
   | BjtOperatingPoint
   | ({ type: string } & Record<string, number | string>);
 
+export interface SmallSignalParam {
+  name: string;
+  latex: string;
+  value: number;
+  unit: string;
+  element: string;
+  /** All elements a merged (matched) symbol stands for. */
+  elements?: string[];
+}
+
 export interface MatchCandidate {
   elements: string[];
   kind: "device" | "passive";
@@ -126,6 +136,8 @@ export interface SmallSignalResult {
    * (and bias, in numeric mode), and passives with equal values.
    */
   matchCandidates?: MatchCandidate[];
+  /** Every symbol in the equations and the elements it stands for. */
+  params?: SmallSignalParam[];
   gain?: SmallSignalQuantity;
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;

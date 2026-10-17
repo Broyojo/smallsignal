@@ -31,6 +31,7 @@ import {
   type SmallSignalSource,
   type SmallSignalQuantity,
   type SmallSignalRequest,
+  type SmallSignalResult,
   type SmallSignalResponse,
 } from "@icm/small-signal";
 import {
@@ -465,6 +466,86 @@ function BiasTable({
   );
 }
 
+/** Junction leakage symbols appear only in the Exact form: not listed. */
+const LEAKAGE_SYMBOL = /^r_\{b[sd]/u;
+
+/**
+ * Which transistor each symbol belongs to, one line per device or matched
+ * group: "M1: g_m1, r_o1", "M1, M2: g_m1,2, r_o1,2". A matched group's name
+ * is a toggle that treats its devices separately; an unmatched candidate
+ * pair gets a "Match" toggle.
+ */
+function SymbolLegend({
+  result,
+  onToggle,
+}: {
+  result: SmallSignalResult;
+  onToggle(key: string, on: boolean): void;
+}) {
+  const groups = new Map<string, { elements: string[]; latex: string[] }>();
+  for (const param of result.params ?? []) {
+    const elements = param.elements ?? [param.element];
+    if (!elements.every((name) => /^[MQ]/iu.test(name))) continue;
+    if (LEAKAGE_SYMBOL.test(param.latex)) continue;
+    const key = elements.join("=");
+    const group = groups.get(key) ?? { elements, latex: [] };
+    group.latex.push(param.latex);
+    groups.set(key, group);
+  }
+  if (!groups.size) return null;
+  const candidates = result.matchCandidates ?? [];
+  const applied = new Set(
+    candidates
+      .filter((candidate) => candidate.applied)
+      .map((candidate) => candidate.elements.join("=")),
+  );
+  const unapplied = candidates.filter(
+    (candidate) => candidate.applied === false && candidate.kind === "device",
+  );
+  const rows = [...groups.entries()].sort(([a], [b]) =>
+    a.localeCompare(b, undefined, { numeric: true }),
+  );
+  return (
+    <section className="small-signal-legend" aria-label="Symbols">
+      {rows.map(([key, group]) => (
+        <div key={key} className="small-signal-legend-row">
+          {applied.has(key) ? (
+            <button
+              type="button"
+              aria-pressed
+              title="Matched: they share these symbols. Click to treat them separately."
+              onClick={() => onToggle(key, true)}
+            >
+              {group.elements.join(", ")}
+            </button>
+          ) : (
+            <b>{group.elements.join(", ")}</b>
+          )}
+          <Formula latex={group.latex.join(",\\ ")} />
+        </div>
+      ))}
+      {unapplied.length ? (
+        <div className="small-signal-legend-row is-actions">
+          {unapplied.map((candidate) => {
+            const key = candidate.elements.join("=");
+            return (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={false}
+                title="Click to match them: they would share one set of symbols."
+                onClick={() => onToggle(key, false)}
+              >
+                Match {candidate.elements.join(", ")}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 /** `v_{out}` for a net named Vout or out, `i_{1}` for a source named I1. */
 export function signalLabel(letter: "v" | "i", name: string): string {
   const body = new RegExp(`^${letter}(?=.)`, "iu").test(name)
@@ -853,45 +934,18 @@ export function SmallSignalPanel({
               </div>
             ) : null}
 
-            {result?.matchCandidates?.length ? (
-              <div className="small-signal-match" aria-label="Matched pairs">
-                <span>Matched</span>
-                {[...result.matchCandidates]
-                  .sort((a, b) =>
-                    (a.elements[0] ?? "").localeCompare(
-                      b.elements[0] ?? "",
-                      undefined,
-                      { numeric: true },
-                    ),
-                  )
-                  .map((candidate) => {
-                    const pair = candidate.elements;
-                    const key = pair.join("=");
-                    const on = candidate.applied ?? !unmatched.has(key);
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        aria-pressed={on}
-                        title={
-                          on
-                            ? "Shares one set of symbols. Click to treat separately."
-                            : "Click to treat as a matched pair."
-                        }
-                        onClick={() =>
-                          setUnmatched((prev) => {
-                            const next = new Set(prev);
-                            if (on) next.add(key);
-                            else next.delete(key);
-                            return next;
-                          })
-                        }
-                      >
-                        {`${matchedSubscript(pair)} = ${pair.join(", ")}`}
-                      </button>
-                    );
-                  })}
-              </div>
+            {result ? (
+              <SymbolLegend
+                result={result}
+                onToggle={(key, on) =>
+                  setUnmatched((prev) => {
+                    const next = new Set(prev);
+                    if (on) next.add(key);
+                    else next.delete(key);
+                    return next;
+                  })
+                }
+              />
             ) : null}
 
             {pinsNeedingBias.length || otherUnknown.length ? (
