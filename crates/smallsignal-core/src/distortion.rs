@@ -520,29 +520,33 @@ impl Probe<'_> {
     }
 
     /// The size of what each H_n's node responses are summed from, per
-    /// input unit^n: for v_out and v_ref, their KCL row solved for the
-    /// node, x_c = (rhs_c − Σ_{k≠c} A_ck·x_k)/A_cc, gives
-    /// (|rhs_c| + Σ_{k≠c} |A_ck·x_k|)/|A_cc| (at least |x_c|). A notch at
-    /// the output (branch currents that cancel) leaves H_n a roundoff
+    /// input unit^n. A node voltage x_c is the sum its defining rows give:
+    /// its KCL row (when A_cc != 0), x_c = (rhs_c − Σ_{k≠c} A_ck·x_k)/A_cc,
+    /// and every constraint row with a coefficient on it (a voltage
+    /// source, VCVS or inductor branch), x_c = (rhs_r − Σ_{k≠c} A_rk·x_k)/
+    /// A_rc. Its size is the largest over those rows of (|rhs| + Σ_{k≠c}
+    /// |A·x_k|)/|A_·c|, where in a constraint row each other node voltage
+    /// counts with its own size (recursively, each node once), so a
+    /// buffered notch is as large as the notch it buffers. It never rests
+    /// on |x_c| alone: a notch (branch currents that cancel at a node, or
+    /// node voltages that do through a buffer) leaves x_c a roundoff
     /// residual of this size.
     fn node_terms(&self, x: &[Vec<Complex64>; 3], f: f64) -> [f64; 3] {
         let dim = self.sys.dim;
+        let mut is_node = vec![false; dim];
+        for c in self.sys.node_col.iter().flatten() {
+            is_node[*c] = true;
+        }
         let mut terms = [0.0; 3];
         for n in 0..3 {
             let a = matrix_at(self.sys, self.ss, jw(f * (n + 1) as f64));
+            let mut memo: Vec<Option<f64>> = vec![None; dim];
+            let mut busy = vec![false; dim];
             let mut sum = 0.0;
             for node in [self.out, self.rf] {
-                let Some(c) = self.sys.node_col[node] else { continue };
-                let row = &a[c * dim..(c + 1) * dim];
-                let xc = x[n][c].norm();
-                let diag = row[c].norm();
-                if diag == 0.0 {
-                    sum += xc;
-                    continue;
+                if let Some(c) = self.sys.node_col[node] {
+                    sum += node_size(&a, dim, &x[n], &is_node, c, &mut memo, &mut busy);
                 }
-                let off: f64 = (0..dim).filter(|&k| k != c).map(|k| (row[k] * x[n][k]).norm()).sum();
-                let rhs = (0..dim).map(|k| row[k] * x[n][k]).sum::<Complex64>().norm();
-                sum += ((off + rhs) / diag).max(xc);
             }
             terms[n] = sum / self.vid.abs().powi(n as i32 + 1);
         }
@@ -643,6 +647,48 @@ impl Probe<'_> {
         let x3 = lu3.as_ref().unwrap_or(&lu1).solve(&rhs3);
         Some([x1, x2, x3])
     }
+}
+
+/// `Probe::node_terms` for node column c of A·x = b (A dim × dim, row
+/// major): the largest over its defining rows of the size of the sum that
+/// row gives for x_c (see there), at least |x_c|.
+fn node_size(
+    a: &[Complex64],
+    dim: usize,
+    x: &[Complex64],
+    is_node: &[bool],
+    c: usize,
+    memo: &mut Vec<Option<f64>>,
+    busy: &mut Vec<bool>,
+) -> f64 {
+    if let Some(v) = memo[c] {
+        return v;
+    }
+    busy[c] = true;
+    let mut size = x[c].norm();
+    for r in 0..dim {
+        let arc = a[r * dim + c].norm();
+        // Its KCL row, and the constraint rows on it (other nodes' KCL
+        // rows only couple it).
+        if arc == 0.0 || (r != c && is_node[r]) || (r == c && !is_node[c]) {
+            continue;
+        }
+        let row = &a[r * dim..(r + 1) * dim];
+        let rhs = (0..dim).map(|k| row[k] * x[k]).sum::<Complex64>().norm();
+        let mut s = rhs;
+        for k in (0..dim).filter(|&k| k != c && row[k].norm() != 0.0) {
+            let xk = if r != c && is_node[k] && !busy[k] {
+                node_size(a, dim, x, is_node, k, memo, busy)
+            } else {
+                x[k].norm()
+            };
+            s += row[k].norm() * xk;
+        }
+        size = size.max(s / arc);
+    }
+    busy[c] = false;
+    memo[c] = Some(size);
+    size
 }
 
 /// Coefficients that may be left out of the closed form: exact zeros, then

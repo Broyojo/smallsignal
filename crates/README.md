@@ -233,9 +233,13 @@ transfer cofactors. Response `distortion`:
   that residual numerically). The difference is
   relative to the largest of the two values and the size of the terms a_n
   sums: each Taylor coefficient's part Σ|K·∂a_n/∂K|, and for v_out and
-  v_ref the size of what their KCL row sums, (|rhs_c| + Σ_{k≠c} |A_ck·x_k|)/|A_cc|,
-  so an a_n that cancels exactly (a matched pair's a₂) is not compared with
-  its numeric roundoff alone.
+  v_ref the largest size of the sum a defining row gives for x_c,
+  (|rhs_r| + Σ_{k≠c} |A_rk|·s_k)/|A_rc|, over its KCL row (A_cc ≠ 0) and
+  each constraint row on it (voltage source, VCVS, inductor), where s_k is
+  |x_k| in a KCL row and node k's own size (recursively) in a constraint
+  row, so a buffered node is as large as what it buffers. An a_n that
+  cancels exactly (a matched pair's a₂) is then not compared with its
+  numeric roundoff alone.
 - Every field is always present. A quantity whose exact closed form would
   exceed 100k terms or `maxTerms` (its numerator, or the D^{2n−1} under it;
   e.g. a 5T OTA's a₃ with junction leakage kept), or every quantity when the

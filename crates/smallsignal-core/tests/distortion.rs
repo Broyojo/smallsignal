@@ -877,35 +877,47 @@ fn a_notch_in_the_fundamental_is_zero_to_roundoff() {
     // f = 0.1591549430918953 (2 ulp off the float nearest 1/(2π)) the LU
     // leaves H1 a residual of order 1e-16 of the currents it sums, which
     // is 0 to roundoff: HD_n is infinite where H_n != 0 and unavailable
-    // where H_n = 0 too (the differential H2, 0 by symmetry).
-    let net = "trap\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail tail nm W=10u L=1u\n\
+    // where H_n = 0 too (the differential H2, 0 by symmetry). Buffering
+    // the drains with ideal VCVSs (whose output rows have no diagonal),
+    // loaded or not, must not change that.
+    let base = "trap\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail tail nm W=10u L=1u\n\
 M2 o2 inn tail tail nm W=10u L=1u\nRT tail 0 2k\nL1 o1 t1 1\nC1 t1 0 1\nL2 o2 t2 1\nC2 t2 0 1\n\
-VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n";
+    let model = ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
     let f = 0.1591549430918953;
-    let rq = |output: &str, reff: Option<&str>| {
+    let rq = |extra: &str, output: &str, reff: Option<&str>| {
         let mut v = json!({ "input": "VIP", "inputNeg": "VINN", "mode": "differential", "output": output,
                             "nonlinear": ["M1", "M2"], "freqs": [f, 1e-3, f * (1.0 + 1e-6)],
                             "match": [["M1", "M2"], ["RD1", "RD2"], ["L1", "L2"], ["C1", "C2"]] });
         if let Some(r) = reff {
             v["ref"] = json!(r);
         }
-        run(net, &req(v))
+        run(&format!("{base}{extra}{model}"), &req(v))
     };
-    // Differential: H2 = 0, H3 != 0.
-    let r = rq("o1", Some("o2"));
-    let p = &r["distortion"]["vsFreq"][0];
-    assert!(p["hd2"].is_null() && p.get("hd2Infinite").is_none(), "{p}");
-    assert!(p["hd3"].is_null() && p["hd3Infinite"] == true, "{p}");
-    // Away from the notch, even 1e-6 off it, HD3 is finite.
-    for p in &r["distortion"]["vsFreq"].as_array().unwrap()[1..] {
-        assert!(
-            p["hd3"].as_f64().unwrap() > 0.0 && p.get("hd3Infinite").is_none(),
-            "{p}"
-        );
+    let buffers = "EOUT out 0 o1 o2 1\nESE se 0 o1 0 1\n";
+    // (netlist extra, output, ref, H2 != 0 at the output).
+    let cases = [
+        ("", "o1", Some("o2"), false),
+        ("", "o1", None, true),
+        (buffers, "out", None, false),
+        (buffers, "se", None, true),
+        ("EOUT out 0 o1 o2 1\nRL out 0 1k\n", "out", None, false),
+        ("ESE se 0 o1 0 1\nRL se 0 1meg\n", "se", None, true),
+    ];
+    for (extra, output, reff, h2) in cases {
+        let r = rq(extra, output, reff);
+        let vs = r["distortion"]["vsFreq"].as_array().unwrap();
+        let p = &vs[0];
+        let what = format!("{extra:?} {output}: {p}");
+        assert!(p["hd2"].is_null() && p["hd3"].is_null(), "{what}");
+        assert_eq!(p.get("hd2Infinite").is_some(), h2, "{what}");
+        assert_eq!(p["hd3Infinite"], true, "{what}");
+        // Away from the notch, even 1e-6 off it, HD is finite.
+        for p in &vs[1..] {
+            assert!(
+                p["hd3"].as_f64().unwrap() > 0.0 && p.get("hd3Infinite").is_none() && p.get("hd2Infinite").is_none(),
+                "{extra:?} {output}: {p}"
+            );
+        }
     }
-    // Single-ended: H2 != 0 as well (RT passes common-mode current).
-    let r = rq("o1", None);
-    let p = &r["distortion"]["vsFreq"][0];
-    assert!(p["hd2"].is_null() && p["hd2Infinite"] == true, "{p}");
-    assert!(p["hd3"].is_null() && p["hd3Infinite"] == true, "{p}");
 }
