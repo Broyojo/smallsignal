@@ -315,9 +315,9 @@ impl Numeric<'_> {
     /// lim f→0 of |Z(j2πf)|²·c/f^x for each flicker source (x > 0) whose
     /// transfer Z vanishes at s = 0. With Z(s) = Σ z_n sⁿ and k the order of
     /// its zero (the first z_n ≠ 0): 0 when 2k > x, c·|z_k|²·(2π)^{2k} when
-    /// 2k = x, ∞ when 2k < x. The z_n come from the Taylor series of the
-    /// adjoint: with A(s) = Σ A_d s^d, A₀ᵀ y_n = −Σ_{d≥1} A_dᵀ y_{n−d}, on
-    /// the LU of A₀ᵀ already factored. A zero is an exact floating-point zero,
+    /// 2k = x, ∞ when 2k < x (0 when Z ≡ 0). The z_n come from the Taylor
+    /// series of the adjoint: with A(s) = Σ A_d s^d,
+    /// A₀ᵀ y_n = −Σ_{d≥1} A_dᵀ y_{n−d}, on the LU of A₀ᵀ already factored. A zero is an exact floating-point zero,
     /// as for z₀ (a transfer that only rounds to zero counts as nonzero, so
     /// an unresolved case is ∞, never a dropped term).
     fn dc_limits(&self, y0: &[Complex64], lu: &ScaledLu, srcs: &[Source], z2: &[f64]) -> Vec<Option<f64>> {
@@ -328,15 +328,17 @@ impl Numeric<'_> {
         if (0..srcs.len()).all(|k| wanted(k).is_none()) {
             return Vec::new();
         }
-        // Orders beyond this are not expanded: a source still zero there is
-        // left unresolved (∞).
-        const MAX_ORDER: usize = 64;
+        // Z(s) = N(s)/D(s) with D(0) ≠ 0 (A₀ factored) and N of degree at
+        // most the number of reactive parameters (every monomial holds each
+        // parameter at most once). So a Z still zero through that order is
+        // identically zero, and no larger order is ever needed.
+        let degree = self.ss.reactive_mask.count_ones() as usize;
         let top = (0..srcs.len())
             .filter_map(wanted)
             .map(|x| (x / 2.0).floor() as usize)
             .max()
             .unwrap_or(0);
-        let orders = top.min(MAX_ORDER);
+        let orders = top.min(degree);
         let n = self.sys.dim;
         let coeffs = if orders > 0 {
             s_coeffs(self.sys, self.ss)
@@ -374,10 +376,9 @@ impl Numeric<'_> {
                     Some((o, z)) if 2.0 * o as f64 == x => c * z * (2.0 * std::f64::consts::PI).powi(2 * o as i32),
                     Some((o, _)) if 2.0 * o as f64 > x => 0.0,
                     Some(_) => f64::INFINITY,
-                    // Zero through every order with 2n ≤ x: the zero's order
-                    // exceeds x/2 (unless the expansion stopped short).
-                    None if (x / 2.0).floor() as usize <= MAX_ORDER => 0.0,
-                    None => f64::INFINITY,
+                    // Zero through every order with 2n ≤ x (the zero's order
+                    // exceeds x/2), or through the numerator's degree (Z ≡ 0).
+                    None => 0.0,
                 })
             })
             .collect()
@@ -1074,6 +1075,10 @@ pub struct Ctx<'a> {
 /// a notch of Q up to 5e8 is integrated (its zero is a breakpoint).
 const AXIS_REL: f64 = 1e-9;
 
+/// Relative accuracy of a computed gain zero's frequency (the roots of the
+/// exact numerator, to about 1e-15 on lossless notches).
+const ZERO_REL: f64 = 1e-12;
+
 /// Relative accuracy asked of the band integral.
 const INTEGRAL_RTOL: f64 = 1e-6;
 
@@ -1223,7 +1228,11 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 .iter()
                 .filter(|&&(re, im)| im != 0.0 && re.abs() <= AXIS_REL * im.abs())
                 .map(|&(_, im)| im.abs())
-                .filter(|&f0| f0 >= lo * (1.0 - 1e-9) && f0 <= hi * (1.0 + 1e-9))
+                // In the closed band: at an endpoint S_in ~ 1/(f − f0)² is
+                // not integrable either. A zero within ZERO_REL of an endpoint
+                // is taken to be at it (the root's own accuracy); one any
+                // farther outside leaves S_in finite across the band.
+                .filter(|&f0| f0 >= lo * (1.0 - ZERO_REL) && f0 <= hi * (1.0 + ZERO_REL))
                 .find(|&f0| match s_in(f0) {
                     Some(v) if v.is_infinite() => true,
                     Some(v) => [1.0 - 1e-4, 1.0 + 1e-4]
@@ -1322,10 +1331,17 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             let mut v = low_freq_json(&lf, dc_ref, c.tol);
             if v["check"]["ok"] == json!(false) && c.ss.params.len() != c.full.params.len() {
                 // A proven-negligible junction for the gain need not be one
-                // for the noise: redo the closed form on the full model.
-                if let Ok(Ok(lf)) = closed(c.full, &(c.full_symbols)()) {
-                    v = low_freq_json(&lf, dc_ref, c.tol);
-                }
+                // for the noise: redo the closed form on the full model. If
+                // that fails, the reduced form is known wrong: give the reason
+                // instead.
+                v = match closed(c.full, &(c.full_symbols)()).and_then(|r| r) {
+                    Ok(lf) => low_freq_json(&lf, dc_ref, c.tol),
+                    Err(why) => json!({
+                        "unavailable": format!(
+                            "{why} (the junctions omitted for the gain matter for the noise, so the closed form needs the full model)"
+                        )
+                    }),
+                };
             }
             if v["check"]["ok"] == json!(false) {
                 warnings.push(format!(
