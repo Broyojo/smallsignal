@@ -423,21 +423,25 @@ impl Expr {
     /// The same function with the common factors of numerator and
     /// denominator cancelled: what is left after pruning can share one the
     /// full form did not, e.g. (1 + g_m R_E) once the r_o terms are gone.
+    /// Whenever a factor cancels, even if as many terms are left.
     pub fn cancelled(self, syms: &[Sym]) -> Expr {
         let (n, d) = self.to_mna(syms);
         let (cn, cd) = crate::analyze::cancel(&n, &d);
-        if cn.terms.len() + cd.terms.len() < n.terms.len() + d.terms.len() {
+        if cn != n || cd != d {
             Expr::from_mna(&cn, &cd, syms)
         } else {
             self
         }
     }
 
-    /// `prune` levels for a tolerance, coarsest first. None is above `tol`
-    /// (or 1), so a pruned coefficient never moves by more than the
-    /// tolerance even where the overall error would allow it.
+    /// `prune` levels for a tolerance, coarsest first. None is above
+    /// 2·`tol` (or 1), so a pruned coefficient never moves by more than
+    /// twice the tolerance even where the overall error would allow it.
+    /// Twice: a coefficient may move a little more than the result does
+    /// (another part can share the error), but never by the half it took
+    /// to make a form that is no limit of the exact one.
     pub fn prune_levels(tol: f64) -> impl Iterator<Item = f64> {
-        let top = tol.min(1.0);
+        let top = (2.0 * tol).min(1.0);
         std::iter::once(top).chain(
             [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4]
                 .into_iter()
@@ -633,4 +637,46 @@ fn push_signed(out: &mut String, negative: bool, body: &str) {
         out.push_str(if negative { " - " } else { " + " });
     }
     out.push_str(body);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ss::Role;
+
+    fn sym(name: &str, value: f64) -> Sym {
+        Sym {
+            name: name.into(),
+            latex: name.into(),
+            value,
+            inverted: false,
+            reactive: false,
+            role: Role::Gm,
+            unit: "S",
+            elements: vec![name.into()],
+            output_r: false,
+            leakage: false,
+        }
+    }
+
+    /// A common factor whose cancellation leaves as many terms as before is
+    /// still cancelled: (1 − x³)/(y − x y) is (1 + x + x²)/y, three terms
+    /// and one against two and two. Before, the uncancelled form was kept.
+    #[test]
+    fn cancelled_even_when_the_term_count_stays() {
+        let syms = [sym("x", 2.0), sym("y", 3.0)];
+        let p = |ts: &[([u8; 2], i128)]| XPoly {
+            terms: ts.iter().map(|(e, c)| (e.to_vec(), *c)).collect(),
+        };
+        let e = Expr::from_mna(
+            &p(&[([0, 0], 1), ([3, 0], -1)]),
+            &p(&[([0, 1], 1), ([1, 1], -1)]),
+            &syms,
+        );
+        let c = e.clone().cancelled(&syms);
+        assert_eq!((c.num.len(), c.den.len()), (3, 1));
+        let s = Complex64::new(0.0, 1.0);
+        assert!((c.eval(s) - e.eval(s)).norm() <= 1e-12 * e.eval(s).norm());
+        assert!((c.eval(s) - Complex64::new(7.0 / 3.0, 0.0)).norm() <= 1e-12);
+    }
 }

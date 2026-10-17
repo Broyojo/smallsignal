@@ -125,7 +125,12 @@ pub fn analyze_json(netlist: &str, request: &str) -> String {
 }
 
 pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
-    let net = parse(text)?;
+    let mut net = parse(text)?;
+    let inputs: Vec<&str> = std::iter::once(req.input.as_str())
+        .chain(req.input_neg.as_deref())
+        .collect();
+    drop_shorted_branches(&mut net, &inputs)?;
+    let net = net;
     let find_source = |name: &str| -> Result<(usize, bool), String> {
         let i = net
             .element(name)
@@ -397,41 +402,62 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         },
     );
 
-    // The circuit's natural frequencies (the roots of its determinant, every
-    // source zeroed), from the full model's MNA matrix when D is over budget.
-    let numeric_modes = || -> Vec<Complex64> {
-        Pencil::new(&fsys.gain, &full, None)
-            .zip(crate::pencil::s_orders(&fsys.gain, &full, None))
-            .and_then(|(p, o)| p.roots(o))
-            .unwrap_or_default()
-    };
-    let modes = match &d {
-        _ if symbolic => None,
-        Some(d) => Some(Err(Expr::from_mna(
-            &XPoly::constant(1, symbols.syms.len()),
-            &x(d)?,
-            &symbols.syms,
-        ))),
-        None => Some(Ok(numeric_modes())),
-    };
-
-    // Stability at this bias.
-    let unstable = match &modes {
-        None => 0,
-        Some(Err(e)) => rhp_poles(e),
-        Some(Ok(roots)) => roots.iter().filter(|p| p.re > 1e-6 * p.norm()).count(),
-    };
-    match unstable {
-        0 => {}
-        1 => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
-        _ => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+    // Stability at this bias: the circuit's natural frequencies (the roots of
+    // its determinant, every source zeroed), on the full model with every
+    // parameter's own value. A junction conductance left out because no
+    // reported value moves can still move a marginal pole across the jω
+    // axis, and matched symbols carry one member's value. Exact while the
+    // full model's determinant fits the budget, else the roots of its MNA
+    // matrix (`pencil`).
+    let mut full_roots: Option<Vec<Complex64>> = None;
+    if !symbolic {
+        let d_full = match &d {
+            // The full determinant holds every monomial of D: over budget too.
+            None => None,
+            Some(d) if omitted.is_empty() => Some(d.clone()),
+            Some(_) => crate::det::det(&fsys.gain.a, max_terms)
+                .map(Some)
+                .or_else(|e| numeric_if_over_budget(symbolic, e))?,
+        };
+        let own = sym::unmerged(&full);
+        let exact = match d_full {
+            Some(df) => XPoly::from_poly(&df, &own.class, own.syms.len())
+                .map(Some)
+                .or_else(|e| numeric_if_over_budget(symbolic, e))?,
+            None => None,
+        };
+        let unstable = match exact {
+            Some(df) => Some(rhp_poles(&Expr::from_mna(
+                &XPoly::constant(1, own.syms.len()),
+                &df,
+                &own.syms,
+            ))),
+            None => {
+                full_roots = circuit_roots(&fsys.gain, &full);
+                full_roots
+                    .as_ref()
+                    .map(|r| r.iter().filter(|p| p.re > 1e-6 * p.norm()).count())
+            }
+        };
+        match unstable {
+            Some(0) => {}
+            Some(1) => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
+            Some(_) => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+            None => warnings.push("Stability not checked. Its poles were not found.".to_string()),
+        }
     }
 
     if req.noise || req.noise_band.is_some() {
-        let poles_hz: Vec<f64> = match &modes {
-            None => Vec::new(),
-            Some(Err(e)) => roots(&e.s_coeffs().1).iter().map(|p| p.norm() / (2.0 * PI)).collect(),
-            Some(Ok(roots)) => roots.iter().map(|p| p.norm() / (2.0 * PI)).collect(),
+        // Breakpoints for the band integral: the analysis model's natural
+        // frequencies, or the full model's when D is over budget (none when
+        // its roots were not found, as the integral refines regardless).
+        let poles_hz: Vec<f64> = match &d {
+            _ if symbolic => Vec::new(),
+            Some(d) => {
+                let e = Expr::from_mna(&XPoly::constant(1, symbols.syms.len()), &x(d)?, &symbols.syms);
+                roots(&e.s_coeffs().1).iter().map(|p| p.norm() / (2.0 * PI)).collect()
+            }
+            None => full_roots.iter().flatten().map(|p| p.norm() / (2.0 * PI)).collect(),
         };
         // The gain's zeros as reported (Hz), after common factors cancel.
         let zeros_hz: Vec<(f64, f64)> = resp["gain"]["zeros"]
@@ -1006,6 +1032,28 @@ impl Numeric<'_> {
     }
 }
 
+/// Finite roots (rad/s) of det A of `sys` with `ss`'s values, or with
+/// `border` of the Cramer numerator, given its lowest and highest power of s
+/// (`orders`, None when it vanishes identically: no roots). None when the
+/// pencil cannot find them.
+fn pencil_roots(
+    sys: &System,
+    ss: &SsCircuit,
+    border: Option<&[(usize, i128)]>,
+    orders: Option<(usize, usize)>,
+) -> Option<Vec<Complex64>> {
+    match orders {
+        None => Some(Vec::new()),
+        Some(o) => Pencil::new(sys, ss, border)?.roots(o),
+    }
+}
+
+/// The circuit's natural frequencies (rad/s), the roots of det A, every
+/// source zeroed. None when the pencil cannot find them.
+fn circuit_roots(sys: &System, ss: &SsCircuit) -> Option<Vec<Complex64>> {
+    pencil_roots(sys, ss, None, crate::pencil::s_orders(sys, ss, None))
+}
+
 fn poly_add(a: &Poly, b: &Poly) -> Poly {
     let mut p = a.clone();
     p.add_scaled(b, 1);
@@ -1083,20 +1131,31 @@ fn degenerate_junctions(net: &Netlist) -> Vec<String> {
 /// mode has no operating point (the bias is unknown, even where the netlist
 /// holds placeholder values), so only the case the wiring decides: two
 /// MOSFETs of one type and model on a shared gate, one's drain on the
-/// other's source. Whenever the outer one conducts, the inner one has
-/// V_DS < V_GS − V_TH (its threshold is no higher), so it is in triode: the
-/// pair is one longer device.
+/// other's source, with both bulks on one node or each on its own source.
+/// Then the inner threshold is no higher: its reverse bulk-source bias is
+/// no larger (with one bulk node, the current flows from the outer source
+/// to the inner one, so the inner source is nearer the bulk's potential;
+/// with each bulk on its source, both are zero). Whenever the outer one
+/// conducts, the inner one has
+/// V_DS < V_GS − V_TH: it is in triode, and the pair is one longer device.
+/// With other bulk wiring, body effect can keep the inner one saturated.
 fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
     let (mut linear, mut warnings) = (Vec::new(), Vec::new());
     for (ei, inner) in net.elements.iter().enumerate() {
         let Kind::M { model: mi, .. } = &inner.kind else {
             continue;
         };
-        let (d, g, s) = (inner.nodes[0], inner.nodes[1], inner.nodes[2]);
+        let (d, g, s, b) = (inner.nodes[0], inner.nodes[1], inner.nodes[2], inner.nodes[3]);
         let stacked = d != s
             && net.elements.iter().enumerate().any(|(eo, outer)| match &outer.kind {
                 Kind::M { model: mo, .. } => {
-                    eo != ei && mo.ty == mi.ty && mo.name == mi.name && outer.nodes[1] == g && outer.nodes[2] == d
+                    let ob = outer.nodes[3];
+                    eo != ei
+                        && mo.ty == mi.ty
+                        && mo.name == mi.name
+                        && outer.nodes[1] == g
+                        && outer.nodes[2] == d
+                        && (ob == b || (b == s && ob == d))
                 }
                 _ => false,
             });
@@ -1106,6 +1165,74 @@ fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
         }
     }
     (linear, warnings)
+}
+
+/// V sources and inductors with both ends on one node. Nothing fixes their
+/// branch current, so the MNA system (at DC for an inductor) is singular.
+/// A 0 V source or an inductor there does nothing else: it is dropped and
+/// named as any element on one node is. A source with a value there
+/// contradicts itself, the input must drive something, and an F or H
+/// cannot sense an undefined current: those are errors naming it.
+fn drop_shorted_branches(net: &mut Netlist, inputs: &[&str]) -> Result<(), String> {
+    let mut index = vec![usize::MAX; net.elements.len()];
+    let mut kept = 0;
+    let mut dropped = Vec::new();
+    for (i, e) in net.elements.iter().enumerate() {
+        let zero = match e.kind {
+            Kind::V { dc, ac } => dc == 0.0 && ac == 0.0,
+            Kind::L { .. } => true,
+            _ => {
+                index[i] = kept;
+                kept += 1;
+                continue;
+            }
+        };
+        if e.nodes[0] != e.nodes[1] {
+            index[i] = kept;
+            kept += 1;
+            continue;
+        }
+        let at = &net.nodes[e.nodes[0]];
+        if inputs.iter().any(|n| n.trim().eq_ignore_ascii_case(&e.name)) {
+            return Err(format!("Input {} has both ends at {at}", e.name));
+        }
+        if !zero {
+            return Err(format!("{} has both ends at {at}. Remove it or make it 0 V.", e.name));
+        }
+        dropped.push(i);
+    }
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    for e in &net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = e.kind {
+            if index[ctrl] == usize::MAX {
+                let v = &net.elements[ctrl];
+                return Err(format!(
+                    "{} senses {}, which has both ends at {}",
+                    e.name, v.name, net.nodes[v.nodes[0]]
+                ));
+            }
+        }
+    }
+    for &i in &dropped {
+        let e = &net.elements[i];
+        net.warnings
+            .push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
+    }
+    let names: Vec<String> = dropped.iter().map(|&i| net.elements[i].name.clone()).collect();
+    net.missing.retain(|m| !names.iter().any(|n| n.eq_ignore_ascii_case(m)));
+    let mut k = 0;
+    net.elements.retain(|_| {
+        k += 1;
+        index[k - 1] != usize::MAX
+    });
+    for e in &mut net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = &mut e.kind {
+            *ctrl = index[*ctrl];
+        }
+    }
+    Ok(())
 }
 
 /// Cross-coupled transistor pairs (each one's gate/base on the other's
@@ -1151,11 +1278,12 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
             out.push(format!("{} has an open end at {}", users[0], net.nodes[n]));
         }
     }
-    // A two-terminal element with both ends on one node does nothing.
+    // A two-terminal element with both ends on one node does nothing (V
+    // and L there were dropped before the DC solve).
     for e in &net.elements {
         let two = matches!(
             e.kind,
-            Kind::R { .. } | Kind::C { .. } | Kind::L { .. } | Kind::D { .. } | Kind::V { .. } | Kind::I { .. }
+            Kind::R { .. } | Kind::C { .. } | Kind::D { .. } | Kind::I { .. }
         );
         if two && e.nodes[0] == e.nodes[1] {
             out.push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
@@ -1544,7 +1672,7 @@ impl Quantities<'_> {
 
         // Simplified form: the coarsest pruning of the display form whose
         // error (against the full model) stays in budget, with no single
-        // coefficient moved by more than the tolerance.
+        // coefficient moved by more than twice the tolerance.
         let mut simplified = display.clone();
         let mut simp_err = display_err;
         for eps in Expr::prune_levels(self.tol) {

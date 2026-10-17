@@ -43,7 +43,8 @@ with numeric values, poles and zeros, and the operating point.
    within each power of s, up to the coarsest pruning whose error over
    1 Hz–100 GHz stays within `tolerance`. Magnitude pruning (here, in noise
    and in distortion) moves no coefficient of a numerator or denominator by
-   more than `tolerance` of itself, drops terms of equal size together, and
+   more than 2·`tolerance` of itself (at most all of it), with the overall
+   error still within `tolerance`, drops terms of equal size together, and
    cancels the common factors left.
 
 ## Correctness checks
@@ -95,8 +96,7 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   independent stamp columns, at the trial shift σ whose eigenvalues spread
   least, then polished by Newton's method on det. No common factor is
   cancelled, as for an exact form too large for the GCD; `poleCount` and
-  `zeroCount` are their number. The unstable-bias warning then uses the
-  same roots of the circuit determinant. Noise `inputLowFreq` (unavailable:
+  `zeroCount` are their number. Noise `inputLowFreq` (unavailable:
   "too large for the exact closed form") and the distortion closed forms
   (`skipped`) are then not attempted: they expand the same circuit.
 
@@ -111,8 +111,10 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   r_{o1,2}, R_{D1,2}). Exact: merging happens after the multilinear solve, by
   mapping parameters onto symbols with exponents. In numeric mode a group
   merges only if its values agree to 1e-9 (else a warning says what differs);
-  symbolic mode assumes equality. `matchCandidates` lists pairs with the same
-  type, model and geometry (and, in numeric mode, small-signal values), plus
+  symbolic mode assumes equality. Devices in different regions (a triode r_o
+  against a saturated one) never merge ("M1 and M2 are in different regions,
+  not matched"). `matchCandidates` lists pairs with the same type, model,
+  geometry and region (and, in numeric mode, small-signal values), plus
   passives with equal values (`kind: "passive"`).
 - Common factors of numerator and denominator cancel (exact multivariate GCD),
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
@@ -136,8 +138,8 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   outside saturation (MOS triode, BJT saturation) stays finite in every
   leading-order form, with the region warning. Symbolic mode, which has no
   operating point, knows one such case: two MOSFETs of one type and model
-  on a shared gate, one's drain on the other's source; that one is in
-  triode. Then `values`
+  on a shared gate, one's drain on the other's source, with both bulks on
+  one node or each on its own source; that one is in triode. Then `values`
   (`f, re, im, mag, phaseDeg`; `inf: true` with null parts when infinite),
   `poles` and `zeros` (in Hz; empty in symbolic mode), `poleCount` and
   `zeroCount` (their number, the degree in s of the denominator and
@@ -149,10 +151,15 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   cross-coupled (latch) pairs that may have several DC solutions, junctions
   forward-biased by ideal sources (also named in the DC error when that is
   why DC fails), two-terminal elements with both ends on one node
-  ("CSB has both ends at 0"), a root of the circuit determinant (every
-  source zeroed) with re > 1e-6·|p| in numeric mode ("Unstable at this
-  bias: …", not when a coefficient's sign is below its rounding error),
-  and so on.
+  ("CSB has both ends at 0"; a 0 V source or an inductor there carries no
+  defined current and is dropped before the DC solve, while a source with a
+  value there, the input source, or one an F or H senses is an error), a
+  root of the circuit determinant (every source zeroed, on the full model
+  with each parameter's own value) with re > 1e-6·|p| in numeric mode
+  ("Unstable at this bias: …"). The roots are exact while that determinant
+  fits `maxTerms` (no verdict when a coefficient's sign is below its rounding
+  error), else from its MNA matrix as for a numeric quantity ("Stability not
+  checked. Its poles were not found." when that fails), and so on.
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
