@@ -1135,7 +1135,9 @@ export function SmallSignalPanel({
   const [noiseBand, setNoiseBand] = useState("");
   const [noiseResponse, setNoiseResponse] =
     useState<SmallSignalResponse | null>(null);
-  const extraClientRef = useRef<SmallSignalClient | null>(null);
+  const noiseClientRef = useRef<SmallSignalClient | null>(null);
+  // A noise solve was sent and its job is still the current one.
+  const noiseBusy = useRef(false);
   const noiseGeneration = useRef(0);
 
   useEffect(() => {
@@ -1151,8 +1153,8 @@ export function SmallSignalPanel({
     return () => {
       client.dispose();
       clientRef.current = null;
-      extraClientRef.current?.dispose();
-      extraClientRef.current = null;
+      noiseClientRef.current?.dispose();
+      noiseClientRef.current = null;
     };
   }, []);
 
@@ -1255,18 +1257,30 @@ export function SmallSignalPanel({
     ];
     const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
     const timer = setTimeout(() => {
-      extraClientRef.current ??= createSmallSignalClient();
-      void extraClientRef.current
+      noiseClientRef.current ??= createSmallSignalClient();
+      noiseBusy.current = true;
+      void noiseClientRef.current
         .analyze(text, {
           ...job,
           noise: true,
           ...(range ? { noiseBand: range } : {}),
         })
         .then((next) => {
-          if (current === noiseGeneration.current) setNoiseResponse(next);
+          if (current !== noiseGeneration.current) return;
+          noiseBusy.current = false;
+          setNoiseResponse(next);
         });
     }, SOLVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      // The WASM solve runs to completion once started: a solve for a job no
+      // longer wanted is stopped with its worker, and the next starts fresh.
+      if (noiseBusy.current) {
+        noiseClientRef.current?.dispose();
+        noiseClientRef.current = null;
+        noiseBusy.current = false;
+      }
+    };
   }, [noiseKey]);
 
   const blocked = unconnected.length > 0 || noDcPath.length > 0 || noOutput;

@@ -191,13 +191,15 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                         }),
                     );
                 }
-                if model.kf > 0.0 && ib > 0.0 {
+                // As bjtnoise.c: |I_B| floored at N_MINLOG, so AF = 0 gives
+                // KF/f even at zero bias. (NaN: no operating point.)
+                if model.kf > 0.0 && !ib.is_nan() {
                     push(
                         "flicker",
                         n[1],
                         n[2],
                         0.0,
-                        Some((model.kf * ib.powf(model.af), 1.0)),
+                        Some((model.kf * ib.abs().max(N_MINLOG).powf(model.af), 1.0)),
                         None,
                     );
                 }
@@ -222,13 +224,14 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                         }),
                     );
                 }
-                if model.kf > 0.0 && id > 0.0 {
+                // As dionoise.c: |I_D| floored at N_MINLOG.
+                if model.kf > 0.0 && !id.is_nan() {
                     push(
                         "flicker",
                         n[0],
                         n[1],
                         0.0,
-                        Some((model.kf * id.powf(model.af), 1.0)),
+                        Some((model.kf * id.abs().max(N_MINLOG).powf(model.af), 1.0)),
                         None,
                     );
                 }
@@ -924,6 +927,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                         .all(|k| matches!(s_in(f0 * k), Some(n) if v > 100.0 * n)),
                     None => false,
                 });
+            // The input never reaches the output (the gain is zero across the
+            // band): the output noise is still well defined, the input-referred
+            // one is not.
+            let zero_gain = singular.is_none()
+                && [lo, (lo * hi).sqrt(), hi]
+                    .iter()
+                    .all(|&f| matches!(num.at_with_cond(f, &srcs, false), Some((p, _)) if p.gain.norm_sqr() == 0.0));
             let mut breaks = c.poles_hz.clone();
             breaks.extend(c.zeros_hz.iter().map(|&(re, im)| re.hypot(im)));
             // LU accuracy of the solves the quadrature actually makes.
@@ -932,7 +942,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 let (p, err) = num.at_with_cond(f, &srcs, true)?;
                 band_lu = band_lu.max(err);
                 let (total, _) = output_psd(&p, &srcs, f);
-                let input = if singular.is_some() {
+                let input = if singular.is_some() || zero_gain {
                     0.0
                 } else {
                     total / p.gain.norm_sqr()
@@ -956,6 +966,20 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                             "the input-referred spectrum is unbounded in the band (the gain is zero at {})",
                             hz_text(f0)
                         ),
+                    })
+                }
+                (Some(r), None) if zero_gain && r.value[0].is_finite() => {
+                    if !r.converged {
+                        warnings.push("noise: the band integral did not fully converge".to_string());
+                    }
+                    let rel = if r.value[0] > 0.0 { r.err[0] / r.value[0] } else { 0.0 };
+                    json!({
+                        "fLow": lo, "fHigh": hi,
+                        "outputRms": r.value[0].sqrt(), "inputRms": null,
+                        "outputV2": r.value[0], "inputV2": null,
+                        "relError": rel + band_lu,
+                        "evaluations": r.evals, "converged": r.converged,
+                        "unavailable": "the input does not reach the output, so there is no input-referred noise",
                     })
                 }
                 (Some(r), None) if r.value.iter().all(|v| v.is_finite()) => {
@@ -1017,6 +1041,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         "inputLowFreq": input_low,
     }))
 }
+
+/// ngspice's floor on a junction current before `^AF` in flicker noise.
+const N_MINLOG: f64 = 1e-38;
 
 /// Sources listed per frequency; any more are summed into `omitted`.
 pub const MAX_CONTRIBUTORS: usize = 32;
@@ -1183,14 +1210,22 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
     let val = |p: &Pair| group_value(p.0.as_ref(), Scale::FourKT) + group_value(p.1.as_ref(), Scale::TwoQ);
     let mut cands: Vec<(Pair, &str)> = vec![(lp.clone(), "leading order (ro ≫ R, 1/gm)")];
     if numeric {
-        let start = if rel(val(&lp)) <= tol { lp } else { bp.clone() };
+        // Prune the leading order when it is within tol, else the display
+        // form itself: only the former assumes r_o → ∞.
+        let from_lead = rel(val(&lp)) <= tol;
+        let start = if from_lead { lp } else { bp.clone() };
         for eps in [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001] {
             let p = (
                 start.0.as_ref().map(|e| e.prune(eps, syms)),
                 start.1.as_ref().map(|e| e.prune(eps, syms)),
             );
             if terms(&p) < terms(&start) && rel(val(&p)) <= tol {
-                cands.push((p, "leading order, small terms dropped"));
+                let method = if from_lead {
+                    "leading order, small terms dropped"
+                } else {
+                    "small terms dropped"
+                };
+                cands.push((p, method));
                 break;
             }
         }
@@ -1203,7 +1238,9 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
     let (mut simplified, sv, _) = pair_json(&sp, syms);
     simplified["relError"] = if numeric { num_or_null(rel(sv)) } else { Value::Null };
     simplified["method"] = json!(method);
-    simplified["assumption"] = json!("ro ≫ R, 1/gm");
+    if method.starts_with("leading order") {
+        simplified["assumption"] = json!("ro ≫ R, 1/gm");
+    }
     simplified["tolerance"] = json!(tol);
 
     let check = match dc_ref {

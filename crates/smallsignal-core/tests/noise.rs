@@ -513,3 +513,47 @@ fn contributors_are_bounded_per_frequency() {
         assert!((total - 1.0).abs() < 1e-12, "{total}");
     }
 }
+
+/// When the r_o → ∞ form misses by more than tol, the simplified form is the
+/// display form pruned: it must not claim r_o ≫ R.
+#[test]
+fn pruned_display_form_makes_no_ro_assumption() {
+    let net = "dcs\nVDD vdd 0 5\nVIN in 0 DC 1.2 AC 1\nRD vdd out 20k\nRS s 0 2k\n\
+               M1 out in s s nm W=10u L=1u\n.model nm NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.5)\n";
+    let r = req(json!({ "input": "VIN", "output": "out", "noise": true }));
+    let simplified = &run(net, &r)["noise"]["inputLowFreq"]["simplified"];
+    assert_eq!(simplified["method"], "small terms dropped", "{simplified}");
+    assert!(simplified.get("assumption").is_none(), "{simplified}");
+}
+
+/// The input never reaches the output: the output noise still integrates
+/// (a lone 10k gives √(4kTR·Δf)); only the input-referred value is missing.
+#[test]
+fn zero_gain_keeps_the_output_integral() {
+    let net = "zg\nVIN in 0 DC 0 AC 1\nR1 in 0 1k\nR2 out 0 10k\n";
+    let r = req(json!({ "input": "VIN", "output": "out", "noiseBand": [1.0, 1e6] }));
+    let band = &run(net, &r)["noise"]["integrated"];
+    let want = (FOUR_KT * 10e3 * (1e6 - 1.0)).sqrt();
+    assert!(rel(band["outputRms"].as_f64().unwrap(), want) < 1e-7, "{band}");
+    assert!(band["inputRms"].is_null());
+    assert!(band["unavailable"].as_str().unwrap().contains("does not reach"));
+}
+
+/// As bjtnoise.c: |I_B| is floored before ^AF, so AF = 0 gives KF/f even
+/// with no base current (base, collector and emitter all held at 0 V, so
+/// not even gmin current flows).
+#[test]
+fn bjt_flicker_with_af_zero_survives_zero_bias() {
+    let net = "q\nVIN b 0 DC 0 AC 1\nQ1 0 b 0 qm\nR1 b out 1k\nR2 out 0 1k\n\
+               .model qm NPN (IS=1e-15 BF=100 KF=1e-12 AF=0)\n";
+    let r = req(json!({ "input": "VIN", "output": "out", "noise": true }));
+    let out = run(net, &r);
+    assert_eq!(out["op"]["devices"]["Q1"]["ib"].as_f64(), Some(0.0));
+    let flicker = out["noise"]["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["element"] == "Q1" && s["kind"] == "flicker")
+        .unwrap_or_else(|| panic!("no Q1 flicker: {}", out["noise"]["sources"]));
+    assert_eq!(flicker["flicker"]["coef"].as_f64().unwrap(), 1e-12);
+}
