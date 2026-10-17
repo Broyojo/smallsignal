@@ -1,0 +1,50 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "differential",
+ "output": "o1",
+ "ref": "o2",
+ "freqs": [
+  1000,
+  1000000.0,
+  100000000.0,
+  1000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "match": [
+  [
+   "M1",
+   "M2"
+  ],
+  [
+   "RD1",
+   "RD2"
+  ],
+  [
+   "CL1",
+   "CL2"
+  ]
+ ],
+ "assume": {
+  "ignore": [
+   {
+    "element": "M1",
+    "term": "ro"
+   },
+   {
+    "element": "M2",
+    "term": "ro"
+   },
+   {
+    "element": "M1",
+    "term": "gmb"
+   },
+   {
+    "element": "M2",
+    "term": "gmb"
+   }
+  ]
+ },
+ "description": "A_d = -gm RD/(1 + s RD CL) with the pair matched: both members share their assumptions."
+}

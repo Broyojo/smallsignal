@@ -1,0 +1,46 @@
+uA741 (Analog Canvas panel netlist), open loop
+CC O1 net6 30p
+Q1 net8 INP net3 npn_l1
+Q10 net1 net2 net17 npn_l1
+Q11 net2 net2 VEE npn_l1
+Q12 net10 net10 VCC pnp_l1
+Q13A net9 net10 VCC pnp_l1
+Q13B net6 net10 VCC pnp_l1
+Q14 VCC net9 net4 npn_l1
+Q15 net9 net4 OUT npn_l1
+Q16 VCC O1 net12 npn_l1
+Q17 net6 net12 net14 npn_l1
+Q18 net9 net18 net0 npn_l1
+Q19 net9 net9 net18 npn_l1
+Q2 net8 INN net13 npn_l1
+Q20 VEE net0 net19 pnp_l1
+Q21 net5 net19 OUT pnp_l1
+Q22 O1 net5 VEE npn_l1
+Q23 VEE net6 net0 pnp_l1
+Q24 net5 net5 VEE npn_l1
+Q3 net7 net1 net3 pnp_l1
+Q4 O1 net1 net13 pnp_l1
+Q5 net7 net15 net11 npn_l1
+Q6 O1 net15 net16 npn_l1
+Q7 VCC net7 net15 npn_l1
+Q8 net8 net8 VCC pnp_l1
+Q9 net1 net8 VCC pnp_l1
+R1 net11 VEE 1k
+R10 net18 net0 40k
+R11 net5 VEE 50k
+R2 net16 VEE 1k
+R3 net15 VEE 50k
+R4 net17 VEE 5k
+R5 net10 net2 39k
+R6 net4 OUT 27
+R7 OUT net19 22
+R8 net14 VEE 100
+R9 net12 VEE 50k
+RL OUT 0 2k
+VCC VCC 0 DC 12
+VEE 0 VEE DC 12
+VINN INN 0 DC 0
+VINP INP 0 DC -665.46u
+.model npn_l1 NPN (IS=1e-15 BF=100 VAF=50 KF=0 AF=1)
+.model pnp_l1 PNP (IS=1e-15 BF=50 VAF=50 KF=0 AF=1)
+.end

@@ -1,0 +1,13 @@
+NMOS differential pair, matched, r_o and g_mb ignored
+VDD vdd 0 1.8
+VIP inp 0 DC 1.0
+VINN inn 0 DC 1.0
+M1 o1 inp tail 0 nch W=10u L=1u
+M2 o2 inn tail 0 nch W=10u L=1u
+ITAIL tail 0 DC 200u
+RD1 vdd o1 5k
+RD2 vdd o2 5k
+CL1 o1 0 0.5p
+CL2 o2 0 0.5p
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4)
+.end

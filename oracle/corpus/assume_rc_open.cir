@@ -1,0 +1,6 @@
+RC lowpass with a parasitic capacitor taken open
+VIN in 0 DC 0 AC 1
+R1 in out 1k
+C1 out 0 1n
+C2 out 0 10p
+.end

@@ -1,0 +1,23 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  1000,
+  1000000.0,
+  1600000.0,
+  100000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "assume": {
+  "ignore": [
+   {
+    "element": "L1",
+    "term": "short"
+   }
+  ]
+ },
+ "ngspiceEquivalent": "assume_rl_short_eq",
+ "description": "L1 = 0: the assumed values equal ngspice's with L1 replaced by a 0 V source (the same operating point)."
+}

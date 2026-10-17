@@ -1,0 +1,234 @@
+{
+ "input": "VINP",
+ "output": "OUT",
+ "ref": null,
+ "freqs": [
+  1,
+  1000,
+  100000.0,
+  1000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "tooLarge": true,
+ "gmin": 1e-18,
+ "reference_limits": {
+  "V(out)": {
+   "rtol": 0.0001,
+   "why": "The open-loop output sits within 0.3 mV of 0 V: a difference of 5.5 nV (8e-14 V at the input through the 68k gain) is below what either DC solve fixes, and is above the 1 nV floor only at the nodes the output stage follows."
+  },
+  "V(net4)": {
+   "rtol": 0.0001,
+   "why": "The open-loop output sits within 0.3 mV of 0 V: a difference of 5.5 nV (8e-14 V at the input through the 68k gain) is below what either DC solve fixes, and is above the 1 nV floor only at the nodes the output stage follows."
+  },
+  "V(net19)": {
+   "rtol": 0.0001,
+   "why": "The open-loop output sits within 0.3 mV of 0 V: a difference of 5.5 nV (8e-14 V at the input through the 68k gain) is below what either DC solve fixes, and is above the 1 nV floor only at the nodes the output stage follows."
+  }
+ },
+ "assume": {
+  "ignore": [
+   {
+    "element": "Q1",
+    "term": "ro"
+   },
+   {
+    "element": "Q1",
+    "term": "rmu"
+   },
+   {
+    "element": "Q2",
+    "term": "ro"
+   },
+   {
+    "element": "Q2",
+    "term": "rmu"
+   },
+   {
+    "element": "Q3",
+    "term": "ro"
+   },
+   {
+    "element": "Q3",
+    "term": "rmu"
+   },
+   {
+    "element": "Q4",
+    "term": "ro"
+   },
+   {
+    "element": "Q4",
+    "term": "rmu"
+   },
+   {
+    "element": "Q5",
+    "term": "ro"
+   },
+   {
+    "element": "Q5",
+    "term": "rmu"
+   },
+   {
+    "element": "Q6",
+    "term": "ro"
+   },
+   {
+    "element": "Q6",
+    "term": "rmu"
+   },
+   {
+    "element": "Q7",
+    "term": "ro"
+   },
+   {
+    "element": "Q7",
+    "term": "rmu"
+   },
+   {
+    "element": "Q8",
+    "term": "ro"
+   },
+   {
+    "element": "Q8",
+    "term": "rmu"
+   },
+   {
+    "element": "Q9",
+    "term": "ro"
+   },
+   {
+    "element": "Q9",
+    "term": "rmu"
+   },
+   {
+    "element": "Q10",
+    "term": "ro"
+   },
+   {
+    "element": "Q10",
+    "term": "rmu"
+   },
+   {
+    "element": "Q11",
+    "term": "ro"
+   },
+   {
+    "element": "Q11",
+    "term": "rmu"
+   },
+   {
+    "element": "Q12",
+    "term": "ro"
+   },
+   {
+    "element": "Q12",
+    "term": "rmu"
+   },
+   {
+    "element": "Q13A",
+    "term": "ro"
+   },
+   {
+    "element": "Q13A",
+    "term": "rmu"
+   },
+   {
+    "element": "Q13B",
+    "term": "ro"
+   },
+   {
+    "element": "Q13B",
+    "term": "rmu"
+   },
+   {
+    "element": "Q14",
+    "term": "ro"
+   },
+   {
+    "element": "Q14",
+    "term": "rmu"
+   },
+   {
+    "element": "Q15",
+    "term": "ro"
+   },
+   {
+    "element": "Q15",
+    "term": "rmu"
+   },
+   {
+    "element": "Q16",
+    "term": "ro"
+   },
+   {
+    "element": "Q16",
+    "term": "rmu"
+   },
+   {
+    "element": "Q17",
+    "term": "ro"
+   },
+   {
+    "element": "Q17",
+    "term": "rmu"
+   },
+   {
+    "element": "Q18",
+    "term": "ro"
+   },
+   {
+    "element": "Q18",
+    "term": "rmu"
+   },
+   {
+    "element": "Q19",
+    "term": "ro"
+   },
+   {
+    "element": "Q19",
+    "term": "rmu"
+   },
+   {
+    "element": "Q20",
+    "term": "ro"
+   },
+   {
+    "element": "Q20",
+    "term": "rmu"
+   },
+   {
+    "element": "Q21",
+    "term": "ro"
+   },
+   {
+    "element": "Q21",
+    "term": "rmu"
+   },
+   {
+    "element": "Q22",
+    "term": "ro"
+   },
+   {
+    "element": "Q22",
+    "term": "rmu"
+   },
+   {
+    "element": "Q23",
+    "term": "ro"
+   },
+   {
+    "element": "Q23",
+    "term": "rmu"
+   },
+   {
+    "element": "Q24",
+    "term": "ro"
+   },
+   {
+    "element": "Q24",
+    "term": "rmu"
+   }
+  ]
+ },
+ "description": "uA741 from the Analog Canvas panel (+-12 V, open loop). Over the term budget even with every BJT's ro and rmu ignored, so each quantity is numeric. gmin 1e-18 as dc_opamp_bjt_15v (the PNPs' base-substrate gmin)."
+}

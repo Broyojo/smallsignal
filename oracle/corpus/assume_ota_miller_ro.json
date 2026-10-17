@@ -1,0 +1,49 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  10,
+  1000,
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0
+ ],
+ "rin": false,
+ "rout": true,
+ "assume": {
+  "ignore": [
+   {
+    "element": "M1",
+    "term": "ro"
+   },
+   {
+    "element": "M2",
+    "term": "ro"
+   },
+   {
+    "element": "M3",
+    "term": "ro"
+   },
+   {
+    "element": "M4",
+    "term": "ro"
+   },
+   {
+    "element": "M5",
+    "term": "ro"
+   },
+   {
+    "element": "M6",
+    "term": "ro"
+   },
+   {
+    "element": "M7",
+    "term": "ro"
+   }
+  ]
+ },
+ "description": "Every ro ignored: the gain and Zout are unbounded at DC without the ro at the high-impedance nodes, which are kept."
+}

@@ -80,6 +80,10 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     if requested(side, "noise"):
         band = noise_spec.get("band")
         args += ["--noise-band", ",".join(repr(float(f)) for f in band)] if band else ["--noise"]
+    for flag, key, field in (("--ignore", "ignore", "term"), ("--region", "regions", "region")):
+        items = (side.get("assume") or {}).get(key) or []
+        if items:
+            args += [flag, ",".join(f"{x['element']}:{x[field]}" for x in items)]
     if requested(side, "distortion"):
         # ngspice is fully nonlinear, so every transistor and diode is selected.
         devices = [e.tokens[0] for e in spice.parse(cir.read_text()).elements if e.kind in "mqd"]
@@ -426,7 +430,90 @@ def compare_distortion(got: dict, want: dict, rep: Report):
                 rep.failures.append(f"{what}: got {g[h]:.10e}, want {w[h]:.10e} (diff {err:.1e})")
 
 
-def compare(got: dict, want: dict, rep: Report, side: dict | None = None):
+# Assumed values against the independent rebuild under the same assumptions:
+# the solver's exact form of the assumed model is evaluated at the same
+# operating point, so only that point's agreement (~1e-9) enters.
+def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
+    """Sidecar `assume`: each quantity's `assumed` block. Its values must
+    equal indep.py's rebuild with the assumptions in effect for it (those
+    the solver did not restore; `restored` in the sidecar, when given, says
+    which it must restore), its relError must not exceed the distance from
+    the full values it reports, maxRelError must be no smaller than any of
+    them and equal the exact form's fullModelError, and every assumed gain
+    pole must be a root of the assumed circuit's determinant. With
+    `ngspiceEquivalent` (a corpus netlist that is the assumed circuit at the
+    same operating point) the assumed values must also equal ngspice's on
+    it."""
+    import mpmath
+
+    import indep
+
+    applied = {(x["element"], x["term"]) for x in side["assume"].get("ignore", [])}
+    cache: dict = {}
+    equivalent = None
+    if side.get("ngspiceEquivalent"):
+        equivalent = json.loads((HERE / "expected" / f"{side['ngspiceEquivalent']}.json").read_text())
+    for q, kind in (("gain", "gain"), ("rin", "z"), ("rout", "z")):
+        if q not in want or q not in got:
+            continue
+        block = got[q].get("assumed")
+        if block is None:
+            rep.failures.append(f"assumed.{q}: missing")
+            continue
+        restored = {(r["element"], r["term"]) for r in block.get("restored", [])}
+        want_restored = (side.get("restored") or {}).get(q)
+        if want_restored is not None and restored != {tuple(x.split(":")) for x in want_restored}:
+            rep.failures.append(f"assumed.{q}.restored: got {sorted(restored)}, want {sorted(want_restored)}")
+        drop = frozenset(applied - restored)
+        if drop not in cache:
+            cache[drop] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop))
+        ind = cache[drop]
+        used: set[int] = set()
+        for w in want[q]["values"]:
+            f = w["f"]
+            x = ind.get(f"{q}@{f:g}")
+            if x is None:
+                continue
+            ref = ({"re": None, "im": None, "inf": True} if mpmath.isinf(abs(x))
+                   else {"re": float(mpmath.re(x)), "im": float(mpmath.im(x))})
+            rep.complex(f"assumed.{q}@{f:g}", by_freq(block.get("values"), f, used), ref, kind)
+            if equivalent is not None and q in equivalent:
+                e = next((v for v in equivalent[q]["values"] if math.isclose(v["f"], f, rel_tol=1e-9)), None)
+                if e is not None:
+                    rep.complex(f"assumed.{q}@{f:g} (ngspice equivalent)", by_freq(block.get("values"), f), e, kind)
+        # relError at each requested frequency: |assumed − full| over |full|,
+        # floored at 1e-3 of the full response's peak on the solver's check
+        # grid (not shown here, so this is an upper bound).
+        rels = block.get("relError") or []
+        for k, (a, fv) in enumerate(zip(block.get("values") or [], got[q].get("values") or [])):
+            if k >= len(rels) or rels[k] is None or is_inf(a) or is_inf(fv):
+                continue
+            av, ff = complex(a["re"], a["im"]), complex(fv["re"], fv["im"])
+            bound = abs(av - ff) / abs(ff) if ff != 0 else math.inf
+            if rels[k] > bound * (1 + 1e-9):
+                rep.failures.append(f"assumed.{q}.relError@{fv['f']:g}: {rels[k]:.6e} above |a - f|/|f| = {bound:.6e}")
+        mx = block.get("maxRelError")
+        finite = [r for r in rels if r is not None]
+        if mx is not None and finite and mx < max(finite) * (1 - 1e-12):
+            rep.failures.append(f"assumed.{q}.maxRelError: {mx:.6e} below a relError {max(finite):.6e}")
+        exact = got[q].get("exact") or {}
+        if exact.get("latex") is not None and exact.get("fullModelError") != mx:
+            rep.failures.append(f"assumed.{q}: maxRelError {mx} != exact.fullModelError {exact.get('fullModelError')}")
+        if q == "gain" and not side.get("tooLarge"):
+            key = ("poles", drop)
+            if key not in cache:
+                cache[key] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), want_system="poles")
+            for p in block.get("poles") or []:
+                a = p.get("assumed")
+                if a is None:
+                    continue
+                z = complex(a["re"], a["im"])
+                d = min((abs(z - complex(r)) for r in cache[key]), default=math.inf)
+                if d > 1e-6 * abs(z) + 1e-9:
+                    rep.failures.append(f"assumed.gain pole {z:.8g}: no root of the assumed circuit within 1e-6")
+
+
+def compare(got: dict, want: dict, rep: Report, side: dict | None = None, cir: Path | None = None):
     """got against want; with the sidecar, a requested noise or distortion
     analysis whose expected block is missing fails."""
     for q in ("noise", "distortion"):
@@ -457,6 +544,8 @@ def compare(got: dict, want: dict, rep: Report, side: dict | None = None):
         compare_noise(got, want, rep)
     if "distortion" in want:
         compare_distortion(got, want, rep)
+    if side and side.get("assume") and cir is not None:
+        compare_assume(got, want, side, cir, rep)
 
 
 def main() -> int:
@@ -480,7 +569,7 @@ def main() -> int:
         side = json.loads(cir.with_suffix(".json").read_text())
         rep = Report(args.rtol, side.get("reference_limits"))
         try:
-            compare(run_cli(cmd, cir, side), want, rep, side)
+            compare(run_cli(cmd, cir, side), want, rep, side, cir)
         except (RuntimeError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
             print(f"{wpath.stem:28s} {'ERROR':6s} {'':>13s}  {str(exc)[:100]}")
             continue
