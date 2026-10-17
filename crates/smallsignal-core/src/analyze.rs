@@ -464,6 +464,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             max_terms,
             poles_hz,
             zeros_hz,
+            over_budget: d.is_none() && !symbolic,
         };
         resp.insert("noise".into(), crate::noise::report(&ctx, &mut warnings)?);
     }
@@ -495,6 +496,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             amplitude: req.amplitude.unwrap_or(if input_is_v { 0.01 } else { 1e-6 }),
             tol,
             max_terms,
+            over_budget: d.is_none() && !symbolic,
         };
         resp.insert("distortion".into(), crate::distortion::report(&ctx, &mut warnings)?);
         for w in rebuild_warnings.into_inner() {

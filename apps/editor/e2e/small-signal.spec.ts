@@ -751,4 +751,11 @@ test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async 
   await expect(
     card(panel, "Bias point").locator("tr[data-device]"),
   ).toHaveCount(25);
+
+  // Noise: the densities, and the closed form named as too large, briefly.
+  const noise = panel.locator("details.small-signal-noise");
+  await noise.locator("summary", { hasText: "Noise" }).click();
+  await expect(noise).toContainText("nV/√Hz", { timeout: 30_000 });
+  await expect(noise).toContainText("Too large for the exact closed form.");
+  await expect(noise).not.toContainText("simplify the circuit");
 });

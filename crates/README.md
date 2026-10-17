@@ -96,7 +96,9 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   least, then polished by Newton's method on det. No common factor is
   cancelled, as for an exact form too large for the GCD; `poleCount` and
   `zeroCount` are their number. The unstable-bias warning then uses the
-  same roots of the circuit determinant.
+  same roots of the circuit determinant. Noise `inputLowFreq` (unavailable:
+  "too large for the exact closed form") and the distortion closed forms
+  (`skipped`) are then not attempted: they expand the same circuit.
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
   With `inputNeg`, `mode` "differential" (the default) drives the two sources

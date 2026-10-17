@@ -164,6 +164,43 @@ fn over_the_term_limit_the_numbers_stay_and_the_formula_goes() {
 }
 
 #[test]
+fn over_the_term_limit_noise_and_distortion_skip_their_closed_forms() {
+    // Once the gain's determinant is over budget, neither closed form is
+    // attempted (both expand the same circuit); the numbers stay.
+    let r = |mt: usize| {
+        run(
+            CS,
+            &req(json!({ "input": "VIN", "output": "out", "noise": true, "nonlinear": ["M1"], "maxTerms": mt })),
+        )
+    };
+    let (exact, tight) = (r(2_000_000), r(1));
+    assert_eq!(tight["gain"]["skipped"], "too large for the exact closed form");
+    assert_eq!(
+        tight["noise"]["inputLowFreq"],
+        json!({ "unavailable": "too large for the exact closed form" })
+    );
+    for (a, b) in exact["noise"]["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(tight["noise"]["output"].as_array().unwrap())
+    {
+        let (a, b) = (a["v2"].as_f64().unwrap(), b["v2"].as_f64().unwrap());
+        assert!((a - b).abs() <= 1e-9 * a.abs(), "{a} vs {b}");
+    }
+    for (a, b) in exact["distortion"]["coefficients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(tight["distortion"]["coefficients"].as_array().unwrap())
+    {
+        assert_eq!(b["skipped"], "too large for the exact closed form");
+        let (a, b) = (a["numeric"].as_f64().unwrap(), b["numeric"].as_f64().unwrap());
+        assert!((a - b).abs() <= 1e-9 * a.abs(), "{a} vs {b}");
+    }
+}
+
+#[test]
 fn over_the_term_limit_a_gate_input_is_still_infinite() {
     let r = req(json!({ "input": "VIN", "output": "out", "rin": true, "rout": true, "maxTerms": 1 }));
     let v = run(CS, &r);

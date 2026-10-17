@@ -1437,6 +1437,9 @@ pub struct Ctx<'a> {
     pub amplitude: f64,
     pub tol: f64,
     pub max_terms: usize,
+    /// The gain's determinant is already over the term budget: no closed
+    /// form (each a_n is built on it) is attempted.
+    pub over_budget: bool,
 }
 
 /// The closed form against the numeric reference: `ok`, the worst relative
@@ -1803,6 +1806,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 
     let mt = c.max_terms.min(DIST_TERM_LIMIT);
     let build = |ss: &SsCircuit, symbols: &Symbols, free: bool| -> Option<Closed> {
+        if c.over_budget {
+            return None;
+        }
         let sys = crate::ss::system(c.net, ss, c.excite);
         match closed(
             ss, symbols, &sys, &devs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,

@@ -1666,18 +1666,30 @@ export function SmallSignalPanel({
     // requestKey covers the netlist text and every request field.
   }, [requestKey]);
 
+  // The main solve found the exact forms over the term budget: the Noise
+  // and Distortion solves, which show neither, skip them at once.
+  const overBudget = Boolean(
+    response &&
+    !isSmallSignalError(response) &&
+    responseKey === requestKey &&
+    response.gain?.skipped,
+  );
+  const numericOnly = (over: boolean) => (over ? { maxTerms: 1 } : {});
   const band = noiseBandRange(noiseBand);
   const noiseKey =
-    noiseOpen && requestKey ? JSON.stringify([requestKey, band]) : null;
+    noiseOpen && requestKey
+      ? JSON.stringify([requestKey, band, overBudget])
+      : null;
   useEffect(() => {
     // A new job, or none: drop the old result and any solve in flight, so
     // the section never shows numbers for a different circuit or band.
     const current = ++noiseGeneration.current;
     setNoiseResponse(null);
     if (!noiseKey) return;
-    const [key, range] = JSON.parse(noiseKey) as [
+    const [key, range, over] = JSON.parse(noiseKey) as [
       string,
       [number, number] | null,
+      boolean,
     ];
     const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
     const timer = setTimeout(() => {
@@ -1688,6 +1700,7 @@ export function SmallSignalPanel({
           ...job,
           noise: true,
           ...(range ? { noiseBand: range } : {}),
+          ...numericOnly(over),
         })
         .then((next) => {
           if (current !== noiseGeneration.current) return;
@@ -1739,17 +1752,18 @@ export function SmallSignalPanel({
     !handAnalysis &&
     nonlinear.length &&
     amplitude !== null
-      ? JSON.stringify([requestKey, nonlinear, amplitude])
+      ? JSON.stringify([requestKey, nonlinear, amplitude, overBudget])
       : null;
   useEffect(() => {
     // A new job, or none: drop the old result and any solve in flight.
     const current = ++distortionGeneration.current;
     setDistortionResponse(null);
     if (!distortionKey) return;
-    const [key, devices, size] = JSON.parse(distortionKey) as [
+    const [key, devices, size, over] = JSON.parse(distortionKey) as [
       string,
       string[],
       number,
+      boolean,
     ];
     const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
     const timer = setTimeout(() => {
@@ -1761,6 +1775,7 @@ export function SmallSignalPanel({
           nonlinear: devices,
           order: 3,
           amplitude: size,
+          ...numericOnly(over),
         })
         .then((next) => {
           if (current !== distortionGeneration.current) return;

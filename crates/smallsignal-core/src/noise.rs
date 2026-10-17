@@ -1106,6 +1106,9 @@ pub struct Ctx<'a> {
     /// The gain's zeros (re, im) in Hz: breakpoints, and on the jω axis a
     /// singularity of the input-referred spectrum.
     pub zeros_hz: Vec<(f64, f64)>,
+    /// The gain's determinant is already over the term budget: the closed
+    /// form (which expands the same circuit) is not attempted.
+    pub over_budget: bool,
 }
 
 /// A zero with |re| ≤ AXIS_REL·|im| is taken to lie on the jω axis: root
@@ -1182,6 +1185,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 
     // Closed form at s → 0.
     let closed = |ss: &SsCircuit, symbols: &Symbols| -> Result<Result<LowFreq, String>, String> {
+        if c.over_budget {
+            return Ok(Err("too large for the exact closed form".to_string()));
+        }
         let sys = crate::ss::system(c.net, ss, c.excite);
         low_freq(ss, symbols, &sys, &srcs, c.out, c.rf, c.vid, c.max_terms)
     };

@@ -31,6 +31,9 @@ export interface SmallSignalRequest {
   order?: 2 | 3;
   /** Input amplitude for HD2, HD3 (V, or A for a current input). */
   amplitude?: number;
+  /** Term budget of each exact polynomial (default 2,000,000); over it a
+   * quantity is numeric only. */
+  maxTerms?: number;
 }
 
 export interface ComplexPoint {
