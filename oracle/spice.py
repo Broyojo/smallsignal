@@ -97,6 +97,13 @@ def node_count(kind: str, tokens: list[str], models: dict[str, str]) -> int:
     raise ValueError(f"unsupported element kind {kind!r} ({tokens[0]})")
 
 
+def element_tokens(line: str) -> list[str]:
+    """An element line's tokens as the solver reads them (netlist.rs):
+    parentheses and commas separate, and `k = v` is one token `k=v`, so
+    `W=10u,L=1u` is two parameters."""
+    return re.sub(r"\s*=\s*", "=", re.sub(r"[(),]", " ", line)).split()
+
+
 def parse(text: str) -> Netlist:
     title, lines = logical_lines(text)
     net = Netlist(title=title)
@@ -115,7 +122,7 @@ def parse(text: str) -> Netlist:
         if low.startswith("."):
             net.other_lines.append(line)
             continue
-        pending.append(line.split())
+        pending.append(element_tokens(line))
     for tokens in pending:
         kind = tokens[0][0].lower()
         n = node_count(kind, tokens, net.models)
@@ -163,21 +170,42 @@ def source_line(e: Element, ac: float | None) -> str:
 OPEN_L = "1e12"
 
 
+def reserved_names(net: Netlist) -> set[str]:
+    """Every name a synthetic node or element must avoid: the netlist's
+    element and node names (lower-case) and ground."""
+    return {e.name for e in net.elements} | set(net.nodes()) | GROUND
+
+
+def fresh_name(taken: set[str], base: str) -> str:
+    """`base`, or `base` with the smallest numeric suffix, unused by any name
+    in `taken` (lower-case; SPICE ignores case), which then reserves it. Keeps
+    the first letter, so the element type."""
+    name, k = base, 1
+    while name.lower() in taken:
+        name, k = f"{base}{k}", k + 1
+    taken.add(name.lower())
+    return name
+
+
 def render(net: Netlist, ac_source: str | None, extra: list[str] | None = None,
-           ac: dict[str, str] | None = None, open_sources: tuple[str, ...] = ()) -> str:
+           ac: dict[str, str] | None = None, open_sources: tuple[str, ...] = (),
+           taken: set[str] | None = None) -> str:
     """Netlist text with all AC specs stripped and AC 1 placed on `ac_source`
     (or the AC specs in `ac`, by lower-case source name). Sources in
     `open_sources` keep their DC value behind a huge series inductor, so they
-    are open for AC."""
+    are open for AC. Its node and element names are fresh in `taken` (default
+    reserved_names(net)); a caller adding `extra` lines passes the set it
+    drew their names from."""
     out = [net.title]
     opened = {n.lower() for n in open_sources}
+    taken = reserved_names(net) if taken is None else taken
     for e in net.elements:
         if e.kind in "vi":
             spec = (ac or {}).get(e.name) if ac is not None else (1 if ac_source and e.name == ac_source.lower() else None)
             if e.name in opened:
-                inner = f"{e.tokens[1]}__open"
+                inner = fresh_name(taken, f"{e.tokens[1]}__open")
                 out.append(f"{e.tokens[0]} {inner} {e.tokens[2]} DC {source_dc(e)}")
-                out.append(f"LOPEN__{e.name} {e.tokens[1]} {inner} {OPEN_L}")
+                out.append(f"{fresh_name(taken, f'LOPEN__{e.name}')} {e.tokens[1]} {inner} {OPEN_L}")
             else:
                 out.append(source_line(e, spec))
         else:

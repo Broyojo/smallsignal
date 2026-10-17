@@ -86,7 +86,7 @@ describe("model parameters", () => {
       models: { nmos: { KP: 300e-6, LAMBDA: 0.1 } },
     })!;
     expect(custom.text.split("\n")).toContain(
-      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0003 VTO=0.5 LAMBDA=0.1 GAMMA=0 PHI=0.6)",
+      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0003 VTO=0.5 LAMBDA=0.1 GAMMA=0 PHI=0.6 KF=0 AF=1)",
     );
   });
 
@@ -95,12 +95,12 @@ describe("model parameters", () => {
       nmos: { LEVEL: 2, KPP: 1, KP: Number.NaN, VTO: 0.4 },
     } as unknown as ModelOverrides;
     expect(modelCard("nmos", overrides)).toBe(
-      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.4 LAMBDA=0.05 GAMMA=0 PHI=0.6)",
+      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.4 LAMBDA=0.05 GAMMA=0 PHI=0.6 KF=0 AF=1)",
     );
   });
 
   it("writes BJT cards without a LEVEL", () => {
-    expect(modelCard("npn")).toBe(".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50)");
+    expect(modelCard("npn")).toBe(".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50 KF=0 AF=1)");
   });
 });
 
@@ -141,7 +141,7 @@ describe("smallSignalNetlist", () => {
         "VDD vdd 0 DC 1.8",
         "VIN in 0 DC 0.7 AC 1",
         "M1 out in 0 0 nmos_l1 W=10u L=1u",
-        ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.5 LAMBDA=0.05 GAMMA=0 PHI=0.6)",
+        ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.5 LAMBDA=0.05 GAMMA=0 PHI=0.6 KF=0 AF=1)",
         ".end",
       ]),
     );

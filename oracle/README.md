@@ -1,7 +1,9 @@
 # oracle: ngspice reference results for the smallsignal solver
 
 ngspice (tested with ngspice-47) is the ground truth for operating points and
-small-signal numbers. Needs `ngspice` on PATH and `uv`.
+small-signal numbers. Needs `ngspice` on PATH and `uv`. `install-ngspice.sh`
+builds ngspice-47 from source; distributions ship older releases (Ubuntu
+24.04's ngspice-42 prints no `.disto` results).
 
 ```sh
 uv run run_ngspice.py                 # corpus/*.cir -> expected/*.json
@@ -41,6 +43,39 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   - `mpverify.py`: 60-digit solve of the solver's own `--certificate`.
   - `physical.py`: junction-current sanity, used by both generators and the
     minimizer.
+- Noise (`"noise": true` in a sidecar, frequencies = `freqs` or `noise.freqs`;
+  compare.py runs the CLI at both): `expected/<name>.json` gets
+  `noise.output` / `noise.input` as [{f, v2}] in
+  V²/Hz (A²/Hz input-referred for an I-source input; ngspice prints V/√Hz
+  densities, which are squared) and `noise.contributors` [{element, source,
+  values}] from `set noisedetail` (sources: thermal, 1overf for R; id, 1overf,
+  rd, rs for MOS; ic, ib, 1overf, rb, rc, re for BJT; id, rs, 1overf and the
+  sidewall idsw, rsw, 1overfsw for diodes). A netlist with an element named
+  `<element>_<source>` (R1 and R1_thermal: one vector onoise_r1_thermal for
+  both) is rejected, as is a source not in this list.
+  With `inputNeg`, ngspice's input is one new source driving both inputs
+  through controlled sources (±1/2, or +1 each in common mode), as the
+  solver drives them. `noise.band` adds `noise.integrated`: the independent
+  60-digit quadrature, written only if it agrees with a Richardson trapezoid
+  of ngspice's spectrum to 1e-6. compare.py checks each source the solver
+  lists, and the ngspice sources it does not (beyond its 32 largest) through
+  `omitted`: none larger than a listed one, their sum and count. It also
+  fails a missing `contributors` list and `inputLowFreq.check.ok: false`.
+  Zero noise (noise_zero_output) is exact agreement with zero: a reference
+  of 0 passes only a value within 1e-40 V²/Hz (times the band width for an
+  integral).
+  `noise_indep.py` recomputes every source on the independent 60-digit
+  rebuild, with the source models in
+  [crates/README.md, Noise](../crates/README.md#noise-noise-true-optional-noiseband-flow-fhigh).
+  compare.py checks noise at rtol 1e-6, as AC, pairing each reference
+  frequency one-to-one with the closest solver row within relative 1e-9. A
+  band integral must report `converged: true` and a finite `relError`, unless
+  the sidecar sets `noise.solverConverged: false` (copied into the
+  reference). Element lines are tokenized as the solver does (`W=10u,L=1u`
+  is two parameters).
+- `textbook_nd.py`: textbook noise cases (CS, degenerated CS, SF, diff pair,
+  5T OTA, BJT CE), hand-derived (KCL with noise injections), checked against
+  ngspice and the quoted closed forms.
 - `run_ngspice.options_override(...)` changes ngspice options per thread;
   never assign `run_ngspice.OPTIONS` (the evidence tools run threads).
 

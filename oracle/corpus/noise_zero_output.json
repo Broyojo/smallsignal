@@ -1,0 +1,22 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  1000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "noise": {
+  "freqs": [
+   10.0,
+   1000.0,
+   100000.0
+  ],
+  "band": [
+   1.0,
+   1000000.0
+  ]
+ },
+ "description": "Nonzero gain, exactly zero output noise: R1 sits across the input source and R2 across the VCVS output"
+}

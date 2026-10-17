@@ -45,14 +45,29 @@ def num(tok: str) -> mp.mpf:
 
 
 def model_params(text: str) -> dict[str, dict[str, float]]:
+    """{model: {param: value}}, values with SPICE suffixes (KF=1f, TOX=100n).
+    Cards are read as the parser's logical lines, so parameters on `+`
+    continuation lines count (and comments do not), and tokenized as the
+    solver does (netlist.rs): parentheses and commas separate, so
+    `(KP=1m,KF=1f)` is two parameters."""
     out = {}
-    for m in re.finditer(r"^\.model\s+(\S+)\s+\S+\s*\(?([^)\n]*)\)?", text, re.I | re.M):
-        out[m.group(1).lower()] = {k.lower(): float(v) for k, v in re.findall(r"(\w+)=([-+\d.eE]+)", m.group(2))}
+    for line in spice.parse(text).model_lines:
+        m = re.match(r"\.model\s+(\S+?)\s+([A-Za-z]+)(.*)$", line, re.I)
+        if not m:
+            continue
+        params = {}
+        for k, v in re.findall(r"(\w+)\s*=\s*(\S+)", re.sub(r"[(),]", " ", m.group(3))):
+            try:
+                params[k.lower()] = float(num(v))
+            except ValueError:
+                continue
+        out[m.group(1).lower()] = params
     return out
 
 
 def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
-                    kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt")) -> dict[str, object]:
+                    kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt"),
+                    want_system: bool = False):
     """variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
     "solverlike" (only the junction / g_mu terms in `kept`, the solver's own
     parameter names such as rbd_m1, rmu_q2, each as ngspice has it) or
@@ -89,6 +104,15 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
     v = lambda n: mp.mpf(0) if n in spice.GROUND else volt[n.lower()]
     devs = {k.lower(): d for k, d in want["op"]["devices"].items()}
     inp = side["input"].lower()
+    # Gain excitation: the input alone, or with inputNeg the pair driven
+    # ±1/2 (differential) or both +1 (common), as the solver and the ngspice
+    # reference drive them.
+    excite = {inp: mp.mpf(1)}
+    if side.get("inputNeg"):
+        half = mp.mpf("0.5")
+        neg = side["inputNeg"].lower()
+        excite = ({inp: half, neg: -half} if (side.get("mode") or "differential") == "differential"
+                  else {inp: mp.mpf(1), neg: mp.mpf(1)})
 
     def system(s, mode: str):
         A = mp.matrix(dim, dim)
@@ -118,18 +142,19 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 r = bidx[t[3].lower()]
                 add(ni(e.nodes[0]), r, num(t[4])); add(ni(e.nodes[1]), r, -num(t[4]))
             elif k == "i":
-                if mode == "gain" and e.name.lower() == inp:
-                    # SPICE current flows n+ -> source -> n-: 1 A into n-.
+                w = excite.get(e.name.lower(), 0) if mode == "gain" else 0
+                if w:
+                    # SPICE current flows n+ -> source -> n-: w A into n-.
                     if ni(e.nodes[1]) is not None:
-                        b[ni(e.nodes[1])] += 1
+                        b[ni(e.nodes[1])] += w
                     if ni(e.nodes[0]) is not None:
-                        b[ni(e.nodes[0])] -= 1
+                        b[ni(e.nodes[0])] -= w
             elif k in ("v", "e", "h", "l"):
                 r = bidx[e.name.lower()]
                 p, n = ni(e.nodes[0]), ni(e.nodes[1])
                 add(p, r, 1); add(n, r, -1); add(r, p, 1); add(r, n, -1)
                 if k == "v":
-                    b[r] = 1 if (mode == "gain" and e.name.lower() == inp) else 0
+                    b[r] = excite.get(e.name.lower(), 0) if mode == "gain" else 0
                 elif k == "e":
                     gain = num(t[5])
                     add(r, ni(e.nodes[2]), -gain); add(r, ni(e.nodes[3]), gain)
@@ -176,6 +201,10 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 b[r_] -= 1
         return A, b
 
+    if want_system:
+        # system(s, mode): mode "gain" excites the input source, "rout" injects
+        # 1 A at the output, anything else leaves every source at zero.
+        return system, ni, bidx, net, side, models
     out: dict[str, object] = {}
     at = lambda x, n: x[ni(n)] if n is not None and ni(n) is not None else 0
     eps = mp.mpf(2) ** -52

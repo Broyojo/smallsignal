@@ -96,6 +96,12 @@ fn merged_rest(elements: &[String]) -> String {
     format!("{}{}", &first[..prefix], tails.join(","))
 }
 
+/// `I_{C1,2}` for a quantity (base, subscript) shared by matched elements.
+pub fn merged_dev_latex(base: &str, sub: &str, elements: &[String]) -> String {
+    let name = format!("{}{}", &elements[0][..1], merged_rest(elements));
+    dev_latex_sub(base, sub, &name)
+}
+
 fn merged_latex(kind: &str, elements: &[String]) -> String {
     let letter = &elements[0][..1];
     let name = format!("{letter}{}", merged_rest(elements));
@@ -481,6 +487,71 @@ impl XPoly {
         XPoly {
             terms: self.terms.iter().map(|(e, c)| (e.clone(), -c)).collect(),
         }
+    }
+
+    pub fn constant(c: i128, nsym: usize) -> XPoly {
+        let terms = if c == 0 { Vec::new() } else { vec![(vec![0u8; nsym], c)] };
+        XPoly { terms }
+    }
+
+    /// One symbol to the first power.
+    pub fn var(k: usize, nsym: usize) -> XPoly {
+        let mut e = vec![0u8; nsym];
+        e[k] = 1;
+        XPoly { terms: vec![(e, 1)] }
+    }
+
+    /// The same polynomial over `nsym` ≥ its current symbols (new ones absent).
+    pub fn padded(&self, nsym: usize) -> XPoly {
+        XPoly {
+            terms: self
+                .terms
+                .iter()
+                .map(|(e, c)| {
+                    let mut e = e.clone();
+                    e.resize(nsym, 0);
+                    (e, *c)
+                })
+                .collect(),
+        }
+    }
+
+    fn collect(map: std::collections::BTreeMap<Vec<u8>, i128>) -> XPoly {
+        XPoly {
+            terms: map.into_iter().filter(|(_, c)| *c != 0).collect(),
+        }
+    }
+
+    pub fn add(&self, other: &XPoly) -> Result<XPoly, String> {
+        let mut map: std::collections::BTreeMap<Vec<u8>, i128> = self.terms.iter().cloned().collect();
+        for (e, c) in &other.terms {
+            let v = map.entry(e.clone()).or_insert(0);
+            *v = v.checked_add(*c).ok_or("coefficient overflow")?;
+        }
+        Ok(XPoly::collect(map))
+    }
+
+    /// Exact product; fails on coefficient or exponent overflow, or when the
+    /// result would exceed `max_terms` terms.
+    pub fn mul(&self, other: &XPoly, max_terms: usize) -> Result<XPoly, String> {
+        let mut map: std::collections::BTreeMap<Vec<u8>, i128> = std::collections::BTreeMap::new();
+        for (ea, ca) in &self.terms {
+            for (eb, cb) in &other.terms {
+                let e = ea
+                    .iter()
+                    .zip(eb)
+                    .map(|(&x, &y)| x.checked_add(y))
+                    .collect::<Option<Vec<u8>>>()
+                    .ok_or("exponent overflow")?;
+                let c = ca.checked_mul(*cb).ok_or("coefficient overflow")?;
+                let v = map.entry(e).or_insert(0);
+                *v = v.checked_add(c).ok_or("coefficient overflow")?;
+            }
+            if map.len() > max_terms {
+                return Err(format!("expression too large (over {max_terms} terms)"));
+            }
+        }
+        Ok(XPoly::collect(map))
     }
 }
 

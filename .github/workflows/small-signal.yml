@@ -32,6 +32,19 @@ jobs:
       - run: cargo clippy --locked --workspace --release -- -D warnings
       - run: cargo test --locked --workspace --release
       - run: cargo build --locked --release -p smallsignal-cli
+      # textbook_nd.py runs ngspice itself (the corpus compares against
+      # stored results). It needs ngspice-47: Ubuntu's 42 prints no .disto.
+      - uses: actions/cache@v4
+        id: ngspice
+        with:
+          path: ~/.local/ngspice
+          key: ngspice-47-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('oracle/install-ngspice.sh') }}
+      - if: steps.ngspice.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libreadline-dev bison flex
+          oracle/install-ngspice.sh "$HOME/.local/ngspice"
+      - run: echo "$HOME/.local/ngspice/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@v6
       - name: ngspice corpus, regressions and textbook identities
         working-directory: oracle
@@ -60,6 +73,7 @@ jobs:
           uv run --locked compare.py
           uv run --locked compare.py --corpus regressions --expected regressions/expected
           uv run --locked textbook.py
+          uv run --locked textbook_nd.py
 
   editor:
     name: Panel

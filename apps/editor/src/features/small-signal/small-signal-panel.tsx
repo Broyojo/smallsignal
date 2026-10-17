@@ -36,6 +36,8 @@ import {
   type SmallSignalRequest,
   type SmallSignalResult,
   type SmallSignalResponse,
+  type NoiseContribution,
+  type SmallSignalNoise,
 } from "@icm/small-signal";
 import {
   browserStaleBuildRecovery,
@@ -146,6 +148,9 @@ const MODEL_RANGE: Record<
   BF: { min: 1e-3, max: 1e6 },
   VAF: { min: 0.01, max: 1e6, zero: true },
   N: { min: 0.01, max: 100 },
+  // Flicker noise: KF·I^AF/f (ngspice's level-1 MOS form uses gm²).
+  KF: { min: 0, max: 1 },
+  AF: { min: 0, max: 10 },
 };
 
 export function modelValue(name: string, text: string): number | null {
@@ -595,6 +600,304 @@ function QuantityCard({
   );
 }
 
+const NOISE_KIND: Record<string, string> = {
+  thermal: "thermal",
+  flicker: "flicker",
+  shot: "shot",
+  shot_c: "shot (c)",
+  shot_b: "shot (b)",
+};
+
+/** √PSD as a spectral density, e.g. 3.88 nV/√Hz; "—" where not finite. */
+export function formatDensity(v2: number | null, unit: string): string {
+  if (v2 === null || !Number.isFinite(v2)) return "—";
+  const base = unit.startsWith("A") ? "A" : "V";
+  return `${formatEngineering(Math.sqrt(v2), base)}/√Hz`;
+}
+
+/** The solver integrates bands of up to 40 decades. */
+const MAX_BAND_DECADES = 40;
+
+/** "1, 10meg" → [1, 1e7]; null unless 0 < fLow < fHigh within 40 decades. */
+export function noiseBandRange(text: string): [number, number] | null {
+  // Exactly two readable frequencies: never quietly drop a bad token.
+  const tokens = text.split(/[\s,;]+/u).filter(Boolean);
+  if (tokens.length !== 2) return null;
+  const [low, high] = tokens.map(parseSpiceNumber);
+  if (low == null || high == null) return null;
+  return low > 0 && high > low && Math.log10(high / low) <= MAX_BAND_DECADES
+    ? [low, high]
+    : null;
+}
+
+/** A solver note as a sentence: capitalized, with a full stop. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  const capital = trimmed[0]!.toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/u.test(capital) ? capital : `${capital}.`;
+}
+
+/**
+ * The largest sources, then one row for the rest (including any the solver
+ * already summed). A source with no finite share is an unbounded one (e.g.
+ * flicker at 0 Hz): it is listed first, with a null share, never dropped.
+ */
+export function topContributions(
+  sources: readonly NoiseContribution[],
+  /** The solver's omitted bucket: null when it is unbounded. */
+  omittedFraction: number | null = 0,
+  limit = 4,
+): { label: string; fraction: number | null }[] {
+  const label = (source: NoiseContribution) =>
+    `${source.element} ${NOISE_KIND[source.kind] ?? source.kind}`;
+  const unbounded = sources
+    .filter((source) => !Number.isFinite(source.fraction))
+    .map((source) => ({ label: label(source), fraction: null }));
+  const sorted = sources
+    .filter((source): source is NoiseContribution & { fraction: number } =>
+      Number.isFinite(source.fraction),
+    )
+    .sort((a, b) => b.fraction - a.fraction);
+  const room = Math.max(0, limit - unbounded.length);
+  const rows = [
+    ...unbounded,
+    ...sorted
+      .slice(0, room)
+      .map((source) => ({ label: label(source), fraction: source.fraction })),
+  ];
+  // An unbounded omitted bucket is shown like an unbounded source.
+  if (omittedFraction === null)
+    return [...rows, { label: "others", fraction: null }];
+  const rest =
+    sorted.slice(room).reduce((sum, s) => sum + s.fraction, 0) +
+    omittedFraction;
+  return rest > 0 ? [...rows, { label: "others", fraction: rest }] : rows;
+}
+
+/** Warnings from a section's own solve that the main results don't show. */
+function ExtraWarnings({
+  warnings,
+  shown,
+}: {
+  warnings: readonly string[] | undefined;
+  shown: readonly string[] | undefined;
+}) {
+  const extra = (warnings ?? []).filter((text) => !shown?.includes(text));
+  if (!extra.length) return null;
+  return (
+    <div className="small-signal-alert is-warning" role="alert">
+      {extra.map((text) => (
+        <p key={text}>{sentence(text)}</p>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Noise: the input-referred white PSD as an equation, input and output
+ * densities per frequency, the largest sources, and the band rms.
+ */
+function NoiseDetails({
+  noise,
+  current,
+  band,
+  onBand,
+}: {
+  noise: SmallSignalNoise;
+  current: boolean;
+  band: string;
+  onBand: (text: string) => void;
+}) {
+  const low = "unavailable" in noise.inputLowFreq ? null : noise.inputLowFreq;
+  const symbol = `\\frac{\\overline{${current ? "i" : "v"}_{n,in}^{2}}}{\\Delta f}`;
+  const display = low?.display.latex ? low.display : null;
+  const simpler =
+    low?.simplified.latex && low.simplified.latex !== display?.latex
+      ? low.simplified
+      : null;
+  // The exact form, when it differs from the display one (junction leakage
+  // dropped); null when it is too large to typeset.
+  const exactLatex = low?.exact.latex ?? null;
+  const displayIsExact = Boolean(
+    display && (display.same || exactLatex === display.latex),
+  );
+  const exactContent =
+    exactLatex && exactLatex !== display?.latex
+      ? exactLatex
+      : displayIsExact
+        ? display!.latex
+        : null;
+  const displayError = display?.relError ?? 0;
+  const displayEquals = displayIsExact || displayError < INVISIBLE_ERROR;
+  // As on the result cards: a long form would bury the readable one.
+  const long =
+    !display?.latex ||
+    (display.terms ?? 0) > 6 ||
+    display.latex.length > FORMULA_MAX_LATEX_LENGTH;
+  const leadSimpler = simpler && long;
+  const simplerNote = simpler?.assumption
+    ? `assuming ${simpler.assumption}`
+    : `within ${formatPercent(simpler?.relError ?? 0)} of exact`;
+  // From every source: the contributor lists stop at the 32 largest.
+  const flicker = noise.sources.some((source) => source.kind === "flicker");
+  const sources = noise.contributors[0];
+  const integrated = noise.integrated;
+  const exactDisclosure = (
+    <details className="small-signal-exact">
+      <summary>Exact</summary>
+      {exactContent ? (
+        <Formula latex={`${symbol} = ${exactContent}`} />
+      ) : (
+        <p className="small-signal-muted">
+          The exact expression is too large to typeset.
+        </p>
+      )}
+    </details>
+  );
+  return (
+    <>
+      {leadSimpler ? (
+        <>
+          <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
+          <small className="small-signal-muted">{simplerNote}</small>
+          {exactDisclosure}
+        </>
+      ) : display ? (
+        <>
+          <Formula
+            latex={`${symbol} ${displayEquals ? "=" : "\\approx"} ${display.latex}`}
+          />
+          {displayEquals ? null : (
+            <small className="small-signal-muted">
+              neglecting junction leakage ({formatPercent(displayError)})
+            </small>
+          )}
+          {simpler ? (
+            <div className="small-signal-simpler">
+              <Formula latex={`\\approx ${simpler.latex}`} />
+              <small>{simplerNote}</small>
+            </div>
+          ) : null}
+          {displayIsExact ? null : exactDisclosure}
+        </>
+      ) : low ? (
+        // Every form is over the typesetting limit: say so, not nothing.
+        <>
+          <Formula latex={`${symbol} = \\ldots`} />
+          <small className="small-signal-muted">too large to typeset</small>
+        </>
+      ) : null}
+      {low && flicker ? (
+        <small className="small-signal-muted">
+          Thermal and shot noise. Flicker is in the numbers below.
+        </small>
+      ) : null}
+      {"unavailable" in noise.inputLowFreq ? (
+        <p className="small-signal-muted">
+          {sentence(noise.inputLowFreq.unavailable)}
+        </p>
+      ) : null}
+      {noise.input.length ? (
+        <table className="small-signal-values" aria-label="Noise density">
+          <thead>
+            <tr>
+              <th />
+              <th scope="col">Input</th>
+              <th scope="col">Output</th>
+            </tr>
+          </thead>
+          <tbody>
+            {noise.input.map((point, index) => (
+              <tr key={point.f} data-frequency={point.f}>
+                <th scope="row">{formatEngineering(point.f, "Hz")}</th>
+                <td data-quantity="input">
+                  {formatDensity(point.v2, noise.inputUnit)}
+                </td>
+                <td data-quantity="output">
+                  {noise.output[index]
+                    ? formatDensity(noise.output[index].v2, noise.outputUnit)
+                    : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {sources?.sources.length ? (
+        <table className="small-signal-values" aria-label="Noise sources">
+          <caption>Sources at {formatEngineering(sources.f, "Hz")}</caption>
+          <tbody>
+            {topContributions(
+              sources.sources,
+              sources.omitted ? sources.omitted.fraction : 0,
+            ).map((row) => (
+              <tr key={row.label}>
+                <th scope="row">{row.label}</th>
+                <td>
+                  {row.fraction === null ? "∞" : formatPercent(row.fraction)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {noise.input.length ? (
+        <label>
+          Band
+          <input
+            aria-label="Noise band"
+            aria-invalid={
+              band.trim() !== "" && noiseBandRange(band) === null
+                ? true
+                : undefined
+            }
+            placeholder="1, 10meg"
+            value={band}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(event) => onBand(event.currentTarget.value)}
+          />
+        </label>
+      ) : null}
+      {integrated ? (
+        <>
+          <table className="small-signal-values" aria-label="Integrated noise">
+            <tbody>
+              {integrated.inputRms !== null ? (
+                <tr>
+                  <th scope="row">Input</th>
+                  <td data-quantity="input-rms">
+                    {formatEngineering(
+                      integrated.inputRms,
+                      current ? "A" : "V",
+                    )}{" "}
+                    rms
+                  </td>
+                </tr>
+              ) : null}
+              {integrated.outputRms !== null ? (
+                <tr>
+                  <th scope="row">Output</th>
+                  <td data-quantity="output-rms">
+                    {formatEngineering(integrated.outputRms, "V")} rms
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+          {integrated.unavailable ? (
+            <small className="small-signal-muted">
+              {sentence(integrated.unavailable)}
+            </small>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * The bias point as a table: per transistor its region and the three numbers
  * the equations use (current, g_m, r_o; r_π too when there are BJTs).
@@ -851,6 +1154,16 @@ export function SmallSignalPanel({
   const [solving, setSolving] = useState(false);
   const clientRef = useRef<SmallSignalClient | null>(null);
   const generation = useRef(0);
+  // Noise runs on its own worker, only while its section is open, so the
+  // main results never wait for it.
+  const [noiseOpen, setNoiseOpen] = useState(false);
+  const [noiseBand, setNoiseBand] = useState("");
+  const [noiseResponse, setNoiseResponse] =
+    useState<SmallSignalResponse | null>(null);
+  const noiseClientRef = useRef<SmallSignalClient | null>(null);
+  // A noise solve was sent and its job is still the current one.
+  const noiseBusy = useRef(false);
+  const noiseGeneration = useRef(0);
 
   useEffect(() => {
     // Start loading the typesetter now, before the first result arrives.
@@ -865,6 +1178,8 @@ export function SmallSignalPanel({
     return () => {
       client.dispose();
       clientRef.current = null;
+      noiseClientRef.current?.dispose();
+      noiseClientRef.current = null;
     };
   }, []);
 
@@ -951,6 +1266,47 @@ export function SmallSignalPanel({
     return () => clearTimeout(timer);
     // requestKey covers the netlist text and every request field.
   }, [requestKey]);
+
+  const band = noiseBandRange(noiseBand);
+  const noiseKey =
+    noiseOpen && requestKey ? JSON.stringify([requestKey, band]) : null;
+  useEffect(() => {
+    // A new job, or none: drop the old result and any solve in flight, so
+    // the section never shows numbers for a different circuit or band.
+    const current = ++noiseGeneration.current;
+    setNoiseResponse(null);
+    if (!noiseKey) return;
+    const [key, range] = JSON.parse(noiseKey) as [
+      string,
+      [number, number] | null,
+    ];
+    const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
+    const timer = setTimeout(() => {
+      noiseClientRef.current ??= createSmallSignalClient();
+      noiseBusy.current = true;
+      void noiseClientRef.current
+        .analyze(text, {
+          ...job,
+          noise: true,
+          ...(range ? { noiseBand: range } : {}),
+        })
+        .then((next) => {
+          if (current !== noiseGeneration.current) return;
+          noiseBusy.current = false;
+          setNoiseResponse(next);
+        });
+    }, SOLVE_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      // The WASM solve runs to completion once started: a solve for a job no
+      // longer wanted is stopped with its worker, and the next starts fresh.
+      if (noiseBusy.current) {
+        noiseClientRef.current?.dispose();
+        noiseClientRef.current = null;
+        noiseBusy.current = false;
+      }
+    };
+  }, [noiseKey]);
 
   const blocked = unconnected.length > 0 || noDcPath.length > 0 || noOutput;
   const result =
@@ -1198,6 +1554,36 @@ export function SmallSignalPanel({
                 </header>
                 <BiasTable devices={devices} />
               </section>
+            ) : null}
+
+            {result ? (
+              <details
+                className="small-signal-options small-signal-noise"
+                open={noiseOpen}
+                onToggle={(event) => setNoiseOpen(event.currentTarget.open)}
+              >
+                <summary>Noise</summary>
+                <div>
+                  {!noiseResponse ? (
+                    <span className="small-signal-formula-pending" />
+                  ) : isSmallSignalError(noiseResponse) ? (
+                    <p className="small-signal-muted">{noiseResponse.error}</p>
+                  ) : noiseResponse.noise ? (
+                    <>
+                      <ExtraWarnings
+                        warnings={noiseResponse.warnings}
+                        shown={result.warnings}
+                      />
+                      <NoiseDetails
+                        noise={noiseResponse.noise}
+                        current={inputSource?.kind === "current"}
+                        band={noiseBand}
+                        onBand={setNoiseBand}
+                      />
+                    </>
+                  ) : null}
+                </div>
+              </details>
             ) : null}
 
             <details className="small-signal-options">

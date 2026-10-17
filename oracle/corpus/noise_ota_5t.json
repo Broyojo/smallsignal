@@ -1,0 +1,20 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  10.0,
+  1000.0,
+  100000.0,
+  10000000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "noise": {
+  "band": [
+   10.0,
+   100000000.0
+  ]
+ },
+ "description": "Five-transistor OTA with mirror load and a transistor tail, with flicker on the PMOS mirror"
+}

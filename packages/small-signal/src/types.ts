@@ -22,6 +22,10 @@ export interface SmallSignalRequest {
   /** Also match every candidate pair in this solve, except `unmatch`. */
   matchAuto?: boolean;
   unmatch?: string[][];
+  /** Also compute noise: spectra, sources and the input-referred PSD. */
+  noise?: boolean;
+  /** Integrate the noise over [fLow, fHigh] in Hz (implies `noise`). */
+  noiseBand?: [number, number];
 }
 
 export interface ComplexPoint {
@@ -123,6 +127,108 @@ export interface MatchCandidate {
   applied?: boolean;
 }
 
+/** A PSD at one frequency, in the spectrum's unit (V²/Hz or A²/Hz). */
+export interface NoisePoint {
+  f: number;
+  /** null where the PSD is not finite (flicker at 0 Hz, no gain). */
+  v2: number | null;
+}
+
+export interface NoiseContribution {
+  element: string;
+  /** thermal, flicker, shot, shot_c (collector) or shot_b (base). */
+  kind: string;
+  /** Its share of the output PSD, in V²/Hz (null when not finite). */
+  v2: number | null;
+  fraction: number | null;
+}
+
+/** Plain-text numerator and denominator, for checking tools. */
+export interface PlainFraction {
+  num: string;
+  den: string;
+}
+
+/** One closed form of the input-referred white (thermal + shot) PSD. */
+export interface NoiseExpression {
+  /** null when too large to typeset. */
+  latex: string | null;
+  /** null in hand analysis (no operating point). */
+  value: number | null;
+  /** Coefficients of 4kT and of 2q, when small enough to write out. */
+  thermal?: PlainFraction | null;
+  shot?: PlainFraction | null;
+  terms?: number;
+  relError?: number | null;
+  same?: boolean;
+  leakageMatters?: boolean;
+  /** Simplified form: how it was made, and what it assumes (if anything). */
+  method?: string;
+  assumption?: string;
+  tolerance?: number;
+}
+
+/** A noise source: its PSD formula and the numbers behind it. */
+export interface NoiseSource {
+  element: string;
+  kind: string;
+  /** The PSD formula as LaTeX, e.g. "\\frac{4kT}{R}". */
+  psd: string;
+  /** White PSD in A²/Hz; null for a flicker source. */
+  white: number | null;
+  /** Flicker: coef/f^exp in A²/Hz. */
+  flicker: { coef: number; exp: number } | null;
+}
+
+/** A bias-current symbol in the shot-noise terms, e.g. I_{C1}. */
+export interface NoiseCurrent {
+  name: string;
+  latex: string;
+  value: number | null;
+  unit: string;
+  elements: string[];
+}
+
+export interface SmallSignalNoise {
+  temperature: number;
+  /** Units of `input` and `output`: "V^2/Hz" or "A^2/Hz". */
+  inputUnit: string;
+  outputUnit: string;
+  sources: NoiseSource[];
+  output: NoisePoint[];
+  input: NoisePoint[];
+  /** The largest sources per frequency; the rest summed in `omitted`. */
+  contributors: {
+    f: number;
+    sources: NoiseContribution[];
+    omitted?: { count: number; v2: number | null; fraction: number | null };
+  }[];
+  integrated: {
+    fLow: number;
+    fHigh: number;
+    /** inputRms null, with `unavailable`, when the gain is zero inside the band (outputRms too when the output noise cannot be integrated). */
+    outputRms: number | null;
+    inputRms: number | null;
+    outputV2?: number | null;
+    inputV2?: number | null;
+    evaluations?: number;
+    relError?: number;
+    converged?: boolean;
+    unavailable?: string;
+  } | null;
+  inputLowFreq:
+    | {
+        /** "per Hz": the forms are PSDs. */
+        unit: string;
+        exact: NoiseExpression;
+        display: NoiseExpression;
+        simplified: NoiseExpression;
+        currents: NoiseCurrent[];
+        check: { ok: boolean; maxRelDiff: number } | null;
+      }
+    | { unavailable: string };
+}
+
 export interface SmallSignalResult {
   /** True when no operating point was computed (missing values or requested). */
   symbolic?: boolean;
@@ -141,6 +247,7 @@ export interface SmallSignalResult {
   gain?: SmallSignalQuantity;
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;
+  noise?: SmallSignalNoise;
 }
 
 export type SmallSignalResponse = SmallSignalResult | { error: string };

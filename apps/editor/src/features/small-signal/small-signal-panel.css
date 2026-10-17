@@ -390,3 +390,15 @@
 .small-signal-reset:hover {
   background: var(--icm-surface-hover);
 }
+
+.small-signal-values caption {
+  padding-bottom: 2px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  text-align: left;
+}
+
+.small-signal-values thead th {
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}

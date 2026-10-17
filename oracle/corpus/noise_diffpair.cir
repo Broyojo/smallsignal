@@ -1,0 +1,11 @@
+NMOS differential pair, differential output, ideal tail (tail noise is common-mode)
+VDD vdd 0 1.8
+VCM cm 0 1.0
+VIN inp cm DC 0 AC 1
+M1 o1 inp tail 0 nch W=10u L=1u
+M2 o2 cm tail 0 nch W=10u L=1u
+ITAIL tail 0 DC 200u
+RD1 vdd o1 5k
+RD2 vdd o2 5k
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.end

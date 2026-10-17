@@ -28,6 +28,7 @@ from pathlib import Path
 import mpmath as mp
 
 import spice
+from indep import model_params  # reads SPICE suffixes (KF=1f, TOX=100n)
 from run_ngspice import OPTIONS
 
 mp.mp.dps = 60
@@ -47,13 +48,6 @@ def run(binary: str, text: str, side: dict, extra: list[str]) -> dict:
     finally:
         Path(path).unlink()
     return json.loads(p.stdout)
-
-
-def model_params(text: str) -> dict[str, dict[str, float]]:
-    out = {}
-    for m in re.finditer(r"^\.model\s+(\S+)\s+\S+\s*\(?([^)\n]*)\)?", text, re.I | re.M):
-        out[m.group(1).lower()] = {k.lower(): float(v) for k, v in re.findall(r"(\w+)=([-+\d.eE]+)", m.group(2))}
-    return out
 
 
 def omitted_junctions(text: str, res: dict, gmin: float) -> list[tuple[str, str, mp.mpf, str]]:

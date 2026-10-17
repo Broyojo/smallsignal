@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
+    /// Bias currents: symbols outside the MNA system (noise expressions).
+    Current,
     Gm,
     Gmb,
     Gain,

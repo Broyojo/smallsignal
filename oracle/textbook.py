@@ -138,6 +138,8 @@ def check_case(case: Case, verbose: bool) -> list[str]:
             vals = {x: typical(x) for x in got.free_symbols | sp.sympify(q.approx()).free_symbols if x != s}
             ratio = float((got / q.approx()).subs(vals).subs(s, 0))
             notes.append(f"{qname}: exact/approx = {ratio:.4f} at typical values")
+    if case.noise is not None:
+        fails += check_noise(case, notes)
     if case.name.startswith("miller"):
         num = sp.numer(sp.together(ours(data["gain"])))
         zeros = sp.solve(num, s)
@@ -164,6 +166,41 @@ def check_case(case: Case, verbose: bool) -> list[str]:
     if verbose:
         for n in notes:
             print(f"    {n}")
+    return fails
+
+
+def noise_pair(form: dict) -> tuple[sp.Expr, sp.Expr]:
+    """(thermal, shot) from the solver's inputLowFreq form."""
+    part = lambda p: parse(p["num"]) / parse(p["den"]) if p else sp.Integer(0)  # noqa: E731
+    return part(form.get("thermal")), part(form.get("shot"))
+
+
+def check_noise(case: Case, notes: list[str]) -> list[str]:
+    fails: list[str] = []
+    nq = case.noise
+    data = run(case.netlist, case, ["--symbolic", "--noise"])
+    lf = data["noise"]["inputLowFreq"]
+    m = lambda pair: tuple(subs_matched(sp.sympify(x), nq.matched) for x in pair)  # noqa: E731
+    hand = m(nq.hand())
+    got = m(noise_pair(lf["exact"]))
+    for k, what in enumerate(("4kT", "2q")):
+        if not identical(got[k], hand[k]):
+            fails.append(f"noise {what}: solver {sp.simplify(got[k])}  !=  hand {sp.simplify(hand[k])}")
+    if nq.closed is not None:
+        closed = m(nq.closed())
+        for k, what in enumerate(("4kT", "2q")):
+            if not identical(closed[k], hand[k]):
+                fails.append(f"noise {what}: textbook closed form {closed[k]} != hand KCL {hand[k]} (derivation slip)")
+    simp = m(noise_pair(lf["simplified"]))
+    if nq.lead is not None:
+        want = m(nq.lead())
+    else:
+        want = tuple(sp.limit(h.subs({x: x / sp.Symbol("eps") for x in h.free_symbols if x.name.startswith("ro_")}),
+                              sp.Symbol("eps"), 0) for h in hand)
+    for k, what in enumerate(("4kT", "2q")):
+        if not identical(simp[k], want[k]):
+            fails.append(f"noise {what} leading order: solver {sp.simplify(simp[k])}  !=  textbook {sp.simplify(want[k])}")
+    notes.append(f"noise: S_in = {lf['simplified']['latex']}")
     return fails
 
 

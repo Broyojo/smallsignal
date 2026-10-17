@@ -2,6 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
 import { smallSignalNetlist } from "./netlist.js";
+import type {
+  NoiseExpression,
+  NoiseSource,
+  SmallSignalNoise,
+} from "./types.js";
 
 // Runs the real solver when the WASM has been built (wasm-pack, see
 // crates/README.md); skipped otherwise.
@@ -161,3 +166,123 @@ describe.skipIf(!built)("every shipped example", () => {
     );
   });
 });
+
+/**
+ * Every key of `T`, checked at compile time: the list must name them all.
+ * The runtime check below then fails when the solver emits a field the
+ * TypeScript contract does not declare.
+ */
+function allKeys<T>() {
+  return <K extends readonly (keyof T)[]>(
+    keys: K & ([Exclude<keyof T, K[number]>] extends [never] ? unknown : never),
+  ) => keys;
+}
+
+type LowFreq = Exclude<
+  SmallSignalNoise["inputLowFreq"],
+  { unavailable: string }
+>;
+type Integrated = NonNullable<SmallSignalNoise["integrated"]>;
+
+const NOISE_KEYS = allKeys<SmallSignalNoise>()([
+  "temperature",
+  "inputUnit",
+  "outputUnit",
+  "sources",
+  "output",
+  "input",
+  "contributors",
+  "integrated",
+  "inputLowFreq",
+] as const);
+const LOW_FREQ_KEYS = allKeys<LowFreq>()([
+  "unit",
+  "exact",
+  "display",
+  "simplified",
+  "currents",
+  "check",
+] as const);
+const EXPRESSION_KEYS = allKeys<NoiseExpression>()([
+  "latex",
+  "value",
+  "thermal",
+  "shot",
+  "terms",
+  "relError",
+  "same",
+  "leakageMatters",
+  "method",
+  "assumption",
+  "tolerance",
+] as const);
+const INTEGRATED_KEYS = allKeys<Integrated>()([
+  "fLow",
+  "fHigh",
+  "outputRms",
+  "inputRms",
+  "outputV2",
+  "inputV2",
+  "evaluations",
+  "relError",
+  "converged",
+  "unavailable",
+] as const);
+const SOURCE_KEYS = allKeys<NoiseSource>()([
+  "element",
+  "kind",
+  "psd",
+  "white",
+  "flicker",
+] as const);
+
+describe.skipIf(!built)(
+  "the solver's JSON matches the TypeScript contract",
+  () => {
+    it("noise: every emitted field is declared", async () => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const project = parseProject(
+        readFileSync(
+          new URL(
+            "../test-fixtures/cs-vdd-pin-wired.icproj.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      const netlist = smallSignalNetlist(project)!;
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({
+            input: "V1",
+            output: "Vout",
+            noise: true,
+            noiseBand: [1, 1e7],
+          }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      const declared = (value: object, keys: readonly string[]) =>
+        expect(Object.keys(value).filter((key) => !keys.includes(key))).toEqual(
+          [],
+        );
+      const noise = result.noise;
+      declared(noise, NOISE_KEYS);
+      declared(noise.inputLowFreq, LOW_FREQ_KEYS);
+      for (const form of ["exact", "display", "simplified"])
+        declared(noise.inputLowFreq[form], EXPRESSION_KEYS);
+      declared(noise.integrated, INTEGRATED_KEYS);
+      for (const source of noise.sources) declared(source, SOURCE_KEYS);
+      for (const point of noise.contributors)
+        declared(point, ["f", "sources", "omitted"]);
+      for (const point of [...noise.input, ...noise.output])
+        declared(point, ["f", "v2"]);
+    });
+  },
+);

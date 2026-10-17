@@ -1,0 +1,22 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  1000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "noise": {
+  "freqs": [
+   10.0,
+   1000.0,
+   100000.0
+  ],
+  "band": [
+   1.0,
+   1000000.0
+  ]
+ },
+ "description": "Diode and MOS flicker (diode KF=0.1f read with its suffix), elements with underscores, noise at noise.freqs"
+}

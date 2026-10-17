@@ -513,3 +513,17 @@ fn a_source_loop_is_still_singular() {
     );
     assert!(err.contains("singular"), "{err}");
 }
+
+/// TOX gives C_ox, not the Meyer gate capacitances ngspice adds: say so.
+#[test]
+fn tox_warns_that_gate_capacitances_are_not_modeled() {
+    let with_tox = CS.replace("lambda=0.1)", "lambda=0.1 tox=20n)");
+    let out = run(&with_tox, &request("VIN", "out"));
+    let warnings = out["warnings"].to_string();
+    assert!(
+        warnings.contains("Model nm has no gate capacitances from TOX"),
+        "{warnings}"
+    );
+    let plain = run(CS, &request("VIN", "out"));
+    assert!(!plain["warnings"].to_string().contains("TOX"));
+}

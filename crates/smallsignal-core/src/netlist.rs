@@ -1,6 +1,6 @@
 //! SPICE netlist subset parser (see plan/contract.md for the dialect).
 
-use crate::devices::{BjtModel, DiodeModel, MosModel};
+use crate::devices::{BjtModel, DiodeModel, MosModel, EPS_OX};
 use crate::units::parse_value;
 use std::collections::HashMap;
 
@@ -180,9 +180,11 @@ fn split_kv(toks: &[String]) -> (Vec<&str>, HashMap<String, String>) {
     (pos, kv)
 }
 
-const MOS_KNOWN: &[&str] = &["level", "kp", "vto", "vt0", "lambda", "gamma", "phi", "is"];
-const BJT_KNOWN: &[&str] = &["is", "bf", "br", "vaf", "va"];
-const DIODE_KNOWN: &[&str] = &["is", "n"];
+const MOS_KNOWN: &[&str] = &[
+    "level", "kp", "vto", "vt0", "lambda", "gamma", "phi", "is", "tox", "uo", "kf", "af",
+];
+const BJT_KNOWN: &[&str] = &["is", "bf", "br", "vaf", "va", "kf", "af"];
+const DIODE_KNOWN: &[&str] = &["is", "n", "kf", "af"];
 
 pub fn parse(text: &str) -> Result<Netlist, String> {
     let (title, lines) = logical_lines(text);
@@ -221,6 +223,11 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
         if !ignored.is_empty() {
             let list: Vec<&str> = ignored.iter().map(|s| s.as_str()).collect();
             warnings.push(format!("Model {name} ignores {}", list.join(", ")));
+        }
+        // TOX sets C_ox (KP, flicker noise), but ngspice also adds Meyer gate
+        // capacitances from it, which this solver does not model.
+        if matches!(kind.as_str(), "nmos" | "pmos") && params.get("tox").is_some_and(|&t| t > 0.0) {
+            warnings.push(format!("Model {name} has no gate capacitances from TOX"));
         }
         cards.insert(name, Card { kind, params });
     }
@@ -375,6 +382,9 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     gamma: 0.0,
                     phi: 0.6,
                     is: 0.0,
+                    cox: EPS_OX / 1e-7,
+                    kf: 0.0,
+                    af: 1.0,
                 };
                 (
                     Kind::M {
@@ -395,6 +405,8 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     bf: f64::NAN,
                     br: 1.0,
                     vaf: 0.0,
+                    kf: 0.0,
+                    af: 1.0,
                 };
                 (Kind::Q { model, area: 1.0 }, pos[..3].to_vec())
             }
@@ -406,6 +418,8 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                             name: String::new(),
                             is: f64::NAN,
                             n: 1.0,
+                            kf: 0.0,
+                            af: 1.0,
                         },
                         area: 1.0,
                     },
@@ -427,15 +441,27 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                         pos[4]
                     ));
                 }
+                // As mos1temp: TOX (default 1e-7 m) sets Cox; when TOX is
+                // given and KP is not, KP = UO·Cox (UO in cm²/V·s, default 600).
+                let tox = card.get("tox").filter(|&t| t > 0.0);
+                let cox = EPS_OX / tox.unwrap_or(1e-7);
+                let kp = match (card.get("kp"), tox) {
+                    (Some(kp), _) => kp,
+                    (None, Some(_)) => card.get("uo").unwrap_or(600.0) * 1e-4 * cox,
+                    (None, None) => 2e-5,
+                };
                 let model = MosModel {
                     name: pos[4].to_string(),
                     ty,
-                    kp: card.get("kp").unwrap_or(2e-5),
+                    kp,
                     vto: card.get("vto").or(card.get("vt0")).unwrap_or(0.0),
                     lambda: card.get("lambda").unwrap_or(0.0),
                     gamma: card.get("gamma").unwrap_or(0.0),
                     phi: card.get("phi").unwrap_or(0.6),
                     is: card.get("is").unwrap_or(1e-14),
+                    cox,
+                    kf: card.get("kf").unwrap_or(0.0),
+                    af: card.get("af").unwrap_or(1.0),
                 };
                 let kvf = |k: &str, d: f64| -> Result<f64, String> {
                     match kv.get(k) {
@@ -473,6 +499,8 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     bf: card.get("bf").unwrap_or(100.0),
                     br: card.get("br").unwrap_or(1.0),
                     vaf: card.get("vaf").or(card.get("va")).unwrap_or(0.0),
+                    kf: card.get("kf").unwrap_or(0.0),
+                    af: card.get("af").unwrap_or(1.0),
                 };
                 let area = match (pos.get(rest), kv.get("area")) {
                     (Some(a), _) => val(Some(a), "area")?,
@@ -491,6 +519,8 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     name: pos[2].to_string(),
                     is: card.get("is").unwrap_or(1e-14),
                     n: card.get("n").unwrap_or(1.0),
+                    kf: card.get("kf").unwrap_or(0.0),
+                    af: card.get("af").unwrap_or(1.0),
                 };
                 let area = match (pos.get(3), kv.get("area")) {
                     (Some(a), _) => val(Some(a), "area")?,

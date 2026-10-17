@@ -1,0 +1,14 @@
+Five-transistor OTA with mirror load and a transistor tail, with flicker on the PMOS mirror
+VDD vdd 0 1.8
+VCM cm 0 1.0
+VIN inp cm DC 0 AC 1
+M1 x inp tail 0 nch W=10u L=1u
+M2 out cm tail 0 nch W=10u L=1u
+M3 x x vdd vdd pchf W=20u L=1u
+M4 out x vdd vdd pchf W=20u L=1u
+M5 tail vbn 0 0 nch W=10u L=1u
+VBN vbn 0 0.7
+CL out 0 1p
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.model pchf PMOS (LEVEL=1 KP=80u VTO=-0.5 LAMBDA=0.1 KF=5e-26 AF=1)
+.end

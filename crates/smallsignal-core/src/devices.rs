@@ -24,6 +24,12 @@ pub struct MosModel {
     pub phi: f64,
     /// Bulk junction saturation current.
     pub is: f64,
+    /// Oxide capacitance per area (F/m²) from TOX (default 1e-7 m); used by
+    /// the flicker noise model only.
+    pub cox: f64,
+    /// Flicker noise coefficient and exponent (ngspice KF, AF).
+    pub kf: f64,
+    pub af: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +41,8 @@ pub struct BjtModel {
     pub br: f64,
     /// Forward Early voltage; 0 means infinite.
     pub vaf: f64,
+    pub kf: f64,
+    pub af: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -42,7 +50,12 @@ pub struct DiodeModel {
     pub name: String,
     pub is: f64,
     pub n: f64,
+    pub kf: f64,
+    pub af: f64,
 }
+
+/// Permittivity of SiO₂ (ngspice CONSTepsSiO2 = 3.9·ε₀).
+pub const EPS_OX: f64 = 3.9 * 8.854214871e-12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MosRegion {

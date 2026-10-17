@@ -39,7 +39,7 @@ with numeric values, poles and zeros, and the operating point.
 
 ## Correctness checks
 
-- `oracle/`: 29 hand-built circuits plus a seeded random-circuit fuzzer, each
+- `oracle/`: hand-built circuits (`corpus/`) plus a seeded random-circuit fuzzer, each
   compared with ngspice (`.op`, `.ac`) at 1e-6. See `oracle/README.md`.
 - `verify: true`: an exact check of the symbolic solution, A·N = b·D as a
   polynomial identity, tested modulo 2⁶¹−1 at random points (Schwartz–Zippel).
@@ -59,10 +59,12 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 
 `smallsignal analyze <netlist> --input <V|I source> --output <node>[:<ref>]
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
-[--freq f1,f2] [--rin] [--rout] [--tol 0.05] [--verify] [--symbolic]`, or
+[--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
+[--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
-`tolerance`, `verify`, `symbolic`, `maxTerms`). The response is JSON, or
+`noise`, `noiseBand`, `tolerance`, `verify`,
+`symbolic`, `maxTerms`). The response is JSON, or
 `{"error": "..."}` on failure.
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
@@ -107,3 +109,73 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
+
+## Noise (`noise: true`, optional `noiseBand: [fLow, fHigh]`)
+
+Sources are ngspice's at 27 °C (k = 1.38064852e-23, q = 1.6021766208e-19,
+T = 300.15 K), each a current between two nodes, checked against ngspice-47
+to 1e-6 (`oracle/`):
+
+| element | source (`kind`) | PSD (A²/Hz) |
+|---|---|---|
+| R | `thermal` | 4kT/R |
+| MOSFET | `thermal` (every region) | (2/3)·4kT·gm |
+| MOSFET | `flicker` | KF·gm²/(Cox·M·W·L·f^AF), Cox = 3.9ε₀/TOX (TOX default 1e-7) |
+| BJT | `shot_c` (c–e), `shot_b` (b–e) | 2q·\|Ic\|, 2q·\|Ib\| |
+| BJT | `flicker` (b–e) | KF·\|Ib\|^AF/f |
+| diode | `shot`, `flicker` | 2q·\|Id\|, KF·\|Id\|^AF/f |
+
+Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
+ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
+noise does. (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
+KF·Id^AF/(Cox·L²·f). With TOX given and KP not, KP = UO·Cox, UO default 600.)
+
+Output PSD S_out = Σ|Z_k|²·S_k with every transfer Z_k from one adjoint LU
+solve per frequency on the full model (input source zeroed); input-referred
+S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
+
+- `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite or
+  undefined). At 0 Hz a flicker source with AF > 0 gives the f → 0 limit of
+  \|Z(f)\|²·c/f^AF: for a transfer Z with a zero of order k at DC (k = 0: none),
+  0 when 2k > AF, c·\|lim Z/fᵏ\|² when 2k = AF, null (∞) when 2k < AF.
+  `input` is null at 0 Hz when the gain vanishes there.
+- `contributors`: `[{f, sources: [{element, kind, v2, fraction}], omitted?}]`,
+  per frequency, sorted by output contribution. At most the 32 largest
+  sources are listed; the rest are summed in `omitted: {count, v2,
+  fraction}`. When the output PSD is positive and finite, the listed
+  fractions plus `omitted.fraction` sum to 1; when it is 0, every fraction
+  is 0; when it is infinite, finite sources have fraction 0 and the
+  infinite ones null.
+- `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
+- `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
+  decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
+  evaluations, converged}`. Adaptive Simpson in ln(f/fLow), so any valid band
+  integrates however narrow (10 panels per decade plus the gain's pole and
+  zero frequencies as breakpoints, none merged away), refined globally (the
+  panel with the largest |S₂ − S₁| is split) until those differences sum to
+  ≤ 1e-6 of each integral (`converged`) or 200 000 evaluations. `relError` is
+  that sum relative to the integral plus κ₁·eps of the band's solves (on the
+  row- and column-equilibrated matrix); when that LU bound exceeds 1e-6 a
+  warning says so ("ill-conditioned in the band"), as for the spectra. A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the closed band
+  (within 1e-12 of an endpoint counts as at it) where the output noise does
+  not vanish makes `inputV2`/`inputRms` null, with
+  `unavailable`. (ngspice's own `inoise_total` can be off by percent; compare
+  with an integral of its spectrum.)
+- `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
+  `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
+  for a CS stage. `exact`, `display` (junction leakage dropped when that moves
+  it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form, then
+  magnitude pruning; the smallest form within `tolerance`; when even the
+  display form misses `tolerance`, the exact form, `method: "exact form"`),
+  each `{latex,
+  value, thermal: {num, den}, shot: {num, den}, terms}`; `currents` lists the
+  bias-current symbols I_{C1}, I_{B1}, I_{D1} (one per matched group, e.g.
+  I_{D1,2}); `check` compares the exact value with the numeric DC solve,
+  within rounding and the match tolerance. Flicker is numeric only.
+  `unavailable` says why when there is no DC limit: no gain at DC (also when
+  it vanishes at the values or once matched symbols merge), singular at
+  s = 0, or too large: any determinant, product, sum or difference in it
+  over `maxTerms` (the spectra are still given), including the full model's
+  form, needed when the junctions omitted for the gain matter for the noise.
+  Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
+  system at s = 0, so the determinant cancels exactly.

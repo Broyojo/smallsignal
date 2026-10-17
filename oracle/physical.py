@@ -11,19 +11,12 @@ node voltages (mos1load: IS·M·(exp(V/Vt) − 1)).
 from __future__ import annotations
 
 import math
-import re
 
 import spice
+from indep import model_params  # reads SPICE suffixes (KF=1f, TOX=100n)
 
 VT = 1.38064852e-23 * 300.15 / 1.6021766208e-19
 MAX_CURRENT = 1.0
-
-
-def model_params(text: str) -> dict[str, dict[str, float]]:
-    out = {}
-    for m in re.finditer(r"^\.model\s+(\S+)\s+\S+\s*\(?([^)\n]*)\)?", text, re.I | re.M):
-        out[m.group(1).lower()] = {k.lower(): float(v) for k, v in re.findall(r"(\w+)=([-+\d.eE]+)", m.group(2))}
-    return out
 
 
 def max_junction_current(result: dict, text: str) -> float:
