@@ -363,10 +363,11 @@ pub fn assumable(net: &Netlist, full: &SsCircuit) -> Value {
 
 /// Relative distance of a value from the full model's: |h − f| over |f|,
 /// floored at `floor` (1e-3 of the full response's peak, so a zero of the
-/// response does not dominate). Both infinite: 0; one of them: ∞.
+/// response does not dominate). One of them infinite: ∞; both: NaN, there
+/// is nothing to compare (reported as null).
 pub fn distance(h: Option<Complex64>, f: Option<Complex64>, floor: f64) -> f64 {
     match (h, f) {
-        (None, None) => 0.0,
+        (None, None) => f64::NAN,
         (Some(h), Some(f)) => {
             let d = (h - f).norm();
             if d == 0.0 {

@@ -506,6 +506,29 @@ fn certificates_cover_the_assumed_element_list() {
 }
 
 #[test]
+fn an_unbounded_quantity_has_no_error_metric() {
+    // Zin looking into a gate is infinite in both models: nothing to
+    // compare, so null rather than 0, on the exact and the numeric path.
+    let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.8 AC 1\nRD vdd out 10k\nM1 out in 0 0 nch W=10u L=1u\n\
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n";
+    for budget in [None, Some(1)] {
+        let mut r = req("VIN", "out", &[1e3, 1e6]);
+        r.rin = true;
+        r.max_terms = budget;
+        let v = run(net, &with(&r, ignore(&[("M1", "ro")])));
+        let rin = &v["rin"];
+        assert_eq!(rin["infinite"], true, "{budget:?}");
+        assert_eq!(rin["assumed"]["maxRelError"], Value::Null, "{budget:?} {rin}");
+        assert_eq!(rin["assumed"]["relError"], json!([null, null]), "{budget:?}");
+        if budget.is_none() {
+            assert_eq!(rin["exact"]["fullModelError"], Value::Null, "{rin}");
+        }
+        // A finite quantity next to it is still measured.
+        assert!(v["gain"]["assumed"]["maxRelError"].as_f64().is_some_and(|e| e > 0.0));
+    }
+}
+
+#[test]
 fn stability_is_the_full_models() {
     // Positive feedback through E1 (k = 3): a right-half-plane pole at
     // 1/(2π R C). With C1 open the assumed circuit has no pole at all, yet

@@ -1161,13 +1161,15 @@ struct Grid {
     bounds: Vec<f64>,
 }
 
-/// Worst `assume::distance` of `vals` from `full` over the grid.
+/// Worst `assume::distance` of `vals` from `full` over the grid points where
+/// either is finite; NaN (null) when there are none, e.g. both unbounded.
 fn deviation(vals: &[Option<Complex64>], full: &Grid) -> f64 {
     let floor = crate::assume::floor_of(&full.vals);
     vals.iter()
         .zip(&full.vals)
         .map(|(&h, &f)| crate::assume::distance(h, f, floor))
-        .fold(0.0, f64::max)
+        .filter(|d| !d.is_nan())
+        .fold(f64::NAN, f64::max)
 }
 
 /// `full` (the full model's quantity JSON) with the assumed model's forms
