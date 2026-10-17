@@ -48,8 +48,11 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   `noise.output` / `noise.input` as [{f, v2}] in
   V²/Hz (A²/Hz input-referred for an I-source input; ngspice prints V/√Hz
   densities, which are squared) and `noise.contributors` [{element, source,
-  values}] from `set noisedetail` (sources: thermal for R; id, 1overf, rd, rs
-  for MOS; ic, ib, 1overf, rb, rc, re for BJT; id, rs, 1overf for diodes).
+  values}] from `set noisedetail` (sources: thermal, 1overf for R; id, 1overf,
+  rd, rs for MOS; ic, ib, 1overf, rb, rc, re for BJT; id, rs, 1overf and the
+  sidewall idsw, rsw, 1overfsw for diodes). A netlist with an element named
+  `<element>_<source>` (R1 and R1_thermal: one vector onoise_r1_thermal for
+  both) is rejected, as is a source not in this list.
   With `inputNeg`, ngspice's input is one new source driving both inputs
   through controlled sources (±1/2, or +1 each in common mode), as the
   solver drives them. `noise.band` adds `noise.integrated`: the independent

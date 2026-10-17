@@ -324,6 +324,21 @@ def noise_input(net: spice.Netlist, side: dict) -> tuple[str, str]:
     return "\n".join(lines) + "\n", src
 
 
+# The noise sources ngspice-47 names per element kind in `set noisedetail`
+# (onoise_<element>_<source>).
+NOISE_SOURCES = {"r": ("thermal", "1overf"), "m": ("id", "1overf", "rd", "rs"),
+                 "q": ("ic", "ib", "1overf", "rb", "rc", "re"), "d": ("id", "rs", "1overf", "idsw", "rsw", "1overfsw")}
+
+
+def noise_name_clashes(net: spice.Netlist) -> list[str]:
+    """Elements named like another element's noise source: onoise_r1_thermal
+    is both R1's thermal noise and R1_thermal's total, so neither can be
+    told apart."""
+    names = {e.name for e in net.elements}
+    return [f"{e.name}_{s} (element) and {e.name}'s {s} noise"
+            for e in net.elements for s in NOISE_SOURCES.get(e.kind, ()) if f"{e.name}_{s}" in names]
+
+
 def split_contributor(body: str, names: list[str]) -> tuple[str, str]:
     """(element, source) of onoise_<body>; element names may contain
     underscores, so the longest element name that prefixes the body wins."""
@@ -344,13 +359,15 @@ def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
     density in V²/Hz (A²/Hz). With inputNeg the input is the pair (see
     noise_input). `set noisedetail` adds one vector per element
     (onoise_<element>) and per noise source of it (onoise_<element>_<source>:
-    id, 1overf, rd, rs for MOS; thermal, 1overf for R; ib, ic, rb, rc, re,
-    1overf for BJT; id, rs, 1overf for diodes), each the output-referred
-    density that source alone produces.
+    NOISE_SOURCES), each the output-referred density that source alone
+    produces. Element names that make those vectors ambiguous are rejected
+    (noise_name_clashes).
     """
     spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
     freqs = spec.get("freqs") or side.get("freqs", [])
     out, ref = side["output"], side.get("ref")
+    if clashes := noise_name_clashes(net):
+        raise NgspiceError(f"{name}: ngspice gives these the same noise vector, rename one: {'; '.join(clashes)}")
     netlist, src = noise_input(net, side)
     vout = f"v({out},{ref})" if ref else f"v({out})"
     lines = ["set noisedetail"]
@@ -369,6 +386,9 @@ def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
             if not key.startswith("onoise_") or key == "onoise_spectrum":
                 continue
             elem, source = split_contributor(key[len("onoise_"):], names)
+            kind = elem[:1]
+            if elem in names and source != "total" and source not in NOISE_SOURCES.get(kind, ()):
+                raise NgspiceError(f"{name}: unknown ngspice noise source {key}")
             contrib.setdefault((elem, source), []).append({"f": f, "v2": float(v) ** 2})
     result = {
         "units": "V^2/Hz (input: V^2/Hz for a V-source input, A^2/Hz for an I source)",
