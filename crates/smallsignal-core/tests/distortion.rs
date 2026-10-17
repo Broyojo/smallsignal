@@ -1082,3 +1082,49 @@ H1 n3 n1 V3 10.54\n.model pch PMOS (LEVEL=1 KP=0.0003912 VTO=-0.4293 LAMBDA=0.02
         .iter()
         .any(|w| w.as_str().unwrap().contains("closed form and numeric")));
 }
+
+#[test]
+fn a_huge_amplitude_overflows_to_unavailable_not_infinite() {
+    // a1 = −4, a2 = −5, a3 ≠ 0 (λ): at A = 1e200, HD2 = 5A/8 is a number but
+    // HD3 = |a3|A²/16 exceeds f64. That is unavailable (null, with a
+    // warning), never \infty (which says a1 = 0), here and versus frequency.
+    let net = SQUARE.replace("kp=200u vto=0.5", "kp=200u vto=0.5 lambda=0.05");
+    let rq = |amp: f64| {
+        run(
+            &net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "amplitude": amp, "freqs": [1e3] })),
+        )
+    };
+    let r = rq(1e200);
+    let d = &r["distortion"];
+    let a = |n: usize| d["coefficients"][n]["numeric"].as_f64().unwrap();
+    assert!(
+        rel(
+            d["hd2"]["value"].as_f64().unwrap(),
+            a(1).abs() * 1e200 / (2.0 * a(0).abs())
+        ) < 1e-12
+    );
+    assert!(d["hd3"].is_null(), "{}", d["hd3"]);
+    assert!(d["iip3"]["value"].as_f64().unwrap() > 0.0);
+    let p = &d["vsFreq"][0];
+    assert!(p["hd3"].is_null() && p.get("hd3Infinite").is_none(), "{p}");
+    assert!(p["hd2"].as_f64().unwrap() > 0.0);
+    let warned = |r: &Value, s: &str| {
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains(s))
+    };
+    assert!(warned(&r, "HD3 exceeds the largest number"), "{}", r["warnings"]);
+    // A product that overflows on the way to a representable value is
+    // still that value: HD2 = 5·1e308/8.
+    let r = rq(1e308);
+    let d = &r["distortion"];
+    let want = (5.0 / 8.0) * 1e308 * (a(1) / -5.0) / (a(0) / -4.0);
+    assert!(
+        rel(d["hd2"]["value"].as_f64().unwrap(), want) < 1e-12,
+        "{}",
+        d["hd2"]["value"]
+    );
+}

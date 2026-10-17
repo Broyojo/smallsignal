@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // --- Taylor arithmetic: three variables, total degree ≤ 3 ------------------
 
@@ -1221,24 +1221,29 @@ pub fn closed(
             Ok(p)
         };
         // Order-2 currents per device output (numerators over D²).
-        let mut i2: HashMap<(usize, usize), XPoly> = HashMap::new();
+        // Sums go in a canonical order (device, output) and are held to
+        // the budget whole (sum_within).
+        let mut parts2: BTreeMap<(usize, usize), Vec<XPoly>> = BTreeMap::new();
         for (k, c) in coefs.iter().enumerate() {
             if cidx[k].is_some() && c.order() == 2 {
                 let t = mul(&kvar(k), &pow(&u1[c.dev], &c.mono)?)?;
-                let e = i2.entry((c.dev, c.out)).or_default();
-                *e = fit(std::mem::take(e).add_owned(t)?)?;
+                parts2.entry((c.dev, c.out)).or_default().push(t);
             }
         }
+        let mut i2: BTreeMap<(usize, usize), XPoly> = BTreeMap::new();
+        for (key, parts) in parts2 {
+            i2.insert(key, sum_within(parts, mt)?);
+        }
         // Response of node n to the order-2 currents: numerator over D³.
-        let mut respond = |n: usize, cur: &HashMap<(usize, usize), XPoly>| -> Result<XPoly, String> {
-            let mut acc = XPoly::default();
+        let mut respond = |n: usize, cur: &BTreeMap<(usize, usize), XPoly>| -> Result<XPoly, String> {
+            let mut parts = Vec::new();
             for (&(dv, o), i) in cur {
                 let ot = &devs[dv].outs[o];
                 // The current leaves node a and enters node b.
                 let t = fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?)?;
-                acc = fit(acc.add_owned(mul(&t, i)?)?)?;
+                parts.push(mul(&t, i)?);
             }
-            Ok(acc)
+            sum_within(parts, mt)
         };
         // Each node's response to the order-2 currents, computed once.
         let mut r2: HashMap<usize, XPoly> = HashMap::new();
@@ -1272,7 +1277,7 @@ pub fn closed(
             // Order-3 currents (over D⁴): K₃·u₁³·D + K₂·(u₁u₂ + u₂u₁). A BJT's
             // two currents share each monomial's product.
             let mut prods: HashMap<(usize, [u8; 3]), XPoly> = HashMap::new();
-            let mut i3: HashMap<(usize, usize), XPoly> = HashMap::new();
+            let mut parts3: BTreeMap<(usize, usize), Vec<XPoly>> = BTreeMap::new();
             for (k, c) in coefs.iter().enumerate() {
                 if cidx[k].is_none() || !(2..=3).contains(&c.order()) {
                     continue;
@@ -1291,8 +1296,11 @@ pub fn closed(
                     v.insert(t);
                 }
                 let t = mul(&kvar(k), &prods[&(c.dev, c.mono)])?;
-                let e = i3.entry((c.dev, c.out)).or_default();
-                *e = fit(std::mem::take(e).add_owned(t)?)?;
+                parts3.entry((c.dev, c.out)).or_default().push(t);
+            }
+            let mut i3: BTreeMap<(usize, usize), XPoly> = BTreeMap::new();
+            for (key, parts) in parts3 {
+                i3.insert(key, sum_within(parts, mt)?);
             }
             num.push(fit(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?)?);
             powers.push(5);
@@ -1456,6 +1464,22 @@ const DIST_TERM_LIMIT: usize = 100_000;
 /// Plain text (for checking tools, not display) up to this many terms.
 pub(crate) const PLAIN_TERM_LIMIT: usize = 20_000;
 
+/// Σ parts, held to the term budget once: a partial sum whose terms
+/// cancel later decides nothing, so the result does not depend on the
+/// order. Each part is a product already within the budget, so the
+/// running sum of k parts never exceeds k·max_terms before the check.
+fn sum_within(parts: Vec<XPoly>, max_terms: usize) -> Result<XPoly, String> {
+    let mut acc = XPoly::default();
+    for p in parts {
+        acc = acc.add_owned(p)?;
+    }
+    if acc.terms.len() > max_terms {
+        Err(format!("expression too large (over {max_terms} terms)"))
+    } else {
+        Ok(acc)
+    }
+}
+
 /// num/den cancelled, as an expression; None when num is zero.
 fn expr(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<Expr> {
     if num.is_zero() {
@@ -1517,6 +1541,17 @@ fn form(e: Option<&Expr>, syms: &[Sym], shape: &Shape) -> Value {
         }
     };
     json!({ "latex": latex, "plain": plain, "terms": terms, "value": num_or_null((shape.map)(value(e))) })
+}
+
+/// x·A^n/2^n (an HD value at amplitude A, x = |a_{n+1}|/|a1|) when it is
+/// a number: `direct` (the plain product) if finite, else from logarithms
+/// (`ln_x` = ln x), None when the value exceeds f64.
+fn representable(direct: f64, ln_x: impl Fn() -> f64, amp: f64, n: usize) -> Option<f64> {
+    if direct.is_finite() {
+        return Some(direct);
+    }
+    let l = ln_x() + n as f64 * (amp.ln() - std::f64::consts::LN_2);
+    (l < f64::MAX.ln()).then(|| l.exp())
 }
 
 /// Relative size below which an a_n (H_n) is 0 to roundoff: of the size
@@ -1939,42 +1974,43 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // With a1 = 0 a ratio over it is infinite, or 0/0 (unavailable) when
     // a_n is 0 too, to roundoff of its terms.
     let zero = |n: usize| a(n).abs() <= ZERO_REL * terms[n];
-    let over_a1 = |n: usize, v: f64| {
-        if !zero(0) {
-            v
-        } else if zero(n) {
-            f64::NAN
-        } else {
-            f64::INFINITY
+    // HD_n at this amplitude: infinite (a1 = 0) or 0/0 by structure, else
+    // the scaled value; None when it exceeds f64 (a huge amplitude), which
+    // is unavailable, not infinite.
+    let mut overflowed: Vec<&str> = Vec::new();
+    let hd_ref = |n: usize| -> Option<f64> {
+        if zero(0) {
+            return Some(if zero(n) { f64::NAN } else { f64::INFINITY });
         }
+        let direct = match n {
+            1 => a(1).abs() * amp / (2.0 * a(0).abs()),
+            _ => a(2).abs() * amp * amp / (4.0 * a(0).abs()),
+        };
+        representable(direct, || a(n).abs().ln() - a(0).abs().ln(), amp, n)
     };
     let w2 = |l: &str| format!("\\frac{{A}}{{2}}\\left|{l}\\right|");
-    let m2 = |x: f64| x.abs() * amp / 2.0;
+    let m2 = |x: f64| representable(x.abs() * amp / 2.0, || x.abs().ln(), amp, 1).unwrap_or(f64::INFINITY);
     let (e, nl) = both(&|cl| cl.ratio(1), false);
-    resp.insert(
-        "hd2".into(),
-        quantity(
-            e,
-            nl,
-            over_a1(1, a(1).abs() * amp / (2.0 * a(0).abs())),
-            &Shape { wrap: &w2, map: &m2 },
-            c.tol,
-        ),
-    );
+    let hd2 = match hd_ref(1) {
+        Some(r) => quantity(e, nl, r, &Shape { wrap: &w2, map: &m2 }, c.tol),
+        None => {
+            overflowed.push("HD2");
+            Value::Null
+        }
+    };
+    resp.insert("hd2".into(), hd2);
     if c.order >= 3 {
         let w3 = |l: &str| format!("\\frac{{A^{{2}}}}{{4}}\\left|{l}\\right|");
-        let m3 = |x: f64| x.abs() * amp * amp / 4.0;
+        let m3 = |x: f64| representable(x.abs() * amp * amp / 4.0, || x.abs().ln(), amp, 2).unwrap_or(f64::INFINITY);
         let (e, nl) = both(&|cl| cl.ratio(2), false);
-        resp.insert(
-            "hd3".into(),
-            quantity(
-                e,
-                nl,
-                over_a1(2, a(2).abs() * amp * amp / (4.0 * a(0).abs())),
-                &Shape { wrap: &w3, map: &m3 },
-                c.tol,
-            ),
-        );
+        let hd3 = match hd_ref(2) {
+            Some(r) => quantity(e, nl, r, &Shape { wrap: &w3, map: &m3 }, c.tol),
+            None => {
+                overflowed.push("HD3");
+                Value::Null
+            }
+        };
+        resp.insert("hd3".into(), hd3);
         let iip3 = if zero(2) && !zero(0) {
             infinite()
         } else {
@@ -2050,6 +2086,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         }
     }
 
+    let vs_overflow = std::cell::Cell::new(false);
     // Harmonic distortion versus frequency, numerically on the full model:
     // HD2 = |H2(jω,jω)|·A/(2|H1(jω)|), HD3 = |H3(jω,jω,jω)|·A²/(4|H1(jω)|).
     let vs: Vec<Value> = c
@@ -2061,10 +2098,27 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 // notch at f): then HD_n is infinite or unavailable below.
                 let h1_zero = h[0].norm() <= ZERO_REL * nt[0];
                 let a1 = if h1_zero { 0.0 } else { h[0].norm() };
+                // A value beyond f64 (a huge amplitude) is unavailable.
+                let hd = |n: usize| -> Value {
+                    let direct = match n {
+                        1 => h[1].norm() * amp / (2.0 * a1),
+                        _ => h[2].norm() * amp * amp / (4.0 * a1),
+                    };
+                    if a1 == 0.0 {
+                        return num_or_null(direct);
+                    }
+                    match representable(direct, || h[n].norm().ln() - a1.ln(), amp, n) {
+                        Some(v) => num_or_null(v),
+                        None => {
+                            vs_overflow.set(true);
+                            Value::Null
+                        }
+                    }
+                };
                 let mut p = json!({
                     "f": f,
-                    "hd2": num_or_null(h[1].norm() * amp / (2.0 * a1)),
-                    "hd3": if c.order >= 3 { num_or_null(h[2].norm() * amp * amp / (4.0 * a1)) } else { Value::Null },
+                    "hd2": hd(1),
+                    "hd3": if c.order >= 3 { hd(2) } else { Value::Null },
                 });
                 // H1 = 0: HD_n is infinite unless H_n is 0 too (to roundoff
                 // of its terms), then unavailable.
@@ -2082,6 +2136,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         })
         .collect();
     resp.insert("vsFreq".into(), json!(vs));
+    if vs_overflow.get() {
+        overflowed.push("HD versus frequency");
+    }
+    overflowed.dedup();
+    for what in overflowed {
+        warnings.push(format!("{what} exceeds the largest number at amplitude {amp:e}."));
+    }
     Ok(Value::Object(resp))
 }
 
@@ -2092,6 +2153,22 @@ mod tests {
     thread_local! {
         /// ω of every factorization `Probe::lu` makes on this thread.
         pub(super) static FACTORED: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// A sum is held to the budget whole: x + y − y fits one term in
+    /// every order of its parts (checking each partial sum would reject
+    /// the orders that put x and y first).
+    #[test]
+    fn a_cancelling_sum_fits_in_any_order() {
+        let x = XPoly::var(0, 2);
+        let y = XPoly::var(1, 2);
+        let my = y.scaled(-1).unwrap();
+        let parts = [x.clone(), y, my];
+        for perm in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+            let sum = sum_within(perm.iter().map(|&k| parts[k].clone()).collect(), 1).unwrap();
+            assert_eq!(sum, x, "{perm:?}");
+        }
+        assert!(sum_within(vec![XPoly::var(0, 2), XPoly::var(1, 2)], 1).is_err());
     }
 
     /// An order-2 request classifies a notched fundamental (H1 = 0 to

@@ -223,13 +223,14 @@ transfer cofactors. Response `distortion`:
   `{latex: "\infty", value: null, display: {latex: "\infty", value: null},
   simplified: (same)}`. Null means unavailable: `hd3` and `iip3` for
   `order` 2, and any of the three where it is 0/0 at DC (a₁ = 0 with a₂ or
-  a₃ = 0, e.g. an input blocked by a coupling capacitor). An a_n (a₁
-  included) counts as 0 here when within 1e-12 of the size of its terms
-  (see `check`).
+  a₃ = 0, e.g. an input blocked by a coupling capacitor), or where the
+  value exceeds f64 at a huge amplitude (with a warning; never `\infty`,
+  which only a₁ = 0 gives). An a_n (a₁ included) counts as 0 here when
+  within 1e-12 of the size of its terms (see `check`).
 - `vsFreq`: `[{f, hd2, hd3}]` at `freqs` from H₂(jω,jω) and H₃(jω,jω,jω)
   (LU solves at ω, 2ω and, for `order` 3, 3ω on the full model; a singular
   system at 2ω or 3ω leaves only that order null). A value is null when
-  unavailable or infinite; `hd2Infinite: true` (`hd3Infinite: true`) is
+  unavailable (also beyond f64, warned) or infinite; `hd2Infinite: true` (`hd3Infinite: true`) is
   present only when it is infinite (H₁ = 0, H₂ (H₃) ≠ 0, each by the same
   1e-12 rule at that frequency: a notch at f leaves H₁ a roundoff residual).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
@@ -250,7 +251,9 @@ transfer cofactors. Response `distortion`:
   row, so a buffered node is as large as what it buffers. An a_n that
   cancels exactly (a matched pair's a₂) is then not compared with its
   numeric roundoff alone.
-- Every field is always present. The term budget holds per quantity: one
+- Every field is always present. Sums are taken in a canonical order and
+  held to the term budget whole, so terms that cancel never decide it. The
+  term budget holds per quantity: one
   whose exact closed form would exceed 100k terms or `maxTerms` (its
   numerator or the parts it is built from, which for a_n include
   a_{n−1}'s, or the D^{2n−1} under it; e.g. a 5T OTA's a₃ with junction
