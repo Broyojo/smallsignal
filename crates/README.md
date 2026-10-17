@@ -124,9 +124,10 @@ exceed `maxTerms` terms (default 2,000,000).
   forward-biased by ideal sources (also named in the DC error when that is
   why DC fails), two-terminal elements with both ends on one node
   ("CSB has both ends at 0"), a root of the circuit determinant (every
-  source zeroed) with re > 1e-6·|p| in numeric mode ("Unstable at this
-  bias: …", not when a coefficient's sign is below its rounding error),
-  and so on.
+  source zeroed, on the full model with each parameter's own value) with
+  re > 1e-6·|p| in numeric mode ("Unstable at this bias: …", not when a
+  coefficient's sign is below its rounding error; "Stability not checked"
+  when that determinant exceeds `maxTerms`), and so on.
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.

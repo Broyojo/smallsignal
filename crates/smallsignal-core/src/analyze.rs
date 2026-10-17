@@ -373,13 +373,28 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     );
 
     // Stability at this bias: the circuit's natural frequencies (the roots of
-    // its determinant, every source zeroed).
+    // its determinant, every source zeroed), on the full model with every
+    // parameter's own value. A junction conductance left out because no
+    // reported value moves can still move a marginal pole across the jω
+    // axis, and matched symbols carry one member's value.
     if !symbolic {
-        let modes = Expr::from_mna(&XPoly::constant(1, symbols.syms.len()), &x(&d)?, &symbols.syms);
-        match rhp_poles(&modes) {
-            0 => {}
-            1 => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
-            _ => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+        let d_full = if omitted.is_empty() {
+            Ok(d.clone())
+        } else {
+            crate::det::det(&fsys.gain.a, max_terms)
+        };
+        match d_full {
+            Ok(df) => {
+                let own = sym::unmerged(&full);
+                let df = XPoly::from_poly(&df, &own.class, own.syms.len())?;
+                let modes = Expr::from_mna(&XPoly::constant(1, own.syms.len()), &df, &own.syms);
+                match rhp_poles(&modes) {
+                    0 => {}
+                    1 => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
+                    _ => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+                }
+            }
+            Err(_) => warnings.push("Stability not checked. The full model is too large.".to_string()),
         }
     }
 

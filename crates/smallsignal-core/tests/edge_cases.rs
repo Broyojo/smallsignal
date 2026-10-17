@@ -669,6 +669,28 @@ fn triode_inference_needs_the_bulk_bias() {
     assert_eq!(r["warnings"], json!(["M1 is in triode"]));
 }
 
+/// Stability is judged on the full model, not the one with junction
+/// conductances left out. A block the output does not see (so leaving its
+/// bulk junction out moves no reported value) has a net conductance of
+/// −0.5 pS without the junction (gmin, 1 pS, as M9 is off) and +0.5 pS
+/// with it: stable. Before: "Unstable at this bias", from the model
+/// without the junction.
+#[test]
+fn stability_uses_the_full_model() {
+    let net = "blk\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\nRX x 0 1meg\nGX 0 x x 0 1.0000005u\nCX x 0 1p\n\
+               M9 x 0 0 0 nm\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let r = run(net, &request("VIN", "out"));
+    assert_eq!(r["omittedJunctions"], json!(["rbd_M9"]));
+    assert_eq!(r["warnings"], json!(["M9 is off"]));
+    // The reduced determinant fits maxTerms but the full one does not: no
+    // verdict rather than the reduced model's.
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "maxTerms": 6 })));
+    assert_eq!(
+        r["warnings"],
+        json!(["M9 is off", "Stability not checked. The full model is too large."])
+    );
+}
+
 /// An element with both ends on one node contributes nothing: it is named,
 /// and the result is the circuit's without it.
 #[test]
