@@ -19,6 +19,7 @@ import {
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
   ASSUMPTION_REGIONS,
+  ASSUMPTION_TERMS,
   createSmallSignalClient,
   DEFAULT_MODEL_PARAMETERS,
   DEFAULT_SUPPLY_VOLTAGE,
@@ -60,6 +61,7 @@ import {
   partKey,
   saveCircuits,
   saveDefaults,
+  sameChoices,
   storeCircuit,
   touchCircuit,
   TRANSISTOR_TYPES,
@@ -1729,7 +1731,7 @@ const REGION_LABEL: Record<string, string> = {
 interface AssumptionMember {
   name: string;
   type: AssumableType;
-  /** Instance path joined, the key its choices are stored under. */
+  /** `partKey` of its instance path, the key its choices are stored under. */
   path: string;
   /** Set for a part drawn in the open Cell itself (selectable there). */
   instanceId: string | null;
@@ -1748,20 +1750,30 @@ export interface AssumptionRow {
 const byName = (a: string, b: string) =>
   a.localeCompare(b, undefined, { numeric: true });
 
+interface AssumptionChoices {
+  defaults: AssumptionDefaults;
+  parts: CircuitAssumptions;
+}
+
 /**
  * The table's rows: each transistor type present ("All NMOS"), then its
- * matched groups and other parts, then passives and diodes.
+ * matched groups and other parts, then passives and diodes. A matched
+ * group is one row only while its members make the same choices, as the
+ * solver matches them; otherwise each member is its own row.
  */
 export function assumptionRows(
   assumable: readonly AssumableElement[],
   elements: readonly SmallSignalElement[],
   groups: readonly (readonly string[])[],
+  { defaults, parts }: AssumptionChoices,
 ): AssumptionRow[] {
   const drawn = new Map(elements.map((element) => [element.name, element]));
   const members = new Map<string, AssumptionMember>();
   for (const { element, type, terms } of assumable) {
-    const instancePath = drawn.get(element)?.instancePath;
-    if (!instancePath) continue;
+    const part = drawn.get(element);
+    // Metadata from a solve of another drawing never describes this part.
+    if (!part || part.kind !== type) continue;
+    const instancePath = part.instancePath;
     members.set(element, {
       name: element,
       type,
@@ -1791,7 +1803,13 @@ export function assumptionRows(
       if (
         found.length < 2 ||
         found.length !== group.length ||
-        found.some((member) => grouped.has(member.name))
+        found.some((member) => grouped.has(member.name)) ||
+        !sameChoices(
+          type,
+          found.map((member) => member.path),
+          defaults,
+          parts,
+        )
       )
         continue;
       found.sort((a, b) => byName(a.name, b.name));
@@ -1847,6 +1865,49 @@ interface AssumptionChange {
 }
 
 /**
+ * A row's column checked or cleared. A type row sets the default for every
+ * term of the column the type accepts, not only the ones this circuit's
+ * parts have: the default holds in every circuit.
+ */
+export function assumptionColumnChange(
+  row: AssumptionRow,
+  column: string,
+  on: boolean,
+  { defaults, parts }: AssumptionChoices,
+): AssumptionChange {
+  const inColumn = (terms: readonly AssumptionTerm[]) =>
+    terms.filter((term) => termColumn(term) === column);
+  if (row.scope === "type" && isTransistor(row.type))
+    return withDefault(
+      defaults,
+      parts,
+      row.type,
+      inColumn(ASSUMPTION_TERMS[row.type]),
+      on,
+      row.members.map((member) => member.path),
+    );
+  let next = parts;
+  for (const member of row.members)
+    next = withTerms(
+      next,
+      member.path,
+      row.type,
+      inColumn(member.terms),
+      on,
+      defaults,
+    );
+  return { parts: next };
+}
+
+/** The last answer, only for the circuit (Cell) it answered. */
+export function resultForCircuit<T>(
+  last: { circuit: string; result: T } | null,
+  circuit: string,
+): T | null {
+  return last?.circuit === circuit ? last.result : null;
+}
+
+/**
  * Per-device assumptions: checked terms are neglected, a passive is taken
  * open or shorted, and a region is checked against the bias, never imposed.
  * A type row sets the default for every circuit; a matched group's members
@@ -1887,34 +1948,8 @@ function AssumptionTable({
         ?.scrollIntoView({ block: "nearest" });
   }, [selectedRows]);
 
-  const setTerms = (row: AssumptionRow, column: string, on: boolean) => {
-    const terms = (member: AssumptionMember) =>
-      member.terms.filter((term) => termColumn(term) === column);
-    if (row.scope === "type" && isTransistor(row.type)) {
-      onChange(
-        withDefault(
-          defaults,
-          parts,
-          row.type,
-          [...new Set(row.members.flatMap(terms))],
-          on,
-          row.members.map((member) => member.path),
-        ),
-      );
-      return;
-    }
-    let next = parts;
-    for (const member of row.members)
-      next = withTerms(
-        next,
-        member.path,
-        row.type,
-        terms(member),
-        on,
-        defaults,
-      );
-    onChange({ parts: next });
-  };
+  const setTerms = (row: AssumptionRow, column: string, on: boolean) =>
+    onChange(assumptionColumnChange(row, column, on, { defaults, parts }));
 
   const termCell = (row: AssumptionRow, column: string) => {
     const pairs = row.members.flatMap((member) =>
@@ -2404,9 +2439,13 @@ export function SmallSignalPanel({
   // The request the response answers: a queued solve can still deliver an
   // older circuit's result after the circuit changed.
   const [responseKey, setResponseKey] = useState<string | null>(null);
-  // The latest answer that was not an error: the Assumptions table keeps
-  // its rows while a choice the solver refuses is on screen.
-  const [lastResult, setLastResult] = useState<SmallSignalResult | null>(null);
+  // The latest answer that was not an error, with the circuit it answered:
+  // the Assumptions table keeps its rows while a choice the solver refuses
+  // is on screen, but never shows another Cell's.
+  const [lastResult, setLastResult] = useState<{
+    circuit: string;
+    result: SmallSignalResult;
+  } | null>(null);
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);
@@ -2554,8 +2593,11 @@ export function SmallSignalPanel({
           ...(assume ? { assume } : {}),
         }
       : null;
+  // The circuit too: two Cells can draw the same netlist text.
   const requestKey =
-    netlist && request ? JSON.stringify([netlist.text, request]) : null;
+    netlist && request
+      ? JSON.stringify([netlist.text, request, assumptionKey])
+      : null;
 
   useEffect(() => {
     if (!requestKey) {
@@ -2563,7 +2605,11 @@ export function SmallSignalPanel({
       return;
     }
     // The key is the whole job: the netlist text and every request field.
-    const [text, job] = JSON.parse(requestKey) as [string, SmallSignalRequest];
+    const [text, job, circuit] = JSON.parse(requestKey) as [
+      string,
+      SmallSignalRequest,
+      string,
+    ];
     const current = ++generation.current;
     const timer = setTimeout(() => {
       const client = clientRef.current;
@@ -2573,7 +2619,7 @@ export function SmallSignalPanel({
         if (current !== generation.current) return;
         setResponse(next);
         setResponseKey(requestKey);
-        if (!isSmallSignalError(next)) setLastResult(next);
+        if (!isSmallSignalError(next)) setLastResult({ circuit, result: next });
         setSolving(false);
       });
     }, SOLVE_DEBOUNCE_MS);
@@ -2796,15 +2842,17 @@ export function SmallSignalPanel({
   const otherUnknown = unknownBias.filter(
     (name) => !sources.some((source) => source.pin === name),
   );
+  const solved = resultForCircuit(lastResult, assumptionKey);
   const assumptionTableRows = netlist
     ? assumptionRows(
-        lastResult?.assumable ?? [],
+        solved?.assumable ?? [],
         netlist.elements,
-        (lastResult?.matchCandidates ?? [])
+        (solved?.matchCandidates ?? [])
           .filter(
             (candidate) => candidate.kind === "device" && candidate.applied,
           )
           .map((candidate) => candidate.elements),
+        { defaults: assumptionDefaults, parts: assumptionParts },
       )
     : [];
   const assumptionsStored =

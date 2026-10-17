@@ -27,7 +27,30 @@ const ELEMENTS: SmallSignalElement[] = [
 describe("keys", () => {
   it("names a circuit by project and root Cell, a part by its instance path", () => {
     expect(circuitStorageKey("project-1", "main")).toBe("project-1/main");
-    expect(partKey(["x1", "m2"])).toBe("x1/m2");
+    expect(partKey(["x1", "m2"])).toBe('["x1","m2"]');
+  });
+
+  it("never gives two instance paths one key, whatever their ids hold", () => {
+    expect(partKey(["a/b", "c"])).not.toBe(partKey(["a", "b/c"]));
+    expect(partKey(['a","b'])).not.toBe(partKey(["a", "b"]));
+  });
+
+  it("reads a key stored as joined ids only where it cannot be ambiguous", () => {
+    const stored = {
+      k: {
+        used: 1,
+        parts: {
+          m1: { region: "triode" },
+          "x1/m2": { region: "triode" },
+          '["x1","m3"]': { region: "triode" },
+          "[1]": { region: "triode" },
+        },
+      },
+    };
+    expect(Object.keys(readCircuits(JSON.stringify(stored)).k!.parts)).toEqual([
+      partKey(["m1"]),
+      partKey(["x1", "m3"]),
+    ]);
   });
 });
 
@@ -67,7 +90,12 @@ describe("readCircuits", () => {
       c: { used: 1, parts: [] },
     };
     expect(readCircuits(JSON.stringify(stored))).toEqual({
-      a: { used: 5, parts: { m1: { ignore: { ro: true }, region: "triode" } } },
+      a: {
+        used: 5,
+        parts: {
+          [partKey(["m1"])]: { ignore: { ro: true }, region: "triode" },
+        },
+      },
     });
     expect(readCircuits("not json")).toEqual({});
   });
@@ -200,10 +228,13 @@ describe("assumptionRequest", () => {
       ELEMENTS,
       { nmos: ["ro"], npn: ["rpi"] },
       {
-        m1: { ignore: { ro: false, gmb: true }, region: "triode" },
-        "x1/m2": { region: "forward-active" },
-        r1: { ignore: { short: true } },
-        v1: { ignore: { open: true } },
+        [partKey(["m1"])]: {
+          ignore: { ro: false, gmb: true },
+          region: "triode",
+        },
+        [partKey(["x1", "m2"])]: { region: "forward-active" },
+        [partKey(["r1"])]: { ignore: { short: true } },
+        [partKey(["v1"])]: { ignore: { open: true } },
       },
     );
     expect(request).toEqual({

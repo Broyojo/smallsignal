@@ -6,10 +6,13 @@ import type {
   SmallSignalSource,
   SmallSignalSuggestion,
 } from "@icm/small-signal";
+import { partKey } from "./small-signal-assumption-store";
 import {
+  assumptionColumnChange,
   assumptionColumns,
   assumptionRows,
   formatDeviation,
+  resultForCircuit,
   formatPercent,
   suggestionText,
   suggestionThreshold,
@@ -387,6 +390,7 @@ describe("formatPercent", () => {
 });
 
 describe("assumption table", () => {
+  const NONE = { defaults: {}, parts: {} };
   const assumable = [
     { element: "R1", type: "resistor" as const, terms: ["open", "short"] },
     { element: "M2", type: "nmos" as const, terms: ["ro", "rbs", "rbd"] },
@@ -405,7 +409,7 @@ describe("assumption table", () => {
   ];
 
   it("a type row, then matched groups and parts by name, then passives", () => {
-    const rows = assumptionRows(assumable, elements, [["M2", "M1"]]);
+    const rows = assumptionRows(assumable, elements, [["M2", "M1"]], NONE);
     expect(rows.map((row) => [row.scope, row.label])).toEqual([
       ["type", "All NMOS"],
       ["group", "M1 = M2"],
@@ -422,16 +426,72 @@ describe("assumption table", () => {
       null,
     ]);
     expect(rows[2]?.members[0]).toMatchObject({
-      path: "m10",
+      path: partKey(["m10"]),
       instanceId: "m10",
     });
     // A group of different types, or with a part not drawn, is no row.
     expect(
-      assumptionRows(assumable, elements, [
-        ["M1", "M3"],
-        ["M1", "M9"],
-      ]).filter((row) => row.scope === "group"),
+      assumptionRows(
+        assumable,
+        elements,
+        [
+          ["M1", "M3"],
+          ["M1", "M9"],
+        ],
+        NONE,
+      ).filter((row) => row.scope === "group"),
     ).toEqual([]);
+  });
+
+  it("a matched pair whose members differ is two rows, as the solver solves it", () => {
+    const rows = assumptionRows(assumable, elements, [["M1", "M2"]], {
+      defaults: {},
+      parts: { [partKey(["x1", "m1"])]: { region: "triode" } },
+    });
+    expect(
+      rows.filter((row) => row.type === "nmos").map((row) => row.label),
+    ).toEqual(["All NMOS", "M1", "M2", "M10"]);
+    // The same choice by default or by each member's own is one row again.
+    const shared = assumptionRows(assumable, elements, [["M1", "M2"]], {
+      defaults: { nmos: ["ro"] },
+      parts: { [partKey(["x1", "m1"])]: { ignore: { ro: true } } },
+    });
+    expect(shared.some((row) => row.label === "M1 = M2")).toBe(true);
+  });
+
+  it("a part whose type changed since the last solve is no row", () => {
+    const rows = assumptionRows(
+      assumable,
+      elements.map((element) =>
+        element.name === "M3" ? { ...element, kind: "npn" as const } : element,
+      ),
+      [],
+      NONE,
+    );
+    expect(rows.some((row) => row.label === "M3")).toBe(false);
+  });
+
+  it("a type's column sets every term the type accepts, present here or not", () => {
+    // M1 and M2 have no r_bs here (body on the source); another circuit may.
+    const bodyTied = assumable.map((element) =>
+      element.type === "nmos"
+        ? { ...element, terms: element.terms.filter((term) => term !== "rbs") }
+        : element,
+    );
+    const row = assumptionRows(bodyTied, elements, [], NONE)[0]!;
+    expect(row.label).toBe("All NMOS");
+    expect(assumptionColumnChange(row, "leakage", true, NONE).defaults).toEqual(
+      { nmos: ["rbs", "rbd"] },
+    );
+  });
+
+  it("a stored answer serves only the circuit it answered", () => {
+    const result = { assumable: [] };
+    expect(resultForCircuit({ circuit: "p/main", result }, "p/main")).toBe(
+      result,
+    );
+    expect(resultForCircuit({ circuit: "p/main", result }, "p/dut")).toBeNull();
+    expect(resultForCircuit(null, "p/main")).toBeNull();
   });
 
   it("one column per term the circuit has, leakage combined, others after", () => {
@@ -442,6 +502,7 @@ describe("assumption table", () => {
       ] as Parameters<typeof assumptionRows>[0],
       [...elements, { name: "M4", instancePath: ["m4"], kind: "pmos" }],
       [],
+      NONE,
     );
     expect(assumptionColumns(rows)).toEqual([
       "ro",
@@ -502,7 +563,7 @@ describe("suggestions", () => {
       { name: "C1", kind: "capacitor", instancePath: ["c"] },
     ] as SmallSignalElement[];
     const parts = withSuggestions(
-      { c: { ignore: { open: true } } },
+      { [partKey(["c"])]: { ignore: { open: true } } },
       [
         item(["M3", "M4"], "ro", "pmos", "group"),
         item(["C1"], "short", "capacitor", "part"),
@@ -511,15 +572,15 @@ describe("suggestions", () => {
       {},
     );
     expect(parts).toEqual({
-      a: { ignore: { ro: true } },
-      b: { ignore: { ro: true } },
-      c: { ignore: { short: true } },
+      [partKey(["a"])]: { ignore: { ro: true } },
+      [partKey(["b"])]: { ignore: { ro: true } },
+      [partKey(["c"])]: { ignore: { short: true } },
     });
     // A default already neglecting it stores nothing.
     expect(
       withSuggestions({}, [item(["M3"], "ro", "pmos", "part")], elements, {
         pmos: ["ro"],
       }),
-    ).toEqual({ a: { ignore: {} } });
+    ).toEqual({ [partKey(["a"])]: { ignore: {} } });
   });
 });
