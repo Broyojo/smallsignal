@@ -12,6 +12,16 @@ import Certs.bjt_diffpair
 import Certs.bjt_diffpair_dm
 import Certs.bjt_ef
 import Certs.bjt_pnp_ce
+import Certs.caps_bjt_ce
+import Certs.caps_bjt_sat
+import Certs.caps_cascode
+import Certs.caps_cs
+import Certs.caps_cutoff
+import Certs.caps_diffpair
+import Certs.caps_diode
+import Certs.caps_ota5t
+import Certs.caps_sf
+import Certs.caps_triode
 import Certs.cccs
 import Certs.ccvs
 import Certs.cs_pmos_load
@@ -22,6 +32,7 @@ import Certs.dist_cs
 import Certs.dist_cs_cl
 import Certs.dist_cs_degen
 import Certs.dist_cs_isrc
+import Certs.dist_cs_overlap
 import Certs.dist_diffpair
 import Certs.dist_diffpair_cm
 import Certs.dist_diffpair_dm
