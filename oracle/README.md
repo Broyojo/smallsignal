@@ -95,8 +95,12 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
     |c1|): "not quasi-static". A transient that times out or fails is
     recorded in `transient_error`; the amplitudes before it are kept.
 
-  compare.py checks the solver at rtol 1e-6 + 3×uncertainty, and repeats
-  the harmonic-balance and transient checks on the expected file. An
+  compare.py checks the solver's a1..a3 at rtol 1e-6 + 3×uncertainty, its
+  IIP3 inside the range sqrt(4|a1|/(3|a3|)) takes over those a1, a3
+  intervals (infinite, latex `\infty` and value null, required when the
+  reference a3 is 0 and allowed when a3 may be 0), fails
+  `distortion.check.ok: false` (null passes: no exact a_n), and repeats the
+  harmonic-balance and transient checks on the expected file. An
   optional `"vsFreq": [f...]` adds HD2/HD3 at each f from .disto's complex
   phasors (valid circuits only), checked at rtol 1e-6 with an absolute floor
   of 1e-15 (exact zeros). With a capacitor, set `"freq"` far below the poles

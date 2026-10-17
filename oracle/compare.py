@@ -106,6 +106,12 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     low = (data.get("noise") or {}).get("inputLowFreq") or {}
     if (low.get("check") or {}).get("ok") is False:
         raise RuntimeError(f"CLI noise.inputLowFreq: closed form vs numeric mismatch {low['check'].get('maxRelDiff')}")
+    # The distortion closed forms' a_n against the numeric ones (null: no
+    # exact a_n materialized, nothing to check).
+    dcheck = (data.get("distortion") or {}).get("check")
+    if dcheck is not None and dcheck.get("ok") is False:
+        raise RuntimeError(f"CLI distortion: closed form vs numeric mismatch {dcheck.get('maxRelDiff')} "
+                           f"(orders {dcheck.get('orders')})")
     return data
 
 
@@ -278,13 +284,15 @@ def compare_distortion(got: dict, want: dict, rep: Report):
     gd = got.get("distortion") or {}
     gc = {c.get("order"): c.get("value") for c in gd.get("coefficients") or []}
     ref = want["distortion"]
+    coef_tol = {c["order"]: DIST_RTOL * abs(c["value"]) + 3 * c["uncertainty"]
+                + 1e-12 * abs(ref["coefficients"][0]["value"]) for c in ref["coefficients"]}
     for c in ref["coefficients"]:
         g = gc.get(c["order"])
         what = f"distortion.a{c['order']}"
         if g is None:
             rep.failures.append(f"{what}: missing")
             continue
-        tol = DIST_RTOL * abs(c["value"]) + 3 * c["uncertainty"] + 1e-12 * abs(ref["coefficients"][0]["value"])
+        tol = coef_tol[c["order"]]
         rep.worst = max(rep.worst, abs(g - c["value"]) / max(abs(c["value"]), 1e-300))
         if abs(g - c["value"]) > tol:
             rep.failures.append(f"{what}: got {g:.10e}, want {c['value']:.10e} (tol {tol:.1e}, ref {ref['reference']})")
@@ -295,6 +303,28 @@ def compare_distortion(got: dict, want: dict, rep: Report):
             rep.failures.append(f"distortion.{h}: missing")
         elif abs(g - w) > 1e-5 * w + 1e-15:
             rep.failures.append(f"distortion.{h}: got {g:.8e}, want {w:.8e}")
+    # IIP3 = sqrt(4|a1|/(3|a3|)) over the reference's a1, a3 intervals (each
+    # within the coefficient tolerance above); an a3 that may be 0 allows an
+    # infinite IIP3, which an exact 0 requires (latex \infty, value null).
+    (w1, t1), (w3, t3) = ((abs(c["value"]), coef_tol[c["order"]]) for c in ref["coefficients"] if c["order"] in (1, 3))
+    gi = gd.get("iip3") or {}
+    g = gi.get("value")
+    infinite = g is None and gi.get("latex") == "\\infty"
+    lo = math.sqrt(4 * max(w1 - t1, 0.0) / (3 * (w3 + t3))) if w3 + t3 > 0 else math.inf
+    hi = math.sqrt(4 * (w1 + t1) / (3 * (w3 - t3))) if w3 > t3 else math.inf
+    if w3 == 0:
+        if not infinite:
+            rep.failures.append(f"distortion.iip3: got {g if g is not None else gi or 'missing'}, want infinite (a3 = 0)")
+    elif not gi or (g is None and not infinite):
+        rep.failures.append("distortion.iip3: missing")
+    elif infinite:
+        if hi < math.inf:
+            rep.failures.append(f"distortion.iip3: got infinite, want {math.sqrt(4 * w1 / (3 * w3)):.8e}")
+    else:
+        want = math.sqrt(4 * w1 / (3 * w3))
+        rep.worst = max(rep.worst, abs(g - want) / want)
+        if not lo <= g <= hi:
+            rep.failures.append(f"distortion.iip3: got {g:.10e}, want {want:.10e} (range {lo:.10e}..{hi:.10e})")
     # The reference's own harmonic-balance and transient confirmations
     # (distortion.py refuses to write disagreeing ones; this catches stale or
     # edited expectations).
