@@ -857,15 +857,18 @@ function DistortionDetails({
     ["HD2", distortion.hd2],
     ["HD3", distortion.hd3],
   ];
-  const varies =
-    distortion.vsFreq.length > 1 &&
-    distortion.vsFreq.some(
-      (point) =>
-        Math.abs((point.hd2 ?? 0) - (distortion.vsFreq[0]?.hd2 ?? 0)) >
-          1e-6 * Math.abs(distortion.vsFreq[0]?.hd2 ?? 0) ||
-        Math.abs((point.hd3 ?? 0) - (distortion.vsFreq[0]?.hd3 ?? 0)) >
-          1e-6 * Math.abs(distortion.vsFreq[0]?.hd3 ?? 0),
-    );
+  // The summary is the low-frequency (s → 0) value. Show HD at the asked
+  // frequencies too wherever it differs from that, even at one frequency
+  // (near a pole): never let the low-frequency value pass for it.
+  const differs = (at: number | null, low: number | null | undefined) =>
+    at !== null &&
+    low != null &&
+    Math.abs(at - low) > 1e-6 * Math.max(Math.abs(low), Math.abs(at));
+  const varies = distortion.vsFreq.some(
+    (point) =>
+      differs(point.hd2, distortion.hd2?.value) ||
+      differs(point.hd3, distortion.hd3?.value),
+  );
   const a1 = distortion.coefficients.find(
     (coefficient) => coefficient.order === 1,
   )?.value;
@@ -875,6 +878,7 @@ function DistortionDetails({
   return (
     <>
       <table className="small-signal-values" aria-label="Distortion">
+        {varies ? <caption>At low frequency</caption> : null}
         <tbody>
           {a1 != null ? (
             // The swing these numbers assume: an unrealistic one is obvious.
