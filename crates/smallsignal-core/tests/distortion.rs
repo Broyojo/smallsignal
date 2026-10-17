@@ -529,3 +529,110 @@ fn leakage_free_fallback_drops_the_whole_collector_base_junction() {
         assert!(q["display"]["relError"].as_f64().unwrap() <= 1e-3, "{q}");
     }
 }
+
+const OTA: &str = "ota\nVDD vdd 0 3\nVIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\nITAIL tail 0 100u\n\
+M1 x inp tail 0 nm W=10u L=1u\nM2 out inn tail 0 nm W=10u L=1u\nM3 x x vdd vdd pm W=20u L=1u\n\
+M4 out x vdd vdd pm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.4)\n\
+.model pm pmos (level=1 kp=100u vto=-0.5 lambda=0.05)\n";
+
+#[test]
+fn response_has_every_contract_field() {
+    // SmallSignalDistortion (packages/small-signal/src/types.ts) requires
+    // every field, nullable or empty when unavailable; check, taylor and
+    // omissionError come with them.
+    let keys = [
+        "amplitude",
+        "check",
+        "coefficients",
+        "hd2",
+        "hd3",
+        "iip3",
+        "inputUnit",
+        "nonlinear",
+        "omissionError",
+        "order",
+        "symbols",
+        "taylor",
+        "vsFreq",
+    ];
+    let has_keys = |r: &Value| {
+        let d = r["distortion"].as_object().unwrap();
+        let mut got: Vec<&str> = d.keys().map(|k| k.as_str()).collect();
+        got.sort_unstable();
+        assert_eq!(got, keys, "{d:?}");
+        assert!(d["symbols"].is_array() && d["vsFreq"].is_array() && d["coefficients"].is_array());
+        assert!(d["hd2"].is_object());
+    };
+    let rq = |extra: Value| {
+        let mut v = json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "freqs": [1e3] });
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        run(SQUARE, &req(v))
+    };
+    // Order 2: no third-order quantities, as null.
+    let r = rq(json!({ "order": 2 }));
+    has_keys(&r);
+    let d = &r["distortion"];
+    assert!(d["hd3"].is_null() && d["iip3"].is_null());
+    assert_eq!(d["coefficients"].as_array().unwrap().len(), 2);
+    assert!(d["vsFreq"][0]["hd3"].is_null());
+    let r = rq(json!({ "order": 3 }));
+    has_keys(&r);
+    assert!(r["distortion"]["hd3"].is_object() && r["distortion"]["iip3"].is_object());
+    // Both closed forms over the term budget: numeric only, no symbols.
+    let r = run(
+        OTA,
+        &req(
+            json!({ "input": "VIP", "inputNeg": "VINN", "output": "out", "match": [["M1", "M2"], ["M3", "M4"]],
+                     "nonlinear": ["M1", "M2", "M3", "M4"], "freqs": [1.0], "maxTerms": 1000 }),
+        ),
+    );
+    has_keys(&r);
+    let d = &r["distortion"];
+    for q in d["coefficients"].as_array().unwrap() {
+        assert!(q["skipped"].is_string() && q["display"].is_null(), "{q}");
+    }
+    assert_eq!(d["symbols"], json!([]));
+    assert!(d["hd3"]["value"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn an_unaffordable_denominator_power_falls_back_per_quantity() {
+    // Degenerated CS with the drain junction's leakage in the exact model
+    // (D has 4 terms, D³ 20, D⁵ 56; the numerators at most 10). With
+    // maxTerms 30 the exact a1, a2, HD2 materialize but a3 = N3/D⁵ and
+    // HD3, IIP3 (over D⁴·N1) do not: they come from the leakage-free model
+    // (D has 2 terms there).
+    let net = "cs\nVDD vdd 0 50\nVIN in 0 DC 1.0 AC 1\nRD vdd out 5k\nM1 out in s s nm W=10u L=1u\nRS s 0 1k\n\
+.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let rq = |mt: usize| {
+        run(
+            net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "maxTerms": mt })),
+        )
+    };
+    let full = rq(2_000_000);
+    let r = rq(30);
+    let d = &r["distortion"];
+    for q in [&d["coefficients"][0], &d["coefficients"][1], &d["hd2"]] {
+        assert!(q["skipped"].is_null() && q["latex"].is_string(), "{q}");
+    }
+    let fd = &full["distortion"];
+    for (q, f) in [
+        (&d["coefficients"][2], &fd["coefficients"][2]),
+        (&d["hd3"], &fd["hd3"]),
+        (&d["iip3"], &fd["iip3"]),
+    ] {
+        assert!(q["skipped"].is_string(), "{q}");
+        let v = q["value"].as_f64().unwrap();
+        assert!(rel(v, f["value"].as_f64().unwrap()) < 1e-12);
+        let disp = &q["display"];
+        assert!(disp["relError"].as_f64().unwrap() <= 1e-3, "{q}");
+        assert!(rel(disp["value"].as_f64().unwrap(), v) <= 1e-3);
+        assert!(disp["latex"].is_string());
+        // The leakage-free form is the full model's display form.
+        assert_eq!(disp["latex"], f["display"]["latex"]);
+        let s = &q["simplified"];
+        assert!(s["latex"].is_string() && s["relError"].as_f64().unwrap() <= 0.05, "{q}");
+    }
+    assert_eq!(d["symbols"][0]["name"], "K2g_M1");
+}

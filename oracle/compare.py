@@ -61,6 +61,9 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     # The CLI takes one frequency list: the sidecar's freqs plus any noise.freqs.
     noise_spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
     freqs = sorted({float(f) for f in [*side.get("freqs", []), *noise_spec.get("freqs", [])]})
+    # ... and distortion.vsFreq (the frequencies distortion.py ran .disto at).
+    dist_spec = side["distortion"] if isinstance(side.get("distortion"), dict) else {}
+    freqs = sorted({*freqs, *(float(f) for f in dist_spec.get("vsFreq", []))})
     if freqs:
         args += ["--freq", ",".join(repr(f) for f in freqs)]
     if side.get("rin"):

@@ -207,17 +207,20 @@ transfer cofactors. Response `distortion`:
   for a₁…a_order (`numeric` from the direct numeric solve, full model).
 - `hd2` = |a₂|A/(2|a₁|), `hd3` = |a₃|A²/(4|a₁|), `iip3` = √(4|a₁|/(3|a₃|)) (input
   amplitude; `\infty` when a₃ = 0), each `{latex, value, display, simplified}`,
-  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`.
+  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`; `hd3` and
+  `iip3` are null for `order` 2.
 - `vsFreq`: `[{f, hd2, hd3}]` at `freqs` from H₂(jω,jω) and H₃(jω,jω,jω)
   (LU solves at ω, 2ω, 3ω on the full model).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
-  `symbols`: the K symbols used; `omissionError`; `check` (closed form vs numeric).
-- When an exact closed form would exceed 100k terms (e.g. a 5T OTA's a₃ with
-  junction leakage kept), or when the analysis model's form misses the full
-  numeric a_n by more than 1e-11 and the full model's would exceed that,
-  `exact` is skipped (`skipped`, value numeric) and `display` comes from the
-  leakage-free model (its Taylor coefficients without leakage), accepted only
-  within 1e-3.
+  `symbols`: the K symbols used (`[]` when no closed form was built);
+  `omissionError`; `check` (closed form vs numeric).
+- Every field is always present. A quantity whose exact closed form would
+  exceed 100k terms or `maxTerms` (its numerator, or the D^{2n−1} under it;
+  e.g. a 5T OTA's a₃ with junction leakage kept), or every quantity when the
+  analysis model's form misses the full numeric a_n by more than 1e-11 and
+  the full model's would exceed that, is `skipped` (value numeric) and its
+  `display` comes from the leakage-free model (its Taylor coefficients
+  without leakage), accepted only within 1e-3.
 - `display`/`simplified` work as for the other quantities; simplified is the
   r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
   as output conductances), then magnitude pruning, within `tolerance`.

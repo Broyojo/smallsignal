@@ -1411,9 +1411,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             exact = build(full, &fs, false);
         }
     }
+    // Every quantity shown must materialize: `build` returns the numerators,
+    // and a_n's D^(2n−1) (or a ratio's D^(2n−2)·N1) can still exceed the
+    // budget. Any that does not comes from the leakage-free model.
+    let order = c.order as usize;
+    let complete = |cl: &Closed| (0..order).all(|n| cl.a(n).is_some()) && (1..order).all(|n| cl.ratio(n).is_some());
     let noleak_ss;
     let noleak_syms;
-    let noleak = if exact.is_none() && !full.optional.is_empty() {
+    let noleak = if !exact.as_ref().is_some_and(complete) && !full.optional.is_empty() {
         noleak_ss = full.omit(&full.optional);
         noleak_syms = (c.noleak_symbols)(&noleak_ss);
         build(&noleak_ss, &noleak_syms, true)
@@ -1488,17 +1493,25 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             )
         };
         resp.insert("iip3".into(), iip3);
+    } else {
+        resp.insert("hd3".into(), Value::Null);
+        resp.insert("iip3".into(), Value::Null);
     }
-    let shown = exact.as_ref().or(noleak.as_ref());
-    if let Some(cl) = shown {
-        let ksyms: Vec<Value> = cl
-            .syms
-            .iter()
-            .filter(|s| s.role == Role::Coeff)
-            .map(|s| json!({ "name": s.name, "latex": s.latex, "value": s.value, "unit": s.unit, "elements": s.elements }))
-            .collect();
-        resp.insert("symbols".into(), json!(ksyms));
+    // The K symbols of the forms shown (exact first; empty when neither
+    // closed form was built).
+    let mut ksyms: Vec<&Sym> = Vec::new();
+    for cl in [&exact, &noleak].into_iter().flatten() {
+        for s in cl.syms.iter().filter(|s| s.role == Role::Coeff) {
+            if !ksyms.iter().any(|k| k.name == s.name) {
+                ksyms.push(s);
+            }
+        }
     }
+    let ksyms: Vec<Value> = ksyms
+        .iter()
+        .map(|s| json!({ "name": s.name, "latex": s.latex, "value": s.value, "unit": s.unit, "elements": s.elements }))
+        .collect();
+    resp.insert("symbols".into(), json!(ksyms));
     match exact.as_ref().and_then(check) {
         Some((ok, diff)) => {
             if !ok {
