@@ -88,18 +88,51 @@ def amplitudes(spec: dict) -> list[float]:
     return spec.get("amplitudes") or DEFAULT_AMPLITUDES
 
 
-def _checked_amplitudes(spec: dict, name: str) -> list[float]:
-    """The amplitudes, or ValueError: at least three, distinct, finite and
+# The transient's DFT window is its last WINDOW_PERIODS periods, after at
+# least one period of settling.
+WINDOW_PERIODS = 4
+# At 200 points per period the 3rd harmonic still has 3ωh ≤ 0.1 rad per
+# step, so transient_tolerance's first-order resampling bound holds.
+MIN_POINTS_PER_PERIOD = 200
+
+
+def _positive(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x > 0
+
+
+def _checked_spec(side: dict, name: str) -> tuple[dict, list[float]]:
+    """The distortion sidecar and its amplitudes, or a ValueError naming the
+    circuit and the control. amplitudes: at least three, distinct, finite and
     positive (the A² fit has degree 1 or 2 and needs one more point than
-    parameters for a residual), and a positive reported amplitude."""
+    parameters for a residual); amplitude, freq: finite and positive;
+    periods: an integer above WINDOW_PERIODS; points_per_period: an integer
+    of at least MIN_POINTS_PER_PERIOD; vsFreq: a list of finite positive
+    frequencies."""
+    spec = side.get("distortion")
+    if not isinstance(spec, dict):
+        raise ValueError(f"{name}: distortion must be an object, got {spec!r}")
+
+    def bad(key, want):
+        return ValueError(f"{name}: distortion.{key} must be {want}, got {spec.get(key)!r}")
+
     amps = amplitudes(spec)
-    ok = all(isinstance(a, (int, float)) and math.isfinite(a) and a > 0 for a in amps)
-    if not ok or len(set(amps)) != len(amps) or len(amps) < 3:
-        raise ValueError(f"{name}: distortion.amplitudes must be at least 3 distinct positive numbers, got {amps!r}")
-    a = amplitude(spec)
-    if not (isinstance(a, (int, float)) and math.isfinite(a) and a > 0):
-        raise ValueError(f"{name}: distortion.amplitude must be a positive number, got {a!r}")
-    return amps
+    if not (isinstance(amps, list) and all(_positive(a) for a in amps) and len(set(amps)) == len(amps)
+            and len(amps) >= 3):
+        raise bad("amplitudes", "at least 3 distinct positive numbers")
+    if not _positive(amplitude(spec)):
+        raise bad("amplitude", "a positive number")
+    if not _positive(spec.get("freq", 1000.0)):
+        raise bad("freq", "a positive frequency")
+    periods = spec.get("periods", 10)
+    if not (isinstance(periods, int) and not isinstance(periods, bool) and periods > WINDOW_PERIODS):
+        raise bad("periods", f"an integer above {WINDOW_PERIODS} (the DFT window plus settling)")
+    ppp = spec.get("points_per_period", 4000)
+    if not (isinstance(ppp, int) and not isinstance(ppp, bool) and ppp >= MIN_POINTS_PER_PERIOD):
+        raise bad("points_per_period", f"an integer of at least {MIN_POINTS_PER_PERIOD}")
+    vs = spec.get("vsFreq", [])
+    if not (isinstance(vs, list) and all(_positive(f) for f in vs)):
+        raise bad("vsFreq", "a list of positive frequencies")
+    return spec, amps
 
 
 def amplitude(spec: dict) -> float:
@@ -197,7 +230,7 @@ def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep,
     step = period / ppp
     body = _with_sources(net, side, lambda e, v0, w: f"{e.tokens[0]} {e.tokens[1]} {e.tokens[2]} DC {v0!r} "
                          f"SIN({v0!r} {w * amp!r} {freq!r})").splitlines()
-    t_from = (periods - 4) * period
+    t_from = (periods - WINDOW_PERIODS) * period
     nodes = _out_nodes(side)
     expr = _vout(side)
     control = [run_ngspice.current_options() + " method=gear maxord=2",
@@ -219,13 +252,13 @@ def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep,
         if out is None:
             raise run_ngspice.NgspiceError(f"{name}: transient wrote no data: {(proc.stdout + proc.stderr)[-200:]}")
         rows = [list(map(float, l.split())) for l in out.read_text().splitlines() if l.strip()]
-    want = 4 * ppp
+    want = WINDOW_PERIODS * ppp
     window = [r for r in rows if r[0] >= t_from - step / 2][:want]
     if len(window) < want:
         raise run_ngspice.NgspiceError(f"{name}: transient grid has {len(window)} of {want} points")
     reltol, vntol = _tolerances()
     solve = max(reltol * sum(abs(v) for v in r[2:]) + vntol * len(nodes) for r in window)
-    return [mag for _, mag in _cos_series([r[1] for r in window], 4)], solve
+    return [mag for _, mag in _cos_series([r[1] for r in window], WINDOW_PERIODS)], solve
 
 
 def transient_tolerance(n: int, hd: float, c1: float, solve: float, ppp: int) -> float:
@@ -389,9 +422,8 @@ def _disto_dc(net, side, freq: float, at_f: dict, tay: list[float], tay_unc: lis
 
 
 def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
-    spec = side["distortion"]
     name = cir.stem
-    amps = _checked_amplitudes(spec, name)
+    spec, amps = _checked_spec(side, name)
     freq = spec.get("freq", 1000.0)
     hb = {a: harmonic_balance(net, side, a, keep, name) for a in amps}
     # a_n = 2^(n-1)·lim c_n/A^n; each c_n is within twice the samples'

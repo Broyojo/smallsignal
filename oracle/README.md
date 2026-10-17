@@ -71,8 +71,11 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   an uncertainty each, HD2/HD3 at A (|a2|A/(2|a1|), |a3|A²/(4|a1|)), and four
   ngspice methods that confirm one another: .disto (Volterra; the reference
   where valid), DC-sweep Taylor fit (the reference otherwise), quasi-static
-  harmonic balance, and transient + DFT. `amplitudes` must be at least three
-  distinct positive numbers. ngspice-47's .disto is wrong by
+  harmonic balance, and transient + DFT. Generation refuses a sidecar unless
+  `amplitudes` has at least three distinct positive numbers, `amplitude` and
+  `freq` are positive, `periods` (default 10) is an integer above 4 (the
+  4-period DFT window plus settling), `points_per_period` (default 4000) is
+  an integer of at least 200, and `vsFreq` is a list of positive frequencies. ngspice-47's .disto is wrong by
   several % in a2, a3 for MOSFETs with GAMMA > 0 (shown against an exact
   implicit series), so it is flagged `"valid": false` there. Its
   coefficients are used only at their DC limit (`disto.dc_limit`: real parts
