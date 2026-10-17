@@ -817,17 +817,21 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         resp.insert("omissionError".into(), json!(gm.omit_err));
         let a = st.assume;
         let netr = &net;
-        let applied: Vec<Value> = st
-            .units
+        // In the request's order, each with its unit's symbol.
+        let applied: Vec<Value> = a
+            .applied
             .iter()
-            .flat_map(|u| {
-                let latex = st.symbol_latex(&full, u);
-                u.iter().map(move |&i| {
-                    let x = &a.applied[i];
-                    json!({
-                        "element": x.element, "term": x.term.as_str(),
-                        "latex": crate::assume::latex_of(netr, x, latex.as_deref()),
-                    })
+            .enumerate()
+            .map(|(i, x)| {
+                let unit = st
+                    .units
+                    .iter()
+                    .find(|u| u.contains(&i))
+                    .expect("every assumption has a unit");
+                let latex = st.symbol_latex(&full, unit);
+                json!({
+                    "element": x.element, "term": x.term.as_str(),
+                    "latex": crate::assume::latex_of(netr, x, latex.as_deref()),
                 })
             })
             .collect();

@@ -225,49 +225,44 @@ pub fn apply(full: &SsCircuit, a: &Assume, restored: &[usize]) -> SsCircuit {
 }
 
 /// The assumptions that are put back together: one unit per term and
-/// matched group (`group` names an element's group).
+/// matched group (`group` names an element's group), ordered by group and
+/// term, not by the request.
 pub fn units(a: &Assume, group: impl Fn(&str) -> String) -> Vec<Vec<usize>> {
-    let mut keys: Vec<(Term, String)> = Vec::new();
-    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut out: Vec<((String, Term), Vec<usize>)> = Vec::new();
     for (i, x) in a.applied.iter().enumerate() {
-        let k = (x.term, group(&x.element));
-        match keys.iter().position(|q| *q == k) {
-            Some(u) => out[u].push(i),
-            None => {
-                keys.push(k);
-                out.push(vec![i]);
-            }
+        let k = (group(&x.element), x.term);
+        match out.iter_mut().find(|(q, _)| *q == k) {
+            Some((_, u)) => u.push(i),
+            None => out.push((k, vec![i])),
         }
     }
-    out
+    out.sort_by(|x, y| x.0.cmp(&y.0));
+    out.into_iter().map(|(_, u)| u).collect()
 }
 
-/// Exhaustive search for the smallest restorations stops at this many units
-/// put back together; beyond it a minimal (irreducible) set is taken.
-const RESTORE_EXHAUSTIVE: usize = 3;
-/// Most candidate sets tried by the exhaustive search.
-const RESTORE_TRIALS: usize = 4_000;
+/// Sets of three units are searched only while there are at most this many
+/// (30 units); sets of one and two always are.
+const RESTORE_TRIPLES: usize = 4_060;
 
 /// Which assumptions to put back so that `singular` (given the assumption
 /// indices put back) no longer holds: none when it does not hold to begin
 /// with. Otherwise every unit that belongs to some smallest set of units
 /// that suffices (their union, so the answer does not depend on the order
-/// of the request: a CS stage with an active load gets both r_o back), or,
-/// past the exhaustive search, an irreducible set found by putting every
-/// unit back and taking units out again while it still suffices.
+/// of the request: a CS stage with an active load gets both r_o back),
+/// searched over every set of one and two units, and of three while there
+/// are at most 30 units. Past that, an irreducible set found by putting
+/// every unit back and taking units out again, in `units`' (canonical)
+/// order, while it still suffices.
 pub fn restore(units: &[Vec<usize>], singular: impl Fn(&[usize]) -> bool) -> Vec<usize> {
     if units.is_empty() || !singular(&[]) {
         return Vec::new();
     }
     let flat = |set: &[usize]| -> Vec<usize> { set.iter().flat_map(|&u| units[u].iter().copied()).collect() };
     let n = units.len();
-    let mut trials = 0usize;
-    for k in 1..=RESTORE_EXHAUSTIVE.min(n) {
-        let count = binomial(n, k);
-        if trials + count > RESTORE_TRIALS {
+    for k in 1..=3.min(n) {
+        if k == 3 && binomial(n, 3) > RESTORE_TRIPLES {
             break;
         }
-        trials += count;
         let mut found: Vec<usize> = Vec::new();
         let mut combo: Vec<usize> = (0..k).collect();
         loop {
@@ -472,6 +467,19 @@ mod tests {
         assert_eq!(got, vec![0, 2]);
         // Not singular: nothing comes back.
         assert!(restore(&units, |_| false).is_empty());
+    }
+
+    #[test]
+    fn every_pair_is_searched_however_many_units() {
+        // 89 units, two pairs that each suffice: their union, never one
+        // irreducible set picked by order.
+        let units: Vec<Vec<usize>> = (0..89).map(|i| vec![i]).collect();
+        let fix = |r: &[usize]| (r.contains(&5) && r.contains(&77)) || (r.contains(&6) && r.contains(&78));
+        assert_eq!(restore(&units, |r| !fix(r)), vec![5, 6, 77, 78]);
+        // 30 units: every triple too.
+        let units: Vec<Vec<usize>> = (0..30).map(|i| vec![i]).collect();
+        let fix = |r: &[usize]| [3, 17, 29].iter().all(|u| r.contains(u)) || [4, 17, 28].iter().all(|u| r.contains(u));
+        assert_eq!(restore(&units, |r| !fix(r)), vec![3, 4, 17, 28, 29]);
     }
 
     #[test]
