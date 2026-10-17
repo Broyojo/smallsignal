@@ -202,7 +202,13 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             })?,
         )
     };
-    let full = ss::build(&net, op.as_ref())?;
+    // Symbolic mode assumes saturation except where the region is known.
+    let (linear, region_warnings) = if symbolic {
+        symbolic_regions(&net)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let full = ss::build_with(&net, op.as_ref(), &linear)?;
     let excite = match (mode, neg) {
         (Mode::Single, _) | (_, None) => Excite::Source(input),
         (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
@@ -265,7 +271,13 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             format!("{kind}:{}", group_of(&p.element))
         })
     };
-    let mut warnings: Vec<String> = net.warnings.iter().chain(&ss.warnings).cloned().collect();
+    let mut warnings: Vec<String> = net
+        .warnings
+        .iter()
+        .chain(&ss.warnings)
+        .chain(&region_warnings)
+        .cloned()
+        .collect();
     // Missing values mean hand analysis: the response's `symbolic` says so,
     // and a warning would only repeat it.
     warnings.extend(wiring_warnings(&net, op.as_ref()));
@@ -878,6 +890,36 @@ fn degenerate_junctions(net: &Netlist) -> Vec<String> {
         }
     }
     out
+}
+
+/// Devices symbolic mode must not take as saturated (their r_o stays finite
+/// in the hand-analysis form), each with numeric mode's warning. Symbolic
+/// mode has no operating point (the bias is unknown, even where the netlist
+/// holds placeholder values), so only the case the wiring decides: two
+/// MOSFETs of one type and model on a shared gate, one's drain on the
+/// other's source. Whenever the outer one conducts, the inner one has
+/// V_DS < V_GS − V_TH (its threshold is no higher), so it is in triode: the
+/// pair is one longer device.
+fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
+    let (mut linear, mut warnings) = (Vec::new(), Vec::new());
+    for (ei, inner) in net.elements.iter().enumerate() {
+        let Kind::M { model: mi, .. } = &inner.kind else {
+            continue;
+        };
+        let (d, g, s) = (inner.nodes[0], inner.nodes[1], inner.nodes[2]);
+        let stacked = d != s
+            && net.elements.iter().enumerate().any(|(eo, outer)| match &outer.kind {
+                Kind::M { model: mo, .. } => {
+                    eo != ei && mo.ty == mi.ty && mo.name == mi.name && outer.nodes[1] == g && outer.nodes[2] == d
+                }
+                _ => false,
+            });
+        if stacked {
+            linear.push(ei);
+            warnings.push(format!("{} is in triode", inner.name));
+        }
+    }
+    (linear, warnings)
 }
 
 /// Cross-coupled transistor pairs (each one's gate/base on the other's

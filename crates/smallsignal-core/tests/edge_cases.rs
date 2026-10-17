@@ -544,6 +544,38 @@ fn simplified_cancels_common_factors() {
     assert_eq!(r["rout"]["simplified"]["latex"], "R_{D}");
 }
 
+/// Symbolic mode keeps r_o finite for a device it knows is in triode, and
+/// says so. Two NMOS on one gate, the inner one's drain on the outer one's
+/// source: the inner one is in triode whenever the outer one conducts (one
+/// longer device), so its r_o stays. Before: −g_{m1} R_D, a cascode reading.
+#[test]
+fn symbolic_keeps_triode_ro() {
+    let r = run(
+        "stack\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["warnings"], json!(["M1 is in triode"]));
+    assert!(
+        r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o1}"),
+        "{}",
+        r["gain"]["simplified"]
+    );
+    assert!(!r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o2}"));
+    // The same rule with values given (symbolic mode ignores the bias): the
+    // bottom NMOS of this two-NMOS stage is in triode (r_o2 ≈ 1 kΩ at this
+    // bias, as numeric mode reports).
+    let net = "nn\nVDD vdd 0 1.8\nVIN in 0 DC 1.2 AC 1\nM1 vdd in out 0 nch W=10u L=1u\nM2 out in 0 0 nch W=10u L=1u\n\
+               .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4 PHI=0.8)\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "symbolic": true })));
+    assert_eq!(r["symbolic"], true);
+    assert_eq!(r["warnings"], json!(["M2 is in triode"]));
+    let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
+    assert!(
+        simplified.contains("r_{o2}") && !simplified.contains("r_{o1}"),
+        "{simplified}"
+    );
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported

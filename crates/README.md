@@ -101,7 +101,12 @@ exceed `maxTerms` terms (default 2,000,000).
   `simplified` drops numerically small terms within `maxRelError`; in symbolic
   mode it is the hand-analysis limit r_o → ∞ (every device output resistance
   r_o, r_μ, bulk junction scaled as r/ε, the lowest order in ε kept for each
-  power of s), labelled `assumption: "ro ≫ R, 1/gm"`. Then `values`
+  power of s), labelled `assumption: "ro ≫ R, 1/gm"`. The r_o of a device
+  outside saturation (MOS triode, BJT saturation) stays finite in every
+  leading-order form, with the region warning. Symbolic mode, which has no
+  operating point, knows one such case: two MOSFETs of one type and model
+  on a shared gate, one's drain on the other's source; that one is in
+  triode. Then `values`
   (`f, re, im, mag, phaseDeg`; `inf: true` with null parts when infinite),
   `poles` and `zeros` (in Hz), and `check`.
 - `op` (null in symbolic mode) holds node voltages, source branch currents, and

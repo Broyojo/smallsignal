@@ -30,7 +30,8 @@ pub struct Sym {
     pub unit: &'static str,
     pub elements: Vec<String>,
     /// A device output resistance (r_o, r_μ, bulk junction): the quantities
-    /// hand analysis takes to infinity.
+    /// hand analysis takes to infinity. Not the r_o of a device outside
+    /// saturation (MOS triode, BJT saturation), which is small.
     pub output_r: bool,
     /// Junction leakage (r_bs, r_bd, r_μ): present only through gmin-level
     /// junction conductance; the `display` form drops it.
@@ -270,7 +271,7 @@ pub fn symbols(
                 role: p.role,
                 unit: p.unit,
                 elements,
-                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
                 leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd"),
             });
         }
@@ -294,7 +295,7 @@ pub fn unmerged(ss: &SsCircuit) -> Symbols {
             role: p.role,
             unit: p.unit,
             elements: vec![p.element.clone()],
-            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
             leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd"),
         })
         .collect();
