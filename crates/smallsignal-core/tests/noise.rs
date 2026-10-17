@@ -707,3 +707,35 @@ fn an_unreachable_tolerance_does_not_converge() {
     assert!(r.converged);
     assert!(rel(r.value[1], 100f64.ln()) < 1e-6);
 }
+
+/// Two independent CS branches measured differentially: every determinant
+/// and product of the closed form fits 16 terms, but the sums built from
+/// them (out − ref numerators, each source's node difference, the group
+/// sums) do not. At maxTerms 16 the closed form is unavailable as too large
+/// while the spectra are unchanged; at 24 it is exact.
+#[test]
+fn the_noise_closed_form_holds_its_sums_to_the_term_limit() {
+    let net = "two\nVDD vdd 0 1.8\nVIN in 0 DC 0.8 AC 1\nRD1 vdd o1 10k\nM1 o1 in 0 0 nm W=10u L=1u\n\
+RD2 vdd o2 20k\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
+    let at = |max_terms: usize| {
+        run(
+            net,
+            &req(
+                json!({ "input": "VIN", "output": "o1", "ref": "o2", "noise": true, "freqs": [1e3], "maxTerms": max_terms }),
+            ),
+        )
+    };
+    let (small, fits) = (at(16), at(24));
+    let lf = &small["noise"]["inputLowFreq"];
+    assert!(
+        lf["unavailable"]
+            .as_str()
+            .unwrap_or("")
+            .contains("too large (over 16 terms)"),
+        "{lf}"
+    );
+    assert_eq!(small["noise"]["output"], fits["noise"]["output"]);
+    let exact = &fits["noise"]["inputLowFreq"]["exact"];
+    assert!(exact["latex"].is_string(), "{exact}");
+    assert_eq!(fits["noise"]["inputLowFreq"]["check"]["ok"], true);
+}

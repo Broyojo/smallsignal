@@ -769,7 +769,7 @@ pub fn low_freq(
     let (co, cr) = (sys.node_col[out], sys.node_col[rf]);
     let num_for = |b: &[i128]| -> Result<Poly, String> {
         let pick = |c: Option<usize>| c.map(|c| cramer_with(&a0, c, b, max_terms)).unwrap_or(Ok(Poly::zero()));
-        Ok(sub(&pick(co)?, &pick(cr)?))
+        fit(sub(&pick(co)?, &pick(cr)?), max_terms)
     };
     let no_gain = || Ok(Err("no gain at DC".to_string()));
     let na = num_for(&sys.b)?;
@@ -889,7 +889,7 @@ pub fn low_freq(
             },
             SymOf::Current(_) => XPoly::var(cur_index[k].expect("current symbol"), nsym),
         };
-        let nk = x(&sub(&node_num(s.a)?, &node_num(s.b)?))?;
+        let nk = x(&fit(sub(&node_num(s.a)?, &node_num(s.b)?), max_terms)?)?;
         if nk.is_zero() {
             continue;
         }
@@ -897,6 +897,9 @@ pub fn low_freq(
         let w = ps.num * (g.1 / ps.den) * vid * vid;
         let term = mul(&mul(&nk, &nk)?, &var)?.scaled(w)?;
         g.0 = add(std::mem::take(&mut g.0), term)?;
+        if g.0.terms.len() > max_terms {
+            return Err(too_large(max_terms));
+        }
     }
     let [(th, lt), (sh, ls)] = groups;
     Ok(Ok(LowFreq {
@@ -905,6 +908,22 @@ pub fn low_freq(
         shot: (sh, na2.scaled(ls)?),
         mismatch,
     }))
+}
+
+/// The error of an over-budget determinant or product (det.rs), for the
+/// sums and differences built from them here.
+fn too_large(max_terms: usize) -> String {
+    format!("exact expression too large (over {max_terms} terms); simplify the circuit or analyze a smaller block")
+}
+
+/// `p` (a difference of two numerators, up to twice their terms) within the
+/// term budget.
+fn fit(p: Poly, max_terms: usize) -> Result<Poly, String> {
+    if p.len() > max_terms {
+        Err(too_large(max_terms))
+    } else {
+        Ok(p)
+    }
 }
 
 /// a + b (each sorted by exponent, as `XPoly` keeps them), merged.
@@ -1112,7 +1131,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         let sys = crate::ss::system(c.net, ss, c.excite);
         low_freq(ss, symbols, &sys, &srcs, c.out, c.rf, c.vid, c.max_terms)
     };
-    let lf = closed(c.ss, c.symbols)?;
+    // Over the term budget (or any other failure of the exact form), the
+    // closed form is unavailable with the reason; the spectra still follow.
+    let lf = closed(c.ss, c.symbols).and_then(|r| r);
 
     if symbolic {
         let input_low = match lf {

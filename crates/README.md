@@ -166,7 +166,8 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   I_{D1,2}); `check` compares the exact value with the numeric DC solve,
   within rounding and the match tolerance. Flicker is numeric only.
   `unavailable` says why when there is no DC limit: no gain at DC (also when
-  it vanishes at the values or once matched symbols merge), or singular at
-  s = 0.
+  it vanishes at the values or once matched symbols merge), singular at
+  s = 0, or too large: any determinant, product, sum or difference in it
+  over `maxTerms` (the spectra are still given).
   Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
   system at s = 0, so the determinant cancels exactly.
