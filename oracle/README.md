@@ -95,15 +95,30 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
     by more than `tran_tol_hd2`/`tran_tol_hd3`
     (`distortion.transient_tolerance`: (n²−1)(2π/ppp)²/4 relative for
     `linearize`, plus 4× the solve tolerance reltol·Σ|v(node)| + vntol over
-    |c1|): "not quasi-static". A transient that times out or fails is
-    recorded in `transient_error`; the amplitudes before it are kept.
+    |c1|): "not quasi-static". At an amplitude whose fundamental is 0
+    (within 3× twice its resolution) there is no HD, and |c1..c3| are
+    compared instead (`tran_c*`, `distortion.transient_magnitude_tolerance`).
+    A transient that times out or fails is recorded in `transient_error`
+    and `transient_failed_at`; only that amplitude and the later ones may
+    lack transient values.
 
-  compare.py checks the solver's a1..a3 at rtol 1e-6 + 3×uncertainty, its
-  IIP3 inside the range sqrt(4|a1|/(3|a3|)) takes over those a1, a3
-  intervals (infinite, latex `\infty` and value null, required when the
-  reference a3 is 0 and allowed when a3 may be 0), fails
-  `distortion.check.ok: false` (null passes: no exact a_n), and repeats the
-  harmonic-balance and transient checks on the expected file. An
+  A reference a_n is 0 when within 3× (its uncertainty + harmonic
+  balance's) (`distortion.zero_orders`). With a1 = 0 (e.g. a diff pair's
+  tail under differential drive), HD_n is infinite (`"infinite": true`,
+  value null) unless a_n is 0 too, then unavailable (0/0, value null);
+  vsFreq applies the same floors to .disto's H1..H3, giving null HD with
+  `hd2Infinite`/`hd3Infinite` when infinite, as the solver does.
+
+  compare.py checks the solver's a1..a3 at rtol 1e-6 + 3×uncertainty; HD2,
+  HD3 and vsFreq states (finite, infinite as latex `\infty` with value
+  null, or null for 0/0); its IIP3 inside the range sqrt(4|a1|/(3|a3|))
+  takes over those a1, a3 intervals (infinite required when the reference
+  a3 is exactly 0 and allowed when a3 may be 0, null when a1 and a3 are
+  both 0); fails `distortion.check.ok: false` (null passes: no exact a_n);
+  and repeats the harmonic-balance and transient checks on the expected
+  file. A sidecar that requests noise or distortion fails when the expected
+  result has no such block. The CLI's `--nonlinear` lists every M, Q and D
+  element the parser reads. An
   optional `"vsFreq": [f...]` adds HD2/HD3 at each f from .disto's complex
   phasors (valid circuits only), checked at rtol 1e-6 with an absolute floor
   of 1e-15 (exact zeros). With a capacitor, set `"freq"` far below the poles

@@ -276,17 +276,58 @@ def transient_tolerance(n: int, hd: float, c1: float, solve: float, ppp: int) ->
     return (n * n - 1) * (2 * math.pi / ppp) ** 2 / 4 * hd + 4 * solve * (1 + hd) / abs(c1)
 
 
-def transient_disagreements(points: list[dict]) -> list[str]:
-    """Each transient HD that misses harmonic balance's by more than its
-    tolerance (points as analyze writes them)."""
+def transient_magnitude_tolerance(n: int, cn: float, solve: float, ppp: int) -> float:
+    """How far the transient's |c_n| may sit from harmonic balance's, for a
+    point whose fundamental is 0 (no HD to compare): linearize scales
+    harmonic n by up to 1 + (nωh)²/8 (doubled, as transient_tolerance), and
+    the two waveforms' c_n differ by up to 4·solve."""
+    return n * n * (2 * math.pi / ppp) ** 2 / 4 * abs(cn) + 4 * solve
+
+
+def transient_disagreements(d: dict) -> list[str]:
+    """Each transient result that misses harmonic balance's by more than its
+    tolerance: HD2, HD3, or |c1..c3| where the fundamental is 0 (d as
+    analyze writes it). A point without one is a disagreement too, unless a
+    recorded transient failure covers it (`transient_failed_at` and every
+    amplitude after it)."""
+    points = d["points"]
+    failed_at = d.get("transient_failed_at")
+    covered = len(points)
+    if d.get("transient_error") is not None and failed_at is not None:
+        covered = next((i for i, p in enumerate(points) if p["A"] == failed_at), len(points))
     out = []
-    for p in points:
-        for h in ("hd2", "hd3"):
+    for i, p in enumerate(points):
+        if i >= covered:
+            break
+        keys = ("hd2", "hd3") if p["hd2"] is not None else ("c1", "c2", "c3")
+        for h in keys:
             t, tol = p.get(f"tran_{h}"), p.get(f"tran_tol_{h}")
-            if t is not None and not (tol is not None and abs(t - p[h]) <= tol):
-                out.append(f"transient {h} at A={p['A']:g}: {t:.8e} vs harmonic balance {p[h]:.8e} "
-                           f"(diff {abs(t - p[h]):.1e}, tolerance {tol if tol is None else f'{tol:.1e}'})")
+            w = p[h] if h.startswith("hd") else abs(p[h])
+            if t is None:
+                out.append(f"transient {h} at A={p['A']:g}: missing (no recorded transient failure covers it)")
+            elif not (tol is not None and abs(t - w) <= tol):
+                out.append(f"transient {h} at A={p['A']:g}: {t:.8e} vs harmonic balance {w:.8e} "
+                           f"(diff {abs(t - w):.1e}, tolerance {tol if tol is None else f'{tol:.1e}'})")
     return out
+
+
+def zero_orders(d: dict) -> list[bool]:
+    """Which reference a_n are 0: within 3x the reference's plus harmonic
+    balance's uncertainty (the latter is the measured DC resolution, so an
+    exact zero has a floor). d as analyze writes it."""
+    hb_unc = d["harmonic_balance"].get("uncertainty") or [0.0] * 3
+    return [abs(c["value"]) <= 3 * (c["uncertainty"] + u) for c, u in zip(d["coefficients"], hb_unc)]
+
+
+def _hd(n: int, an: float, a1: float, amp: float, zero: list[bool]) -> dict:
+    """HD_n = |a_n|·A^(n-1)/(2^(n-1)|a1|), as the solver reports it: infinite
+    when a1 is 0 and a_n is not, unavailable (0/0) when both are."""
+    form = "|a2|·A/(2|a1|)" if n == 2 else "|a3|·A²/(4|a1|)"
+    if not zero[0]:
+        return {"value": abs(an) * amp ** (n - 1) / (2 ** (n - 1) * abs(a1)), "form": form}
+    if not zero[n - 1]:
+        return {"value": None, "form": form, "infinite": True}
+    return {"value": None, "form": form, "unavailable": f"0/0: a1 and a{n} are 0"}
 
 
 def disto(net, side, freq: float, keep, name: str) -> dict:
@@ -409,16 +450,25 @@ def _disto_dc(net, side, freq: float, at_f: dict, tay: list[float], tay_unc: lis
     fit within 3x its uncertainty (a pole below f/10 would pass the first)."""
     low = disto(net, side, freq / 10, keep, f"{name}.dc")
     keys = ("a1", "a2", "a3")
+    # A coefficient that is 0 (a1 too, at a symmetric node) has no relative
+    # change: below 3x its Taylor uncertainty the change is measured
+    # against that.
     floor = 1e-12 * abs(low["a1"])
-    change = max(abs(at_f[k].real - low[k].real) / max(abs(low[k].real), floor) for k in keys)
+    change = max(_ratio(abs(at_f[k].real - low[k].real), max(abs(low[k].real), floor, 3 * u))
+                 for k, u in zip(keys, tay_unc))
     ref = [low[k].real for k in keys]
-    gap = max(abs(r - t) / (3 * u + 1e-12 * abs(r) + floor) for r, t, u in zip(ref, tay, tay_unc))
+    gap = max(_ratio(abs(r - t), 3 * u + 1e-12 * abs(r) + floor) for r, t, u in zip(ref, tay, tay_unc))
     info = {"f": freq / 10, "change": change, "taylor_gap": gap}
     if change > 1e-9:
         return None, {**info, "error": "not quasi-static at f"}
     if gap > 1:
         return None, {**info, "error": "disagrees with the DC-Taylor fit"}
     return ref, info
+
+
+def _ratio(x: float, scale: float) -> float:
+    """x / scale, with 0/0 = 0."""
+    return x / scale if scale else (0.0 if x == 0 else math.inf)
 
 
 def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
@@ -450,46 +500,43 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     except (run_ngspice.NgspiceError, KeyError, ValueError) as exc:
         dis_out = _disto_unavailable(name, exc, net)
     tr = {}
-    tr_error = None
+    tr_error = tr_failed_at = None
     ppp = spec.get("points_per_period", 4000)
     for a in amps:
         # Each amplitude on its own: a later failure keeps the earlier runs.
         try:
             tr[a] = transient(net, side, a, freq, spec.get("periods", 10), ppp, keep, name)
         except (run_ngspice.NgspiceError, subprocess.TimeoutExpired) as exc:
-            tr_error = f"A={a:g}: {exc}"[:200]
+            tr_error, tr_failed_at = f"A={a:g}: {exc}"[:200], a
             break
     points = []
     for a in amps:
-        c1, c2, c3 = hb[a][0]
-        row = {"A": a, "c1": c1, "c2": c2, "c3": c3, "hd2": abs(c2 / c1), "hd3": abs(c3 / c1)}
+        (c1, c2, c3), res = hb[a]
+        # A fundamental within 3x its resolution (each c_n is within 2·res)
+        # is 0: no HD at this amplitude, the transient is compared by |c_n|.
+        c1_zero = abs(c1) <= 3 * 2 * res
+        row = {"A": a, "c1": c1, "c2": c2, "c3": c3,
+               "hd2": None if c1_zero else abs(c2 / c1), "hd3": None if c1_zero else abs(c3 / c1)}
         if a in tr:
-            (t1, t2, t3), solve = tr[a]
-            row.update({"tran_hd2": t2 / t1, "tran_hd3": t3 / t1,
-                        "tran_tol_hd2": transient_tolerance(2, row["hd2"], c1, solve, ppp),
-                        "tran_tol_hd3": transient_tolerance(3, row["hd3"], c1, solve, ppp)})
+            mags, solve = tr[a]
+            if c1_zero:
+                for n, (t, c) in enumerate(zip(mags, (c1, c2, c3)), 1):
+                    row.update({f"tran_c{n}": t, f"tran_tol_c{n}": transient_magnitude_tolerance(n, c, solve, ppp)})
+            else:
+                t1, t2, t3 = mags
+                row.update({"tran_hd2": t2 / t1, "tran_hd3": t3 / t1,
+                            "tran_tol_hd2": transient_tolerance(2, row["hd2"], c1, solve, ppp),
+                            "tran_tol_hd3": transient_tolerance(3, row["hd3"], c1, solve, ppp)})
         points.append(row)
     # A transient that ran must confirm harmonic balance (the quasi-static
     # assumption at f); only one that timed out or failed is optional.
     # ValueError: run_ngspice's main() catches it whether or not it runs as
     # __main__ (its NgspiceError is then a different class).
-    if bad := transient_disagreements(points):
+    tr_record = {"points": points, "transient_error": tr_error, "transient_failed_at": tr_failed_at}
+    if bad := transient_disagreements(tr_record):
         raise ValueError(f"{name}: not quasi-static at {freq:g} Hz: " + "; ".join(bad[:2])
                          + (f" (+{len(bad) - 2} more)" if len(bad) > 2 else ""))
     amp = amplitude(spec)
-    # Frequency-dependent HD from .disto's complex Volterra phasors at each f:
-    # the 2f output for a unit DISTOF1 is H2(jω,jω)/2, the 3f output
-    # H3(jω,jω,jω)/4, so HD2 = A·|a2|/(2|a1|) and HD3 = A²·|a3|/(4|a1|).
-    vs_freq = []
-    if dis_out["valid"] and not dis_out.get("unavailable"):
-        try:
-            for f in spec.get("vsFreq", []):
-                d = disto(net, side, f, keep, f"{name}.f{f:g}")
-                vs_freq.append({"f": f, "hd2": abs(d["a2"]) * amp / (2 * abs(d["a1"])),
-                                "hd3": abs(d["a3"]) * amp**2 / (4 * abs(d["a1"]))})
-        except (run_ngspice.NgspiceError, KeyError, ValueError) as exc:
-            dis_out.update(_disto_unavailable(name, exc, net))
-            vs_freq = []
     if dis_dc is not None:
         # Exact Volterra coefficients at their DC limit; their uncertainty is
         # the (tiny) gap to the independent DC-Taylor fit at the full span.
@@ -499,14 +546,37 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     else:
         ref, which = tay, "taylor"
     a1, a2, a3 = ref
+    floors = [3 * (u + h) for u, h in zip(unc, hb_unc)]
+    zero = zero_orders({"coefficients": [{"value": v, "uncertainty": u} for v, u in zip(ref, unc)],
+                        "harmonic_balance": {"uncertainty": hb_unc}})
+    # Frequency-dependent HD from .disto's complex Volterra phasors at each f:
+    # the 2f output for a unit DISTOF1 is H2(jω,jω)/2, the 3f output
+    # H3(jω,jω,jω)/4, so HD2 = A·|a2|/(2|a1|) and HD3 = A²·|a3|/(4|a1|). An
+    # H_n within the static a_n's zero floor is 0: H1 = 0 makes HD_n null,
+    # marked infinite (hd2Infinite, hd3Infinite) unless H_n is 0 too.
+    vs_freq = []
+    if dis_out["valid"] and not dis_out.get("unavailable"):
+        try:
+            for f in spec.get("vsFreq", []):
+                d = disto(net, side, f, keep, f"{name}.f{f:g}")
+                h = [abs(d[k]) for k in ("a1", "a2", "a3")]
+                if h[0] > floors[0]:
+                    vs_freq.append({"f": f, "hd2": h[1] * amp / (2 * h[0]), "hd3": h[2] * amp**2 / (4 * h[0])})
+                else:
+                    row = {"f": f, "hd2": None, "hd3": None}
+                    row.update({f"hd{n}Infinite": True for n in (2, 3) if h[n - 1] > floors[n - 1]})
+                    vs_freq.append(row)
+        except (run_ngspice.NgspiceError, KeyError, ValueError) as exc:
+            dis_out.update(_disto_unavailable(name, exc, net))
+            vs_freq = []
     result = {
         "freq": freq,
         "amplitude": amp,
         "reference": which,
         "coefficients": [{"order": i + 1, "value": v, "uncertainty": u} for i, (v, u) in enumerate(zip(ref, unc))],
         "taylor": [{"order": i + 1, "value": v, "uncertainty": u} for i, (v, u) in enumerate(zip(tay, tay_unc))],
-        "hd2": {"value": abs(a2) * amp / (2 * abs(a1)), "form": "|a2|·A/(2|a1|)"},
-        "hd3": {"value": abs(a3) * amp**2 / (4 * abs(a1)), "form": "|a3|·A²/(4|a1|)"},
+        "hd2": _hd(2, a2, a1, amp, zero),
+        "hd3": _hd(3, a3, a1, amp, zero),
         "taylor_span": span,
         "harmonic_balance": {"coefficients": hb_coef, "fit_error": {"a1": e1, "a2": e2, "a3": e3},
                              "uncertainty": hb_unc},
@@ -515,6 +585,8 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
         "points": points,
         "transient_error": tr_error,
     }
+    if tr_failed_at is not None:
+        result["transient_failed_at"] = tr_failed_at
     if bad := harmonic_balance_disagreements(result):
         raise ValueError(f"{name}: harmonic balance disagrees with the reference: " + "; ".join(bad))
     return result

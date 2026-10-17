@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 import distortion
+import spice
 from run_ngspice import OPTIONS
 
 HERE = Path(__file__).resolve().parent
@@ -81,7 +82,7 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         args += ["--noise-band", ",".join(repr(float(f)) for f in band)] if band else ["--noise"]
     if side.get("distortion"):
         # ngspice is fully nonlinear, so every transistor and diode is selected.
-        devices = [l.split()[0] for l in cir.read_text().splitlines()[1:] if l[:1].lower() in "mqd" and l.split()]
+        devices = [e.tokens[0] for e in spice.parse(cir.read_text()).elements if e.kind in "mqd"]
         args += ["--nonlinear", ",".join(devices), "--order", "3",
                  "--amplitude", repr(float(distortion.amplitude(side["distortion"])))]
     try:
@@ -296,28 +297,44 @@ def compare_distortion(got: dict, want: dict, rep: Report):
         rep.worst = max(rep.worst, abs(g - c["value"]) / max(abs(c["value"]), 1e-300))
         if abs(g - c["value"]) > tol:
             rep.failures.append(f"{what}: got {g:.10e}, want {c['value']:.10e} (tol {tol:.1e}, ref {ref['reference']})")
+    def infinite(q) -> bool:
+        return bool(q) and q.get("value") is None and q.get("latex") == "\\infty"
+
+    # HD with a1 = 0 is infinite, or 0/0 (unavailable: null) when a_n is 0 too.
     for h in ("hd2", "hd3"):
-        g = (gd.get(h) or {}).get("value")
+        gq = gd.get(h)
+        g = (gq or {}).get("value")
         w = ref[h]["value"]
-        if g is None:
-            rep.failures.append(f"distortion.{h}: missing")
+        if ref[h].get("infinite"):
+            if not infinite(gq):
+                rep.failures.append(f"distortion.{h}: got {g if gq else 'null'}, want infinite (a1 = 0)")
+        elif w is None:
+            if gq is not None:
+                rep.failures.append(f"distortion.{h}: got {'infinite' if infinite(gq) else g}, want null "
+                                    f"({ref[h].get('unavailable')})")
+        elif g is None:
+            rep.failures.append(f"distortion.{h}: {'infinite' if infinite(gq) else 'missing'}, want {w:.8e}")
         elif abs(g - w) > 1e-5 * w + 1e-15:
             rep.failures.append(f"distortion.{h}: got {g:.8e}, want {w:.8e}")
     # IIP3 = sqrt(4|a1|/(3|a3|)) over the reference's a1, a3 intervals (each
     # within the coefficient tolerance above); an a3 that may be 0 allows an
-    # infinite IIP3, which an exact 0 requires (latex \infty, value null).
+    # infinite IIP3, which an exact 0 requires (latex \infty, value null),
+    # and a1 = a3 = 0 (distortion.zero_orders) requires null (0/0).
     (w1, t1), (w3, t3) = ((abs(c["value"]), coef_tol[c["order"]]) for c in ref["coefficients"] if c["order"] in (1, 3))
+    zero = distortion.zero_orders(ref)
     gi = gd.get("iip3") or {}
     g = gi.get("value")
-    infinite = g is None and gi.get("latex") == "\\infty"
     lo = math.sqrt(4 * max(w1 - t1, 0.0) / (3 * (w3 + t3))) if w3 + t3 > 0 else math.inf
     hi = math.sqrt(4 * (w1 + t1) / (3 * (w3 - t3))) if w3 > t3 else math.inf
-    if w3 == 0:
-        if not infinite:
+    if zero[0] and zero[2]:
+        if gd.get("iip3") is not None:
+            rep.failures.append(f"distortion.iip3: got {'infinite' if infinite(gi) else g}, want null (0/0: a1 = a3 = 0)")
+    elif w3 == 0:
+        if not infinite(gi):
             rep.failures.append(f"distortion.iip3: got {g if g is not None else gi or 'missing'}, want infinite (a3 = 0)")
-    elif not gi or (g is None and not infinite):
+    elif not gi or (g is None and not infinite(gi)):
         rep.failures.append("distortion.iip3: missing")
-    elif infinite:
+    elif infinite(gi):
         if hi < math.inf:
             rep.failures.append(f"distortion.iip3: got infinite, want {math.sqrt(4 * w1 / (3 * w3)):.8e}")
     else:
@@ -329,7 +346,7 @@ def compare_distortion(got: dict, want: dict, rep: Report):
     # (distortion.py refuses to write disagreeing ones; this catches stale or
     # edited expectations).
     rep.failures += [f"expected distortion: {m}" for m in distortion.harmonic_balance_disagreements(ref)
-                     + distortion.transient_disagreements(ref["points"])]
+                     + distortion.transient_disagreements(ref)]
     # Frequency-dependent HD against .disto's complex Volterra phasors, which
     # match an exact 50-digit harmonic perturbation to ~4e-12 (textbook_nd).
     gv = {round(math.log10(r["f"]), 9): r for r in gd.get("vsFreq") or []}
@@ -337,8 +354,16 @@ def compare_distortion(got: dict, want: dict, rep: Report):
         g = gv.get(round(math.log10(w["f"]), 9))
         for h in ("hd2", "hd3"):
             what = f"distortion.vsFreq.{h}@{w['f']:g}"
+            # H1 = 0: null, marked infinite unless H_n is 0 too (0/0).
+            if w[h] is None:
+                want_inf = bool(w.get(f"{h}Infinite"))
+                if g is None or g.get(h) is not None or bool(g.get(f"{h}Infinite")) != want_inf:
+                    got = "missing" if g is None else g.get(h) if g.get(h) is not None else \
+                        "infinite" if g.get(f"{h}Infinite") else "null"
+                    rep.failures.append(f"{what}: got {got}, want {'infinite' if want_inf else 'null (0/0)'}")
+                continue
             if g is None or g.get(h) is None:
-                rep.failures.append(f"{what}: missing")
+                rep.failures.append(f"{what}: {'infinite' if g and g.get(f'{h}Infinite') else 'missing'}")
                 continue
             # An exact zero (symmetry, linearity) is checked with the same
             # absolute floor as hd2, hd3.
@@ -348,7 +373,12 @@ def compare_distortion(got: dict, want: dict, rep: Report):
                 rep.failures.append(f"{what}: got {g[h]:.10e}, want {w[h]:.10e} (diff {err:.1e})")
 
 
-def compare(got: dict, want: dict, rep: Report):
+def compare(got: dict, want: dict, rep: Report, side: dict | None = None):
+    """got against want; with the sidecar, a requested noise or distortion
+    analysis whose expected block is missing fails."""
+    for q in ("noise", "distortion"):
+        if side and side.get(q) and q not in want:
+            rep.failures.append(f"{q}: the sidecar requests it but the expected result has no {q} block")
     gnodes = lower_keys(got.get("op", {}).get("nodes"))
     for n, v in want["op"]["nodes"].items():
         rep.real(f"V({n})", gnodes.get(n), v, "v")
@@ -396,7 +426,7 @@ def main() -> int:
         side = json.loads(cir.with_suffix(".json").read_text())
         rep = Report(args.rtol, side.get("reference_limits"))
         try:
-            compare(run_cli(cmd, cir, side), want, rep)
+            compare(run_cli(cmd, cir, side), want, rep, side)
         except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
             print(f"{wpath.stem:28s} {'ERROR':6s} {'':>13s}  {str(exc)[:100]}")
             continue
