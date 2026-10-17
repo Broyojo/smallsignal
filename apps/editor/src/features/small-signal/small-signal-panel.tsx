@@ -1514,6 +1514,11 @@ export function SmallSignalPanel({
   >({ V: "", A: "" });
   const [distortionResponse, setDistortionResponse] =
     useState<SmallSignalResponse | null>(null);
+  // The job the distortion response answers: shown only while it is the
+  // current one, so a new amplitude never sits beside old numbers.
+  const [distortionResponseKey, setDistortionResponseKey] = useState<
+    string | null
+  >(null);
   const distortionGeneration = useRef(0);
 
   useEffect(() => {
@@ -1721,6 +1726,7 @@ export function SmallSignalPanel({
           if (current !== distortionGeneration.current) return;
           distortionBusy.current = false;
           setDistortionResponse(next);
+          setDistortionResponseKey(distortionKey);
         });
     }, SOLVE_DEBOUNCE_MS);
     return () => {
@@ -2078,7 +2084,8 @@ export function SmallSignalPanel({
                         <p className="small-signal-muted">
                           Enter an amplitude above 0.
                         </p>
-                      ) : !distortionResponse ? (
+                      ) : !distortionResponse ||
+                        distortionResponseKey !== distortionKey ? (
                         <span className="small-signal-formula-pending" />
                       ) : isSmallSignalError(distortionResponse) ? (
                         <p className="small-signal-muted">
