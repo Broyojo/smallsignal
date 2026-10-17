@@ -7,6 +7,7 @@ use crate::poly::{sub, Poly};
 use crate::render::Expr;
 use crate::roots::roots;
 use crate::ss::{self, Excite, SsCircuit, System};
+use crate::sym::{self, Sym, Symbols, XPoly};
 use num_complex::Complex64;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -37,6 +38,24 @@ pub struct Request {
     /// when any element has no value.
     #[serde(default)]
     pub symbolic: bool,
+    /// Second input source: the analysis drives `input` and `inputNeg` as a
+    /// pair (see `mode`).
+    #[serde(default)]
+    pub input_neg: Option<String>,
+    /// "differential" (default with inputNeg: ±1/2, gain per v_in+ − v_in−)
+    /// or "common" (both +1, gain per common-mode volt).
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Groups of matched elements that share one set of symbols.
+    #[serde(default, rename = "match")]
+    pub matched: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Single,
+    Differential,
+    Common,
 }
 
 /// Exact LaTeX is emitted only up to this many terms (UI readability).
@@ -50,7 +69,7 @@ const VERIFY_WORK_LIMIT: usize = 20_000_000;
 /// Unknowns the small-signal system has at least: node classes once every
 /// voltage source except the input is shorted, minus ground. Checked before
 /// the DC solve so an oversized circuit fails fast.
-fn unknowns_lower_bound(net: &Netlist, input: usize) -> usize {
+fn unknowns_lower_bound(net: &Netlist, inputs: &[usize]) -> usize {
     let mut uf: Vec<usize> = (0..net.nodes.len()).collect();
     fn find(uf: &mut [usize], x: usize) -> usize {
         let mut r = x;
@@ -61,7 +80,7 @@ fn unknowns_lower_bound(net: &Netlist, input: usize) -> usize {
         r
     }
     for (ei, e) in net.elements.iter().enumerate() {
-        if ei != input && matches!(e.kind, Kind::V { .. }) {
+        if !inputs.contains(&ei) && matches!(e.kind, Kind::V { .. }) {
             let (a, b) = (find(&mut uf, e.nodes[0]), find(&mut uf, e.nodes[1]));
             uf[a.max(b)] = a.min(b);
         }
@@ -84,13 +103,36 @@ pub fn analyze_json(netlist: &str, request: &str) -> String {
 
 pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     let net = parse(text)?;
-    let input = net
-        .element(&req.input)
-        .ok_or_else(|| format!("input source '{}' not found", req.input))?;
-    let input_is_v = match net.elements[input].kind {
-        Kind::V { .. } => true,
-        Kind::I { .. } => false,
-        _ => return Err(format!("input '{}' must be an independent V or I source", req.input)),
+    let find_source = |name: &str| -> Result<(usize, bool), String> {
+        let i = net
+            .element(name)
+            .ok_or_else(|| format!("input source '{name}' not found"))?;
+        match net.elements[i].kind {
+            Kind::V { .. } => Ok((i, true)),
+            Kind::I { .. } => Ok((i, false)),
+            _ => Err(format!("input '{name}' must be an independent V or I source")),
+        }
+    };
+    let (input, input_is_v) = find_source(&req.input)?;
+    let neg = match &req.input_neg {
+        Some(n) if !n.trim().is_empty() => {
+            let (i, v) = find_source(n)?;
+            if i == input {
+                return Err("input and inputNeg are the same source".to_string());
+            }
+            if v != input_is_v {
+                return Err("input and inputNeg must both be voltage sources or both current sources".to_string());
+            }
+            Some(i)
+        }
+        _ => None,
+    };
+    let mode = match (neg, req.mode.as_deref().map(str::trim)) {
+        (None, None | Some("")) => Mode::Single,
+        (None, Some(m)) => return Err(format!("mode '{m}' needs inputNeg")),
+        (Some(_), None | Some("") | Some("differential")) => Mode::Differential,
+        (Some(_), Some("common")) => Mode::Common,
+        (Some(_), Some(m)) => return Err(format!("unknown mode '{m}' (use differential or common)")),
     };
     let out = net
         .node(&req.output)
@@ -112,7 +154,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     if freqs.len() > MAX_FREQS {
         return Err(format!("too many frequencies ({}; limit {MAX_FREQS})", freqs.len()));
     }
-    let bound = unknowns_lower_bound(&net, input);
+    let inputs: Vec<usize> = std::iter::once(input).chain(neg).collect();
+    let bound = unknowns_lower_bound(&net, &inputs);
     if bound > MAX_UNKNOWNS {
         return Err(format!(
             "circuit too large for exact analysis: at least {bound} small-signal unknowns (limit {MAX_UNKNOWNS})"
@@ -130,9 +173,12 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         ));
     }
     warnings.extend(wiring_warnings(&net, op.as_ref()));
+    let symbols = sym::symbols(&net, &ss, &req.matched, symbolic, &mut warnings);
+    let x = |p: &Poly| XPoly::from_poly(p, &symbols.class, symbols.syms.len());
     let has_reactive = ss.reactive_mask != 0;
     let q = Quantities {
         ss: &ss,
+        sym: &symbols,
         freqs: &freqs,
         tol,
         has_reactive,
@@ -145,10 +191,31 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         "op".into(),
         op.as_ref().map(|op| op_json(&net, op)).unwrap_or(Value::Null),
     );
-    resp.insert("params".into(), params_json(&ss));
+    resp.insert("params".into(), params_json(&symbols.syms));
+    let candidates: Vec<Value> = sym::match_candidates(&net, &ss, op.as_ref())
+        .into_iter()
+        .map(|(a, b, kind)| json!({ "elements": [a, b], "kind": kind }))
+        .collect();
+    resp.insert("matchCandidates".into(), json!(candidates));
+    resp.insert(
+        "mode".into(),
+        json!(match mode {
+            Mode::Single => "single",
+            Mode::Differential => "differential",
+            Mode::Common => "common",
+        }),
+    );
 
-    // Gain: input source excited, output voltage per unit input.
-    let gsys = ss::system(&net, &ss, &Excite::Source(input));
+    // Gain: input source(s) excited, output voltage per unit input. A
+    // differential pair is driven ±1 (so v_id = 2) and the denominator
+    // doubled, exactly.
+    let excite = match (mode, neg) {
+        (Mode::Single, _) | (_, None) => Excite::Source(input),
+        (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
+        (Mode::Common, Some(n)) => Excite::Sources(vec![(input, 1), (n, 1)]),
+    };
+    let vid = if mode == Mode::Differential { 2.0 } else { 1.0 };
+    let gsys = ss::system(&net, &ss, &excite);
     let d = crate::det::det(&gsys.a, max_terms)?;
     if d.is_zero() {
         return Err("small-signal circuit is singular (floating node or source loop)".to_string());
@@ -165,41 +232,93 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         ));
     }
     let numeric_gain = |s: Complex64| {
-        let (x, err) = solve_at(&gsys, &ss, s)?;
-        let v = xnode(&gsys, &x, out) - xnode(&gsys, &x, rf);
-        Some((v, 2.0 * err / v.norm()))
+        let (xs, err) = solve_at(&gsys, &ss, s)?;
+        let v = (xnode(&gsys, &xs, out) - xnode(&gsys, &xs, rf)) / vid;
+        Some((v, 2.0 * err / vid / v.norm()))
     };
     let unit = if input_is_v { "V/V" } else { "V/A" };
+    let gain_den = if mode == Mode::Differential {
+        x(&d)?.scaled(2)?
+    } else {
+        x(&d)?
+    };
     resp.insert(
         "gain".into(),
-        q.json(&n_out, &d, unit, numeric_gain, &mut warnings, "gain"),
+        q.json(&x(&n_out)?, &gain_den, unit, numeric_gain, &mut warnings, "gain"),
     );
 
     if req.rin {
         let e = &net.elements[input];
-        let (num, den) = if input_is_v {
-            // Zin = V / I_into_circuit = 1 / (−I_branch).
-            let k = gsys.branch_col[&input];
-            (d.clone(), gsys.cramer(k, max_terms)?.neg())
-        } else {
-            let (p, n) = (e.nodes[0], e.nodes[1]);
-            (
-                sub(&node_num(&gsys, n, max_terms)?, &node_num(&gsys, p, max_terms)?),
-                d.clone(),
-            )
-        };
         let (p, n) = (e.nodes[0], e.nodes[1]);
-        let numeric = |s: Complex64| {
-            let (x, err) = solve_at(&gsys, &ss, s)?;
-            Some(if input_is_v {
-                let ib = x[gsys.branch_col[&input]];
-                (Complex64::new(-1.0, 0.0) / ib, err / ib.norm())
-            } else {
-                let v = xnode(&gsys, &x, n) - xnode(&gsys, &x, p);
-                (v, 2.0 * err / v.norm())
-            })
-        };
-        resp.insert("rin".into(), q.json(&num, &den, "Ω", numeric, &mut warnings, "rin"));
+        match (mode, neg) {
+            (Mode::Differential, Some(ng)) => {
+                // The port between the two inputs' + nodes, both sources removed.
+                let (p2, into) = (net.elements[ng].nodes[0], p);
+                let isys = ss::system(
+                    &net,
+                    &ss,
+                    &Excite::InjectOpen {
+                        into,
+                        outof: p2,
+                        open: inputs.clone(),
+                    },
+                );
+                let id = crate::det::det(&isys.a, max_terms)?;
+                let inum = sub(&node_num(&isys, into, max_terms)?, &node_num(&isys, p2, max_terms)?);
+                let numeric = |s: Complex64| {
+                    let (xs, err) = solve_at(&isys, &ss, s)?;
+                    let v = xnode(&isys, &xs, into) - xnode(&isys, &xs, p2);
+                    Some((v, 2.0 * err / v.norm()))
+                };
+                resp.insert(
+                    "rin".into(),
+                    q.json(&x(&inum)?, &x(&id)?, "Ω", numeric, &mut warnings, "rin"),
+                );
+            }
+            (Mode::Common, Some(ng)) if input_is_v => {
+                // Both inputs at the same 1 V: Z = 1 / (total current in).
+                let (k1, k2) = (gsys.branch_col[&input], gsys.branch_col[&ng]);
+                let total = poly_add(&gsys.cramer(k1, max_terms)?, &gsys.cramer(k2, max_terms)?);
+                let numeric = |s: Complex64| {
+                    let (xs, err) = solve_at(&gsys, &ss, s)?;
+                    let i = xs[k1] + xs[k2];
+                    Some((Complex64::new(-1.0, 0.0) / i, 2.0 * err / i.norm()))
+                };
+                resp.insert(
+                    "rin".into(),
+                    q.json(&x(&d)?, &x(&total.neg())?, "Ω", numeric, &mut warnings, "rin"),
+                );
+            }
+            (Mode::Common, Some(_)) => {
+                warnings.push("rin in common mode needs voltage-source inputs".to_string());
+            }
+            _ => {
+                let (num, den) = if input_is_v {
+                    // Zin = V / I_into_circuit = 1 / (−I_branch).
+                    let k = gsys.branch_col[&input];
+                    (d.clone(), gsys.cramer(k, max_terms)?.neg())
+                } else {
+                    (
+                        sub(&node_num(&gsys, n, max_terms)?, &node_num(&gsys, p, max_terms)?),
+                        d.clone(),
+                    )
+                };
+                let numeric = |s: Complex64| {
+                    let (xs, err) = solve_at(&gsys, &ss, s)?;
+                    Some(if input_is_v {
+                        let ib = xs[gsys.branch_col[&input]];
+                        (Complex64::new(-1.0, 0.0) / ib, err / ib.norm())
+                    } else {
+                        let v = xnode(&gsys, &xs, n) - xnode(&gsys, &xs, p);
+                        (v, 2.0 * err / v.norm())
+                    })
+                };
+                resp.insert(
+                    "rin".into(),
+                    q.json(&x(&num)?, &x(&den)?, "Ω", numeric, &mut warnings, "rin"),
+                );
+            }
+        }
     }
 
     if req.rout {
@@ -207,11 +326,14 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         let od = crate::det::det(&osys.a, max_terms)?;
         let on = sub(&node_num(&osys, out, max_terms)?, &node_num(&osys, rf, max_terms)?);
         let numeric = |s: Complex64| {
-            let (x, err) = solve_at(&osys, &ss, s)?;
-            let v = xnode(&osys, &x, out) - xnode(&osys, &x, rf);
+            let (xs, err) = solve_at(&osys, &ss, s)?;
+            let v = xnode(&osys, &xs, out) - xnode(&osys, &xs, rf);
             Some((v, 2.0 * err / v.norm()))
         };
-        resp.insert("rout".into(), q.json(&on, &od, "Ω", numeric, &mut warnings, "rout"));
+        resp.insert(
+            "rout".into(),
+            q.json(&x(&on)?, &x(&od)?, "Ω", numeric, &mut warnings, "rout"),
+        );
     }
 
     if req.verify {
@@ -233,6 +355,12 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
     resp.insert("warnings".into(), json!(warnings));
     Ok(Value::Object(resp))
+}
+
+fn poly_add(a: &Poly, b: &Poly) -> Poly {
+    let mut p = a.clone();
+    p.add_scaled(b, 1);
+    p
 }
 
 /// Wiring that makes a result meaningless even though it solves: a node only
@@ -272,10 +400,53 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
     out
 }
 
+/// Above this many terms, common-factor cancellation is not attempted.
+const GCD_TERM_LIMIT: usize = 1_000;
+
+/// num/den with their greatest common divisor cancelled (exactly; nothing is
+/// cancelled if the GCD cannot be found within its budget).
+fn cancel(num: &XPoly, den: &XPoly) -> (XPoly, XPoly) {
+    if num.is_zero() || num.terms.len() + den.terms.len() > GCD_TERM_LIMIT {
+        return (num.clone(), den.clone());
+    }
+    let to_m = |p: &XPoly| -> crate::gcd::MPoly { p.terms.iter().cloned().collect() };
+    let to_x = |m: crate::gcd::MPoly| XPoly {
+        terms: m.into_iter().collect(),
+    };
+    let (n, d) = (to_m(num), to_m(den));
+    let Some(g) = crate::gcd::gcd(&n, &d) else {
+        return (num.clone(), den.clone());
+    };
+    if g.keys().all(|e| e.iter().all(|&x| x == 0)) {
+        return (num.clone(), den.clone());
+    }
+    match (crate::gcd::div_exact(&n, &g), crate::gcd::div_exact(&d, &g)) {
+        (Some(qn), Some(qd)) => (to_x(qn), to_x(qd)),
+        _ => (num.clone(), den.clone()),
+    }
+}
+
+/// Value of an MNA-form symbol polynomial with displayed symbol values
+/// `vals` (resistances as R).
+fn xeval(p: &XPoly, syms: &[Sym], vals: &[f64], s: Complex64) -> Complex64 {
+    let mut acc = Complex64::new(0.0, 0.0);
+    for (e, c) in &p.terms {
+        let mut v = *c as f64;
+        for (k, &x) in e.iter().enumerate() {
+            if x > 0 {
+                let m = if syms[k].inverted { 1.0 / vals[k] } else { vals[k] };
+                v *= m.powi(x as i32);
+            }
+        }
+        acc += v * s.powu(sym::spow(e, syms));
+    }
+    acc
+}
+
 /// Conventional (∥) notation for num/den, kept only if it is the same
-/// function: checked at random parameter values and random complex s.
-fn structured(num: &Poly, den: &Poly, ss: &SsCircuit) -> Option<String> {
-    let st = crate::structure::structure(num, den, &ss.params, ss.reactive_mask)?;
+/// function: checked at random symbol values and random complex s.
+fn structured(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<String> {
+    let st = crate::structure::structure(num, den, syms)?;
     let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut rnd = || {
         seed ^= seed << 13;
@@ -284,23 +455,10 @@ fn structured(num: &Poly, den: &Poly, ss: &SsCircuit) -> Option<String> {
         0.5 + (seed % 1_000_000) as f64 / 1_000_000.0
     };
     for _ in 0..4 {
-        let vals: Vec<f64> = ss.params.iter().map(|_| rnd()).collect();
+        let vals: Vec<f64> = syms.iter().map(|_| rnd()).collect();
         let s = Complex64::new(rnd() - 1.0, rnd());
-        let ev = |p: &Poly| {
-            let mut acc = Complex64::new(0.0, 0.0);
-            for (&m, &c) in &p.terms {
-                let mut v = c as f64;
-                for (i, p) in ss.params.iter().enumerate() {
-                    if m >> i & 1 == 1 {
-                        v *= if p.inverted { 1.0 / vals[i] } else { vals[i] };
-                    }
-                }
-                acc += v * s.powu((m & ss.reactive_mask).count_ones());
-            }
-            acc
-        };
-        let want = ev(num) / ev(den);
-        let got = st.eval(&ss.params, &vals, s);
+        let want = xeval(num, syms, &vals, s) / xeval(den, syms, &vals, s);
+        let got = st.eval(syms, &vals, s);
         if (got - want).norm() > 1e-10 * want.norm().max(1e-300) {
             return None;
         }
@@ -356,7 +514,9 @@ fn solve_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Option<(Vec<Complex64
 }
 
 struct Quantities<'a> {
+    #[allow(dead_code)]
     ss: &'a SsCircuit,
+    sym: &'a Symbols,
     freqs: &'a [f64],
     tol: f64,
     has_reactive: bool,
@@ -392,14 +552,15 @@ impl Quantities<'_> {
 
     fn json(
         &self,
-        num: &Poly,
-        den: &Poly,
+        num: &XPoly,
+        den: &XPoly,
         unit: &str,
         numeric: impl Fn(Complex64) -> Option<(Complex64, f64)>,
         warnings: &mut Vec<String>,
         what: &str,
     ) -> Value {
-        let params = &self.ss.params;
+        let syms = &self.sym.syms;
+        let (num, den) = &cancel(num, den);
         if den.is_zero() {
             let values: Vec<Value> = self
                 .freqs
@@ -408,18 +569,31 @@ impl Quantities<'_> {
                 .collect();
             return json!({ "unit": unit, "infinite": true, "values": values, "exact": { "latex": "\\infty", "num": "1", "den": "0" } });
         }
-        let exact = Expr::from_rational(num, den, params, self.ss.inv_mask, self.ss.reactive_mask);
+        let exact = Expr::from_mna(num, den, syms);
         if self.symbolic {
             let terms = json!({ "num": exact.num.len(), "den": exact.den.len() });
-            let ex = if exact.term_count() <= LATEX_TERM_LIMIT {
-                let (en, ed) = exact.plain(params);
-                let expanded = exact.latex(params);
-                let latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
-                json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed, "terms": terms })
-            } else {
-                json!({ "latex": null, "latexExpanded": null, "num": null, "den": null, "terms": terms })
+            let text = |e: &Expr, n: &XPoly, d: &XPoly| {
+                if e.term_count() <= LATEX_TERM_LIMIT {
+                    let (en, ed) = e.plain(syms);
+                    let expanded = e.latex(syms);
+                    let latex = structured(n, d, syms).unwrap_or_else(|| expanded.clone());
+                    json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed })
+                } else {
+                    json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
+                }
             };
-            return json!({ "unit": unit, "exact": ex, "simplified": Value::Null, "values": [], "poles": [], "zeros": [] });
+            let mut ex = text(&exact, num, den);
+            ex["terms"] = terms;
+            // Hand-analysis form: the leading order as every device output
+            // resistance goes to infinity.
+            let (ln, ld) = cancel(&sym::leading_order(num, syms), &sym::leading_order(den, syms));
+            let lead = Expr::from_mna(&ln, &ld, syms);
+            let same = &ln == num && &ld == den;
+            let mut simp = if same { ex.clone() } else { text(&lead, &ln, &ld) };
+            simp["same"] = json!(same);
+            simp["assumption"] = json!("ro ≫ R, 1/gm");
+            simp["terms"] = json!({ "num": lead.num.len(), "den": lead.den.len() });
+            return json!({ "unit": unit, "exact": ex, "simplified": simp, "values": [], "poles": [], "zeros": [] });
         }
         let values: Vec<Value> = self
             .freqs
@@ -459,7 +633,11 @@ impl Quantities<'_> {
                     if scale > 0.0 {
                         let diff = (h - hn).norm() / scale;
                         max_diff = max_diff.max(diff);
-                        if diff > 1e-12 + 4.0 * bound + 4.0 * lu_rel {
+                        // Merged matched symbols take the first member's value;
+                        // members agree to `mismatch`, which moves the result by at
+                        // most that per merged factor, amplified by cancellation.
+                        let merge = self.sym.mismatch * exact.max_degree() as f64 * exact.cancellation(jw(f));
+                        if diff > 1e-12 + 4.0 * bound + 4.0 * lu_rel + 4.0 * merge {
                             check_ok = false;
                         }
                     }
@@ -485,7 +663,7 @@ impl Quantities<'_> {
         let mut simplified = exact.clone();
         let mut simp_err = 0.0;
         for eps in [1.0, 0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4] {
-            let cand = exact.prune(eps, params);
+            let cand = exact.prune(eps, syms);
             if cand.term_count() >= exact.term_count() {
                 break;
             }
@@ -506,9 +684,9 @@ impl Quantities<'_> {
         let simp_small = simplified.term_count() <= LATEX_TERM_LIMIT;
         let same = simplified.term_count() == exact.term_count();
         let exact_json = if small {
-            let (en, ed) = exact.plain(params);
-            let expanded = exact.latex(params);
-            let latex = structured(num, den, self.ss).unwrap_or_else(|| expanded.clone());
+            let (en, ed) = exact.plain(syms);
+            let expanded = exact.latex(syms);
+            let latex = structured(num, den, syms).unwrap_or_else(|| expanded.clone());
             json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed })
         } else {
             json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
@@ -516,10 +694,10 @@ impl Quantities<'_> {
         let simp_json = if same {
             exact_json.clone()
         } else if simp_small {
-            let (sn, sd) = simplified.plain(params);
-            let expanded = simplified.latex(params);
-            let (smn, smd) = simplified.to_mna(self.ss.inv_mask);
-            let latex = structured(&smn, &smd, self.ss).unwrap_or_else(|| expanded.clone());
+            let (sn, sd) = simplified.plain(syms);
+            let expanded = simplified.latex(syms);
+            let (smn, smd) = simplified.to_mna(syms);
+            let latex = structured(&smn, &smd, syms).unwrap_or_else(|| expanded.clone());
             json!({ "latex": latex, "latexExpanded": expanded, "num": sn, "den": sd })
         } else {
             json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
@@ -548,13 +726,15 @@ impl Quantities<'_> {
     }
 }
 
-fn params_json(ss: &SsCircuit) -> Value {
+fn params_json(syms: &[Sym]) -> Value {
     Value::Array(
-        ss.params
-            .iter()
-            .map(
-                |p| json!({ "name": p.name, "latex": p.latex, "value": p.value, "unit": p.unit, "element": p.element }),
-            )
+        syms.iter()
+            .map(|p| {
+                json!({
+                    "name": p.name, "latex": p.latex, "value": p.value, "unit": p.unit,
+                    "element": p.elements[0], "elements": p.elements,
+                })
+            })
             .collect(),
     )
 }

@@ -337,3 +337,131 @@ fn values_at_dc_with_a_pole_at_dc_are_null_not_garbage() {
     let s = serde_json::to_string(&r).unwrap();
     assert!(!s.contains("NaN") && !s.contains("inf\""), "{s}");
 }
+
+// ---- Two-source inputs and matching -------------------------------------------
+
+const PAIR: &str = "pair\nVDD vdd 0 1.8\nVIP inp 0 DC 1 AC 1\nVINN inn 0 DC 1\nIT tail 0 200u\nIX x 0 1u\nRX x 0 1k\n\
+                    M1 o1 inp tail 0 nm W=10u L=1u\nM2 o2 inn tail 0 nm W=10u L=1u\nRD1 vdd o1 5k\nRD2 vdd o2 5k\n\
+                    .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
+
+#[test]
+fn two_source_requests_are_validated() {
+    let bad = [
+        (
+            json!({ "input": "VIP", "inputNeg": "VIP", "output": "o1" }),
+            "same source",
+        ),
+        (
+            json!({ "input": "VIP", "inputNeg": "IX", "output": "o1" }),
+            "both be voltage sources",
+        ),
+        (
+            json!({ "input": "VIP", "inputNeg": "RD1", "output": "o1" }),
+            "independent V or I source",
+        ),
+        (
+            json!({ "input": "VIP", "inputNeg": "nope", "output": "o1" }),
+            "not found",
+        ),
+        (
+            json!({ "input": "VIP", "mode": "common", "output": "o1" }),
+            "needs inputNeg",
+        ),
+        (
+            json!({ "input": "VIP", "inputNeg": "VINN", "mode": "sideways", "output": "o1" }),
+            "unknown mode",
+        ),
+    ];
+    for (r, want) in bad {
+        let e = run_err(PAIR, &req(r.clone()));
+        assert!(e.contains(want), "{r}: {e}");
+    }
+    // An empty inputNeg or mode means a single input.
+    let r = run(
+        PAIR,
+        &req(json!({ "input": "VIP", "inputNeg": "", "mode": "", "output": "o1" })),
+    );
+    assert_eq!(r["mode"], "single");
+}
+
+#[test]
+fn differential_gain_of_a_balanced_pair_is_twice_the_half_circuit() {
+    let r = run(
+        PAIR,
+        &req(
+            json!({ "input": "VIP", "inputNeg": "VINN", "output": "o1", "ref": "o2", "match": [["M1", "M2"], ["RD1", "RD2"]] }),
+        ),
+    );
+    assert_eq!(r["mode"], "differential");
+    let m = &r["op"]["devices"]["M1"];
+    let (gm, ro) = (m["gm"].as_f64().unwrap(), 1.0 / m["gds"].as_f64().unwrap());
+    assert!(
+        close(value(&r, "gain", 0), (-gm * (5e3 * ro / (5e3 + ro)), 0.0), 1e-12),
+        "{}",
+        r["gain"]["values"]
+    );
+    assert_eq!(
+        r["gain"]["exact"]["latex"],
+        "-g_{m1,2} \\left(r_{o1,2} \\parallel R_{D1,2}\\right)"
+    );
+    // Ideal tail: no common-mode gain at the differential output.
+    let c = run(
+        PAIR,
+        &req(json!({ "input": "VIP", "inputNeg": "VINN", "mode": "common", "output": "o1", "ref": "o2" })),
+    );
+    assert_eq!(value(&c, "gain", 0), (0.0, 0.0));
+}
+
+#[test]
+fn match_requests_are_validated() {
+    let warn =
+        |m: Value| run(PAIR, &req(json!({ "input": "VIP", "output": "o1", "match": m })))["warnings"].to_string();
+    assert!(warn(json!([["M1", "MX"]])).contains("'MX' not found"));
+    assert!(warn(json!([["M1", "RD1"]])).contains("not all the same kind"));
+    // A one-element group, or a repeated name, merges nothing and warns nothing.
+    let w = warn(json!([["M1"], ["M2", "M2"]]));
+    assert!(!w.contains("match"), "{w}");
+    // Overlapping groups join: [M1,M2] + [M2,M1] is one group.
+    let r = run(
+        PAIR,
+        &req(json!({ "input": "VIP", "output": "o1", "match": [["M1", "M2"], ["M2", "M1"]] })),
+    );
+    assert!(r["params"].to_string().contains("g_{m1,2}"));
+}
+
+#[test]
+fn match_candidates_need_the_same_model_geometry_and_bias() {
+    let r = run(PAIR, &req(json!({ "input": "VIP", "output": "o1" })));
+    let c = r["matchCandidates"].to_string();
+    assert!(c.contains("[\"M1\",\"M2\"]") && c.contains("[\"RD1\",\"RD2\"]"), "{c}");
+    // Different W: not a candidate.
+    let net = PAIR.replace("M2 o2 inn tail 0 nm W=10u", "M2 o2 inn tail 0 nm W=11u");
+    let r = run(&net, &req(json!({ "input": "VIP", "output": "o1" })));
+    assert!(
+        !r["matchCandidates"].to_string().contains("M1"),
+        "{}",
+        r["matchCandidates"]
+    );
+    // Same geometry, different bias: not a candidate in numeric mode.
+    let net = PAIR.replace("VINN inn 0 DC 1", "VINN inn 0 DC 1.05");
+    let r = run(&net, &req(json!({ "input": "VIP", "output": "o1" })));
+    assert!(
+        !r["matchCandidates"].to_string().contains("M1"),
+        "{}",
+        r["matchCandidates"]
+    );
+}
+
+#[test]
+fn symbolic_leading_order_is_labelled() {
+    let r = run(
+        "cs\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in 0 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["gain"]["simplified"]["assumption"], "ro ≫ R, 1/gm");
+    assert_eq!(r["gain"]["simplified"]["latex"], "-g_{m1} R_{D}");
+    assert_eq!(
+        r["gain"]["exact"]["latex"],
+        "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)"
+    );
+}

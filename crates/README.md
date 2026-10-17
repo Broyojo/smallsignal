@@ -51,16 +51,36 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 ## Contract
 
 `smallsignal analyze <netlist> --input <V|I source> --output <node>[:<ref>]
+[--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
-(`input`, `output`, `ref`, `freqs`, `rin`, `rout`, `tolerance`, `verify`,
-`symbolic`, `maxTerms`). The response is JSON, or `{"error": "..."}` on failure.
+(`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
+`tolerance`, `verify`, `symbolic`, `maxTerms`). The response is JSON, or
+`{"error": "..."}` on failure.
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
-- `rin`: the impedance the input source sees looking into the circuit.
+  With `inputNeg`, `mode` "differential" (the default) drives the two sources
+  ±1/2, so the gain is A_d = v_out/(v_in+ − v_in−); "common" drives both with
+  +1, giving A_cm. The response's `mode` says which applied.
+- `rin`: the impedance the input source sees looking into the circuit. In
+  differential mode it is the impedance between the two sources' + nodes with
+  both sources removed; in common mode, 1/(total input current) with both at 1 V.
+- `match`: groups of elements that share one set of symbols (g_{m1,2},
+  r_{o1,2}, R_{D1,2}). Exact: merging happens after the multilinear solve, by
+  mapping parameters onto symbols with exponents. In numeric mode a group
+  merges only if its values agree to 1e-9 (else a warning says what differs);
+  symbolic mode assumes equality. `matchCandidates` lists pairs with the same
+  type, model and geometry (and, in numeric mode, small-signal values), plus
+  passives with equal values (`kind: "passive"`).
+- Common factors of numerator and denominator cancel (exact multivariate GCD),
+  so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
 - `rout`: the impedance at out/ref with every independent source zeroed.
-- Each quantity carries `exact` and `simplified` (`latex`, `num`, `den`,
-  `terms`, plus `maxRelError` for simplified), `values`
+- Each quantity carries `exact` and `simplified` (`latex`, `latexExpanded`,
+  `num`, `den`, `terms`; `same` when nothing was dropped). In numeric mode
+  `simplified` drops numerically small terms within `maxRelError`; in symbolic
+  mode it is the hand-analysis limit r_o → ∞ (every device output resistance
+  r_o, r_μ, bulk junction scaled as r/ε, the lowest order in ε kept for each
+  power of s), labelled `assumption: "ro ≫ R, 1/gm"`. Then `values`
   (`f, re, im, mag, phaseDeg`; `inf: true` with null parts when infinite),
   `poles` and `zeros` (in Hz), and `check`.
 - `op` (null in symbolic mode) holds node voltages, source branch currents, and

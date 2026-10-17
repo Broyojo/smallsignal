@@ -8,7 +8,7 @@ use num_complex::Complex64;
 use serde_json::Value;
 use smallsignal_core::poly::Poly;
 use smallsignal_core::ss::{self, Excite, SsCircuit};
-use smallsignal_core::{analyze, dc, det, netlist, render, roots, structure};
+use smallsignal_core::{analyze, dc, det, netlist, render, roots, structure, sym};
 
 const CASES: usize = 300;
 
@@ -442,8 +442,10 @@ fn structured_notation_is_the_same_function() {
         if d.is_zero() {
             continue;
         }
+        let sy = sym::unmerged(&ss);
+        let x = |p: &Poly| sym::XPoly::from_poly(p, &sy.class, sy.syms.len()).unwrap();
         for (num, den) in [(&n, &d), (&d, &d)] {
-            let Some(st) = structure::structure(num, den, &ss.params, ss.reactive_mask) else {
+            let Some(st) = structure::structure(&x(num), &x(den), &sy.syms) else {
                 continue;
             };
             structured += 1;
@@ -457,7 +459,7 @@ fn structured_notation_is_the_same_function() {
                     .collect();
                 let s = Complex64::new(rng.unit() - 0.5, rng.unit() * 3.0);
                 let want = eval_poly(num, &mna, ss.reactive_mask, s) / eval_poly(den, &mna, ss.reactive_mask, s);
-                let got = st.eval(&ss.params, &vals, s);
+                let got = st.eval(&sy.syms, &vals, s);
                 assert!(
                     (got - want).norm() <= 1e-9 * want.norm(),
                     "{} : {got} vs {want}\n{text}",
@@ -480,7 +482,9 @@ fn poles_are_roots_of_the_denominator() {
         let Some((ss, n, d)) = gain_polys(&text, false, "n1") else {
             continue;
         };
-        let e = render::Expr::from_rational(&n, &d, &ss.params, ss.inv_mask, ss.reactive_mask);
+        let sy = sym::unmerged(&ss);
+        let x = |p: &Poly| sym::XPoly::from_poly(p, &sy.class, sy.syms.len()).unwrap();
+        let e = render::Expr::from_mna(&x(&n), &x(&d), &sy.syms);
         let (_, dc) = e.s_coeffs();
         for p in roots::roots(&dc) {
             let (mut v, mut scale) = (Complex64::new(0.0, 0.0), 0.0);
@@ -734,4 +738,115 @@ fn reordering_lines_finds_the_same_operating_point() {
             );
         }
     }
+}
+
+// ---- Two-source drive and matching ------------------------------------------
+
+/// v_out = A_d·(v₊ − v₋) + A_cm·(v₊ + v₋)/2, so with single-source gains G₊ and
+/// G₋: A_d = (G₊ − G₋)/2 and A_cm = G₊ + G₋.
+#[test]
+fn differential_and_common_mode_follow_superposition() {
+    let mut rng = Rng::new(31);
+    let mut compared = 0;
+    for _ in 0..CASES {
+        let controlled = rng.below(2) == 0;
+        let c = linear(&mut rng, controlled, true);
+        let k = 2 + rng.below(c.nodes.max(2) - 1);
+        let mut lines = c.lines.clone();
+        lines.push("VIN n1 0 AC 1".into());
+        lines.push(format!("VIN2 n{k} 0 AC 1"));
+        let net = netlist_text("two", &lines);
+        let out = format!("n{}", 1 + rng.below(c.nodes));
+        let q = |extra: Value| {
+            let mut base = serde_json::json!({ "input": "VIN", "output": out, "freqs": FREQS });
+            base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            try_run(&net, &req_json(base))
+        };
+        let (Some(gp), Some(gn)) = (q(serde_json::json!({})), q(serde_json::json!({ "input": "VIN2" }))) else {
+            continue;
+        };
+        let (Some(dm), Some(cm)) = (
+            q(serde_json::json!({ "inputNeg": "VIN2" })),
+            q(serde_json::json!({ "inputNeg": "VIN2", "mode": "common" })),
+        ) else {
+            continue;
+        };
+        for i in 0..FREQS.len() {
+            let (p, n) = (value(&gp, "gain", i), value(&gn, "gain", i));
+            let ad = ((p.0 - n.0) / 2.0, (p.1 - n.1) / 2.0);
+            let acm = (p.0 + n.0, p.1 + n.1);
+            let scale = (p.0.hypot(p.1) + n.0.hypot(n.1)).max(1e-300);
+            let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) <= 1e-9 * scale;
+            assert!(near(value(&dm, "gain", i), ad), "A_d\n{net}");
+            assert!(near(value(&cm, "gain", i), acm), "A_cm\n{net}");
+            assert_eq!(dm["gain"]["check"]["ok"], true, "{net}");
+        }
+        compared += 1;
+    }
+    assert!(compared > CASES / 3, "only {compared} compared");
+}
+
+/// Symmetric stages with random values: merging every reported candidate
+/// leaves every value unchanged and passes the cross-check.
+#[test]
+fn matching_candidates_never_changes_values() {
+    let mut rng = Rng::new(32);
+    let mut merged = 0;
+    for _ in 0..CASES {
+        let (vdd, vcm) = (1.5 + rng.unit() * 1.5, 0.8 + rng.unit() * 0.4);
+        let (rd, w, l, kp, lam) = (
+            rng.decade(1e3, 5e4),
+            rng.decade(2e-6, 50e-6),
+            rng.decade(0.2e-6, 2e-6),
+            rng.decade(50e-6, 400e-6),
+            rng.unit() * 0.15,
+        );
+        let tail = rng.decade(10e-6, 300e-6);
+        let mos_load = rng.below(2) == 0;
+        let load = if mos_load {
+            format!("M3 o1 o1 vdd vdd mp W={w:.4e} L={l:.4e}\nM4 o2 o1 vdd vdd mp W={w:.4e} L={l:.4e}\n")
+        } else {
+            format!("RD1 vdd o1 {rd:.6e}\nRD2 vdd o2 {rd:.6e}\nCL1 o1 0 1p\nCL2 o2 0 1p\n")
+        };
+        let net = format!(
+            "pair\nVDD vdd 0 {vdd}\nVIP inp 0 DC {vcm} AC 1\nVINN inn 0 DC {vcm}\nIT tail 0 {tail:.6e}\n\
+             M1 o1 inp tail 0 mn W={w:.4e} L={l:.4e}\nM2 o2 inn tail 0 mn W={w:.4e} L={l:.4e}\n{load}\
+             .model mn nmos (kp={kp:.6e} vto=0.5 lambda={lam:.4} gamma=0.3)\n.model mp pmos (kp={kp:.6e} vto=-0.5 lambda={lam:.4})\n"
+        );
+        let base =
+            serde_json::json!({ "input": "VIP", "inputNeg": "VINN", "output": "o2", "freqs": FREQS, "rout": true });
+        let Some(plain) = try_run(&net, &req_json(base.clone())) else {
+            continue;
+        };
+        let groups: Vec<Value> = plain["matchCandidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["elements"].clone())
+            .collect();
+        if groups.is_empty() {
+            continue;
+        }
+        let mut with = base.clone();
+        with["match"] = Value::Array(groups);
+        let m = run(&net, &req_json(with));
+        assert!(
+            m["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|w| !w.as_str().unwrap().contains("not merged")),
+            "{}",
+            m["warnings"]
+        );
+        for q in ["gain", "rout"] {
+            for i in 0..FREQS.len() {
+                assert!(close(value(&plain, q, i), value(&m, q, i), 1e-9), "{q}\n{net}");
+            }
+            assert_eq!(m[q]["check"]["ok"], true, "{q}\n{net}");
+        }
+        assert!(m["params"].as_array().unwrap().len() < plain["params"].as_array().unwrap().len());
+        merged += 1;
+    }
+    assert!(merged > CASES / 2, "only {merged} merged");
 }

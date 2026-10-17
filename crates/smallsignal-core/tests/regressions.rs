@@ -301,3 +301,159 @@ fn huge_netlists_fail_fast() {
     assert!(e.contains("too large"), "{e}");
     assert!(t.elapsed().as_secs_f64() < if cfg!(debug_assertions) { 10.0 } else { 1.0 });
 }
+
+/// Log-space evaluation used to rebuild values as magnitude∠angle, so a
+/// negative real gain came back with im ≈ 5e-16 (shown as "4.19 ∠ 180°").
+#[test]
+fn resistive_quantities_are_exactly_real() {
+    let net = "cs\nV1 g 0 DC 0.7 AC 1\nR1 VDD Vout 10k\nM1 Vout g 0 0 nm W=10u L=1u\nVSUP_VDD VDD 0 DC 1.8\n\
+               .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "V1", "output": "Vout", "rout": true, "rin": true, "freqs": [0, 1e3, 1e9] })),
+    );
+    for q in ["gain", "rout"] {
+        for p in r[q]["values"].as_array().unwrap() {
+            assert_eq!(p["im"].as_f64(), Some(0.0), "{q}: {p}");
+        }
+    }
+    assert!(value(&r, "gain", 1).0 < 0.0);
+    assert_eq!(r["gain"]["values"][1]["phaseDeg"].as_f64(), Some(180.0));
+}
+
+/// At s = jω the powers of s must be exact (±1, ±j): a capacitive circuit's
+/// values keep their exact real/imaginary structure, and nothing tiny flips
+/// a phase.
+#[test]
+fn powers_of_j_are_exact() {
+    // An inductor: Z = jωL is exactly imaginary.
+    let r = run(
+        "t\nIIN 0 out AC 1\nL1 out 0 1u\n",
+        &req(json!({ "input": "IIN", "output": "out", "freqs": [1e3, 1e6] })),
+    );
+    for p in r["gain"]["values"].as_array().unwrap() {
+        assert_eq!(p["re"].as_f64(), Some(0.0), "{p}");
+        assert!(p["im"].as_f64().unwrap() > 0.0);
+    }
+    // An RC divider: |im|/|z| is either 0 or well above rounding.
+    let r = run(
+        "t\nVIN in 0 AC 1\nR1 in out 1k\nC1 out 0 1n\n",
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [0, 1, 1e3] })),
+    );
+    for p in r["gain"]["values"].as_array().unwrap() {
+        let (re, im) = (p["re"].as_f64().unwrap(), p["im"].as_f64().unwrap());
+        assert!(im == 0.0 || im.abs() / re.hypot(im) > 1e-15, "{p}");
+    }
+    assert_eq!(r["gain"]["values"][0]["im"].as_f64(), Some(0.0));
+}
+
+fn candidate_pairs(r: &Value) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = r["matchCandidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let e = c["elements"].as_array().unwrap();
+            let (a, b) = (e[0].as_str().unwrap().to_string(), e[1].as_str().unwrap().to_string());
+            if a < b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+    v.sort();
+    v
+}
+
+/// The editor's current-mirror-loaded diff pair (no values: symbolic). The
+/// tail M5 has the same default size as M3/M4 and used to be proposed with
+/// both, chaining M3, M4 and M5 into one symbol.
+const MIRROR_PAIR: &str = "* Main (small-signal netlist from Analog Canvas)\n\
+    M1 Vout net1 VDD VDD pmos_l1 W=1u L=1u\nM2 net1 net1 VDD VDD pmos_l1 W=1u L=1u\n\
+    M3 net1 Vin1 net0 0 nmos_l1 W=1u L=1u\nM4 Vout Vin2 net0 0 nmos_l1 W=1u L=1u\nM5 net0 Vb 0 0 nmos_l1 W=1u L=1u\n\
+    VPIN_Vin1 Vin1 0 DC 0\nVPIN_Vin2 Vin2 0 DC 0\nVPIN_Vb Vb 0 DC 0\nVSUP_VDD VDD 0 DC 1.8\n\
+    .model pmos_l1 PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.05)\n.model nmos_l1 NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.05)\n";
+
+#[test]
+fn match_candidates_are_topologically_paired() {
+    let base =
+        json!({ "input": "VPIN_Vin1", "inputNeg": "VPIN_Vin2", "output": "Vout", "symbolic": true, "rout": true });
+    let r = run(MIRROR_PAIR, &req(base.clone()));
+    // M1/M2 share their gate (mirror), M3/M4 their source (diff pair); the
+    // tail M5 shares neither with anything.
+    assert_eq!(candidate_pairs(&r), pairs(&[("M1", "M2"), ("M3", "M4")]));
+    let mut with = base.clone();
+    with["match"] = json!([["M1", "M2"], ["M3", "M4"]]);
+    let r = run(MIRROR_PAIR, &req(with));
+    assert!(!r["warnings"].to_string().contains("match:"), "{}", r["warnings"]);
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "g_{m3,4} \\left(r_{o1,2} \\parallel r_{o3,4}\\right)"
+    );
+    assert_eq!(r["rout"]["simplified"]["latex"], "r_{o1,2} \\parallel r_{o3,4}");
+}
+
+/// Symbolic mode has no values to compare: a requested group merges the
+/// parameter kinds its members share (M5 has no g_mb: body tied to source),
+/// without warning.
+#[test]
+fn symbolic_groups_merge_their_shared_kinds_silently() {
+    let r = run(
+        MIRROR_PAIR,
+        &req(
+            json!({ "input": "VPIN_Vin1", "inputNeg": "VPIN_Vin2", "output": "Vout", "symbolic": true, "match": [["M3", "M4", "M5"]] }),
+        ),
+    );
+    assert!(!r["warnings"].to_string().contains("match:"), "{}", r["warnings"]);
+    let p = r["params"].to_string();
+    assert!(p.contains("g_{m3,4,5}") && p.contains("r_{o3,4,5}"), "{p}");
+    assert!(p.contains("g_{mb3,4}"), "g_mb merges only where it exists: {p}");
+}
+
+/// The editor's 5T OTA (numeric): the pair and the mirror, not the bias
+/// devices (M5/M6 share gate and source, but their sizes differ).
+#[test]
+fn ota_candidates_are_the_pair_and_the_mirror() {
+    let net = "* Testbench (small-signal netlist from Analog Canvas)\nCL vout 0 1p\nIBIAS vdd ibias DC 15u\nVDD vdd 0 DC 1.8\n\
+        VINN vinn 0 DC 0.9\nVINP vinp 0 DC 0.9 AC 1\nM1 nleft_DUT vinp tail_DUT 0 nmos_l1 W=96u L=1u\n\
+        M2 vout vinn tail_DUT 0 nmos_l1 W=96u L=1u\nM3 nleft_DUT nleft_DUT vdd vdd pmos_l1 W=64u L=1u\n\
+        M4 vout nleft_DUT vdd vdd pmos_l1 W=64u L=1u\nM5 tail_DUT ibias 0 0 nmos_l1 W=100u L=3u\n\
+        M6 ibias ibias 0 0 nmos_l1 W=60u L=3u\n\
+        .model nmos_l1 NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.05)\n.model pmos_l1 PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.05)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VINP", "inputNeg": "VINN", "output": "vout" })),
+    );
+    assert_eq!(candidate_pairs(&r), pairs(&[("M1", "M2"), ("M3", "M4")]));
+    let r = run(
+        net,
+        &req(json!({ "input": "VINP", "inputNeg": "VINN", "output": "vout", "match": [["M1", "M2"], ["M3", "M4"]] })),
+    );
+    assert_eq!(r["gain"]["check"]["ok"], true);
+    assert!(!r["warnings"].to_string().contains("not merged"));
+}
+
+#[test]
+fn candidates_never_chain_and_passives_need_symmetry() {
+    // Ma–Mb share a gate, Mb–Mc a source, but Ma–Mc share neither: at most
+    // one of the two pairs, never a three-device group.
+    let chain = "t\nVDD vdd 0 1.8\nVG g1 0 1\nVG3 g3 0 1\nRA vdd d1 10k\nRB vdd d2 10k\nRC vdd d3 10k\n\
+                 Ma d1 g1 s1 0 nm W=1u L=1u\nMb d2 g1 s2 0 nm W=1u L=1u\nMc d3 g3 s2 0 nm W=1u L=1u\n\
+                 RS1 s1 0 1k\nRS2 s2 0 500\n.model nm nmos (kp=200u vto=0.5 lambda=0.05)\n";
+    let r = run(chain, &req(json!({ "input": "VG", "output": "d1", "symbolic": true })));
+    let c = candidate_pairs(&r);
+    let devices: Vec<_> = c.iter().filter(|(a, _)| a.starts_with('M')).collect();
+    assert!(devices.len() <= 1, "{c:?}");
+    // Passives: RD1/RD2 from one supply node to two outputs pair; equal
+    // resistors that share nothing, or both terminals, do not.
+    let passives = "t\nVIN in 0 1\nVDD vdd 0 1\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nRA in a 5k\nRB b o1 5k\nRP1 o2 0 7k\nRP2 o2 0 7k\nRZ a b 1k\n";
+    let r = run(passives, &req(json!({ "input": "VIN", "output": "o1" })));
+    assert_eq!(candidate_pairs(&r), pairs(&[("RD1", "RD2")]));
+}

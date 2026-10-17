@@ -5,6 +5,7 @@ use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
+[--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] \
 [--freq f1,f2,...] [--rin] [--rout] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
@@ -35,6 +36,9 @@ fn run() -> Result<(), String> {
         verify: false,
         max_terms: None,
         symbolic: false,
+        input_neg: None,
+        mode: None,
+        matched: Vec::new(),
     };
     let mut pretty = false;
     let mut certificate = false;
@@ -66,6 +70,20 @@ fn run() -> Result<(), String> {
             "--rout" => req.rout = true,
             "--verify" => req.verify = true,
             "--symbolic" => req.symbolic = true,
+            "--input-neg" => req.input_neg = Some(value(&mut it, a)?),
+            "--mode" => req.mode = Some(value(&mut it, a)?),
+            "--match" => {
+                for group in value(&mut it, a)?.split(';') {
+                    let names: Vec<String> = group
+                        .split(',')
+                        .map(|n| n.trim().to_string())
+                        .filter(|n| !n.is_empty())
+                        .collect();
+                    if !names.is_empty() {
+                        req.matched.push(names);
+                    }
+                }
+            }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,
             other => return Err(format!("unknown flag {other}\n{USAGE}")),

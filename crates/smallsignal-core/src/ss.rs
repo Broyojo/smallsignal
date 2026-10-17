@@ -109,7 +109,7 @@ pub struct SsCircuit {
 
 /// Escapes TeX specials so a name like `R{x}` or `R\\x` renders as text
 /// and can never inject a macro.
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -127,7 +127,7 @@ fn esc(s: &str) -> String {
 }
 
 /// `R_{D}` from `RD`; `R` alone stays `R`.
-fn elem_latex(name: &str) -> String {
+pub(crate) fn elem_latex(name: &str) -> String {
     let (head, rest) = name.split_at(1);
     if rest.is_empty() {
         head.to_string()
@@ -136,12 +136,17 @@ fn elem_latex(name: &str) -> String {
     }
 }
 
-/// `g_{m1}` for M1, `g_{m,in}` for Min, `g_{m}` for M.
+/// `g_{m1}` for M1, `g_{m,in}` for Min, `g_{m}` for M; `g_{m1,2}` for a
+/// merged M1,2 (commas only arise from merging: the parser splits on them).
+pub(crate) fn dev_latex_sub(base: &str, sub: &str, elem: &str) -> String {
+    dev_latex(base, sub, elem)
+}
+
 fn dev_latex(base: &str, sub: &str, elem: &str) -> String {
     let rest = &elem[1..];
     if rest.is_empty() {
         format!("{base}_{{{sub}}}")
-    } else if rest.chars().all(|c| c.is_ascii_digit()) {
+    } else if rest.chars().all(|c| c.is_ascii_digit() || c == ',') {
         format!("{base}_{{{sub}{rest}}}")
     } else {
         format!("{base}_{{{sub},{}}}", esc(rest))
@@ -717,8 +722,18 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
 pub enum Excite {
     /// AC unit excitation of an independent source (V: 1 V, I: 1 A).
     Source(usize),
+    /// Several independent sources at once, each with an integer weight
+    /// (differential: +1/−1, common mode: +1/+1).
+    Sources(Vec<(usize, i128)>),
     /// 1 A test current into `into`, returning from `outof`.
     Inject { into: usize, outof: usize },
+    /// A test current as in `Inject`, with the listed voltage sources
+    /// removed (open) rather than shorted: the port between two inputs.
+    InjectOpen {
+        into: usize,
+        outof: usize,
+        open: Vec<usize>,
+    },
 }
 
 pub struct System {
@@ -755,16 +770,21 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             controllers.push(*ctrl);
         }
     }
-    let excited = match ex {
-        Excite::Source(e) => Some(*e),
-        _ => None,
+    let excited: Vec<(usize, i128)> = match ex {
+        Excite::Source(e) => vec![(*e, 1)],
+        Excite::Sources(list) => list.clone(),
+        _ => Vec::new(),
     };
-    let kept_v = |e: usize| excited == Some(e) || controllers.contains(&e);
+    let opened: &[usize] = match ex {
+        Excite::InjectOpen { open, .. } => open,
+        _ => &[],
+    };
+    let kept_v = |e: usize| excited.iter().any(|&(x, _)| x == e) || controllers.contains(&e);
 
     let mut uf: Vec<usize> = (0..nnodes).collect();
     for s in &ss.stamps {
         if let Stamp::VSrc { e, a, b } = s {
-            if !kept_v(*e) {
+            if !kept_v(*e) && !opened.contains(e) {
                 let (ra, rb) = (find(&mut uf, *a), find(&mut uf, *b));
                 // Keep ground (0) as the representative.
                 let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
@@ -893,17 +913,32 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             b[o] -= 1;
         }
     };
+    let mut branch_b: Vec<(usize, i128)> = Vec::new();
+    let mut inject_v = |k: usize, w: i128| branch_b.push((k, w));
     match ex {
-        Excite::Source(e) => match &net.elements[*e].kind {
-            Kind::V { .. } => b[branch_col[e]] = 1,
-            Kind::I { .. } => {
-                // SPICE current flows from n+ through the source to n−.
-                let n = &net.elements[*e].nodes;
-                inject(nc(n[1]), nc(n[0]));
+        Excite::Source(_) | Excite::Sources(_) => {
+            for &(e, w) in &excited {
+                match &net.elements[e].kind {
+                    Kind::V { .. } => inject_v(branch_col[&e], w),
+                    Kind::I { .. } => {
+                        // SPICE current flows from n+ through the source to n−.
+                        let n = &net.elements[e].nodes;
+                        for _ in 0..w.unsigned_abs() {
+                            if w > 0 {
+                                inject(nc(n[1]), nc(n[0]));
+                            } else {
+                                inject(nc(n[0]), nc(n[1]));
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
             }
-            _ => unreachable!(),
-        },
-        Excite::Inject { into, outof } => inject(nc(*into), nc(*outof)),
+        }
+        Excite::Inject { into, outof } | Excite::InjectOpen { into, outof, .. } => inject(nc(*into), nc(*outof)),
+    }
+    for (k, w) in branch_b {
+        b[k] += w;
     }
     System {
         dim,

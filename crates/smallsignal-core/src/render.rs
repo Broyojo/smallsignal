@@ -2,15 +2,14 @@
 //! conductances, common factors cancelled, terms ordered by magnitude, and a
 //! simplified form that drops numerically small terms.
 
-use crate::poly::{Mono, Poly};
-use crate::ss::Param;
+use crate::sym::{spow, Sym, XPoly};
 use num_complex::Complex64;
 
 #[derive(Clone, Debug)]
 pub struct Term {
     pub coeff: i128,
-    /// Displayed factors (resistances as R, not 1/R).
-    pub mask: Mono,
+    /// Exponent of each displayed symbol (resistances as R, not 1/R).
+    pub e: Vec<u8>,
     pub spow: u32,
     /// ln(|coeff| · Π |factor values|), excluding s: kept in log form because
     /// products of resistances like 1e15 Ω (gmin-level rπ) overflow f64.
@@ -33,44 +32,59 @@ fn gcd(a: i128, b: i128) -> i128 {
     a as i128
 }
 
-fn term(coeff: i128, mask: Mono, spow: u32, params: &[Param]) -> Term {
+fn term(coeff: i128, e: Vec<u8>, spow: u32, syms: &[Sym]) -> Term {
     let mut lmag = (coeff.unsigned_abs() as f64).ln();
-    // Parameter values can be negative (e.g. an inverting controlled source).
+    // Symbol values can be negative (e.g. an inverting controlled source).
     let mut sign = coeff.signum() as f64;
     let mut symbolic = false;
-    let mut m = mask;
-    while m != 0 {
-        let i = m.trailing_zeros() as usize;
-        let v = params[i].value;
+    for (k, &x) in e.iter().enumerate() {
+        if x == 0 {
+            continue;
+        }
+        let v = syms[k].value;
         if v.is_nan() {
             symbolic = true;
         } else {
-            lmag += v.abs().ln();
-            if v < 0.0 {
+            lmag += x as f64 * v.abs().ln();
+            if v < 0.0 && x % 2 == 1 {
                 sign = -sign;
             }
         }
-        m &= m - 1;
     }
     if symbolic {
-        // Symbolic-only parameters have no values; order those terms by
+        // Symbolic-only symbols have no values; order those terms by
         // coefficient alone, and give them no numeric value.
         lmag = (coeff.unsigned_abs() as f64).ln();
         sign = f64::NAN;
     }
     Term {
         coeff,
-        mask,
+        e,
         spow,
         lmag,
         sign,
     }
 }
 
+/// Unit-modulus factor of s^k: exact powers of j when s is imaginary (so a
+/// real coefficient stays exactly real or imaginary), else e^{ik·arg s}.
+fn phase(s: Complex64, k: u32) -> Complex64 {
+    if s.re == 0.0 {
+        let one = if s.im >= 0.0 { 1.0 } else { -1.0 };
+        match k % 4 {
+            0 => Complex64::new(1.0, 0.0),
+            1 => Complex64::new(0.0, one),
+            2 => Complex64::new(-1.0, 0.0),
+            _ => Complex64::new(0.0, -one),
+        }
+    } else {
+        Complex64::from_polar(1.0, k as f64 * s.arg())
+    }
+}
+
 /// Σ terms at s, as (sum, Σ|terms|) scaled by e^(−shift), and the shift.
 fn scaled_sum(ts: &[Term], s: Complex64) -> (Complex64, f64, f64) {
     let ls = s.norm().ln();
-    let arg = s.arg();
     let log_of = |t: &Term| {
         if t.spow == 0 {
             t.lmag
@@ -90,47 +104,75 @@ fn scaled_sum(ts: &[Term], s: Complex64) -> (Complex64, f64, f64) {
     let mut abs = 0.0;
     for t in ts {
         let m = (log_of(t) - shift).exp();
-        sum += Complex64::from_polar(m, t.spow as f64 * arg) * t.sign;
+        sum += phase(s, t.spow) * (m * t.sign);
         abs += m;
     }
     (sum, abs, shift)
 }
 
-/// (n·e^a) / (d·e^b) without overflowing the intermediate factors.
+/// (n·e^a) / (d·e^b) without overflowing the intermediate factors. Scaling
+/// is component-wise, so an exactly real ratio stays exactly real.
 fn scaled_ratio(n: Complex64, a: f64, d: Complex64, b: f64) -> Complex64 {
     let r = n / d;
-    if r.norm() == 0.0 || !r.norm().is_finite() {
+    let f = (a - b).exp();
+    let direct = r * f;
+    if direct.re.is_finite() && direct.im.is_finite() && (f > 0.0 || a - b == f64::NEG_INFINITY) {
+        return direct;
+    }
+    let norm = r.norm();
+    if norm == 0.0 || !norm.is_finite() {
         return r;
     }
-    Complex64::from_polar((r.norm().ln() + a - b).exp(), r.arg())
+    (r / norm) * (norm.ln() + a - b).exp()
 }
 
 impl Expr {
-    /// num/den in MNA form (conductances) → display form.
-    pub fn from_rational(num: &Poly, den: &Poly, params: &[Param], inv: Mono, reactive: Mono) -> Expr {
-        let inv_set = (num.support() | den.support()) & inv;
-        let conv = |p: &Poly| -> Vec<Term> {
+    /// num/den in MNA form (conductances) → display form: each resistance
+    /// symbol's power is raised to its largest power in either, so its
+    /// conductance shows as the resistance.
+    pub fn from_mna(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Expr {
+        let mut top = vec![0u8; syms.len()];
+        for (e, _) in num.terms.iter().chain(&den.terms) {
+            for (k, &x) in e.iter().enumerate() {
+                top[k] = top[k].max(x);
+            }
+        }
+        let conv = |p: &XPoly| -> Vec<Term> {
             p.terms
                 .iter()
-                .map(|(&m, &c)| {
-                    let d = (m & !inv) | (inv_set & !m);
-                    term(c, d, (m & reactive).count_ones(), params)
+                .map(|(e, c)| {
+                    let c = *c;
+                    let d: Vec<u8> = e
+                        .iter()
+                        .enumerate()
+                        .map(|(k, &x)| if syms[k].inverted { top[k] - x } else { x })
+                        .collect();
+                    term(c, d, spow(e, syms), syms)
                 })
                 .collect()
         };
-        let mut e = Expr {
+        let mut x = Expr {
             num: conv(num),
             den: conv(den),
         };
-        e.normalize(params);
-        e
+        x.normalize(syms);
+        x
     }
 
     /// Cancels common factors, powers of s and integer content; makes the
     /// largest denominator term positive; sorts terms.
-    pub fn normalize(&mut self, params: &[Param]) {
+    pub fn normalize(&mut self, syms: &[Sym]) {
+        let n = syms.len();
         let all = self.num.iter().chain(&self.den);
-        let common = all.clone().fold(Mono::MAX, |acc, t| acc & t.mask);
+        let mut common = vec![u8::MAX; n];
+        for t in all.clone() {
+            for (c, &x) in common.iter_mut().zip(&t.e) {
+                *c = (*c).min(x);
+            }
+        }
+        if self.num.is_empty() && self.den.is_empty() {
+            common = vec![0; n];
+        }
         let smin = all.clone().map(|t| t.spow).min().unwrap_or(0);
         let g = all.fold(0, |acc, t| gcd(acc, t.coeff));
         let g = if g == 0 { 1 } else { g };
@@ -143,14 +185,23 @@ impl Expr {
         let fix = |ts: &mut Vec<Term>| {
             for t in ts.iter_mut() {
                 let c = t.coeff / g * if flip { -1 } else { 1 };
-                *t = term(c, t.mask & !common, t.spow - smin, params);
+                let e: Vec<u8> = t.e.iter().zip(&common).map(|(x, c)| x - c).collect();
+                // Common reactive symbols are removed with their s powers.
+                let removed: u32 = common
+                    .iter()
+                    .zip(syms)
+                    .filter(|(_, s)| s.reactive)
+                    .map(|(&c, _)| c as u32)
+                    .sum();
+                *t = term(c, e, t.spow - removed - (smin - removed.min(smin)), syms);
             }
             ts.sort_by(|a, b| {
                 a.spow
                     .cmp(&b.spow)
                     .then(b.lmag.total_cmp(&a.lmag))
-                    .then(b.mask.count_ones().cmp(&a.mask.count_ones()))
-                    .then(a.mask.cmp(&b.mask))
+                    .then(degree(&b.e).cmp(&degree(&a.e)))
+                    // Earlier symbols first: g_{m2} + g_{mb2}, r_{o1} + r_{o2}.
+                    .then(b.e.cmp(&a.e))
             });
         };
         fix(&mut self.num);
@@ -159,16 +210,51 @@ impl Expr {
 
     /// Back to MNA (conductance) form, up to a common monomial factor, which
     /// leaves the ratio unchanged.
-    pub fn to_mna(&self, inv: Mono) -> (Poly, Poly) {
-        let inv_all = self.num.iter().chain(&self.den).fold(0, |acc, t| acc | (t.mask & inv));
-        let conv = |ts: &[Term]| {
-            let mut p = Poly::zero();
-            for t in ts {
-                p.add_term((t.mask & !inv) | (inv_all & !t.mask), t.coeff);
+    pub fn to_mna(&self, syms: &[Sym]) -> (XPoly, XPoly) {
+        let mut top = vec![0u8; syms.len()];
+        for t in self.num.iter().chain(&self.den) {
+            for (k, &x) in t.e.iter().enumerate() {
+                top[k] = top[k].max(x);
             }
-            p
+        }
+        let conv = |ts: &[Term]| XPoly {
+            terms: ts
+                .iter()
+                .map(|t| {
+                    let e =
+                        t.e.iter()
+                            .enumerate()
+                            .map(|(k, &x)| if syms[k].inverted { top[k] - x } else { x })
+                            .collect();
+                    (e, t.coeff)
+                })
+                .collect(),
         };
         (conv(&self.num), conv(&self.den))
+    }
+
+    /// Largest total symbol degree of any term.
+    pub fn max_degree(&self) -> u32 {
+        self.num
+            .iter()
+            .chain(&self.den)
+            .map(|t| degree(&t.e))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Σ|terms| / |Σ terms| for numerator plus denominator at s: how much
+    /// cancellation amplifies a relative change in the terms.
+    pub fn cancellation(&self, s: Complex64) -> f64 {
+        let ratio = |ts: &[Term]| {
+            let (sum, abs, _) = scaled_sum(ts, s);
+            if sum.norm() > 0.0 {
+                abs / sum.norm()
+            } else {
+                f64::INFINITY
+            }
+        };
+        ratio(&self.num) + ratio(&self.den)
     }
 
     pub fn term_count(&self) -> usize {
@@ -215,7 +301,7 @@ impl Expr {
 
     /// Drops, within each power of s, the smallest terms whose combined
     /// magnitude stays below `eps` times the remaining coefficient.
-    pub fn prune(&self, eps: f64, params: &[Param]) -> Expr {
+    pub fn prune(&self, eps: f64, syms: &[Sym]) -> Expr {
         let pr = |ts: &[Term]| -> Vec<Term> {
             let mut out = Vec::new();
             let mut k = 0;
@@ -249,11 +335,11 @@ impl Expr {
             num: pr(&self.num),
             den: pr(&self.den),
         };
-        e.normalize(params);
+        e.normalize(syms);
         e
     }
 
-    pub fn latex(&self, params: &[Param]) -> String {
+    pub fn latex(&self, syms: &[Sym]) -> String {
         let neg = !self.num.is_empty() && self.num.iter().all(|t| t.coeff < 0);
         let num_terms: Vec<Term> = if neg {
             self.num
@@ -267,27 +353,28 @@ impl Expr {
         } else {
             self.num.clone()
         };
-        let n = poly_str(&num_terms, params, Style::Latex);
-        let unit_den = self.den.len() == 1 && self.den[0].coeff == 1 && self.den[0].mask == 0 && self.den[0].spow == 0;
+        let (n, product) = factored(&num_terms, syms);
+        let unit_den =
+            self.den.len() == 1 && self.den[0].coeff == 1 && degree(&self.den[0].e) == 0 && self.den[0].spow == 0;
         let sign = if neg { "-" } else { "" };
         if self.num.is_empty() {
             return "0".to_string();
         }
         if unit_den {
-            if neg && num_terms.len() > 1 {
+            if neg && !product {
                 format!("-\\left({n}\\right)")
             } else {
                 format!("{sign}{n}")
             }
         } else {
-            format!("{sign}\\frac{{{n}}}{{{}}}", poly_str(&self.den, params, Style::Latex))
+            format!("{sign}\\frac{{{n}}}{{{}}}", factored(&self.den, syms).0)
         }
     }
 
-    pub fn plain(&self, params: &[Param]) -> (String, String) {
+    pub fn plain(&self, syms: &[Sym]) -> (String, String) {
         (
-            poly_str(&self.num, params, Style::Plain),
-            poly_str(&self.den, params, Style::Plain),
+            poly_str(&self.num, syms, Style::Plain),
+            poly_str(&self.den, syms, Style::Plain),
         )
     }
 }
@@ -298,24 +385,43 @@ enum Style {
     Plain,
 }
 
-fn factors(mask: Mono, params: &[Param]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..params.len()).filter(|&i| mask >> i & 1 == 1).collect();
-    idx.sort_by(|&a, &b| params[a].role.cmp(&params[b].role).then(a.cmp(&b)));
+fn degree(e: &[u8]) -> u32 {
+    e.iter().map(|&x| x as u32).sum()
+}
+
+/// Symbols of a term, ordered by role (g_m before r_o before R…).
+pub(crate) fn factors(e: &[u8], syms: &[Sym]) -> Vec<(usize, u8)> {
+    let mut idx: Vec<(usize, u8)> = e
+        .iter()
+        .enumerate()
+        .filter(|(_, &x)| x > 0)
+        .map(|(k, &x)| (k, x))
+        .collect();
+    idx.sort_by(|&(a, _), &(b, _)| syms[a].role.cmp(&syms[b].role).then(a.cmp(&b)));
     idx
 }
 
+pub(crate) fn power_latex(latex: &str, x: u8) -> String {
+    if x == 1 {
+        latex.to_string()
+    } else {
+        format!("{{{latex}}}^{{{x}}}")
+    }
+}
+
 /// Monomial body without sign: `2 g_{m1} R_{D}` / `2*gm_M1*RD`.
-fn mono_str(t: &Term, with_s: bool, params: &[Param], st: Style) -> String {
+fn mono_str(t: &Term, with_s: bool, syms: &[Sym], st: Style) -> String {
     let mut parts: Vec<String> = Vec::new();
     let c = t.coeff.unsigned_abs();
-    let f = factors(t.mask, params);
+    let f = factors(&t.e, syms);
     if c != 1 || (f.is_empty() && (!with_s || t.spow == 0)) {
         parts.push(c.to_string());
     }
-    for i in f {
+    for (k, x) in f {
         parts.push(match st {
-            Style::Latex => params[i].latex.clone(),
-            Style::Plain => params[i].name.clone(),
+            Style::Latex => power_latex(&syms[k].latex, x),
+            Style::Plain if x == 1 => syms[k].name.clone(),
+            Style::Plain => format!("{}^{x}", syms[k].name),
         });
     }
     if with_s && t.spow > 0 {
@@ -335,8 +441,54 @@ fn s_pow(k: u32, st: Style) -> String {
     }
 }
 
+/// LaTeX of a sum with its common monomial and integer factor pulled out:
+/// `g_{m1} r_{o1} \left(g_{m2} r_{o2} + 1\right)`.
+/// Also says whether the result is a single product (needs no parentheses).
+fn factored(ts: &[Term], syms: &[Sym]) -> (String, bool) {
+    if ts.len() < 2 {
+        return (poly_str(ts, syms, Style::Latex), true);
+    }
+    let mut common = ts[0].e.clone();
+    for t in &ts[1..] {
+        for (c, &x) in common.iter_mut().zip(&t.e) {
+            *c = (*c).min(x);
+        }
+    }
+    let smin = ts.iter().map(|t| t.spow).min().unwrap_or(0);
+    let g = ts.iter().fold(0, |acc, t| gcd(acc, t.coeff));
+    // A leading minus on every term is the caller's to show, so keep g > 0.
+    let g = g.max(1);
+    if degree(&common) == 0 && smin == 0 && g == 1 {
+        return (poly_str(ts, syms, Style::Latex), false);
+    }
+    let rest: Vec<Term> = ts
+        .iter()
+        .map(|t| Term {
+            coeff: t.coeff / g,
+            e: t.e.iter().zip(&common).map(|(x, c)| x - c).collect(),
+            spow: t.spow - smin,
+            ..t.clone()
+        })
+        .collect();
+    // Common reactive symbols and powers of s go with the head; each term's
+    // total power of s is unchanged.
+    let head = Term {
+        coeff: g,
+        e: common,
+        spow: smin,
+        lmag: 0.0,
+        sign: 1.0,
+    };
+    let body = format!(
+        "{} \\left({}\\right)",
+        mono_str(&head, true, syms, Style::Latex),
+        poly_str(&rest, syms, Style::Latex)
+    );
+    (body, true)
+}
+
 /// Polynomial grouped by powers of s: `a + b + (c + d) s + e s^{2}`.
-fn poly_str(ts: &[Term], params: &[Param], st: Style) -> String {
+fn poly_str(ts: &[Term], syms: &[Sym], st: Style) -> String {
     if ts.is_empty() {
         return "0".to_string();
     }
@@ -348,13 +500,13 @@ fn poly_str(ts: &[Term], params: &[Param], st: Style) -> String {
         k += grp.len();
         if grp.len() == 1 || sp == 0 {
             for t in grp {
-                let body = mono_str(t, true, params, st);
+                let body = mono_str(t, true, syms, st);
                 push_signed(&mut out, t.coeff < 0, &body);
             }
         } else {
             let mut inner = String::new();
             for t in &grp {
-                push_signed(&mut inner, t.coeff < 0, &mono_str(t, false, params, st));
+                push_signed(&mut inner, t.coeff < 0, &mono_str(t, false, syms, st));
             }
             let body = match st {
                 Style::Latex => format!("\\left({inner}\\right) {}", s_pow(sp, st)),

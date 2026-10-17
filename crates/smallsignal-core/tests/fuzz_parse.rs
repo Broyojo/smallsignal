@@ -292,11 +292,25 @@ fn request(rng: &mut Rng, net: &str) -> String {
     let (rin, rout) = (flag(rng), flag(rng));
     let verify = if rng.below(10) == 0 { "true" } else { "false" };
     let symbolic = if rng.below(8) == 0 { "true" } else { "false" };
+    let extra = match rng.below(6) {
+        0 if !sources.is_empty() => format!(",\"inputNeg\":{}", serde_json::to_string(rng.pick(&sources)).unwrap()),
+        1 if !sources.is_empty() => format!(
+            ",\"inputNeg\":{},\"mode\":\"{}\"",
+            serde_json::to_string(rng.pick(&sources)).unwrap(),
+            rng.pick(&["common", "differential", "x", ""])
+        ),
+        2 if names.len() > 1 => format!(
+            ",\"match\":[[{},{}]]",
+            serde_json::to_string(rng.pick(&names)).unwrap(),
+            serde_json::to_string(rng.pick(&names)).unwrap()
+        ),
+        _ => String::new(),
+    };
     let input = serde_json::to_string(&input).unwrap();
     let output = serde_json::to_string(&output).unwrap();
     format!(
         "{{\"input\":{input},\"output\":{output}{reference},\"freqs\":{freqs},\"rin\":{rin},\"rout\":{rout},\
-         \"tolerance\":{tol},\"verify\":{verify},\"symbolic\":{symbolic}}}"
+         \"tolerance\":{tol},\"verify\":{verify},\"symbolic\":{symbolic}{extra}}}"
     )
 }
 

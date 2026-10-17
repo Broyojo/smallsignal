@@ -10,6 +10,7 @@ pub mod certificate;
 pub mod dc;
 pub mod det;
 pub mod devices;
+pub mod gcd;
 pub mod linalg;
 pub mod netlist;
 pub mod poly;
@@ -17,6 +18,7 @@ pub mod render;
 pub mod roots;
 pub mod ss;
 pub mod structure;
+pub mod sym;
 pub mod units;
 pub mod verify;
 

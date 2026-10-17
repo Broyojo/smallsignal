@@ -2,8 +2,9 @@
 //! sum of conductances (and transconductances): 1/(g_o + G_1) is written
 //! r_o ∥ R_1, and 1/g_m as 1/g_m, so `-gm/(go + G1)` reads `-g_m (r_o ∥ R_1)`.
 //!
-//! Works on the MNA (conductance) form: with D₀ = g·m·(p₁ + … + p_k), where m
-//! is a monomial and each pᵢ a single admittance-like parameter,
+//! Works on the MNA (conductance) form over display symbols: with
+//! D₀ = g·m·(p₁ + … + p_k), where m is a monomial and each pᵢ a single
+//! admittance-like symbol,
 //!
 //!   N/D = (N/(g·m))·Z / (1 + Σ_{k≥1} (D_k/(g·m))·Z·s^k),   Z = p₁⁻¹ ∥ … ∥ p_k⁻¹.
 //!
@@ -11,15 +12,16 @@
 //! 1/R in a numerator), and the caller checks it numerically against the
 //! exact expression before showing it.
 
-use crate::poly::{Mono, Poly};
-use crate::ss::{Param, Role};
+use crate::render::{factors, power_latex};
+use crate::ss::Role;
+use crate::sym::{spow, Sym, XPoly};
 use num_complex::Complex64;
 
-/// One displayed monomial: integer coefficient, factors shown as-is, and
-/// resistances that come from dividing by a conductance.
+/// One displayed monomial: integer coefficient, symbol exponents (a
+/// resistance where dividing by its conductance), power of s.
 struct DTerm {
     coeff: i128,
-    factors: Vec<usize>,
+    e: Vec<u8>,
     spow: u32,
 }
 
@@ -31,79 +33,89 @@ pub struct Structured {
     negate: bool,
 }
 
-fn admittance_like(p: &Param) -> bool {
-    matches!(p.role, Role::Resistor | Role::DeviceR | Role::Gm | Role::Gmb)
+fn admittance_like(s: &Sym) -> bool {
+    matches!(s.role, Role::Resistor | Role::DeviceR | Role::Gm | Role::Gmb)
 }
 
-/// Divides each term by `g·m`; parameters of `m` missing from a term become
-/// inverse factors, allowed only for conductances (shown as their R).
+/// Divides each term by `g·m`; a symbol of `m` missing from a term becomes an
+/// inverse factor, allowed only for conductances (shown as their R).
 /// Conductances left in a term would display as 1/R, so they reject.
-fn divide(terms: &[(Mono, i128)], g: i128, m: Mono, params: &[Param], reactive: Mono) -> Option<Vec<DTerm>> {
+fn divide(terms: &[&(Vec<u8>, i128)], g: i128, m: &[u8], syms: &[Sym]) -> Option<Vec<DTerm>> {
     let mut out = Vec::new();
-    for &(mask, c) in terms {
+    for &(e, c) in terms {
         if c % g != 0 {
             return None;
         }
-        let mut factors = Vec::new();
-        for (i, p) in params.iter().enumerate() {
-            let bit = 1u128 << i;
-            let in_term = mask & bit != 0;
-            let in_m = m & bit != 0;
-            match (in_term, in_m) {
-                (true, true) | (false, false) => {}
-                // A conductance left over would read 1/R: not conventional.
-                (true, false) if p.inverted => return None,
-                (true, false) => factors.push(i),
-                // Dividing by a conductance gives its resistance.
-                (false, true) if p.inverted => factors.push(i),
-                (false, true) => return None,
+        let mut d = vec![0u8; syms.len()];
+        for k in 0..syms.len() {
+            let (x, y) = (e[k] as i32, m[k] as i32);
+            if x > y {
+                if syms[k].inverted {
+                    return None;
+                }
+                d[k] = (x - y) as u8;
+            } else if x < y {
+                if !syms[k].inverted {
+                    return None;
+                }
+                d[k] = (y - x) as u8;
             }
         }
         out.push(DTerm {
             coeff: c / g,
-            factors,
-            spow: (mask & reactive).count_ones(),
+            spow: spow(e, syms),
+            e: d,
         });
     }
-    out.sort_by(|a, b| a.spow.cmp(&b.spow).then(b.factors.len().cmp(&a.factors.len())));
+    out.sort_by(|a, b| {
+        a.spow.cmp(&b.spow).then(
+            b.e.iter()
+                .map(|&x| x as u32)
+                .sum::<u32>()
+                .cmp(&a.e.iter().map(|&x| x as u32).sum::<u32>()),
+        )
+    });
     Some(out)
 }
 
-pub fn structure(num: &Poly, den: &Poly, params: &[Param], reactive: Mono) -> Option<Structured> {
-    let d0: Vec<(Mono, i128)> = den
-        .terms
-        .iter()
-        .filter(|(&m, _)| m & reactive == 0)
-        .map(|(&m, &c)| (m, c))
-        .collect();
+pub fn structure(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<Structured> {
+    let d0: Vec<&(Vec<u8>, i128)> = den.terms.iter().filter(|(e, _)| spow(e, syms) == 0).collect();
     if d0.len() < 2 {
         return None;
     }
-    let m = d0.iter().fold(Mono::MAX, |acc, &(mask, _)| acc & mask);
+    let mut m = vec![u8::MAX; syms.len()];
+    for (e, _) in &d0 {
+        for (a, &x) in m.iter_mut().zip(e) {
+            *a = (*a).min(x);
+        }
+    }
     let g = d0[0].1;
     let mut parallel = Vec::new();
-    for &(mask, c) in &d0 {
-        let rest = mask & !m;
-        if c != g || rest.count_ones() != 1 {
+    for (e, c) in &d0 {
+        if *c != g {
             return None;
         }
-        let i = rest.trailing_zeros() as usize;
-        if !admittance_like(&params[i]) {
+        let rest: Vec<usize> = (0..syms.len()).filter(|&k| e[k] > m[k]).collect();
+        if rest.len() != 1 || e[rest[0]] - m[rest[0]] != 1 || !admittance_like(&syms[rest[0]]) {
             return None;
         }
-        parallel.push(i);
+        parallel.push(rest[0]);
     }
-    parallel.sort_by(|&a, &b| params[a].role.cmp(&params[b].role).then(a.cmp(&b)));
+    parallel.sort_by(|&a, &b| syms[a].role.cmp(&syms[b].role).then(a.cmp(&b)));
+    parallel.dedup();
+    if parallel.len() != d0.len() {
+        return None;
+    }
 
-    let nterms: Vec<(Mono, i128)> = num.terms.iter().map(|(&m, &c)| (m, c)).collect();
-    let hterms: Vec<(Mono, i128)> = den
-        .terms
-        .iter()
-        .filter(|(&m, _)| m & reactive != 0)
-        .map(|(&m, &c)| (m, c))
-        .collect();
-    let numd = divide(&nterms, g, m, params, reactive)?;
-    let dend = divide(&hterms, g, m, params, reactive)?;
+    let nterms: Vec<&(Vec<u8>, i128)> = num.terms.iter().collect();
+    let hterms: Vec<&(Vec<u8>, i128)> = den.terms.iter().filter(|(e, _)| spow(e, syms) > 0).collect();
+    let numd = divide(&nterms, g, &m, syms)?;
+    let dend = divide(&hterms, g, &m, syms)?;
+    // `(a + b) (r_o ∥ R)` reads worse than the plain fraction; keep the
+    // rewrite to a numerator with at most one term per power of s.
+    if numd.windows(2).any(|w| w[0].spow == w[1].spow) {
+        return None;
+    }
     let negate = !numd.is_empty() && numd.iter().all(|t| t.coeff < 0);
     let mut st = Structured {
         latex: String::new(),
@@ -112,24 +124,18 @@ pub fn structure(num: &Poly, den: &Poly, params: &[Param], reactive: Mono) -> Op
         parallel,
         negate,
     };
-    st.latex = st.render(params);
+    st.latex = st.render(syms);
     Some(st)
 }
 
-fn sorted(factors: &[usize], params: &[Param]) -> Vec<usize> {
-    let mut f = factors.to_vec();
-    f.sort_by(|&a, &b| params[a].role.cmp(&params[b].role).then(a.cmp(&b)));
-    f
-}
-
-fn mono(t: &DTerm, params: &[Param], abs: bool) -> String {
-    let c = if abs { t.coeff.abs() } else { t.coeff };
+fn mono(t: &DTerm, syms: &[Sym], abs: bool) -> String {
+    let c = t.coeff;
     let mut parts: Vec<String> = Vec::new();
-    let f = sorted(&t.factors, params);
-    if c.abs() != 1 || (f.is_empty() && t.spow == 0) {
-        parts.push(c.abs().to_string());
+    let f = factors(&t.e, syms);
+    if c.unsigned_abs() != 1 || (f.is_empty() && t.spow == 0) {
+        parts.push(c.unsigned_abs().to_string());
     }
-    parts.extend(f.iter().map(|&i| params[i].latex.clone()));
+    parts.extend(f.iter().map(|&(k, x)| power_latex(&syms[k].latex, x)));
     if t.spow == 1 {
         parts.push("s".into());
     } else if t.spow > 1 {
@@ -143,11 +149,11 @@ fn mono(t: &DTerm, params: &[Param], abs: bool) -> String {
     }
 }
 
-fn sum(ts: &[DTerm], params: &[Param], abs: bool) -> String {
+fn sum(ts: &[DTerm], syms: &[Sym], abs: bool) -> String {
     let mut out = String::new();
     for t in ts {
         let neg = !abs && t.coeff < 0;
-        let body = mono(t, params, true);
+        let body = mono(t, syms, true);
         if out.is_empty() {
             out.push_str(if neg { "-" } else { "" });
         } else {
@@ -160,17 +166,17 @@ fn sum(ts: &[DTerm], params: &[Param], abs: bool) -> String {
 
 impl Structured {
     /// The parallel group in parentheses, `(r_o ∥ R)`.
-    fn z_latex(&self, params: &[Param]) -> String {
-        format!("\\left({}\\right)", self.z_items(params))
+    fn z_latex(&self, syms: &[Sym]) -> String {
+        format!("\\left({}\\right)", self.z_items(syms))
     }
 
     /// The parallel group alone, `r_o ∥ R`.
-    fn z_items(&self, params: &[Param]) -> String {
+    fn z_items(&self, syms: &[Sym]) -> String {
         let items: Vec<String> = self
             .parallel
             .iter()
             .map(|&i| {
-                let p = &params[i];
+                let p = &syms[i];
                 if p.inverted {
                     p.latex.clone()
                 } else {
@@ -181,28 +187,26 @@ impl Structured {
         items.join(" \\parallel ")
     }
 
-    fn render(&self, params: &[Param]) -> String {
-        let z = self.z_latex(params);
+    fn render(&self, syms: &[Sym]) -> String {
+        let z = self.z_latex(syms);
         // Numerator: N' · Z, written "g_m (r_o ∥ R)" or "(a + b s) (r_o ∥ R)".
         let numer = match self.num.len() {
             0 => return "0".into(),
             1 => {
                 let t = &self.num[0];
-                let body = mono(t, params, true);
+                let body = mono(t, syms, true);
                 if body == "1" {
-                    z.clone()
+                    // Alone in a numerator (or as the whole result) the group
+                    // needs no parentheses.
+                    self.z_items(syms)
                 } else {
                     format!("{body} {z}")
                 }
             }
-            _ => format!("\\left({}\\right) {z}", sum(&self.num, params, self.negate)),
+            _ => format!("\\left({}\\right) {z}", sum(&self.num, syms, self.negate)),
         };
         let sign = if self.negate { "-" } else { "" };
         if self.den.is_empty() {
-            // Just the parallel group: Z = r_o ∥ R_1, no parentheses.
-            if numer == z {
-                return format!("{sign}{}", self.z_items(params));
-            }
             return format!("{sign}{numer}");
         }
         // Denominator: 1 + Σ (D_k / g·m) · Z · s^k, grouped by power of s.
@@ -219,31 +223,31 @@ impl Structured {
             };
             let strip = |t: &DTerm| DTerm {
                 coeff: t.coeff,
-                factors: t.factors.clone(),
+                e: t.e.clone(),
                 spow: 0,
             };
             if grp.len() == 1 {
                 let t = strip(grp[0]);
                 den.push_str(if t.coeff < 0 { " - " } else { " + " });
-                let body = mono(&t, params, true);
+                let body = mono(&t, syms, true);
                 let body = if body == "1" { String::new() } else { format!("{body} ") };
                 den.push_str(&format!("{body}{z} {spow}"));
             } else {
                 let inner: Vec<DTerm> = grp.iter().map(|t| strip(t)).collect();
-                den.push_str(&format!(" + \\left({}\\right) {z} {spow}", sum(&inner, params, false)));
+                den.push_str(&format!(" + \\left({}\\right) {z} {spow}", sum(&inner, syms, false)));
             }
         }
         format!("{sign}\\frac{{{numer}}}{{{den}}}")
     }
 
-    /// Value of the structured form with each parameter's displayed value
+    /// Value of the structured form with each symbol's displayed value
     /// (R for resistances) taken from `vals`, for checking the rewrite.
-    pub fn eval(&self, params: &[Param], vals: &[f64], s: Complex64) -> Complex64 {
+    pub fn eval(&self, syms: &[Sym], vals: &[f64], s: Complex64) -> Complex64 {
         let term = |t: &DTerm| -> Complex64 {
-            let v: f64 = t.factors.iter().map(|&i| vals[i]).product::<f64>() * t.coeff as f64;
+            let v: f64 = t.e.iter().zip(vals).map(|(&x, v)| v.powi(x as i32)).product::<f64>() * t.coeff as f64;
             v * s.powu(t.spow)
         };
-        let adm = |i: usize| if params[i].inverted { 1.0 / vals[i] } else { vals[i] };
+        let adm = |i: usize| if syms[i].inverted { 1.0 / vals[i] } else { vals[i] };
         let z = 1.0 / self.parallel.iter().map(|&i| adm(i)).sum::<f64>();
         let n: Complex64 = self.num.iter().map(term).sum::<Complex64>() * z;
         let d: Complex64 = Complex64::new(1.0, 0.0) + self.den.iter().map(term).sum::<Complex64>() * z;
