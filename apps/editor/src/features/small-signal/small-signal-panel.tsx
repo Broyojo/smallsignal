@@ -888,9 +888,10 @@ function DistortionDetails({
   // frequencies too wherever it differs from that, even at one frequency
   // (near a pole): never let the low-frequency value pass for it.
   const differs = (at: number | null, low: number | null | undefined) =>
-    at !== null &&
-    (low == null ||
-      Math.abs(at - low) > 1e-6 * Math.max(Math.abs(low), Math.abs(at)));
+    at === null || low == null
+      ? // Available at one and not the other, either way round.
+        (at === null) !== (low == null)
+      : Math.abs(at - low) > 1e-6 * Math.max(Math.abs(low), Math.abs(at));
   const varies = distortion.vsFreq.some(
     (point) =>
       differs(point.hd2, distortion.hd2?.value) ||
@@ -903,10 +904,13 @@ function DistortionDetails({
   )?.value;
   // a₁ = 0 (the input's fundamental never reaches this output): HD is
   // infinite whatever the amplitude.
+  // a₁ = 0 at low frequency: no fundamental at all. Otherwise only at the
+  // frequencies (transfer notches) marked infinite.
   const noFundamental =
-    isInfinite(distortion.hd2) ||
-    isInfinite(distortion.hd3) ||
-    distortion.vsFreq.some((point) => point.hd2Infinite || point.hd3Infinite);
+    isInfinite(distortion.hd2) || isInfinite(distortion.hd3);
+  const notchFrequencies = distortion.vsFreq
+    .filter((point) => point.hd2Infinite || point.hd3Infinite)
+    .map((point) => formatEngineering(point.f, "Hz"));
   const large = [
     distortion.hd2?.value,
     distortion.hd3?.value,
@@ -963,7 +967,13 @@ function DistortionDetails({
         <p className="small-signal-muted" role="note">
           The input's fundamental does not reach this output.
         </p>
-      ) : large ? (
+      ) : notchFrequencies.length ? (
+        <p className="small-signal-muted" role="note">
+          The input's fundamental does not reach this output at{" "}
+          {notchFrequencies.join(", ")}.
+        </p>
+      ) : null}
+      {!noFundamental && large ? (
         <p className="small-signal-muted" role="note">
           The amplitude is too large for a 3rd-order expansion.
         </p>
@@ -1458,6 +1468,9 @@ export function SmallSignalPanel({
   // matches every other candidate pair in the same solve.
   const [unmatched, setUnmatched] = useState<ReadonlySet<string>>(new Set());
   const [response, setResponse] = useState<SmallSignalResponse | null>(null);
+  // The request the response answers: a queued solve can still deliver an
+  // older circuit's result after the circuit changed.
+  const [responseKey, setResponseKey] = useState<string | null>(null);
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);
@@ -1596,6 +1609,7 @@ export function SmallSignalPanel({
       void client.analyze(text, job).then((next) => {
         if (current !== generation.current) return;
         setResponse(next);
+        setResponseKey(requestKey);
         setSolving(false);
       });
     }, SOLVE_DEBOUNCE_MS);
@@ -1645,8 +1659,9 @@ export function SmallSignalPanel({
   }, [noiseKey]);
 
   // Every transistor and diode with a bias point can be expanded.
+  // Devices from the response to this very request, never an older one.
   const nonlinearCandidates = Object.keys(
-    response && !isSmallSignalError(response)
+    response && !isSmallSignalError(response) && responseKey === requestKey
       ? (response.op?.devices ?? {})
       : {},
   );
