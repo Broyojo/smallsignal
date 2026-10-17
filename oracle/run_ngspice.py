@@ -258,7 +258,9 @@ def zout(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> list[d
         lines.append(f"let zk{k} = {spice.vexpr(out, ref)}")
         lines.append(f"print zk{k}")
     # ITEST flows from ref through the source into `out`.
-    deck = spice.render(net, None, [f"ITEST__ {ref} {out} DC 0 AC 1"]) + "\n".join(control(lines)) + "\n"
+    taken = spice.reserved_names(net)
+    itest = spice.fresh_name(taken, "ITEST__")
+    deck = spice.render(net, None, [f"{itest} {ref} {out} DC 0 AC 1"], taken=taken) + "\n".join(control(lines)) + "\n"
     v = run_deck(deck, keep, name + ".zout")
     return [cval(f, complex(v[f"zk{k}"])) for k, f in enumerate(freqs)]
 
@@ -273,8 +275,10 @@ def zin_differential(net: spice.Netlist, side: dict, keep: Path | None, name: st
         lines.append(f"ac lin 1 {f!r} {f!r}")
         lines.append(f"let zk{k} = {spice.vexpr(p1, p2)}")
         lines.append(f"print zk{k}")
-    deck = spice.render(net, None, [f"IZIN__ {p2} {p1} DC 0 AC 1"], ac={},
-                        open_sources=(inp.name, neg.name)) + "\n".join(control(lines)) + "\n"
+    taken = spice.reserved_names(net)
+    izin = spice.fresh_name(taken, "IZIN__")
+    deck = spice.render(net, None, [f"{izin} {p2} {p1} DC 0 AC 1"], ac={},
+                        open_sources=(inp.name, neg.name), taken=taken) + "\n".join(control(lines)) + "\n"
     v = run_deck(deck, keep, name + ".zin")
     out = []
     for k, f in enumerate(freqs):
@@ -293,15 +297,15 @@ def noise_input(net: spice.Netlist, side: dict) -> tuple[str, str]:
     differential mode, +1 each in common mode, so ngspice's input-referred
     noise divides by the same gain. A V input gets a VCVS in series, an I
     input a VCCS in parallel (same direction). Every synthetic node and
-    element name avoids the netlist's own (fresh_name)."""
+    element name avoids the netlist's own (spice.fresh_name)."""
     neg = side.get("inputNeg")
     if not neg:
         return spice.render(net, side["input"]), side["input"]
     pos, neg = side["input"].lower(), neg.lower()
     differential = (side.get("mode") or "differential") == "differential"
     weight = {pos: 0.5, neg: -0.5} if differential else {pos: 1.0, neg: 1.0}
-    taken = {e.name for e in net.elements} | set(net.nodes()) | spice.GROUND
-    src, nin = fresh_name(taken, "VNIN__"), fresh_name(taken, "nin__")
+    taken = spice.reserved_names(net)
+    src, nin = spice.fresh_name(taken, "VNIN__"), spice.fresh_name(taken, "nin__")
     lines = [net.title, f"{src} {nin} 0 DC 0 AC 1"]
     for e in net.elements:
         w = weight.get(e.name)
@@ -310,25 +314,14 @@ def noise_input(net: spice.Netlist, side: dict) -> tuple[str, str]:
         elif w is None:
             lines.append(spice.source_line(e, None))
         elif e.kind == "v":
-            mid = fresh_name(taken, f"{e.name}__in")
+            mid = spice.fresh_name(taken, f"{e.name}__in")
             lines.append(f"{e.tokens[0]} {e.tokens[1]} {mid} DC {spice.source_dc(e)}")
-            lines.append(f"{fresh_name(taken, f'E__{e.name}')} {mid} {e.tokens[2]} {nin} 0 {w!r}")
+            lines.append(f"{spice.fresh_name(taken, f'E__{e.name}')} {mid} {e.tokens[2]} {nin} 0 {w!r}")
         else:
             lines.append(spice.source_line(e, None))
-            lines.append(f"{fresh_name(taken, f'G__{e.name}')} {e.tokens[1]} {e.tokens[2]} {nin} 0 {w!r}")
+            lines.append(f"{spice.fresh_name(taken, f'G__{e.name}')} {e.tokens[1]} {e.tokens[2]} {nin} 0 {w!r}")
     lines += net.model_lines + net.other_lines
     return "\n".join(lines) + "\n", src
-
-
-def fresh_name(taken: set[str], base: str) -> str:
-    """`base`, or `base` with the smallest numeric suffix, unused by any name
-    in `taken` (lower-case node and element names; SPICE ignores case), which
-    then reserves it. Keeps the first letter, so the element type."""
-    name, k = base, 1
-    while name.lower() in taken:
-        name, k = f"{base}{k}", k + 1
-    taken.add(name.lower())
-    return name
 
 
 def split_contributor(body: str, names: list[str]) -> tuple[str, str]:
