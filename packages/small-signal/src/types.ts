@@ -164,9 +164,10 @@ export interface SmallSignalQuantity {
   leakageMatters?: boolean;
   simplified?: SmallSignalExpression | null;
   values?: ComplexPoint[];
-  /** In Hz; empty in symbolic mode (no values). */
-  poles?: Root[];
-  zeros?: Root[];
+  /** In Hz; empty in symbolic mode (no values). null when the numeric
+   * model's roots were not found (a warning says so). */
+  poles?: Root[] | null;
+  zeros?: Root[] | null;
   /** Number of poles and zeros: the degree in s of the denominator and
    * numerator (also in symbolic mode). */
   poleCount?: number;
