@@ -570,6 +570,12 @@ pub fn low_freq(
     }
     let nsym = syms.len();
     let x = |p: &Poly| -> Result<XPoly, String> { Ok(XPoly::from_poly(p, &symbols.class, nbase)?.padded(nsym)) };
+    // XPoly::mul and XPoly::add, without a map keyed by Vec<u8>.
+    let mul = |a: &XPoly, b: &XPoly| -> Result<XPoly, String> {
+        Ok(XPoly {
+            terms: crate::gcd::mul_terms(&a.terms, &b.terms, max_terms)?,
+        })
+    };
     let xa = x(&na)?;
     // The gain at s = 0 can vanish once matched symbols merge, or at the
     // numeric values (a balanced bridge): zero within its evaluation bound.
@@ -581,7 +587,7 @@ pub fn low_freq(
     if !g0.re.is_nan() && (g0.norm() == 0.0 || g0_err >= 1.0) {
         return no_gain();
     }
-    let na2 = xa.mul(&xa, max_terms)?;
+    let na2 = mul(&xa, &xa)?;
     let mut groups: [(XPoly, i128); 2] = [(XPoly::default(), 1), (XPoly::default(), 1)];
     // Common denominator per group: the lcm of the PSD fractions' denominators.
     for s in srcs.iter().filter_map(|s| s.sym.as_ref()) {
@@ -603,8 +609,8 @@ pub fn low_freq(
         }
         let g = &mut groups[(ps.scale == Scale::TwoQ) as usize];
         let w = ps.num * (g.1 / ps.den) * vid * vid;
-        let term = nk.mul(&nk, max_terms)?.mul(&var, max_terms)?.scaled(w)?;
-        g.0 = g.0.add(&term)?;
+        let term = mul(&mul(&nk, &nk)?, &var)?.scaled(w)?;
+        g.0 = add(std::mem::take(&mut g.0), term)?;
     }
     let [(th, lt), (sh, ls)] = groups;
     Ok(Ok(LowFreq {
@@ -613,6 +619,32 @@ pub fn low_freq(
         shot: (sh, na2.scaled(ls)?),
         mismatch,
     }))
+}
+
+/// a + b (each sorted by exponent, as `XPoly` keeps them), merged.
+fn add(a: XPoly, b: XPoly) -> Result<XPoly, String> {
+    let mut terms = Vec::with_capacity(a.terms.len() + b.terms.len());
+    let (mut a, mut b) = (a.terms.into_iter().peekable(), b.terms.into_iter().peekable());
+    loop {
+        let ord = match (a.peek(), b.peek()) {
+            (Some(x), Some(y)) => x.0.cmp(&y.0),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => break,
+        };
+        match ord {
+            std::cmp::Ordering::Less => terms.extend(a.next()),
+            std::cmp::Ordering::Greater => terms.extend(b.next()),
+            std::cmp::Ordering::Equal => {
+                let ((e, x), (_, y)) = (a.next().unwrap(), b.next().unwrap());
+                let c = x.checked_add(y).ok_or("coefficient overflow")?;
+                if c != 0 {
+                    terms.push((e, c));
+                }
+            }
+        }
+    }
+    Ok(XPoly { terms })
 }
 
 fn lcm(a: i128, b: i128) -> i128 {
@@ -1083,7 +1115,11 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
     let has_leak = [&lf.thermal, &lf.shot]
         .iter()
         .any(|g| g.0.terms.iter().chain(&g.1.terms).any(|(e, _)| leaky(e)));
-    let mut base = (lf.thermal.clone(), lf.shot.clone());
+    // The display form's groups and expressions (`bp`): the exact ones
+    // unless leakage is dropped.
+    let dropped;
+    let mut base = (&lf.thermal, &lf.shot);
+    let mut dropped_pair = None;
     let mut display = exact_json.clone();
     display["same"] = json!(true);
     display["relError"] = json!(0.0);
@@ -1096,17 +1132,36 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
             display = dj;
             display["same"] = json!(false);
             display["relError"] = if numeric { num_or_null(rel(dv)) } else { Value::Null };
-            base = (dt, ds);
+            dropped = (dt, ds);
+            base = (&dropped.0, &dropped.1);
+            dropped_pair = Some(dp);
         } else {
             display["leakageMatters"] = json!(true);
         }
     }
+    // Merged matched values take the first member's; members agree to
+    // `mismatch`, which moves each group by at most that per merged factor,
+    // amplified by cancellation (as the other quantities' check).
+    let merge = if lf.mismatch > 0.0 {
+        [&exact.0, &exact.1]
+            .into_iter()
+            .flatten()
+            .map(|e| lf.mismatch * e.max_degree() as f64 * e.cancellation(Complex64::new(0.0, 0.0)))
+            .fold(0.0, f64::max)
+    } else {
+        0.0
+    };
+    let bp = dropped_pair.unwrap_or(exact);
 
     // Simplified: the r_o → ∞ leading order of the display form, then the
     // coarsest magnitude pruning; the smallest form within `tol`.
     let lead = |g: &(XPoly, XPoly)| (sym::leading_order(&g.0, syms), sym::leading_order(&g.1, syms));
-    let lp = pair_of(&lead(&base.0), &lead(&base.1), syms);
-    let bp = pair_of(&base.0, &base.1, syms);
+    let (lt, ls) = (lead(base.0), lead(base.1));
+    let lp = if (&lt, &ls) == base {
+        bp.clone()
+    } else {
+        pair_of(&lt, &ls, syms)
+    };
     let val = |p: &Pair| group_value(p.0.as_ref(), Scale::FourKT) + group_value(p.1.as_ref(), Scale::TwoQ);
     let mut cands: Vec<(Pair, &str)> = vec![(lp.clone(), "leading order (ro ≫ R, 1/gm)")];
     if numeric {
@@ -1137,18 +1192,6 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
         Some((want, lu)) if numeric => {
             let diff = if want != 0.0 || value != 0.0 {
                 (value - want).abs() / want.abs().max(value.abs())
-            } else {
-                0.0
-            };
-            // Merged matched values take the first member's; members agree to
-            // `mismatch`, which moves each group by at most that per merged
-            // factor, amplified by cancellation (as the other quantities' check).
-            let merge = if lf.mismatch > 0.0 {
-                [&exact.0, &exact.1]
-                    .into_iter()
-                    .flatten()
-                    .map(|e| lf.mismatch * e.max_degree() as f64 * e.cancellation(Complex64::new(0.0, 0.0)))
-                    .fold(0.0, f64::max)
             } else {
                 0.0
             };
