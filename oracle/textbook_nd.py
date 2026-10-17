@@ -396,7 +396,7 @@ def check(case: NDCase, verbose: bool) -> list[str]:
     if case.distortion:
         a = case.distortion()
         d = want["distortion"]
-        hb = [c["value"] for c in d["coefficients"]]
+        hb = d["harmonic_balance"]["coefficients"]
         dis = [d["disto"][k]["re"] for k in ("a1", "a2", "a3")] if "a1" in d.get("disto", {}) else None
         # .disto (Volterra, small-signal limit) is the strict reference. The
         # harmonic-balance fit is a consistency check within its resolution:

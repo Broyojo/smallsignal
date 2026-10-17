@@ -116,8 +116,14 @@
         "re": 4.057364787383336,
         "im": 0.0
       },
-      "valid": true
+      "valid": true,
+      "dc_limit": {
+        "f": 100.0,
+        "change": 0.0,
+        "taylor_gap": 0.41776154107129193
+      }
     },
+    "vsFreq": [],
     "points": [
       {
         "A": 0.001,

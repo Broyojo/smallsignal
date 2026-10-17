@@ -2,7 +2,9 @@
 
 Sidecar: "distortion": {"amplitudes": [1e-3, 2e-3, 5e-3, 1e-2], "freq": 1000,
 "amplitude": 1e-3 (the one the solver is asked about), "periods": 10,
-"points_per_period": 4000}. The input must be a V source with a DC value.
+"points_per_period": 4000}. The input (and `inputNeg`) must be V sources
+with a DC value. With `inputNeg`, v_in is driven as the solver's `mode`:
+differential moves the two sources by ±v/2, common by +v each.
 
 For v_in = V0 + A·cos(ωt) the output's cosine series is
     c1 = a1·A + (3/4)·a3·A³ + …,  c2 = (1/2)·a2·A² + …,  c3 = (1/4)·a3·A³ + …
@@ -22,8 +24,11 @@ where v_out = a1·v + a2·v² + a3·v³ + … around the bias. Three ngspice met
              Exact for level-1 MOS without body effect, BJTs and diodes; wrong
              by several % in a2, a3 when a MOSFET has GAMMA > 0 ("valid": false).
 
-The reference coefficients are .disto's where it is valid (uncertainty: the
-gap to the DC-Taylor fit), else the DC-Taylor ones (span 20 mV / max(1, |a1|),
+The reference coefficients are the memoryless (s → 0) ones: .disto's real parts
+at f/10 where .disto is valid and they are its DC limit (they move by at most
+1e-9 from f to f/10, so the rest of the way, quadratic in f, is ~1e-11, and
+they agree with the DC-Taylor fit within 3x its uncertainty; uncertainty: the
+gap to that fit), else the DC-Taylor ones (span 20 mV / max(1, |a1|),
 uncertainty: the change when the span halves). Harmonic balance and the
 transient confirm them.
 
@@ -40,19 +45,61 @@ from __future__ import annotations
 
 import math
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 import run_ngspice
 import spice
 
 N_HB = 64
+DEFAULT_AMPLITUDES = [1e-3, 2e-3, 5e-3, 1e-2]
 
 
-def _input(net: spice.Netlist, side: dict) -> tuple[spice.Element, float]:
-    e = net.element(side["input"])
-    if e.kind != "v":
-        raise ValueError("distortion needs a V-source input")
-    return e, float(spice.source_dc(e) or 0)
+def amplitudes(spec: dict) -> list[float]:
+    return spec.get("amplitudes") or DEFAULT_AMPLITUDES
+
+
+def amplitude(spec: dict) -> float:
+    """The input amplitude HD2/HD3 are reported at (the solver's --amplitude)."""
+    return spec["amplitude"] if spec.get("amplitude") is not None else amplitudes(spec)[0]
+
+
+def _drive(net: spice.Netlist, side: dict) -> list[tuple[spice.Element, float, float]]:
+    """(source, DC value, weight) for each driven source: v_in = v moves each
+    source by weight·v. With inputNeg, the differential mode is ±1/2 and the
+    common mode 1, 1, as the solver's."""
+    weights = [(side["input"], 1.0)]
+    if side.get("inputNeg"):
+        if (side.get("mode") or "differential") == "differential":
+            weights = [(side["input"], 0.5), (side["inputNeg"], -0.5)]
+        else:
+            weights = [(side["input"], 1.0), (side["inputNeg"], 1.0)]
+    out = []
+    for name, w in weights:
+        e = net.element(name)
+        if e.kind != "v":
+            raise ValueError("distortion needs V-source inputs")
+        out.append((e, float(spice.source_dc(e) or 0), w))
+    return out
+
+
+def _with_sources(net: spice.Netlist, side: dict, spec) -> str:
+    """The netlist with each driven source's line from spec(source, DC, weight)."""
+    lines = {e.tokens[0]: spec(e, v0, w) for e, v0, w in _drive(net, side)}
+    return "\n".join(lines.get(l.split()[0], l) if l.split() else l for l in spice.render(net, None).splitlines())
+
+
+def _dc_points(net, side, offsets: list[float], keep, tag: str) -> list[float]:
+    """v_out at v_in = offsets[k] (each an .op with the sources altered)."""
+    drive = _drive(net, side)
+    lines = []
+    for k, x in enumerate(offsets):
+        lines += [f"alter {e.name} dc = {v0 + w * x!r}" for e, v0, w in drive]
+        lines += ["op", f"let p{k} = {_vout(side)}", f"print p{k}"]
+    deck = spice.render(net, None) + "\n".join(run_ngspice.control(lines)) + "\n"
+    v = run_ngspice.run_deck(deck, keep, tag)
+    return [float(v[f"p{k}"]) for k in range(len(offsets))]
 
 
 def _vout(side: dict) -> str:
@@ -73,14 +120,8 @@ def _cos_series(samples: list[float], periods: int, harmonics: int = 3) -> list[
 
 
 def harmonic_balance(net, side, amp: float, keep, name: str) -> list[float]:
-    e, v0 = _input(net, side)
-    lines = []
-    for k in range(N_HB):
-        val = v0 + amp * math.cos(2 * math.pi * k / N_HB)
-        lines += [f"alter {e.name} dc = {val!r}", "op", f"let hb{k} = {_vout(side)}", f"print hb{k}"]
-    deck = spice.render(net, None) + "\n".join(run_ngspice.control(lines)) + "\n"
-    v = run_ngspice.run_deck(deck, keep, f"{name}.hb")
-    samples = [float(v[f"hb{k}"]) for k in range(N_HB)]
+    offsets = [amp * math.cos(2 * math.pi * k / N_HB) for k in range(N_HB)]
+    samples = _dc_points(net, side, offsets, keep, f"{name}.hb")
     return [c for c, _ in _cos_series(samples, 1)]
 
 
@@ -89,14 +130,10 @@ def transient(net, side, amp: float, freq: float, periods: int, ppp: int, keep, 
     from the last 4 whole periods of the waveform resampled (`linearize`) on
     a uniform grid of `ppp` points per period, with the step capped at that
     grid so the interpolation is between solved points only."""
-    import subprocess
-    import tempfile
-    e, v0 = _input(net, side)
     period = 1 / freq
     step = period / ppp
-    tok = e.tokens
-    body = [f"{tok[0]} {tok[1]} {tok[2]} DC {v0!r} SIN({v0!r} {amp!r} {freq!r})" if l.split()[:1] == [tok[0]] else l
-            for l in spice.render(net, None).splitlines()]
+    body = _with_sources(net, side, lambda e, v0, w: f"{e.tokens[0]} {e.tokens[1]} {e.tokens[2]} DC {v0!r} "
+                         f"SIN({v0!r} {w * amp!r} {freq!r})").splitlines()
     t_from = (periods - 4) * period
     nodes = [n for n in (side["output"], side.get("ref")) if n and n not in spice.GROUND]
     expr = _vout(side)
@@ -128,10 +165,11 @@ def disto(net, side, freq: float, keep, name: str) -> dict:
     """ngspice .disto (Volterra series, small-signal limit) with a unit
     DISTOF1 on the input: the 2nd-harmonic phasor is a2/2, the 3rd a3/4, and
     the AC gain at f is a1 (all complex, so frequency dependence is kept)."""
-    e, v0 = _input(net, side)
-    tok = e.tokens
-    body = [f"{tok[0]} {tok[1]} {tok[2]} DC {v0!r} AC 1 DISTOF1 1" if l.split()[:1] == [tok[0]] else l
-            for l in spice.render(net, None).splitlines()]
+    def line(e, v0, w):
+        mag, phase = abs(w), "180" if w < 0 else "0"
+        return f"{e.tokens[0]} {e.tokens[1]} {e.tokens[2]} DC {v0!r} AC {mag!r} {phase} DISTOF1 {mag!r} {phase}"
+
+    body = _with_sources(net, side, line).splitlines()
     expr = _vout(side)
     lines = [f"ac lin 1 {freq!r} {freq!r}", f"let d1 = {expr}", "print d1",
              f"disto lin 1 {freq!r} {freq!r}", "setplot disto1", f"let d2 = {expr}", "print d2",
@@ -143,15 +181,20 @@ def disto(net, side, freq: float, keep, name: str) -> dict:
 
 
 def taylor(net, side, keep, name: str, span: float = 0.02, points: int = 81) -> list[float]:
-    e, v0 = _input(net, side)
-    lines = [f"dc {e.name} {v0 - span!r} {v0 + span!r} {2 * span / (points - 1)!r}", f"let ty = {_vout(side)}",
-             "print ty"]
-    deck = spice.render(net, None) + "\n".join(run_ngspice.control(lines)) + "\n"
-    text = run_ngspice.run_deck_text(deck, keep, f"{name}.taylor")
-    ys = [float(m.group(1)) for m in re.finditer(r"^\d+\s+\S+\s+(\S+)\s*$", text, re.M)]
     xs = [-span + 2 * span * i / (points - 1) for i in range(points)]
-    if len(ys) != points:
-        raise run_ngspice.NgspiceError(f"{name}: dc sweep printed {len(ys)} of {points} values")
+    drive = _drive(net, side)
+    if len(drive) > 1:
+        # Two sources move together: one .op per point.
+        ys = _dc_points(net, side, xs, keep, f"{name}.taylor")
+    else:
+        e, v0, _ = drive[0]
+        lines = [f"dc {e.name} {v0 - span!r} {v0 + span!r} {2 * span / (points - 1)!r}", f"let ty = {_vout(side)}",
+                 "print ty"]
+        deck = spice.render(net, None) + "\n".join(run_ngspice.control(lines)) + "\n"
+        text = run_ngspice.run_deck_text(deck, keep, f"{name}.taylor")
+        ys = [float(m.group(1)) for m in re.finditer(r"^\d+\s+\S+\s+(\S+)\s*$", text, re.M)]
+        if len(ys) != points:
+            raise run_ngspice.NgspiceError(f"{name}: dc sweep printed {len(ys)} of {points} values")
     coef = _polyfit([x / span for x in xs], ys, 7)
     return [coef[1] / span, coef[2] / span**2, coef[3] / span**3]
 
@@ -187,21 +230,43 @@ def _fit_limit(amps, values):
     return p, res / abs(p) if p else math.inf
 
 
-def _disto_valid(text: str) -> bool:
+def _disto_valid(net: spice.Netlist) -> bool:
     """ngspice-47's .disto is exact for level-1 MOS without body effect, BJTs
     and diodes, but wrong by several % in a2, a3 when any MOSFET has
     GAMMA > 0 (proven against an exact implicit series of the DC equations
-    with ngspice's threshold law: oracle/README)."""
-    for m in re.finditer(r"^\.model\s+\S+\s+[np]mos\b(.*)$", text, re.I | re.M):
-        g = re.search(r"gamma\s*=\s*([-+\d.eE]+)", m.group(1), re.I)
+    with ngspice's threshold law: oracle/README). Reads the parser's joined
+    model lines, so `+` continuations count."""
+    for line in net.model_lines:
+        m = re.match(r"\.model\s+\S+\s+[np]mos\b(.*)$", line, re.I)
+        g = m and re.search(r"\bgamma\s*=\s*([-+\d.eE]+)", m.group(1), re.I)
         if g and float(g.group(1)) != 0:
             return False
     return True
 
 
+def _disto_dc(net, side, freq: float, at_f: dict, tay: list[float], tay_unc: list[float], keep,
+              name: str) -> tuple[list[float] | None, dict]:
+    """.disto's a1..a3 in the DC limit (real parts at f/10), or None with the
+    reason: they must move by at most 1e-9 between f and f/10 (the rest of
+    the way to f = 0 is quadratic in f: ~1e-11), and agree with the DC-Taylor
+    fit within 3x its uncertainty (a pole below f/10 would pass the first)."""
+    low = disto(net, side, freq / 10, keep, f"{name}.dc")
+    keys = ("a1", "a2", "a3")
+    floor = 1e-12 * abs(low["a1"])
+    change = max(abs(at_f[k].real - low[k].real) / max(abs(low[k].real), floor) for k in keys)
+    ref = [low[k].real for k in keys]
+    gap = max(abs(r - t) / (3 * u + 1e-12 * abs(r) + floor) for r, t, u in zip(ref, tay, tay_unc))
+    info = {"f": freq / 10, "change": change, "taylor_gap": gap}
+    if change > 1e-9:
+        return None, {**info, "error": "not quasi-static at f"}
+    if gap > 1:
+        return None, {**info, "error": "disagrees with the DC-Taylor fit"}
+    return ref, info
+
+
 def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     spec = side["distortion"]
-    amps = spec.get("amplitudes", [1e-3, 2e-3, 5e-3, 1e-2])
+    amps = amplitudes(spec)
     freq = spec.get("freq", 1000.0)
     name = cir.stem
     hb = {a: harmonic_balance(net, side, a, keep, name) for a in amps}
@@ -215,18 +280,21 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
     tay = taylor(net, side, keep, name, span=span)
     tay_half = taylor(net, side, keep, name + ".half", span=span / 2)
     unc = [abs(a - b) for a, b in zip(tay, tay_half)]
+    dis_dc = None
     try:
         dis = disto(net, side, freq, keep, name)
         dis_out = {k: {"re": v.real, "im": v.imag} for k, v in dis.items()}
+        dis_out["valid"] = _disto_valid(net)
+        if dis_out["valid"]:
+            dis_dc, dis_out["dc_limit"] = _disto_dc(net, side, freq, dis, tay, unc, keep, name)
     except (run_ngspice.NgspiceError, KeyError, ValueError) as exc:
-        dis_out = {"error": str(exc)[:200]}
-    dis_out["valid"] = _disto_valid(cir.read_text())
+        dis_out = {"error": str(exc)[:200], "valid": _disto_valid(net)}
     tr = {}
     try:
         for a in amps:
             tr[a] = transient(net, side, a, freq, spec.get("periods", 10), spec.get("points_per_period", 4000), keep, name)
-    except run_ngspice.NgspiceError as exc:
-        tr = {"error": str(exc)}
+    except (run_ngspice.NgspiceError, subprocess.TimeoutExpired) as exc:
+        tr = {"error": str(exc)[:200]}
     points = []
     for a in amps:
         c1, c2, c3 = hb[a]
@@ -235,7 +303,7 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
             t1, t2, t3 = tr[a]
             row.update({"tran_hd2": t2 / t1, "tran_hd3": t3 / t1})
         points.append(row)
-    amp = spec.get("amplitude", amps[0])
+    amp = amplitude(spec)
     # Frequency-dependent HD from .disto's complex Volterra phasors at each f:
     # the 2f output for a unit DISTOF1 is H2(jω,jω)/2, the 3f output
     # H3(jω,jω,jω)/4, so HD2 = A·|a2|/(2|a1|) and HD3 = A²·|a3|/(4|a1|).
@@ -245,10 +313,10 @@ def analyze(cir: Path, net: spice.Netlist, side: dict, keep) -> dict:
             d = disto(net, side, f, keep, f"{name}.f{f:g}")
             vs_freq.append({"f": f, "hd2": abs(d["a2"]) * amp / (2 * abs(d["a1"])),
                             "hd3": abs(d["a3"]) * amp**2 / (4 * abs(d["a1"]))})
-    if dis_out["valid"] and "a1" in dis_out:
-        # Exact Volterra coefficients; their uncertainty is the (tiny) gap to
-        # the independent DC-Taylor fit at the full span.
-        ref = [dis_out[k]["re"] for k in ("a1", "a2", "a3")]
+    if dis_dc is not None:
+        # Exact Volterra coefficients at their DC limit; their uncertainty is
+        # the (tiny) gap to the independent DC-Taylor fit at the full span.
+        ref = dis_dc
         unc = [abs(r - t) for r, t in zip(ref, tay)]
         which = "disto"
     else:

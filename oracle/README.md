@@ -73,11 +73,16 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   where valid), DC-sweep Taylor fit (the reference otherwise), quasi-static
   harmonic balance, and transient + DFT. ngspice-47's .disto is wrong by
   several % in a2, a3 for MOSFETs with GAMMA > 0 (shown against an exact
-  implicit series), so it is flagged `"valid": false` there. compare.py
-  checks the solver at rtol 1e-6 + 3×uncertainty. An optional `"vsFreq":
-  [f...]` adds HD2/HD3 at each f from .disto's complex phasors (valid
-  circuits only), checked at rtol 1e-6. With a capacitor, set `"freq"` far
-  below the poles so the static coefficients stay quasi-static.
+  implicit series), so it is flagged `"valid": false` there. Its
+  coefficients are used only at their DC limit (`disto.dc_limit`: real parts
+  at freq/10 that move ≤ 1e-9 from freq and agree with the DC-Taylor fit),
+  else the fit is the reference. With `inputNeg` every method drives both
+  sources as `mode` does (±v/2, or +v each). compare.py checks the solver at
+  rtol 1e-6 + 3×uncertainty. An optional `"vsFreq": [f...]` adds HD2/HD3 at
+  each f from .disto's complex phasors (valid circuits only), checked at
+  rtol 1e-6 with an absolute floor of 1e-15 (exact zeros). With a capacitor,
+  set `"freq"` far below the poles so the static coefficients stay
+  quasi-static.
 - `textbook_nd.py`: textbook noise (CS, degenerated CS, SF, diff pair, 5T
   OTA, BJT CE) and distortion (CS with R / ideal-current-source load, with and
   without λ; degenerated CS; SF; BJT CE; CS with CL above its pole) cases, hand-derived (KCL with noise

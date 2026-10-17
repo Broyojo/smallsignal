@@ -14,6 +14,8 @@ import Certs.dist_cs_cl
 import Certs.dist_cs_degen
 import Certs.dist_cs_isrc
 import Certs.dist_diffpair
+import Certs.dist_diffpair_cm
+import Certs.dist_diffpair_dm
 import Certs.dist_sf
 import Certs.divider
 import Certs.floating_input

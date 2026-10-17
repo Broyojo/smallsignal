@@ -19,6 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import distortion
 from run_ngspice import OPTIONS
 
 HERE = Path(__file__).resolve().parent
@@ -79,7 +80,7 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         # ngspice is fully nonlinear, so every transistor and diode is selected.
         devices = [l.split()[0] for l in cir.read_text().splitlines()[1:] if l[:1].lower() in "mqd" and l.split()]
         args += ["--nonlinear", ",".join(devices), "--order", "3",
-                 "--amplitude", repr(float(side["distortion"].get("amplitude", side["distortion"]["amplitudes"][0])))]
+                 "--amplitude", repr(float(distortion.amplitude(side["distortion"])))]
     try:
         proc = subprocess.run(args, cwd=REPO, capture_output=True, text=True, timeout=120)
     finally:
@@ -301,10 +302,12 @@ def compare_distortion(got: dict, want: dict, rep: Report):
             if g is None or g.get(h) is None:
                 rep.failures.append(f"{what}: missing")
                 continue
-            err = abs(g[h] - w[h]) / w[h]
-            rep.worst = max(rep.worst, err)
-            if err > DIST_RTOL:
-                rep.failures.append(f"{what}: got {g[h]:.10e}, want {w[h]:.10e} (rel {err:.1e})")
+            # An exact zero (symmetry, linearity) is checked with the same
+            # absolute floor as hd2, hd3.
+            err = abs(g[h] - w[h])
+            rep.worst = max(rep.worst, err / max(w[h], 1e-15 / DIST_RTOL))
+            if err > DIST_RTOL * w[h] + 1e-15:
+                rep.failures.append(f"{what}: got {g[h]:.10e}, want {w[h]:.10e} (diff {err:.1e})")
 
 
 def compare(got: dict, want: dict, rep: Report):
