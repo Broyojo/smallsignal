@@ -142,7 +142,10 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 - `contributors`: `[{f, sources: [{element, kind, v2, fraction}], omitted?}]`,
   per frequency, sorted by output contribution. At most the 32 largest
   sources are listed; the rest are summed in `omitted: {count, v2,
-  fraction}`. The listed fractions plus `omitted.fraction` sum to 1.
+  fraction}`. When the output PSD is positive and finite, the listed
+  fractions plus `omitted.fraction` sum to 1; when it is 0, every fraction
+  is 0; when it is infinite, finite sources have fraction 0 and the
+  infinite ones null.
 - `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
 - `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
   decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
