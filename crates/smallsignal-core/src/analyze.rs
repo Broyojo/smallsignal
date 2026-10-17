@@ -531,7 +531,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         // Miller splits, with K from the gain's model (the first built), so
         // one split model serves every quantity.
         let mut splits: Option<Vec<crate::miller::Split>> = None;
-        let mut definitions: Vec<Option<String>> = Vec::new();
+        let mut definitions: Vec<Option<Value>> = Vec::new();
         for (which, name) in wanted {
             // Unbounded: the denominator vanishes at s = 0 (identically, or
             // a pole at DC). Without junction leakage, which hand analysis
@@ -1133,7 +1133,7 @@ struct AssumeSetup<'a> {
     of_quantity: Vec<(&'a str, usize)>,
     /// The Miller splits made, and each one's K as a closed form.
     splits: Vec<crate::miller::Split>,
-    definitions: Vec<Option<String>>,
+    definitions: Vec<Option<Value>>,
 }
 
 impl AssumeSetup<'_> {
@@ -1191,10 +1191,10 @@ pub(crate) fn gain_model(
     crate::miller::split(&base, &splits, &a.miller)
 }
 
-/// K = v_b(0)/v_a(0) of a Miller split as LaTeX over `shown`: the ratio of
-/// the gain system's Cramer numerators with every reactive term dropped
-/// (`reactive`, the parameters' mask), cancelled. None without an exact
-/// form, or past LATEX_TERM_LIMIT terms.
+/// K = v_b(0)/v_a(0) of a Miller split over `shown` ({latex, num, den}):
+/// the ratio of the gain system's Cramer numerators with every reactive
+/// term dropped (`reactive`, the parameters' mask), cancelled. None without
+/// an exact form, or past LATEX_TERM_LIMIT terms.
 fn k_definition(
     forms: &ExactForms,
     x: &dyn Fn(&Poly) -> Result<XPoly, String>,
@@ -1202,7 +1202,7 @@ fn k_definition(
     split: &crate::miller::Split,
     reactive: u128,
     max_terms: usize,
-) -> Option<String> {
+) -> Option<Value> {
     forms.d.as_ref()?;
     let sys = &forms.gsys;
     let (ca, cb) = (sys.node_col[split.a]?, sys.node_col[split.b]?);
@@ -1255,7 +1255,9 @@ fn k_definition(
         return None;
     }
     let (mn, md) = e.to_mna(&shown.syms);
-    Some(structured(&mn, &md, &shown.syms).unwrap_or_else(|| e.latex(&shown.syms)))
+    let (n, d) = e.plain(&shown.syms);
+    let latex = structured(&mn, &md, &shown.syms).unwrap_or_else(|| e.latex(&shown.syms));
+    Some(json!({ "latex": latex, "num": n, "den": d }))
 }
 
 /// "M1", "M1 and M2", "M1, M2 and M3".

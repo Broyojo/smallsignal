@@ -57,7 +57,7 @@ fn k_is_the_dc_gain_across_the_capacitance() {
     assert_eq!(m["term"], Value::Null);
     assert_eq!(m["latex"], "C_{C}");
     assert_eq!(m["symbol"], "K_{CC}");
-    assert_eq!(m["definition"], "-G_{2} R_{2}");
+    assert_eq!(m["definition"]["latex"], "-G_{2} R_{2}");
     let p = v["params"].as_array().unwrap();
     let kp = p.iter().find(|p| p["name"] == "K_CC").expect("K in params");
     assert_eq!(kp["latex"], "K_{CC}");
@@ -119,7 +119,10 @@ fn the_split_model_is_two_grounded_capacitances() {
     let m = &v["assumptions"]["miller"][0];
     assert_eq!(m["latex"], "C_{gd1}");
     assert_eq!(m["symbol"], "K_{gd1}");
-    assert_eq!(m["definition"], "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)");
+    assert_eq!(
+        m["definition"]["latex"],
+        "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)"
+    );
     let k = m["k"].as_f64().unwrap();
     let cgd = v["op"]["devices"]["M1"]["caps"]["cgd"].as_f64().unwrap();
     // K = −g_m (r_o ∥ r_bd ∥ R_D) at this bias.
@@ -341,7 +344,10 @@ fn symbolic_k_is_a_symbol_with_its_definition() {
     assert_eq!(v["symbolic"], json!(true));
     let m = &v["assumptions"]["miller"][0];
     assert_eq!(m["k"], Value::Null);
-    assert_eq!(m["definition"], "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)");
+    assert_eq!(
+        m["definition"]["latex"],
+        "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)"
+    );
     let p = v["params"].as_array().unwrap();
     assert!(
         p.iter().any(|p| p["name"] == "K_cgd_M1" && p["value"].is_null()),
@@ -399,7 +405,7 @@ fn assumable_lists_the_capacitances_that_bridge_two_signal_nodes() {
     let a = v["assumable"].as_array().unwrap();
     let of = |el: &str| a.iter().find(|x| x["element"] == el).unwrap();
     assert_eq!(of("CC")["miller"], json!([null]));
-    assert!(of("CL").get("miller").is_none());
+    assert_eq!(of("CL")["miller"], json!([]));
     let v = run(CS, &req("VIN", "out", &[1e3], json!({})));
     let m1 = v["assumable"]
         .as_array()

@@ -287,7 +287,8 @@ pub fn gains(
 
 /// `assumable` (the `assume::assumable` list) with each element's
 /// capacitances that bridge two signal nodes of `sys` (the full model's gain
-/// system), as `miller`: the term, or null for an explicit capacitor.
+/// system), as `miller`: the term, or null for an explicit capacitor
+/// (empty when none does).
 pub fn with_targets(
     mut assumable: serde_json::Value,
     net: &Netlist,
@@ -330,9 +331,7 @@ pub fn with_targets(
                 .filter(|(e, _)| *e == el)
                 .map(|(_, t)| t.map_or(serde_json::Value::Null, |t| serde_json::json!(t)))
                 .collect();
-            if !terms.is_empty() {
-                entry["miller"] = serde_json::Value::Array(terms);
-            }
+            entry["miller"] = serde_json::Value::Array(terms);
         }
     }
     assumable
