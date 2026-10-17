@@ -1,0 +1,79 @@
+name: Small-signal
+
+# The small-signal solver and panel: Rust tests, the ngspice and textbook
+# oracles, the unit tests, a static build and the panel's browser tests.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: small-signal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  solver:
+    name: Solver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --release -- -D warnings
+      - run: cargo test --workspace --release
+      - run: cargo build --release -p smallsignal-cli
+      - uses: astral-sh/setup-uv@v6
+      - name: ngspice corpus, regressions and textbook identities
+        working-directory: oracle
+        env:
+          SMALLSIGNAL_BIN: ${{ github.workspace }}/target/release/smallsignal
+        run: |
+          uv run compare.py
+          uv run compare.py --corpus regressions --expected regressions/expected
+          uv run textbook.py
+
+  editor:
+    name: Panel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - run: wasm-pack build crates/smallsignal-wasm --target web --release --out-dir ../../packages/small-signal/wasm
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: pnpm --filter "@icm/editor^..." --if-present build
+      - run: pnpm typecheck
+      - run: pnpm exec vitest run packages/small-signal apps/editor/src/features/small-signal
+      - name: Static build, as Pages deploys it
+        env:
+          ICM_BASE: /smallsignal/
+          ICM_STATIC_PAGES: "1"
+        run: pnpm --filter @icm/editor build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright test apps/editor/e2e/small-signal.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
