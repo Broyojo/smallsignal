@@ -1124,6 +1124,8 @@ fn consistent_groups(
     matched: &[Vec<String>],
     a: &crate::assume::Assume,
 ) -> (Vec<Vec<String>>, Vec<String>) {
+    // A member's terms and declared region (in symbolic mode the region
+    // decides whether its r_o stays finite in the hand form).
     let terms_of = |name: &str| {
         let mut t: Vec<crate::assume::Term> = a
             .applied
@@ -1132,7 +1134,12 @@ fn consistent_groups(
             .map(|x| x.term)
             .collect();
         t.sort();
-        t
+        let region = a
+            .regions
+            .iter()
+            .find(|r| r.element.eq_ignore_ascii_case(name))
+            .map(|r| r.assumed.clone());
+        (t, region)
     };
     let (mut keep, mut warn) = (Vec::new(), Vec::new());
     for g in matched {

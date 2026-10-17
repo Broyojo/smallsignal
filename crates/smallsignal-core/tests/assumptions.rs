@@ -506,6 +506,33 @@ fn certificates_cover_the_assumed_element_list() {
 }
 
 #[test]
+fn matched_members_with_different_regions_are_not_matched() {
+    // Symbolic mode: a declared triode region keeps M1's r_o finite in the
+    // hand form, M2's not. Merged, the form would follow whichever member
+    // came first; so they are not matched, in either order.
+    let net = "diff pair\nVDD vdd 0\nVIP ip 0\nVIN in 0\nIT t 0\nM1 o1 ip t 0\nM2 o2 in t 0\nR1 vdd o1\nR2 vdd o2\n";
+    for (a, b) in [("triode", "saturation"), ("saturation", "triode")] {
+        let mut r = req("VIP", "o1", &[]);
+        r.input_neg = Some("VIN".into());
+        r.matched = vec![vec!["M1".into(), "M2".into()]];
+        let regions = json!({ "regions": [{ "element": "M1", "region": a }, { "element": "M2", "region": b }] });
+        let v = run(net, &with(&r, regions));
+        let w = v["warnings"].as_array().unwrap();
+        assert!(
+            w.contains(&json!("M1 and M2 have different assumptions, not matched")),
+            "{a}: {w:?}"
+        );
+        let latex: Vec<&str> = v["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["latex"].as_str().unwrap())
+            .collect();
+        assert!(latex.contains(&"r_{o1}") && latex.contains(&"r_{o2}"), "{a}: {latex:?}");
+    }
+}
+
+#[test]
 fn an_unbounded_quantity_has_no_error_metric() {
     // Zin looking into a gate is infinite in both models: nothing to
     // compare, so null rather than 0, on the exact and the numeric path.
