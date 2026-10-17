@@ -30,6 +30,7 @@ const FIXTURES = {
   ota: "apps/editor/src/examples/five-transistor-ota-sky130.icproj.json",
   rc: "apps/editor/src/examples/simulation-rc.icproj.json",
   rlc: "apps/editor/src/examples/simulation-rlc.icproj.json",
+  bjtOpAmp: "packages/small-signal/test-fixtures/bjt-op-amp.icproj.json",
 } as const;
 
 /**
@@ -721,4 +722,33 @@ test("a wide exact formula scrolls inside the panel instead of being cut off", a
     expect(box.moved).toBe(box.overflows);
   }
   expect(boxes.some((box) => box.overflows)).toBe(true);
+});
+
+test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.bjtOpAmp);
+  const started = Date.now();
+  // At the default 1 kHz, past the 10.61 Hz dominant pole: |A| = 730
+  // (68,823 at DC, as ngspice-47), Zout 104 Ω.
+  await expect
+    .poll(() => cardValue(panel, "Gain"), { timeout: 30_000 })
+    .toBeCloseTo(730, -1);
+  const seconds = (Date.now() - started) / 1000;
+  expect(seconds).toBeLessThan(20);
+  expect(await cardValue(panel, "Output impedance")).toBeCloseTo(104, -1);
+  await expect(card(panel, "Gain")).toContainText(/Pole [−-]10\.61 Hz/u);
+  // Said once, on the first card; no formula anywhere.
+  await expect(
+    panel.getByText("Formula too large to derive. Try a smaller block."),
+  ).toHaveCount(1);
+  await expect(
+    card(panel, "Gain").getByText("Formula too large to derive.", {
+      exact: false,
+    }),
+  ).toHaveCount(1);
+  await expect(panel.locator("img.small-signal-formula")).toHaveCount(0);
+  await expect(
+    card(panel, "Bias point").locator("tr[data-device]"),
+  ).toHaveCount(25);
 });

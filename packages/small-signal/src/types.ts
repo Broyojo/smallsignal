@@ -67,7 +67,16 @@ export interface SmallSignalExpression {
 export interface SmallSignalQuantity {
   unit?: string;
   infinite?: boolean;
-  exact: SmallSignalExpression;
+  /**
+   * null when the exact form is over the term budget (`skipped` says so):
+   * then display and simplified are null too, and values, poles and zeros
+   * come from the numeric model.
+   */
+  exact: SmallSignalExpression | null;
+  /** Why there is no exact form: "too large for the exact closed form". */
+  skipped?: string;
+  /** The exact form against an independent LU solve; null without one. */
+  check?: { ok: boolean; maxRelDiff: number } | null;
   /**
    * The exact form without gmin-level junction leakage (r_bs, r_bd, r_μ),
    * with its measured error against the full model; `same` when there was

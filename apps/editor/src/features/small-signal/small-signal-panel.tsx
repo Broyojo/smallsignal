@@ -502,7 +502,7 @@ function ExactFormula({
   symbol: string;
   quantity: SmallSignalQuantity;
 }) {
-  if (quantity.exact.latex === null) {
+  if (!quantity.exact?.latex) {
     return (
       <p className="small-signal-muted">
         The exact expression is too large to typeset.
@@ -517,17 +517,23 @@ function formatPercent(fraction: number): string {
   return percent < 0.1 ? "<0.1%" : `${percent.toPrecision(2)}%`;
 }
 
+/** Shown once, on the first result whose formula is over the budget. */
+const NO_FORMULA_NOTE = "Formula too large to derive. Try a smaller block.";
+
 /** One result: its equation, its value, and its poles. */
 function QuantityCard({
   title,
   symbol,
   quantity,
   unit,
+  noFormulaNote = false,
 }: {
   title: string;
   symbol: string;
   quantity: SmallSignalQuantity;
   unit: string;
+  /** Say why there is no formula (when the exact form is over budget). */
+  noFormulaNote?: boolean;
 }) {
   // The simpler form appears only when it actually dropped terms.
   const simpler =
@@ -535,10 +541,11 @@ function QuantityCard({
       ? quantity.simplified
       : null;
   const value = quantity.values?.[0];
-  const terms = quantity.exact.terms;
+  const exact = quantity.exact;
+  const terms = exact?.terms;
   const exactIsLong =
-    quantity.exact.latex === null ||
-    (terms ? terms.num + terms.den > 6 : quantity.exact.latex.length > 160);
+    !exact?.latex ||
+    (terms ? terms.num + terms.den > 6 : exact.latex.length > 160);
   const simplerNote = simpler?.assumption
     ? `assuming ${simpler.assumption}`
     : `within ${formatPercent(simpler?.maxRelError ?? 0)} of exact`;
@@ -559,7 +566,12 @@ function QuantityCard({
           </strong>
         ) : null}
       </header>
-      {simpler && exactIsLong ? (
+      {!exact ? (
+        // Over the term budget: numbers only, no formula to show.
+        noFormulaNote ? (
+          <small className="small-signal-muted">{NO_FORMULA_NOTE}</small>
+        ) : null
+      ) : simpler && exactIsLong ? (
         <>
           {/* A long exact form would bury the result: lead with the
               readable one and keep the exact form a click away. */}
@@ -1779,6 +1791,9 @@ export function SmallSignalPanel({
         inputSource ? sourceLabel(inputSource) : "",
       );
   const devices = Object.entries(result?.op?.devices ?? {});
+  const firstWithoutFormula = (["gain", "rin", "rout"] as const).find(
+    (key) => result?.[key] && !result[key].exact,
+  );
   const allGood =
     result &&
     !result.warnings?.length &&
@@ -1975,6 +1990,7 @@ export function SmallSignalPanel({
                 symbol={`\\frac{${outputLabel}}{${inputLabel}}`}
                 quantity={result.gain}
                 unit={inputSource?.kind === "current" ? "Ω" : ""}
+                noFormulaNote={firstWithoutFormula === "gain"}
               />
             ) : null}
             {result?.rin ? (
@@ -1983,6 +1999,7 @@ export function SmallSignalPanel({
                 symbol="Z_{in}"
                 quantity={result.rin}
                 unit="Ω"
+                noFormulaNote={firstWithoutFormula === "rin"}
               />
             ) : null}
             {result?.rout ? (
@@ -1991,6 +2008,7 @@ export function SmallSignalPanel({
                 symbol="Z_{out}"
                 quantity={result.rout}
                 unit="Ω"
+                noFormulaNote={firstWithoutFormula === "rout"}
               />
             ) : null}
 

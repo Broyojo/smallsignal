@@ -10,6 +10,7 @@ import type {
   NoiseSource,
   SmallSignalDistortion,
   SmallSignalNoise,
+  SmallSignalQuantity,
 } from "./types.js";
 
 // Runs the real solver when the WASM has been built (wasm-pack, see
@@ -397,8 +398,94 @@ describe.skipIf(!built)(
         declared(distortion[name]?.display, FORM_KEYS);
         declared(distortion[name]?.simplified, FORM_KEYS);
       }
-      for (const point of distortion.vsFreq)
-        declared(point, VS_FREQ_KEYS);
+      for (const point of distortion.vsFreq) declared(point, VS_FREQ_KEYS);
+    });
+  },
+);
+
+const RESULT_QUANTITY_KEYS = allKeys<SmallSignalQuantity>()([
+  "unit",
+  "infinite",
+  "exact",
+  "skipped",
+  "check",
+  "display",
+  "leakageMatters",
+  "simplified",
+  "values",
+  "poles",
+  "zeros",
+] as const);
+
+describe.skipIf(!built)(
+  "gain, Zin and Zout match the TypeScript contract",
+  () => {
+    const solve = async (fixture: string, request: object) => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const netlist = smallSignalNetlist(
+        parseProject(
+          readFileSync(
+            new URL(`../test-fixtures/${fixture}.icproj.json`, import.meta.url),
+            "utf8",
+          ),
+        ),
+      )!;
+      return JSON.parse(wasm.analyze(netlist.text, JSON.stringify(request)));
+    };
+    const declared = (value: object) =>
+      expect(
+        Object.keys(value).filter(
+          (key) => !(RESULT_QUANTITY_KEYS as readonly string[]).includes(key),
+        ),
+      ).toEqual([]);
+
+    it.each([
+      ["exact forms", {}],
+      ["over the term budget", { maxTerms: 1 }],
+    ])("%s: every field is declared", async (_, options) => {
+      const result = await solve("cs-vdd-pin-wired", {
+        input: "V1",
+        output: "Vout",
+        rin: true,
+        rout: true,
+        ...options,
+      });
+      expect(result.error).toBeUndefined();
+      for (const name of ["gain", "rin", "rout"]) declared(result[name]);
+    });
+
+    it("a 25-BJT op-amp: numbers without formulas, fast", async () => {
+      const started = Date.now();
+      const result = await solve("bjt-op-amp", {
+        input: "VINP",
+        inputNeg: "VINN",
+        mode: "differential",
+        output: "OUT",
+        freqs: [0],
+        rin: true,
+        rout: true,
+      });
+      expect(result.error).toBeUndefined();
+      for (const name of ["gain", "rin", "rout"]) {
+        declared(result[name]);
+        expect(result[name].skipped).toBe(
+          "too large for the exact closed form",
+        );
+        expect(result[name].exact).toBeNull();
+      }
+      // ngspice-47 at this bias: open-loop gain 68,823, Zout 113 Ω, one pole
+      // at -10.61 Hz (the 30 pF compensation).
+      expect(result.gain.values[0].re).toBeCloseTo(68824, -1);
+      expect(result.rout.values[0].re).toBeCloseTo(113.04, 1);
+      expect(result.gain.poles).toHaveLength(1);
+      expect(result.gain.poles[0].re).toBeCloseTo(-10.608, 2);
+      expect(Object.keys(result.op.devices)).toHaveLength(25);
+      expect(Date.now() - started).toBeLessThan(15_000);
     });
   },
 );
