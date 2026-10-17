@@ -592,6 +592,8 @@ fn response_has_every_contract_field() {
         assert!(q["skipped"].is_string() && q["display"].is_null(), "{q}");
     }
     assert_eq!(d["symbols"], json!([]));
+    // No exact coefficient materialized: nothing to check.
+    assert!(d["check"].is_null());
     assert!(d["hd3"]["value"].as_f64().unwrap() > 0.0);
 }
 
@@ -635,4 +637,10 @@ fn an_unaffordable_denominator_power_falls_back_per_quantity() {
         assert!(s["latex"].is_string() && s["relError"].as_f64().unwrap() <= 0.05, "{q}");
     }
     assert_eq!(d["symbols"][0]["name"], "K2g_M1");
+    // The exact a1, a2 that materialized are still checked against the
+    // numeric reference; the full run checks all three.
+    assert_eq!(d["check"]["ok"], true, "{}", d["check"]);
+    assert_eq!(d["check"]["orders"], json!([1, 2]));
+    assert!(d["check"]["maxRelDiff"].as_f64().unwrap() < 1e-12);
+    assert_eq!(fd["check"]["orders"], json!([1, 2, 3]));
 }

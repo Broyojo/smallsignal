@@ -1374,12 +1374,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         }
     };
     // The closed form's a_n against the numeric reference (full model,
-    // every coefficient).
-    let check = |cl: &Closed| -> Option<(bool, f64)> {
+    // every coefficient), for each a_n that materialized: (ok, worst
+    // relative difference, orders checked); None when none did.
+    let check = |cl: &Closed| -> Option<(bool, f64, Vec<usize>)> {
         let mut worst = 0.0f64;
         let mut ok = true;
+        let mut orders = Vec::new();
         for (n, &r) in a_num.iter().enumerate().take(cl.num.len()) {
-            let e = cl.a(n)?.view(&cl.syms, false).expr();
+            let Some(q) = cl.a(n) else { continue };
+            orders.push(n + 1);
+            let e = q.view(&cl.syms, false).expr();
             let (v, bound) = e
                 .map(|e| {
                     let (z, b) = e.eval_with_bound(Complex64::new(0.0, 0.0));
@@ -1393,7 +1397,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 ok = false;
             }
         }
-        Some((ok, worst))
+        (!orders.is_empty()).then_some((ok, worst, orders))
     };
     // Exact closed form on the analysis model (redone on the full model if
     // a junction it left out matters here); the leakage-free one when the
@@ -1403,7 +1407,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         // Junctions omitted as negligible for the gain (≤ 1e-9) can move
         // a3 by more (it is cubic in the transfers): use the full model then,
         // and no exact form if that one is too large.
-        if check(cl).is_some_and(|(_, diff)| diff > 1e-11) && ss.params.len() != full.params.len() {
+        if check(cl).is_some_and(|(_, diff, _)| diff > 1e-11) && ss.params.len() != full.params.len() {
             let mut fs = (c.full_symbols)();
             if !slopes.is_empty() {
                 fs = sym_values(full, &fs, &slopes);
@@ -1513,13 +1517,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .collect();
     resp.insert("symbols".into(), json!(ksyms));
     match exact.as_ref().and_then(check) {
-        Some((ok, diff)) => {
+        Some((ok, diff, orders)) => {
             if !ok {
                 warnings.push(format!(
                     "distortion: closed form and numeric solution differ ({diff:.2e})"
                 ));
             }
-            resp.insert("check".into(), json!({ "ok": ok, "maxRelDiff": diff }));
+            resp.insert(
+                "check".into(),
+                json!({ "ok": ok, "maxRelDiff": diff, "orders": orders }),
+            );
         }
         None => {
             resp.insert("check".into(), Value::Null);

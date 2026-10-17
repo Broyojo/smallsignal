@@ -213,7 +213,9 @@ transfer cofactors. Response `distortion`:
   (LU solves at ω, 2ω, 3ω on the full model).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
   `symbols`: the K symbols used (`[]` when no closed form was built);
-  `omissionError`; `check` (closed form vs numeric).
+  `omissionError`; `check` `{ok, maxRelDiff, orders}`: each exact a_n that
+  materialized against the numeric reference (`orders` lists which; null
+  when none did).
 - Every field is always present. A quantity whose exact closed form would
   exceed 100k terms or `maxTerms` (its numerator, or the D^{2n−1} under it;
   e.g. a 5T OTA's a₃ with junction leakage kept), or every quantity when the
