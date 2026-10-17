@@ -64,11 +64,10 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   Zero noise (noise_zero_output) is exact agreement with zero: a reference
   of 0 passes only a value within 1e-40 V²/Hz (times the band width for an
   integral).
-  `noise_indep.py` recomputes every source with ngspice's formulas on the
-  independent 60-digit rebuild. ngspice-47 level-1 MOS formulas: channel
-  4kT·(2/3)·gm; flicker KF·gm²/(Cox·W·Leff·f^AF) — not SPICE2's
-  KF·Id^AF/(f·Cox·L²); AF is the frequency exponent; Cox = 3.9·ε0/TOX,
-  TOX = 1e-7 m by default. compare.py checks noise at rtol 1e-6, as AC.
+  `noise_indep.py` recomputes every source on the independent 60-digit
+  rebuild, with the source models in
+  [crates/README.md, Noise](../crates/README.md#noise-noise-true-optional-noiseband-flow-fhigh).
+  compare.py checks noise at rtol 1e-6, as AC.
 - `textbook_nd.py`: textbook noise cases (CS, degenerated CS, SF, diff pair,
   5T OTA, BJT CE), hand-derived (KCL with noise injections), checked against
   ngspice and the quoted closed forms.
