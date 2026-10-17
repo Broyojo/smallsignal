@@ -225,7 +225,7 @@ fn cutoff_device_contributes_nothing() {
     let r = run(net, &request("VIN", "out"));
     assert_eq!(r["op"]["devices"]["M1"]["region"], "cutoff");
     assert_eq!(value(&r, "gain", 0), (0.0, 0.0));
-    assert!(r["warnings"].to_string().contains("cutoff"));
+    assert!(r["warnings"].to_string().contains("M1 is off"));
 }
 
 #[test]
@@ -419,8 +419,8 @@ fn differential_gain_of_a_balanced_pair_is_twice_the_half_circuit() {
 fn match_requests_are_validated() {
     let warn =
         |m: Value| run(PAIR, &req(json!({ "input": "VIP", "output": "o1", "match": m })))["warnings"].to_string();
-    assert!(warn(json!([["M1", "MX"]])).contains("'MX' not found"));
-    assert!(warn(json!([["M1", "RD1"]])).contains("not all the same kind"));
+    assert!(warn(json!([["M1", "MX"]])).contains("No element MX to match"));
+    assert!(warn(json!([["M1", "RD1"]])).contains("different kinds of element"));
     // A one-element group, or a repeated name, merges nothing and warns nothing.
     let w = warn(json!([["M1"], ["M2", "M2"]]));
     assert!(!w.contains("match"), "{w}");

@@ -220,7 +220,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
         ignored.sort();
         if !ignored.is_empty() {
             let list: Vec<&str> = ignored.iter().map(|s| s.as_str()).collect();
-            warnings.push(format!("model {name}: ignored parameters {}", list.join(", ")));
+            warnings.push(format!("Model {name} ignores {}", list.join(", ")));
         }
         cards.insert(name, Card { kind, params });
     }
@@ -261,12 +261,10 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                         }
                     }
                 }
-                ".include" | ".inc" | ".lib" => {
-                    warnings.push(format!("line {no}: {head} ignored (include files are not supported)"))
-                }
+                ".include" | ".inc" | ".lib" => warnings.push(format!("Line {no}: {head} is not supported")),
                 ".subckt" | ".ends" => return Err(format!("line {no}: subcircuits (.subckt) are not supported yet")),
                 ".param" | ".func" => return Err(format!("line {no}: {head} is not supported yet")),
-                other => warnings.push(format!("line {no}: {other} ignored")),
+                other => warnings.push(format!("Line {no}: {other} ignored")),
             }
             continue;
         }

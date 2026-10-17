@@ -128,7 +128,7 @@ pub fn symbols(
             match net.element(name) {
                 Some(i) if !idx.contains(&i) => idx.push(i),
                 Some(_) => {}
-                None => warnings.push(format!("match: element '{name}' not found")),
+                None => warnings.push(format!("No element {name} to match")),
             }
         }
         if idx.len() < 2 {
@@ -160,7 +160,7 @@ pub fn symbols(
         let letter = |i: usize| net.elements[i].name[..1].to_ascii_uppercase();
         if set.iter().any(|&i| letter(i) != letter(set[0])) {
             warnings.push(format!(
-                "match: {} are not all the same kind of element; not merged",
+                "{} are different kinds of element, not matched",
                 names.join(", ")
             ));
             continue;
@@ -196,7 +196,7 @@ pub fn symbols(
             okinds.sort();
             if kinds != okinds {
                 warnings.push(format!(
-                    "match: {} and {} have different small-signal parameters; not merged",
+                    "{} and {} differ, not matched",
                     names[0], net.elements[other].name
                 ));
                 continue 'groups;
@@ -214,9 +214,10 @@ pub fn symbols(
                     (a - b).abs() / a.abs().max(b.abs())
                 };
                 if rel.is_nan() || rel > MATCH_REL {
+                    let _ = (a, b);
                     warnings.push(format!(
-                        "match: {} and {} differ in {} ({a:.6e} vs {b:.6e}); not merged",
-                        names[0], net.elements[other].name, ss.params[i].latex
+                        "{} and {} differ, not matched",
+                        names[0], net.elements[other].name
                     ));
                     continue 'groups;
                 }

@@ -839,7 +839,7 @@ fn matching_candidates_never_changes_values() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|w| !w.as_str().unwrap().contains("not merged")),
+                .all(|w| !w.as_str().unwrap().contains("not matched")),
             "{}",
             m["warnings"]
         );

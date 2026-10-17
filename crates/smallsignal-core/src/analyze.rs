@@ -176,8 +176,9 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             operating_point(&net).map_err(|e| match degenerate_junctions(&net).as_slice() {
                 [] => e,
                 found => format!(
-                    "{e}. No physical DC solution: {}. Add series resistance.",
-                    found.join("; ")
+                    "No DC solution. {} {} forced on by a source. Add a series resistor.",
+                    found.join(", "),
+                    if found.len() == 1 { "is" } else { "are" }
                 ),
             })?,
         )
@@ -246,12 +247,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         })
     };
     let mut warnings: Vec<String> = net.warnings.iter().chain(&ss.warnings).cloned().collect();
-    if !net.missing.is_empty() {
-        warnings.push(format!(
-            "symbolic only: no value or model for {} (transistors assumed saturated / forward-active)",
-            net.missing.join(", ")
-        ));
-    }
+    // Missing values mean hand analysis: the response's `symbolic` says so,
+    // and a warning would only repeat it.
     warnings.extend(wiring_warnings(&net, op.as_ref()));
     if op.is_some() {
         warnings.extend(latch_warnings(&net));
@@ -260,7 +257,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         warnings.extend(
             degenerate_junctions(&net)
                 .into_iter()
-                .map(|d| format!("{d}: its current has no physical limit; add series resistance")),
+                .map(|d| format!("{d} is forced on by a source. Add a series resistor.")),
         );
     }
     let symbols = sym::symbols(&net, &ss, &matched, symbolic, &mut warnings);
@@ -318,13 +315,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     let n_out = sub(&node_num(&gsys, out, max_terms)?, &node_num(&gsys, rf, max_terms)?);
     if n_out.is_zero() {
         let at = match &req.reference {
-            Some(r) if !r.trim().is_empty() => format!("{} (relative to {})", req.output, r.trim()),
+            Some(r) if !r.trim().is_empty() => format!("{} − {}", req.output, r.trim()),
             _ => req.output.clone(),
         };
-        warnings.push(format!(
-            "no signal reaches {at} from {}: the gain is exactly zero",
-            req.input
-        ));
+        warnings.push(format!("No signal reaches {at}"));
     }
     let unit = if input_is_v { "V/V" } else { "V/A" };
     let gain_den = if mode == Mode::Differential {
@@ -390,7 +384,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     ),
                 );
             }
-            None => warnings.push("rin in common mode needs voltage-source inputs".to_string()),
+            None => warnings.push("Common-mode Zin needs voltage-source inputs".to_string()),
             Some(RinKind::Single { p, n }) => {
                 let (num, den) = if input_is_v {
                     // Zin = V / I_into_circuit = 1 / (−I_branch).
@@ -446,7 +440,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         } else {
             let r = crate::verify::kcl(&gsys, ss.params.len(), ss.reactive_mask, max_terms)?;
             if !r.ok {
-                warnings.push("KCL identity check FAILED".to_string());
+                warnings.push("Internal check failed (KCL)".to_string());
             }
             resp.insert("verify".into(), json!({ "kcl": r.ok, "trials": r.trials }));
         }
@@ -738,10 +732,9 @@ fn degenerate_junctions(net: &Netlist) -> Vec<String> {
         if let (Some(a), Some(k)) = (v[anode], v[cathode]) {
             let fwd = polarity * (a - k);
             if fwd > 0.8 {
-                out.push(format!(
-                    "{name}'s {what} junction is forward-biased by {fwd:.3} V between nodes {} and {}, both held by ideal sources",
-                    net.nodes[anode], net.nodes[cathode]
-                ));
+                // Kept short for the panel; the bias is in the netlist.
+                let _ = fwd;
+                out.push(format!("{name} {what} junction"));
             }
         }
     };
@@ -781,7 +774,7 @@ fn latch_warnings(net: &Netlist) -> Vec<String> {
             let Some((gj, dj)) = ends(j) else { continue };
             if gi == dj && gj == di && gi != 0 && gj != 0 {
                 out.push(format!(
-                    "{} and {} are cross-coupled (positive feedback): the circuit may have more than one DC solution; this is the one reached from the default start",
+                    "{} and {} are cross-coupled. The circuit may have another DC state.",
                     net.elements[i].name, net.elements[j].name
                 ));
             }
@@ -803,10 +796,7 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
     }
     for (n, users) in touched.iter().enumerate().skip(1) {
         if users.len() == 1 {
-            out.push(format!(
-                "node {} connects only to {}: that end is open, so {} carries no signal",
-                net.nodes[n], users[0], users[0]
-            ));
+            out.push(format!("{} has an open end at {}", users[0], net.nodes[n]));
         }
     }
     if let Some(op) = op {
@@ -817,10 +807,12 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
                 _ => continue,
             };
             if on && current.abs() < 1e-12 {
-                out.push(format!(
-                    "{} is on but carries no DC current ({:.1e} A): check that its drain/collector has a DC path",
-                    e.name, current
-                ));
+                let path = if matches!(op.dev[ei], Some(DevOp::Bjt(_))) {
+                    "collector"
+                } else {
+                    "drain"
+                };
+                out.push(format!("{} carries no current. Check its {path} path.", e.name));
             }
         }
     }

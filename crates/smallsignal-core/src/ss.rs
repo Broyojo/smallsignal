@@ -425,7 +425,7 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                 };
                 let (ed, es) = if m.reversed { (s, d) } else { (d, s) };
                 if m.region == MosRegion::Cutoff {
-                    warnings.push(format!("{nm} is in cutoff (no small-signal gain)"));
+                    warnings.push(format!("{nm} is off"));
                 }
                 if m.gm > 0.0 {
                     let p = add(
@@ -478,10 +478,10 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                 junctions.push((ei, b, s, m.gbs, "bs", "bs"));
                 junctions.push((ei, b, d, m.gbd, "bd", "bd"));
                 if m.gbs.max(m.gbd) > 1e-6 {
-                    warnings.push(format!("{nm}: a bulk junction is forward biased"));
+                    warnings.push(format!("{nm} bulk junction is forward biased"));
                 }
                 if m.region == MosRegion::Triode {
-                    warnings.push(format!("{nm} is in triode; r_o here is its channel resistance"));
+                    warnings.push(format!("{nm} is in triode"));
                 }
             }
             Kind::Q { .. } => {
@@ -529,7 +529,12 @@ pub fn build(net: &Netlist, op: Option<&Op>) -> Result<SsCircuit, String> {
                     unreachable!()
                 };
                 if q.region != "forward-active" {
-                    warnings.push(format!("{nm} is in {}", q.region));
+                    let state = if q.region == "cutoff" {
+                        "is off".to_string()
+                    } else {
+                        format!("is in {}", q.region)
+                    };
+                    warnings.push(format!("{nm} {state}"));
                 }
                 if q.gm != 0.0 {
                     let p = add(

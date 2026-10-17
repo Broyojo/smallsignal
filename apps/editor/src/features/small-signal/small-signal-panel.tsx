@@ -795,25 +795,23 @@ export function SmallSignalPanel({
               </div>
             ) : noOutput ? (
               <div className="small-signal-alert is-error" role="alert">
-                <p>There is no output node to measure.</p>
-                <small>
-                  Every net is ground or a supply. Check that the output
-                  isn&apos;t wired to ground.
-                </small>
+                <p>No output to measure.</p>
+                <small>Check that the output isn&apos;t wired to ground.</small>
               </div>
             ) : noDcPath.length ? (
               <div className="small-signal-alert is-error" role="alert">
                 <p>
-                  Nothing sets the voltage of <b>{noDcPath.join(", ")}</b>.
+                  Nothing drives <b>{noDcPath.join(", ")}</b>.
                 </p>
-                <small>
-                  Only gates or capacitors connect to it. Wire it to the
-                  circuit, or mark it with a Pin to use it as an input.
-                </small>
+                <small>Wire it, or add a Pin to use it as an input.</small>
               </div>
             ) : error ? (
               <div className="small-signal-alert is-error" role="alert">
                 <p>{error}</p>
+              </div>
+            ) : result?.warnings?.length === 1 ? (
+              <div className="small-signal-alert is-warning" role="alert">
+                <p>{result.warnings[0]}</p>
               </div>
             ) : result?.warnings?.length ? (
               <div className="small-signal-alert is-warning" role="alert">

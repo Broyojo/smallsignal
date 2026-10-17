@@ -277,7 +277,7 @@ fn zero_gain_is_explained() {
     let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
     let r = run(net, &req(json!({ "input": "VIN", "output": "vdd" })));
     assert!(
-        r["warnings"].to_string().contains("no signal reaches vdd from VIN"),
+        r["warnings"].to_string().contains("No signal reaches vdd"),
         "{}",
         r["warnings"]
     );
@@ -452,7 +452,7 @@ fn ota_candidates_are_the_pair_and_the_mirror() {
         &req(json!({ "input": "VINP", "inputNeg": "VINN", "output": "vout", "match": [["M1", "M2"], ["M3", "M4"]] })),
     );
     assert_eq!(r["gain"]["check"]["ok"], true);
-    assert!(!r["warnings"].to_string().contains("not merged"));
+    assert!(!r["warnings"].to_string().contains("not matched"));
 }
 
 #[test]
@@ -593,7 +593,7 @@ fn degenerate_junctions_are_named() {
         &req(json!({ "input": "VIN", "output": "in" })),
     );
     let w = r["warnings"].to_string();
-    assert!(w.contains("D1's diode junction is forward-biased by 1.500 V"), "{w}");
+    assert!(w.contains("D1 diode junction is forced on by a source"), "{w}");
     // A BJT base-emitter junction across an ideal 2 V source.
     let r = analyze(
         "deg\nVB b 0 2\nVC c 0 5\nQ1 c b 0 qn\nVIN in 0 AC 1\nR1 in 0 1k\n.model qn npn is=1e-15 bf=100\n",
@@ -604,7 +604,7 @@ fn degenerate_junctions_are_named() {
         Err(e) => e,
     };
     assert!(
-        text.contains("Q1's base-emitter junction is forward-biased by 2.000 V"),
+        text.contains("Q1 base-emitter junction is forced on by a source"),
         "{text}"
     );
 }
