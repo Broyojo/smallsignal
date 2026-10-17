@@ -18,6 +18,7 @@ import {
 } from "@icm/math-typesetting/cache";
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
+  ASSUMPTION_REGIONS,
   createSmallSignalClient,
   DEFAULT_MODEL_PARAMETERS,
   DEFAULT_SUPPLY_VOLTAGE,
@@ -40,7 +41,32 @@ import {
   type SmallSignalNoise,
   type DistortionQuantity,
   type SmallSignalDistortion,
+  type AssumableElement,
+  type AssumedQuantity,
+  type AssumptionTerm,
+  type RootPair,
+  type SmallSignalElement,
 } from "@icm/small-signal";
+import {
+  assumptionRequest,
+  circuitStorageKey,
+  isIgnored,
+  isTransistor,
+  loadCircuits,
+  loadDefaults,
+  partKey,
+  saveCircuits,
+  saveDefaults,
+  storeCircuit,
+  touchCircuit,
+  TRANSISTOR_TYPES,
+  withDefault,
+  withRegion,
+  withTerms,
+  type AssumableType,
+  type AssumptionDefaults,
+  type CircuitAssumptions,
+} from "./small-signal-assumption-store";
 import {
   browserStaleBuildRecovery,
   diagnoseModuleLoadFailure,
@@ -474,20 +500,48 @@ const INVISIBLE_ERROR = 1e-6;
 function MainFormula({
   symbol,
   quantity,
+  assumed,
 }: {
   symbol: string;
   quantity: SmallSignalQuantity;
+  /** Set under assumptions: the forms are the assumed model's. */
+  assumed?: AssumedQuantity | undefined;
 }) {
   const display = quantity.display;
-  if (!display || display.same || display.latex === null) {
+  const shown =
+    display && !display.same && display.latex !== null ? display : null;
+  if (assumed) {
+    // Every form is the assumed model's: said with its distance from the
+    // full model rather than from its own exact form.
+    const lead = shown ?? quantity.exact;
+    if (!lead?.latex)
+      return <ExactFormula symbol={symbol} quantity={quantity} />;
+    const error = lead.fullModelError ?? assumed.maxRelError;
+    const equals = error !== null && error < INVISIBLE_ERROR;
+    return (
+      <>
+        <Formula
+          latex={`${symbol} ${equals ? "=" : "\\approx"} ${lead.latex}`}
+        />
+        {equals ? null : <FullModelNote error={error} />}
+        {shown ? (
+          <details className="small-signal-exact">
+            <summary>{EXACT_ASSUMED}</summary>
+            <ExactFormula symbol={symbol} quantity={quantity} />
+          </details>
+        ) : null}
+      </>
+    );
+  }
+  if (!shown) {
     return <ExactFormula symbol={symbol} quantity={quantity} />;
   }
-  const error = display.maxRelError ?? 0;
+  const error = shown.maxRelError ?? 0;
   const invisible = error < INVISIBLE_ERROR;
   return (
     <>
       <Formula
-        latex={`${symbol} ${invisible ? "=" : "\\approx"} ${display.latex}`}
+        latex={`${symbol} ${invisible ? "=" : "\\approx"} ${shown.latex}`}
       />
       {invisible ? null : (
         <small className="small-signal-muted">
@@ -519,9 +573,125 @@ function ExactFormula({
   return <Formula latex={`${symbol} = ${quantity.exact.latex}`} />;
 }
 
-function formatPercent(fraction: number): string {
+export function formatPercent(fraction: number): string {
   const percent = fraction * 100;
-  return percent < 0.1 ? "<0.1%" : `${percent.toPrecision(2)}%`;
+  if (percent === 0) return "0%";
+  if (percent < 0.1) return "<0.1%";
+  // Two digits, without an exponent past 100%.
+  return percent >= 99.5
+    ? `${Math.round(percent)}%`
+    : `${percent.toPrecision(2)}%`;
+}
+
+/** The exact form's disclosure under assumptions. */
+const EXACT_ASSUMED = "Exact for these assumptions";
+
+/** "2.1% from full model"; nothing without a number (symbolic, unbounded). */
+function fullModelText(error: number | null | undefined): string | null {
+  return error == null ? null : `${formatPercent(error)} from full model`;
+}
+
+function FullModelNote({ error }: { error: number | null | undefined }) {
+  const text = fullModelText(error);
+  return text ? <small className="small-signal-muted">{text}</small> : null;
+}
+
+/** Full model against assumed per frequency, when they differ anywhere. */
+function AssumedValues({
+  values,
+  assumed,
+  unit,
+}: {
+  values: readonly ComplexPoint[];
+  assumed: AssumedQuantity;
+  unit: string;
+}) {
+  if (assumed.relError.every((error) => error === 0)) return null;
+  return (
+    <table className="small-signal-values" aria-label="Full model and assumed">
+      <thead>
+        <tr>
+          <th />
+          <th scope="col">Full model</th>
+          <th scope="col">Assumed</th>
+          <th scope="col">Δ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {values.map((point, index) => {
+          const value = assumed.values[index];
+          const error = assumed.relError[index];
+          return (
+            <tr key={point.f} data-frequency={point.f}>
+              <th scope="row">{formatEngineering(point.f, "Hz")}</th>
+              <td data-quantity="full">{pointText(point, unit)}</td>
+              <td data-quantity="assumed">
+                {value ? pointText(value, unit) : ""}
+              </td>
+              <td data-quantity="delta">
+                {error == null ? "—" : formatPercent(error)}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * The assumed model's poles and zeros beside the full model's, when any
+ * moved: "removed" where an assumption took a root away. One row per
+ * conjugate pair.
+ */
+function rootPairRows(assumed: AssumedQuantity): [string, RootPair][] {
+  return (
+    [
+      ...assumed.poles.map((pair) => ["Pole", pair]),
+      ...assumed.zeros.map((pair) => ["Zero", pair]),
+    ] as [string, RootPair][]
+  ).filter(([, pair]) =>
+    [pair.assumed, pair.full].every((root) => !root || root.im >= 0),
+  );
+}
+
+/** Whether an assumption moved or removed any pole or zero. */
+function rootsMoved(assumed: AssumedQuantity): boolean {
+  return rootPairRows(assumed).some(
+    ([, pair]) => !pair.assumed || !pair.full || pair.relError !== 0,
+  );
+}
+
+function RootPairs({ assumed }: { assumed: AssumedQuantity }) {
+  const rows = rootPairRows(assumed);
+  return (
+    <table className="small-signal-values" aria-label="Poles and zeros">
+      <thead>
+        <tr>
+          <th />
+          <th scope="col">Full model</th>
+          <th scope="col">Assumed</th>
+          <th scope="col">Δ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([kind, pair], index) => (
+          <tr key={index} data-root={kind.toLowerCase()}>
+            <th scope="row">{kind}</th>
+            <td data-quantity="full">
+              {pair.full ? rootText(pair.full) : "—"}
+            </td>
+            <td data-quantity="assumed">
+              {pair.assumed ? rootText(pair.assumed) : "removed"}
+            </td>
+            <td data-quantity="delta">
+              {pair.relError == null ? "" : formatPercent(pair.relError)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 /** Shown once, on the first result whose formula is over the budget. */
@@ -534,6 +704,7 @@ function QuantityCard({
   quantity,
   unit,
   noFormulaNote = false,
+  assumed,
 }: {
   title: string;
   symbol: string;
@@ -541,10 +712,20 @@ function QuantityCard({
   unit: string;
   /** Say why there is no formula (when the exact form is over budget). */
   noFormulaNote?: boolean;
+  /** Set under assumptions; the header value stays the full model's. */
+  assumed?: AssumedQuantity | undefined;
 }) {
-  // The simpler form appears only when it actually dropped terms.
+  // The simpler form appears only when it actually dropped terms, and never
+  // repeats the form above it (an assumption can leave nothing to drop).
+  const display = quantity.display;
+  const leadLatex =
+    display && !display.same && display.latex !== null
+      ? display.latex
+      : quantity.exact?.latex;
   const simpler =
-    quantity.simplified && !quantity.simplified.same
+    quantity.simplified &&
+    !quantity.simplified.same &&
+    quantity.simplified.latex !== leadLatex
       ? quantity.simplified
       : null;
   const value = quantity.values?.[0];
@@ -587,15 +768,21 @@ function QuantityCard({
           {/* A long exact form would bury the result: lead with the
               readable one and keep the exact form a click away. */}
           <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
-          <small className="small-signal-muted">{simplerNote}</small>
+          <small className="small-signal-muted">
+            {assumed
+              ? [simplerNote, fullModelText(simpler.fullModelError)]
+                  .filter(Boolean)
+                  .join(", ")
+              : simplerNote}
+          </small>
           <details className="small-signal-exact">
-            <summary>Exact</summary>
+            <summary>{assumed ? EXACT_ASSUMED : "Exact"}</summary>
             <ExactFormula symbol={symbol} quantity={quantity} />
           </details>
         </>
       ) : (
         <>
-          <MainFormula symbol={symbol} quantity={quantity} />
+          <MainFormula symbol={symbol} quantity={quantity} assumed={assumed} />
           {simpler ? (
             <div className="small-signal-simpler">
               <Formula latex={`\\approx ${simpler.latex}`} />
@@ -604,7 +791,9 @@ function QuantityCard({
           ) : null}
         </>
       )}
-      {quantity.values && quantity.values.length > 1 ? (
+      {assumed && quantity.values?.length ? (
+        <AssumedValues values={quantity.values} assumed={assumed} unit={unit} />
+      ) : quantity.values && quantity.values.length > 1 ? (
         <table className="small-signal-values">
           <tbody>
             {quantity.values.map((point) => (
@@ -616,7 +805,9 @@ function QuantityCard({
           </tbody>
         </table>
       ) : null}
-      {poles.length ? (
+      {assumed && rootsMoved(assumed) ? (
+        <RootPairs assumed={assumed} />
+      ) : poles.length ? (
         <small className="small-signal-muted">
           {poleCount === 1 ? "Pole" : "Poles"} {poles.join(", ")}
         </small>
@@ -634,6 +825,11 @@ const NOISE_KIND: Record<string, string> = {
   shot_c: "shot (c)",
   shot_b: "shot (b)",
 };
+
+/** A noise source as the tables name it: "M1 thermal". */
+function noiseLabel(source: { element: string; kind: string }): string {
+  return `${source.element} ${NOISE_KIND[source.kind] ?? source.kind}`;
+}
 
 /** √PSD as a spectral density, e.g. 3.88 nV/√Hz; "—" where not finite. */
 export function formatDensity(v2: number | null, unit: string): string {
@@ -676,11 +872,9 @@ export function topContributions(
   omittedFraction: number | null = 0,
   limit = 4,
 ): { label: string; fraction: number | null }[] {
-  const label = (source: NoiseContribution) =>
-    `${source.element} ${NOISE_KIND[source.kind] ?? source.kind}`;
   const unbounded = sources
     .filter((source) => !Number.isFinite(source.fraction))
-    .map((source) => ({ label: label(source), fraction: null }));
+    .map((source) => ({ label: noiseLabel(source), fraction: null }));
   const sorted = sources
     .filter((source): source is NoiseContribution & { fraction: number } =>
       Number.isFinite(source.fraction),
@@ -689,9 +883,10 @@ export function topContributions(
   const room = Math.max(0, limit - unbounded.length);
   const rows = [
     ...unbounded,
-    ...sorted
-      .slice(0, room)
-      .map((source) => ({ label: label(source), fraction: source.fraction })),
+    ...sorted.slice(0, room).map((source) => ({
+      label: noiseLabel(source),
+      fraction: source.fraction,
+    })),
   ];
   // An unbounded omitted bucket is shown like an unbounded source.
   if (omittedFraction === null)
@@ -727,6 +922,8 @@ interface ShownForm {
   terms?: number | null;
   /** Relative error against the exact form (junction leakage dropped). */
   relError?: number | null;
+  /** Under assumptions: relative distance from the full model. */
+  fullModelError?: number | null;
 }
 
 /**
@@ -737,6 +934,8 @@ interface ShownForm {
  *   the result cards);
  * - "Exact" a click away when the lead is not exact: the exact form, or a
  *   note that it is too large to typeset. Nothing inexact is labelled exact.
+ * Under assumptions every form is the assumed model's: "≈", with its
+ * distance from the full model in place of the leakage note.
  */
 function LeadFormula({
   symbol,
@@ -745,18 +944,20 @@ function LeadFormula({
   simpler,
   simplerNote,
   exact,
+  assumed = false,
 }: {
   symbol: string;
   shown: ShownForm | null;
   shownIsExact: boolean;
-  simpler: { latex: string | null } | null;
+  simpler: ShownForm | null;
   simplerNote: string;
   /** The exact form's LaTeX; null when it is too large to typeset. */
   exact: string | null;
+  assumed?: boolean;
 }) {
   const exactDisclosure = (
     <details className="small-signal-exact">
-      <summary>Exact</summary>
+      <summary>{assumed ? EXACT_ASSUMED : "Exact"}</summary>
       {exact ? (
         <Formula latex={`${symbol} = ${exact}`} />
       ) : (
@@ -774,7 +975,13 @@ function LeadFormula({
     return (
       <>
         <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
-        <small className="small-signal-muted">{simplerNote}</small>
+        <small className="small-signal-muted">
+          {assumed
+            ? [simplerNote, fullModelText(simpler.fullModelError)]
+                .filter(Boolean)
+                .join(", ")
+            : simplerNote}
+        </small>
         {exactDisclosure}
       </>
     );
@@ -789,13 +996,18 @@ function LeadFormula({
     );
   }
   const error = shown.relError ?? 0;
-  const equals = shownIsExact || error < INVISIBLE_ERROR;
+  const fullModelError = shown.fullModelError ?? null;
+  const equals = assumed
+    ? fullModelError !== null && fullModelError < INVISIBLE_ERROR
+    : shownIsExact || error < INVISIBLE_ERROR;
   return (
     <>
       <Formula
         latex={`${symbol} ${equals ? "=" : "\\approx"} ${shown.latex}`}
       />
-      {equals ? null : (
+      {equals ? null : assumed ? (
+        <FullModelNote error={fullModelError} />
+      ) : (
         <small className="small-signal-muted">
           neglecting junction leakage ({formatPercent(error)})
         </small>
@@ -815,9 +1027,11 @@ function LeadFormula({
 function DistortionFormula({
   symbol,
   quantity,
+  assumed,
 }: {
   symbol: string;
   quantity: DistortionQuantity;
+  assumed: boolean;
 }) {
   // The display form (leakage dropped), else the exact form itself.
   const display = quantity.display?.latex ? quantity.display : null;
@@ -844,6 +1058,7 @@ function DistortionFormula({
           : `within ${formatPercent(simpler?.relError ?? 0)} of exact`
       }
       exact={shownIsExact ? (shown?.latex ?? null) : quantity.latex}
+      assumed={assumed}
     />
   );
 }
@@ -913,9 +1128,13 @@ const LARGE_DISTORTION = 0.1;
 function DistortionDetails({
   distortion,
   current,
+  assumed,
 }: {
   distortion: SmallSignalDistortion;
   current: boolean;
+  /** Under assumptions the closed forms and their values are the assumed
+   * model's; HD by frequency stays the full model's. */
+  assumed: boolean;
 }) {
   const v = current ? "i" : "v";
   const rows: [string, DistortionQuantity | null][] = [
@@ -957,7 +1176,11 @@ function DistortionDetails({
   return (
     <>
       <table className="small-signal-values" aria-label="Distortion">
-        {varies ? <caption>At low frequency</caption> : null}
+        {assumed ? (
+          <caption>Assumed{varies ? ", at low frequency" : ""}</caption>
+        ) : varies ? (
+          <caption>At low frequency</caption>
+        ) : null}
         <tbody>
           {a1 != null ? (
             // The swing these numbers assume: an unrealistic one is obvious.
@@ -1024,25 +1247,39 @@ function DistortionDetails({
           key={coefficient.order}
           symbol={`a_{${coefficient.order}}`}
           quantity={coefficient}
+          assumed={assumed}
         />
       ))}
       <details className="small-signal-exact">
         <summary>HD2, HD3, IIP3</summary>
         {distortion.hd2 ? (
-          <DistortionFormula symbol="HD_{2}" quantity={distortion.hd2} />
+          <DistortionFormula
+            symbol="HD_{2}"
+            quantity={distortion.hd2}
+            assumed={assumed}
+          />
         ) : null}
         {distortion.hd3 ? (
-          <DistortionFormula symbol="HD_{3}" quantity={distortion.hd3} />
+          <DistortionFormula
+            symbol="HD_{3}"
+            quantity={distortion.hd3}
+            assumed={assumed}
+          />
         ) : null}
         {distortion.iip3 ? (
-          <DistortionFormula symbol="IIP_{3}" quantity={distortion.iip3} />
+          <DistortionFormula
+            symbol="IIP_{3}"
+            quantity={distortion.iip3}
+            assumed={assumed}
+          />
         ) : null}
       </details>
-      {varies ? (
+      {varies || assumed ? (
         <table
           className="small-signal-values"
           aria-label="Distortion by frequency"
         >
+          {assumed ? <caption>Full model</caption> : null}
           <thead>
             <tr>
               <th />
@@ -1085,7 +1322,13 @@ function DistortionDetails({
                         `A/V${term.order === 2 ? "²" : term.order === 3 ? "³" : `^${term.order}`}`,
                       )}
                     </td>
-                    <td>{term.kept ? "" : "not in the equations"}</td>
+                    <td>
+                      {term.ignored
+                        ? "neglected"
+                        : term.kept
+                          ? ""
+                          : "not in the equations"}
+                    </td>
                   </tr>
                 );
               })}
@@ -1106,11 +1349,15 @@ function NoiseDetails({
   current,
   band,
   onBand,
+  assumed,
 }: {
   noise: SmallSignalNoise;
   current: boolean;
   band: string;
   onBand: (text: string) => void;
+  /** Under assumptions the closed form is the assumed model's; the numbers
+   * stay the full model's. */
+  assumed: boolean;
 }) {
   const low = "unavailable" in noise.inputLowFreq ? null : noise.inputLowFreq;
   const symbol = `\\frac{\\overline{${current ? "i" : "v"}_{n,in}^{2}}}{\\Delta f}`;
@@ -1129,6 +1376,12 @@ function NoiseDetails({
   const flicker = noise.sources.some((source) => source.kind === "flicker");
   const sources = noise.contributors[0];
   const integrated = noise.integrated;
+  // Sources an assumption leaves out of the closed form, by row label.
+  const neglected = new Set(
+    noise.sources
+      .filter((source) => source.ignored)
+      .map((source) => noiseLabel(source)),
+  );
 
   return (
     <>
@@ -1145,6 +1398,7 @@ function NoiseDetails({
               : `within ${formatPercent(simpler?.relError ?? 0)} of exact`
           }
           exact={displayIsExact ? (display?.latex ?? null) : exactLatex}
+          assumed={assumed}
         />
       ) : null}
       {low && flicker ? (
@@ -1196,6 +1450,11 @@ function NoiseDetails({
                 <td>
                   {row.fraction === null ? "∞" : formatPercent(row.fraction)}
                 </td>
+                {neglected.size ? (
+                  <td className="small-signal-muted">
+                    {neglected.has(row.label) ? "neglected" : ""}
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -1399,6 +1658,398 @@ function MatchedPairs({
   );
 }
 
+/** Junction leakage (r_bs, r_bd, r_μ) shares one column. */
+const LEAKAGE_TERMS: ReadonlySet<string> = new Set(["rbs", "rbd", "rmu"]);
+/** Known columns first, in hand-analysis order; any others follow. */
+const COLUMN_ORDER = ["ro", "gmb", "rpi", "leakage"];
+
+function termColumn(term: string): string {
+  return LEAKAGE_TERMS.has(term) ? "leakage" : term;
+}
+
+/** A column's symbol as the bias table writes it: r_o, g_mb, r_π, C_gs. */
+function ColumnSymbol({ column }: { column: string }) {
+  if (column === "leakage") return <>Leakage</>;
+  const [head = "", ...rest] = column;
+  return (
+    <>
+      {head === "c" ? "C" : head}
+      <sub>{rest.join("").replace("pi", "π").replace("mu", "μ")}</sub>
+    </>
+  );
+}
+
+const REGION_LABEL: Record<string, string> = {
+  "forward-active": "active",
+  "reverse-active": "reverse",
+};
+
+interface AssumptionMember {
+  name: string;
+  type: AssumableType;
+  /** Instance path joined, the key its choices are stored under. */
+  path: string;
+  /** Set for a part drawn in the open Cell itself (selectable there). */
+  instanceId: string | null;
+  terms: readonly AssumptionTerm[];
+}
+
+export interface AssumptionRow {
+  key: string;
+  label: string;
+  type: AssumableType;
+  /** A whole type (its defaults), a matched group, or one part. */
+  scope: "type" | "group" | "part";
+  members: AssumptionMember[];
+}
+
+const byName = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { numeric: true });
+
+/**
+ * The table's rows: each transistor type present ("All NMOS"), then its
+ * matched groups and other parts, then passives and diodes.
+ */
+export function assumptionRows(
+  assumable: readonly AssumableElement[],
+  elements: readonly SmallSignalElement[],
+  groups: readonly (readonly string[])[],
+): AssumptionRow[] {
+  const drawn = new Map(elements.map((element) => [element.name, element]));
+  const members = new Map<string, AssumptionMember>();
+  for (const { element, type, terms } of assumable) {
+    const instancePath = drawn.get(element)?.instancePath;
+    if (!instancePath) continue;
+    members.set(element, {
+      name: element,
+      type,
+      path: partKey(instancePath),
+      instanceId: instancePath.length === 1 ? (instancePath[0] ?? null) : null,
+      terms,
+    });
+  }
+  const all = [...members.values()];
+  const rows: AssumptionRow[] = [];
+  for (const type of TRANSISTOR_TYPES) {
+    const ofType = all.filter((member) => member.type === type);
+    if (!ofType.length) continue;
+    rows.push({
+      key: type,
+      label: `All ${MODEL_TITLE[type]}`,
+      type,
+      scope: "type",
+      members: ofType,
+    });
+    const grouped = new Set<string>();
+    const units: AssumptionMember[][] = [];
+    for (const group of groups) {
+      const found = group
+        .map((name) => members.get(name))
+        .filter((member) => member?.type === type) as AssumptionMember[];
+      if (
+        found.length < 2 ||
+        found.length !== group.length ||
+        found.some((member) => grouped.has(member.name))
+      )
+        continue;
+      found.sort((a, b) => byName(a.name, b.name));
+      units.push(found);
+      for (const member of found) grouped.add(member.name);
+    }
+    for (const member of ofType)
+      if (!grouped.has(member.name)) units.push([member]);
+    units.sort((a, b) => byName(a[0]?.name ?? "", b[0]?.name ?? ""));
+    for (const unit of units)
+      rows.push({
+        key: unit.map((member) => member.name).join("="),
+        label: unit.map((member) => member.name).join(" = "),
+        type,
+        scope: unit.length > 1 ? "group" : "part",
+        members: unit,
+      });
+  }
+  for (const member of all
+    .filter((member) => !isTransistor(member.type))
+    .sort((a, b) => byName(a.name, b.name)))
+    rows.push({
+      key: member.name,
+      label: member.name,
+      type: member.type,
+      scope: "part",
+      members: [member],
+    });
+  return rows;
+}
+
+/** One column per transistor term the circuit has, leakage combined. */
+export function assumptionColumns(rows: readonly AssumptionRow[]): string[] {
+  const columns: string[] = [];
+  for (const row of rows)
+    if (isTransistor(row.type))
+      for (const member of row.members)
+        for (const term of member.terms) {
+          const column = termColumn(term);
+          if (!columns.includes(column)) columns.push(column);
+        }
+  const rank = (column: string) => {
+    const known = COLUMN_ORDER.indexOf(column);
+    return known < 0 ? COLUMN_ORDER.length : known;
+  };
+  // Stable: unknown columns keep the order the solver lists them in.
+  return columns.sort((a, b) => rank(a) - rank(b));
+}
+
+interface AssumptionChange {
+  defaults?: AssumptionDefaults;
+  parts?: CircuitAssumptions;
+}
+
+/**
+ * Per-device assumptions: checked terms are neglected, a passive is taken
+ * open or shorted, and a region is checked against the bias, never imposed.
+ * A type row sets the default for every circuit; a matched group's members
+ * share one setting.
+ */
+function AssumptionTable({
+  rows,
+  defaults,
+  parts,
+  selected,
+  onChange,
+  onSelect,
+}: {
+  rows: readonly AssumptionRow[];
+  defaults: AssumptionDefaults;
+  parts: CircuitAssumptions;
+  /** Instance ids selected on the canvas. */
+  selected: ReadonlySet<string>;
+  onChange(change: AssumptionChange): void;
+  onSelect?: ((instanceIds: string[]) => void) | undefined;
+}) {
+  const tableRef = useRef<HTMLTableElement>(null);
+  const columns = assumptionColumns(rows);
+  const transistors = rows.some((row) => isTransistor(row.type));
+  const isSelected = (row: AssumptionRow) =>
+    row.scope !== "type" &&
+    row.members.some(
+      (member) => member.instanceId !== null && selected.has(member.instanceId),
+    );
+  const selectedRows = rows
+    .filter(isSelected)
+    .map((row) => row.key)
+    .join(" ");
+  useEffect(() => {
+    if (selectedRows)
+      tableRef.current
+        ?.querySelector("tr.is-selected")
+        ?.scrollIntoView({ block: "nearest" });
+  }, [selectedRows]);
+
+  const setTerms = (row: AssumptionRow, column: string, on: boolean) => {
+    const terms = (member: AssumptionMember) =>
+      member.terms.filter((term) => termColumn(term) === column);
+    if (row.scope === "type" && isTransistor(row.type)) {
+      onChange(
+        withDefault(
+          defaults,
+          parts,
+          row.type,
+          [...new Set(row.members.flatMap(terms))],
+          on,
+          row.members.map((member) => member.path),
+        ),
+      );
+      return;
+    }
+    let next = parts;
+    for (const member of row.members)
+      next = withTerms(
+        next,
+        member.path,
+        row.type,
+        terms(member),
+        on,
+        defaults,
+      );
+    onChange({ parts: next });
+  };
+
+  const termCell = (row: AssumptionRow, column: string) => {
+    const pairs = row.members.flatMap((member) =>
+      member.terms
+        .filter((term) => termColumn(term) === column)
+        .map((term) => isIgnored(row.type, term, parts[member.path], defaults)),
+    );
+    if (!pairs.length)
+      return (
+        <td key={column} className="small-signal-muted">
+          —
+        </td>
+      );
+    const on = pairs.filter(Boolean).length;
+    const checked = on === pairs.length;
+    return (
+      <td key={column}>
+        <input
+          type="checkbox"
+          aria-label={`${row.label} ${column}`}
+          checked={checked}
+          ref={(input) => {
+            if (input) input.indeterminate = on > 0 && !checked;
+          }}
+          onChange={() => setTerms(row, column, !checked)}
+        />
+      </td>
+    );
+  };
+
+  const regionCell = (row: AssumptionRow) => {
+    if (row.scope === "type" || !isTransistor(row.type)) return <td />;
+    const regions = row.members.map(
+      (member) => parts[member.path]?.region ?? "",
+    );
+    const value = regions.every((region) => region === regions[0])
+      ? (regions[0] ?? "")
+      : "";
+    return (
+      <td>
+        <select
+          aria-label={`${row.label} region`}
+          value={value}
+          onChange={(event) =>
+            onChange({
+              parts: withRegion(
+                parts,
+                row.members.map((member) => member.path),
+                event.currentTarget.value || null,
+              ),
+            })
+          }
+        >
+          <option value="" />
+          {ASSUMPTION_REGIONS[row.type].map((region) => (
+            <option key={region} value={region}>
+              {REGION_LABEL[region] ?? region}
+            </option>
+          ))}
+        </select>
+      </td>
+    );
+  };
+
+  const passiveCell = (row: AssumptionRow) => {
+    const member = row.members[0];
+    if (!member) return null;
+    const part = parts[member.path];
+    const value = isIgnored(row.type, "open", part, defaults)
+      ? "open"
+      : isIgnored(row.type, "short", part, defaults)
+        ? "short"
+        : "";
+    return (
+      <td colSpan={Math.max(columns.length, 1)}>
+        <select
+          aria-label={`${row.label} open or short`}
+          value={value}
+          onChange={(event) => {
+            const choice = event.currentTarget.value as AssumptionTerm | "";
+            onChange({
+              parts: choice
+                ? withTerms(
+                    parts,
+                    member.path,
+                    row.type,
+                    [choice],
+                    true,
+                    defaults,
+                  )
+                : withTerms(
+                    parts,
+                    member.path,
+                    row.type,
+                    ["open", "short"],
+                    false,
+                    defaults,
+                  ),
+            });
+          }}
+        >
+          <option value="" />
+          {member.terms.map((term) => (
+            <option key={term} value={term}>
+              {term}
+            </option>
+          ))}
+        </select>
+      </td>
+    );
+  };
+
+  return (
+    <table className="small-signal-assumptions" ref={tableRef}>
+      {columns.length ? (
+        <thead>
+          <tr>
+            <td className="small-signal-muted">Neglect</td>
+            {columns.map((column) => (
+              <th key={column} scope="col">
+                <ColumnSymbol column={column} />
+              </th>
+            ))}
+            <th scope="col">Region</th>
+          </tr>
+        </thead>
+      ) : null}
+      <tbody>
+        {rows.map((row) => {
+          const ids = row.members.map((member) => member.instanceId);
+          const selectable =
+            onSelect && row.scope !== "type" && ids.every(Boolean);
+          return (
+            <tr
+              key={row.key}
+              data-row={row.key}
+              className={
+                [
+                  row.scope === "type" ? "is-type" : "",
+                  isSelected(row) ? "is-selected" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
+            >
+              <th scope="row">
+                {selectable ? (
+                  <button
+                    type="button"
+                    title="Select in the drawing"
+                    onClick={() => onSelect(ids as string[])}
+                  >
+                    {row.label}
+                  </button>
+                ) : (
+                  row.label
+                )}
+              </th>
+              {isTransistor(row.type) ? (
+                <>
+                  {columns.map((column) => termCell(row, column))}
+                  {regionCell(row)}
+                </>
+              ) : (
+                <>
+                  {passiveCell(row)}
+                  {transistors ? <td /> : null}
+                </>
+              )}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 /** `v_{out}` for a net named Vout or out, `i_{1}` for a source named I1. */
 export function signalLabel(letter: "v" | "i", name: string): string {
   const body = new RegExp(`^${letter}(?=.)`, "iu").test(name)
@@ -1460,14 +2111,21 @@ export function differentialPairs(
 }
 
 const DIFF_PREFIX = "diff:";
+const NO_ASSUMPTIONS: CircuitAssumptions = {};
 
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
 export function SmallSignalPanel({
   project,
   rootDocumentId,
+  selectedInstanceIds,
+  onSelectInstances,
 }: {
   project: CircuitProject;
   rootDocumentId?: string;
+  /** Instances selected on the canvas (in the open Cell). */
+  selectedInstanceIds?: readonly string[];
+  /** Select instances of the open Cell on the canvas. */
+  onSelectInstances?: (instanceIds: string[]) => void;
 }) {
   const [supply, setSupply] = useState(String(DEFAULT_SUPPLY_VOLTAGE));
   const supplyVoltage = parseFrequencies(supply)[0] ?? DEFAULT_SUPPLY_VOLTAGE;
@@ -1488,6 +2146,22 @@ export function SmallSignalPanel({
     saveModelText(text);
   }, []);
   const models = useMemo(() => modelOverrides(modelText), [modelText]);
+  // Assumptions: defaults per transistor type for every circuit, and each
+  // circuit's own choices, both kept across sessions.
+  const [assumptionDefaults, setAssumptionDefaults] =
+    useState<AssumptionDefaults>(loadDefaults);
+  const [storedAssumptions, setStoredAssumptions] = useState(loadCircuits);
+  const assumptionKey = circuitStorageKey(project.id, rootDocumentId ?? "");
+  const assumptionParts =
+    storedAssumptions[assumptionKey]?.parts ?? NO_ASSUMPTIONS;
+  useEffect(() => saveDefaults(assumptionDefaults), [assumptionDefaults]);
+  useEffect(() => saveCircuits(storedAssumptions), [storedAssumptions]);
+  useEffect(() => {
+    // Opening a circuit keeps its choices from being the next evicted.
+    setStoredAssumptions((stored) =>
+      touchCircuit(stored, assumptionKey, Date.now()),
+    );
+  }, [assumptionKey]);
   const netlist = useMemo(
     () =>
       smallSignalNetlist(project, {
@@ -1498,6 +2172,31 @@ export function SmallSignalPanel({
       }),
     [project, rootDocumentId, supplyVoltage, pinBias, models],
   );
+  const assume = useMemo(
+    () =>
+      netlist
+        ? assumptionRequest(
+            netlist.elements,
+            assumptionDefaults,
+            assumptionParts,
+          )
+        : null,
+    [netlist, assumptionDefaults, assumptionParts],
+  );
+  const updateAssumptions = ({ defaults, parts }: AssumptionChange) => {
+    if (defaults) setAssumptionDefaults(defaults);
+    if (parts) {
+      // Parts no longer drawn are forgotten with the next change.
+      const drawn = new Set(
+        (netlist?.elements ?? []).map((element) =>
+          partKey(element.instancePath),
+        ),
+      );
+      setStoredAssumptions((stored) =>
+        storeCircuit(stored, assumptionKey, parts, Date.now(), drawn),
+      );
+    }
+  };
   const [input, setInput] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [reference, setReference] = useState("0");
@@ -1511,6 +2210,9 @@ export function SmallSignalPanel({
   // The request the response answers: a queued solve can still deliver an
   // older circuit's result after the circuit changed.
   const [responseKey, setResponseKey] = useState<string | null>(null);
+  // The latest answer that was not an error: the Assumptions table keeps
+  // its rows while a choice the solver refuses is on screen.
+  const [lastResult, setLastResult] = useState<SmallSignalResult | null>(null);
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);
@@ -1638,6 +2340,9 @@ export function SmallSignalPanel({
           rin: true,
           rout: true,
           ...(handAnalysis ? { symbolic: true } : {}),
+          // In the key, so Noise and Distortion send it and a response to
+          // other assumptions is never taken for this one.
+          ...(assume ? { assume } : {}),
         }
       : null;
   const requestKey =
@@ -1659,6 +2364,7 @@ export function SmallSignalPanel({
         if (current !== generation.current) return;
         setResponse(next);
         setResponseKey(requestKey);
+        if (!isSmallSignalError(next)) setLastResult(next);
         setSolving(false);
       });
     }, SOLVE_DEBOUNCE_MS);
@@ -1834,6 +2540,24 @@ export function SmallSignalPanel({
   const otherUnknown = unknownBias.filter(
     (name) => !sources.some((source) => source.pin === name),
   );
+  const assumptionTableRows = netlist
+    ? assumptionRows(
+        lastResult?.assumable ?? [],
+        netlist.elements,
+        (lastResult?.matchCandidates ?? [])
+          .filter(
+            (candidate) => candidate.kind === "device" && candidate.applied,
+          )
+          .map((candidate) => candidate.elements),
+      )
+    : [];
+  const assumptionsStored =
+    Object.keys(assumptionDefaults).length > 0 ||
+    Object.keys(assumptionParts).length > 0;
+  // The forms are the assumed model's only once something was applied.
+  const assumedOn = Boolean(result?.assumptions?.applied.length);
+  const assumedOf = (quantity: SmallSignalQuantity) =>
+    assumedOn ? quantity.assumed : undefined;
 
   return (
     <StaleBuildContext.Provider value={markStale}>
@@ -2019,6 +2743,7 @@ export function SmallSignalPanel({
                 quantity={result.gain}
                 unit={inputSource?.kind === "current" ? "Ω" : ""}
                 noFormulaNote={firstWithoutFormula === "gain"}
+                assumed={assumedOf(result.gain)}
               />
             ) : null}
             {result?.rin ? (
@@ -2028,6 +2753,7 @@ export function SmallSignalPanel({
                 quantity={result.rin}
                 unit="Ω"
                 noFormulaNote={firstWithoutFormula === "rin"}
+                assumed={assumedOf(result.rin)}
               />
             ) : null}
             {result?.rout ? (
@@ -2037,6 +2763,7 @@ export function SmallSignalPanel({
                 quantity={result.rout}
                 unit="Ω"
                 noFormulaNote={firstWithoutFormula === "rout"}
+                assumed={assumedOf(result.rout)}
               />
             ) : null}
 
@@ -2047,6 +2774,33 @@ export function SmallSignalPanel({
                 </header>
                 <BiasTable devices={devices} />
               </section>
+            ) : null}
+
+            {assumptionTableRows.length || assumptionsStored ? (
+              <details className="small-signal-options small-signal-assumptions-section">
+                <summary>{assume ? "Assumptions (on)" : "Assumptions"}</summary>
+                <div>
+                  <AssumptionTable
+                    rows={assumptionTableRows}
+                    defaults={assumptionDefaults}
+                    parts={assumptionParts}
+                    selected={new Set(selectedInstanceIds)}
+                    onChange={updateAssumptions}
+                    onSelect={onSelectInstances}
+                  />
+                  {assumptionsStored ? (
+                    <button
+                      type="button"
+                      className="small-signal-reset"
+                      onClick={() =>
+                        updateAssumptions({ defaults: {}, parts: {} })
+                      }
+                    >
+                      Reset
+                    </button>
+                  ) : null}
+                </div>
+              </details>
             ) : null}
 
             {result ? (
@@ -2072,6 +2826,9 @@ export function SmallSignalPanel({
                         current={inputSource?.kind === "current"}
                         band={noiseBand}
                         onBand={setNoiseBand}
+                        assumed={Boolean(
+                          noiseResponse.assumptions?.applied.length,
+                        )}
                       />
                     </>
                   ) : null}
@@ -2161,6 +2918,9 @@ export function SmallSignalPanel({
                           <DistortionDetails
                             distortion={distortionResponse.distortion}
                             current={currentInput}
+                            assumed={Boolean(
+                              distortionResponse.assumptions?.applied.length,
+                            )}
                           />
                         </>
                       ) : null}
