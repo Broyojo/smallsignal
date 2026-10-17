@@ -2,7 +2,7 @@
 //! conductances, common factors cancelled, terms ordered by magnitude, and a
 //! simplified form that drops numerically small terms.
 
-use crate::sym::{spow, Sym, XPoly};
+use crate::sym::{Sym, XPoly};
 use num_complex::Complex64;
 
 #[derive(Clone, Debug)]
@@ -32,7 +32,22 @@ fn gcd(a: i128, b: i128) -> i128 {
     a as i128
 }
 
-fn term(coeff: i128, e: Vec<u8>, spow: u32, syms: &[Sym]) -> Term {
+/// Per symbol: ln|value|, whether the value is negative, and whether it is
+/// symbolic-only (NaN), so `term` takes no logarithms per term.
+struct Logs(Vec<(f64, bool, bool)>);
+
+impl Logs {
+    fn new(syms: &[Sym]) -> Logs {
+        Logs(
+            syms.iter()
+                .map(|s| (s.value.abs().ln(), s.value < 0.0, s.value.is_nan()))
+                .collect(),
+        )
+    }
+}
+
+/// (lmag, sign) of `term`.
+fn magnitude(coeff: i128, e: &[u8], logs: &Logs) -> (f64, f64) {
     let mut lmag = (coeff.unsigned_abs() as f64).ln();
     // Symbol values can be negative (e.g. an inverting controlled source).
     let mut sign = coeff.signum() as f64;
@@ -41,12 +56,12 @@ fn term(coeff: i128, e: Vec<u8>, spow: u32, syms: &[Sym]) -> Term {
         if x == 0 {
             continue;
         }
-        let v = syms[k].value;
-        if v.is_nan() {
+        let (ln, negative, nan) = logs.0[k];
+        if nan {
             symbolic = true;
         } else {
-            lmag += x as f64 * v.abs().ln();
-            if v < 0.0 && x % 2 == 1 {
+            lmag += x as f64 * ln;
+            if negative && x % 2 == 1 {
                 sign = -sign;
             }
         }
@@ -57,6 +72,11 @@ fn term(coeff: i128, e: Vec<u8>, spow: u32, syms: &[Sym]) -> Term {
         lmag = (coeff.unsigned_abs() as f64).ln();
         sign = f64::NAN;
     }
+    (lmag, sign)
+}
+
+fn term(coeff: i128, e: Vec<u8>, spow: u32, logs: &Logs) -> Term {
+    let (lmag, sign) = magnitude(coeff, &e, logs);
     Term {
         coeff,
         e,
@@ -64,6 +84,45 @@ fn term(coeff: i128, e: Vec<u8>, spow: u32, syms: &[Sym]) -> Term {
         lmag,
         sign,
     }
+}
+
+/// A term before normalization: coefficient, exponents, power of s.
+type Raw = (i128, Vec<u8>, u32);
+
+/// Sorts by power of s, then largest magnitude, then highest degree, then
+/// earlier symbols first (g_{m2} + g_{mb2}, r_{o1} + r_{o2}); stable. The
+/// keys are computed once per term: the first three packed into one
+/// integer, then the leading exponents.
+fn sort_terms(ts: &mut Vec<Term>) {
+    let mut keyed: Vec<(u128, u64, u32)> = ts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            // f64::total_cmp order as an unsigned integer.
+            let b = t.lmag.to_bits() as i64;
+            let lm = ((b ^ ((((b >> 63) as u64) >> 1) as i64)) as u64) ^ (1 << 63);
+            let key = (t.spow as u128) << 96 | ((!lm) as u128) << 32 | (!degree(&t.e)) as u128;
+            // The first 8 exponents, zero-padded: where these differ they
+            // order the vectors as the vectors do (descending, so negated).
+            let mut head = [0u8; 8];
+            let n = t.e.len().min(8);
+            head[..n].copy_from_slice(&t.e[..n]);
+            (key, !u64::from_be_bytes(head), i as u32)
+        })
+        .collect();
+    // Input position last: a total order, so an unstable sort gives the
+    // stable sort's result.
+    keyed.sort_unstable_by(|a, b| {
+        (a.0, a.1)
+            .cmp(&(b.0, b.1))
+            .then_with(|| ts[b.2 as usize].e.cmp(&ts[a.2 as usize].e))
+            .then(a.2.cmp(&b.2))
+    });
+    let mut slots: Vec<Option<Term>> = std::mem::take(ts).into_iter().map(Some).collect();
+    *ts = keyed
+        .iter()
+        .map(|&(_, _, i)| slots[i as usize].take().expect("each term once"))
+        .collect();
 }
 
 /// Unit-modulus factor of s^k: exact powers of j when s is imaginary (so a
@@ -131,81 +190,94 @@ impl Expr {
     /// symbol's power is raised to its largest power in either, so its
     /// conductance shows as the resistance.
     pub fn from_mna(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Expr {
+        let logs = Logs::new(syms);
         let mut top = vec![0u8; syms.len()];
         for (e, _) in num.terms.iter().chain(&den.terms) {
             for (k, &x) in e.iter().enumerate() {
                 top[k] = top[k].max(x);
             }
         }
-        let conv = |p: &XPoly| -> Vec<Term> {
+        let reactive: Vec<usize> = (0..syms.len()).filter(|&k| syms[k].reactive).collect();
+        let inverted: Vec<bool> = syms.iter().map(|s| s.inverted).collect();
+        let conv = |p: &XPoly| -> Vec<Raw> {
             p.terms
                 .iter()
                 .map(|(e, c)| {
-                    let c = *c;
                     let d: Vec<u8> = e
                         .iter()
                         .enumerate()
-                        .map(|(k, &x)| if syms[k].inverted { top[k] - x } else { x })
+                        .map(|(k, &x)| if inverted[k] { top[k] - x } else { x })
                         .collect();
-                    term(c, d, spow(e, syms), syms)
+                    // = spow(e, syms)
+                    let sp = reactive.iter().filter_map(|&k| e.get(k)).map(|&x| x as u32).sum();
+                    (*c, d, sp)
                 })
                 .collect()
         };
-        let mut x = Expr {
-            num: conv(num),
-            den: conv(den),
+        let (num, den) = (conv(num), conv(den));
+        let den_lmag: Vec<f64> = den.iter().map(|(c, e, _)| magnitude(*c, e, &logs).0).collect();
+        Expr::normalized(num, den, &den_lmag, syms, &logs)
+    }
+
+    /// `normalize` of terms given as (coefficient, exponents, power of s),
+    /// with `den_lmag` each denominator term's lmag.
+    fn normalized(num: Vec<Raw>, den: Vec<Raw>, den_lmag: &[f64], syms: &[Sym], logs: &Logs) -> Expr {
+        let n = syms.len();
+        let all = num.iter().chain(&den);
+        let mut common = vec![u8::MAX; n];
+        for (_, e, _) in all.clone() {
+            for (c, &x) in common.iter_mut().zip(e) {
+                *c = (*c).min(x);
+            }
+        }
+        if num.is_empty() && den.is_empty() {
+            common = vec![0; n];
+        }
+        let smin = all.clone().map(|t| t.2).min().unwrap_or(0);
+        // gcd(1, x) = 1, so the fold can stop at 1.
+        let g = all.fold(0, |acc, t| if acc == 1 { 1 } else { gcd(acc, t.0) });
+        let g = if g == 0 { 1 } else { g };
+        let flip = den
+            .iter()
+            .zip(den_lmag)
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|t| t.0 .0 < 0)
+            .unwrap_or(false);
+        // Common reactive symbols are removed with their s powers.
+        let removed: u32 = common
+            .iter()
+            .zip(syms)
+            .filter(|(_, s)| s.reactive)
+            .map(|(&c, _)| c as u32)
+            .sum();
+        let fix = |ts: Vec<Raw>| -> Vec<Term> {
+            let mut out: Vec<Term> = ts
+                .into_iter()
+                .map(|(coeff, mut e, spow)| {
+                    let c = coeff / g * if flip { -1 } else { 1 };
+                    e.truncate(common.len());
+                    for (x, c) in e.iter_mut().zip(&common) {
+                        *x -= c;
+                    }
+                    term(c, e, spow - removed - (smin - removed.min(smin)), logs)
+                })
+                .collect();
+            sort_terms(&mut out);
+            out
         };
-        x.normalize(syms);
-        x
+        Expr {
+            num: fix(num),
+            den: fix(den),
+        }
     }
 
     /// Cancels common factors, powers of s and integer content; makes the
     /// largest denominator term positive; sorts terms.
     pub fn normalize(&mut self, syms: &[Sym]) {
-        let n = syms.len();
-        let all = self.num.iter().chain(&self.den);
-        let mut common = vec![u8::MAX; n];
-        for t in all.clone() {
-            for (c, &x) in common.iter_mut().zip(&t.e) {
-                *c = (*c).min(x);
-            }
-        }
-        if self.num.is_empty() && self.den.is_empty() {
-            common = vec![0; n];
-        }
-        let smin = all.clone().map(|t| t.spow).min().unwrap_or(0);
-        let g = all.fold(0, |acc, t| gcd(acc, t.coeff));
-        let g = if g == 0 { 1 } else { g };
-        let flip = self
-            .den
-            .iter()
-            .max_by(|a, b| a.lmag.total_cmp(&b.lmag))
-            .map(|t| t.coeff < 0)
-            .unwrap_or(false);
-        let fix = |ts: &mut Vec<Term>| {
-            for t in ts.iter_mut() {
-                let c = t.coeff / g * if flip { -1 } else { 1 };
-                let e: Vec<u8> = t.e.iter().zip(&common).map(|(x, c)| x - c).collect();
-                // Common reactive symbols are removed with their s powers.
-                let removed: u32 = common
-                    .iter()
-                    .zip(syms)
-                    .filter(|(_, s)| s.reactive)
-                    .map(|(&c, _)| c as u32)
-                    .sum();
-                *t = term(c, e, t.spow - removed - (smin - removed.min(smin)), syms);
-            }
-            ts.sort_by(|a, b| {
-                a.spow
-                    .cmp(&b.spow)
-                    .then(b.lmag.total_cmp(&a.lmag))
-                    .then(degree(&b.e).cmp(&degree(&a.e)))
-                    // Earlier symbols first: g_{m2} + g_{mb2}, r_{o1} + r_{o2}.
-                    .then(b.e.cmp(&a.e))
-            });
-        };
-        fix(&mut self.num);
-        fix(&mut self.den);
+        let den_lmag: Vec<f64> = self.den.iter().map(|t| t.lmag).collect();
+        let raw = |ts: Vec<Term>| -> Vec<Raw> { ts.into_iter().map(|t| (t.coeff, t.e, t.spow)).collect() };
+        let (num, den) = (std::mem::take(&mut self.num), std::mem::take(&mut self.den));
+        *self = Expr::normalized(raw(num), raw(den), &den_lmag, syms, &Logs::new(syms));
     }
 
     /// Back to MNA (conductance) form, up to a common monomial factor, which

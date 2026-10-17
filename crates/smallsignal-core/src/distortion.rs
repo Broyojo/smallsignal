@@ -39,6 +39,9 @@ use crate::ss::{Role, SsCircuit, System};
 use crate::sym::{self, Sym, Symbols, XPoly, MATCH_REL};
 use num_complex::Complex64;
 use serde_json::{json, Value};
+use std::borrow::Cow;
+use std::cell::{OnceCell, RefCell};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 // --- Taylor arithmetic: three variables, total degree ≤ 3 ------------------
@@ -608,29 +611,132 @@ pub struct Closed {
     pub num: Vec<XPoly>,
     pub pow: Vec<u32>,
     pub vid: i128,
+    /// Term budget of every product (as `closed` was given).
+    max_terms: usize,
+    /// D^0, D^1, … as far as computed, and whether the next power is over
+    /// budget.
+    dpow: RefCell<(Vec<XPoly>, bool)>,
+    a_memo: Vec<OnceCell<Option<Quantity>>>,
+    ratio_memo: Vec<OnceCell<Option<Quantity>>>,
+}
+
+/// One rational quantity of a closed form, with its expressions (of
+/// num/den and of den/num) once built.
+pub struct Quantity {
+    pub num: XPoly,
+    pub den: XPoly,
+    expr: OnceCell<Option<Expr>>,
+    inv_expr: OnceCell<Option<Expr>>,
+}
+
+impl Quantity {
+    fn new(num: XPoly, den: XPoly) -> Quantity {
+        Quantity {
+            num,
+            den,
+            expr: OnceCell::new(),
+            inv_expr: OnceCell::new(),
+        }
+    }
+
+    /// num/den (or den/num when `inverted`) over `syms`.
+    fn view<'a>(&'a self, syms: &'a [Sym], inverted: bool) -> View<'a> {
+        if inverted {
+            View {
+                num: &self.den,
+                den: &self.num,
+                syms,
+                expr: &self.inv_expr,
+            }
+        } else {
+            View {
+                num: &self.num,
+                den: &self.den,
+                syms,
+                expr: &self.expr,
+            }
+        }
+    }
+}
+
+/// A quantity to show: num/den over `syms`, its expression built at most once.
+#[derive(Clone, Copy)]
+struct View<'a> {
+    num: &'a XPoly,
+    den: &'a XPoly,
+    syms: &'a [Sym],
+    expr: &'a OnceCell<Option<Expr>>,
+}
+
+impl<'a> View<'a> {
+    fn expr(&self) -> Option<&'a Expr> {
+        let (num, den, syms) = (self.num, self.den, self.syms);
+        self.expr.get_or_init(|| expr(num, den, syms)).as_ref()
+    }
 }
 
 impl Closed {
-    fn d_pow(&self, k: u32, mt: usize) -> Result<XPoly, String> {
-        let mut p = XPoly::constant(1, self.syms.len());
-        for _ in 0..k {
-            p = p.mul(&self.d, mt)?;
+    fn new(syms: Vec<Sym>, d: XPoly, num: Vec<XPoly>, pow: Vec<u32>, vid: i128, max_terms: usize) -> Closed {
+        let n = num.len();
+        Closed {
+            syms,
+            d,
+            num,
+            pow,
+            vid,
+            max_terms,
+            dpow: RefCell::new((Vec::new(), false)),
+            a_memo: (0..n).map(|_| OnceCell::new()).collect(),
+            ratio_memo: (0..n).map(|_| OnceCell::new()).collect(),
         }
-        Ok(p)
+    }
+
+    /// f(D^k), each power computed once.
+    fn with_d_pow<T>(&self, k: u32, f: impl FnOnce(&XPoly) -> Result<T, String>) -> Result<T, String> {
+        let mut memo = self.dpow.borrow_mut();
+        let (pows, over) = &mut *memo;
+        if pows.is_empty() {
+            pows.push(XPoly::constant(1, self.syms.len()));
+        }
+        while pows.len() <= k as usize {
+            if *over {
+                return Err(format!("expression too large (over {} terms)", self.max_terms));
+            }
+            match pows[pows.len() - 1].mul(&self.d, self.max_terms) {
+                Ok(p) => pows.push(p),
+                Err(e) => {
+                    *over = true;
+                    return Err(e);
+                }
+            }
+        }
+        f(&pows[k as usize])
     }
 
     /// a_n as (numerator, denominator), n = 0 for a1.
-    pub fn a(&self, n: usize, mt: usize) -> Result<(XPoly, XPoly), String> {
-        let k = self.vid.pow(n as u32 + 1);
-        Ok((self.num[n].clone(), self.d_pow(self.pow[n], mt)?.scaled(k)?))
+    pub fn a(&self, n: usize) -> Option<&Quantity> {
+        self.a_memo[n]
+            .get_or_init(|| {
+                let k = self.vid.pow(n as u32 + 1);
+                let den = self.with_d_pow(self.pow[n], |p| p.scaled(k)).ok()?;
+                Some(Quantity::new(self.num[n].clone(), den))
+            })
+            .as_ref()
     }
 
     /// a_n / a1 without multiplying D back in: num[n]·vid^{1−n}... as
     /// (num[n], vid^n · D^{pow[n]−1} · num[0]).
-    pub fn ratio(&self, n: usize, mt: usize) -> Result<(XPoly, XPoly), String> {
-        let k = self.vid.pow(n as u32);
-        let den = self.d_pow(self.pow[n] - 1, mt)?.mul(&self.num[0], mt)?.scaled(k)?;
-        Ok((self.num[n].clone(), den))
+    pub fn ratio(&self, n: usize) -> Option<&Quantity> {
+        self.ratio_memo[n]
+            .get_or_init(|| {
+                let k = self.vid.pow(n as u32);
+                let den = self
+                    .with_d_pow(self.pow[n] - 1, |p| p.mul(&self.num[0], self.max_terms))
+                    .and_then(|p| p.scaled(k))
+                    .ok()?;
+                Some(Quantity::new(self.num[n].clone(), den))
+            })
+            .as_ref()
     }
 }
 
@@ -805,18 +911,18 @@ pub fn closed(
     };
     let mt = max_terms;
     let mul = |a: &XPoly, b: &XPoly| a.mul(b, mt);
-    let sub = |a: &XPoly, b: &XPoly| a.add(&b.neg());
+    let sub = |a: &XPoly, b: &XPoly| a.sub(b);
     // Order-1 control voltages (numerators over D).
     let mut u1: Vec<Vec<XPoly>> = Vec::new();
     for dv in devs {
         let mut u = Vec::new();
         for &(p, q) in &dv.controls {
-            u.push(sub(&n1(p)?, &n1(q)?)?);
+            u.push(n1(p)?.sub_owned(n1(q)?)?);
         }
         u.resize(3, XPoly::default());
         u1.push(u);
     }
-    let na = sub(&n1(out)?, &n1(rf)?)?;
+    let na = n1(out)?.sub_owned(n1(rf)?)?;
     let kvar = |k: usize| XPoly::var(cidx[k].expect("kept"), nsym);
     let pow = |u: &[XPoly], m: &[u8; 3]| -> Result<XPoly, String> {
         let mut p = XPoly::constant(1, nsym);
@@ -833,7 +939,7 @@ pub fn closed(
         if cidx[k].is_some() && c.order() == 2 {
             let t = mul(&kvar(k), &pow(&u1[c.dev], &c.mono)?)?;
             let e = i2.entry((c.dev, c.out)).or_default();
-            *e = e.add(&t)?;
+            *e = std::mem::take(e).add_owned(t)?;
         }
     }
     // Response of node n to the order-2 currents: numerator over D³.
@@ -842,15 +948,30 @@ pub fn closed(
         for (&(dv, o), i) in cur {
             let ot = &devs[dv].outs[o];
             // The current leaves node a and enters node b.
-            let t = sub(&unit(n, ot.b)?, &unit(n, ot.a)?)?;
-            acc = acc.add(&mul(&t, i)?)?;
+            let t = unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?;
+            acc = acc.add_owned(mul(&t, i)?)?;
         }
         Ok(acc)
     };
+    // Each node's response to the order-2 currents, computed once.
+    let mut r2: HashMap<usize, XPoly> = HashMap::new();
+    if order >= 2 {
+        let controls = devs.iter().flat_map(|dv| dv.controls.iter().flat_map(|&(p, q)| [p, q]));
+        let nodes: Vec<usize> = if order >= 3 {
+            [out, rf].into_iter().chain(controls).collect()
+        } else {
+            vec![out, rf]
+        };
+        for n in nodes {
+            if let Entry::Vacant(v) = r2.entry(n) {
+                v.insert(respond(n, &i2)?);
+            }
+        }
+    }
     let mut num = vec![na.clone()];
     let mut powers = vec![1];
     if order >= 2 {
-        num.push(sub(&respond(out, &i2)?, &respond(rf, &i2)?)?);
+        num.push(sub(&r2[&out], &r2[&rf])?);
         powers.push(3);
     }
     if order >= 3 {
@@ -859,42 +980,40 @@ pub fn closed(
         for dv in devs {
             let mut u = Vec::new();
             for &(p, q) in &dv.controls {
-                u.push(sub(&respond(p, &i2)?, &respond(q, &i2)?)?);
+                u.push(sub(&r2[&p], &r2[&q])?);
             }
             u.resize(3, XPoly::default());
             u2.push(u);
         }
-        // Order-3 currents (over D⁴): K₃·u₁³·D + K₂·(u₁u₂ + u₂u₁).
+        // Order-3 currents (over D⁴): K₃·u₁³·D + K₂·(u₁u₂ + u₂u₁). A BJT's
+        // two currents share each monomial's product.
+        let mut prods: HashMap<(usize, [u8; 3]), XPoly> = HashMap::new();
         let mut i3: HashMap<(usize, usize), XPoly> = HashMap::new();
         for (k, c) in coefs.iter().enumerate() {
-            if cidx[k].is_none() {
+            if cidx[k].is_none() || !(2..=3).contains(&c.order()) {
                 continue;
             }
-            let t = match c.order() {
-                3 => mul(&pow(&u1[c.dev], &c.mono)?, &dx)?,
-                2 => {
-                    let ix: Vec<usize> = (0..3)
-                        .flat_map(|v| std::iter::repeat_n(v, c.mono[v] as usize))
-                        .collect();
-                    let (i, j) = (ix[0], ix[1]);
-                    mul(&u1[c.dev][i], &u2[c.dev][j])?.add(&mul(&u2[c.dev][i], &u1[c.dev][j])?)?
-                }
-                _ => continue,
-            };
-            let t = mul(&kvar(k), &t)?;
+            if let Entry::Vacant(v) = prods.entry((c.dev, c.mono)) {
+                let t = match c.order() {
+                    3 => mul(&pow(&u1[c.dev], &c.mono)?, &dx)?,
+                    _ => {
+                        let ix: Vec<usize> = (0..3)
+                            .flat_map(|v| std::iter::repeat_n(v, c.mono[v] as usize))
+                            .collect();
+                        let (i, j) = (ix[0], ix[1]);
+                        mul(&u1[c.dev][i], &u2[c.dev][j])?.add_owned(mul(&u2[c.dev][i], &u1[c.dev][j])?)?
+                    }
+                };
+                v.insert(t);
+            }
+            let t = mul(&kvar(k), &prods[&(c.dev, c.mono)])?;
             let e = i3.entry((c.dev, c.out)).or_default();
-            *e = e.add(&t)?;
+            *e = std::mem::take(e).add_owned(t)?;
         }
-        num.push(sub(&respond(out, &i3)?, &respond(rf, &i3)?)?);
+        num.push(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?);
         powers.push(5);
     }
-    Ok(Ok(Closed {
-        syms,
-        d: dx,
-        num,
-        pow: powers,
-        vid,
-    }))
+    Ok(Ok(Closed::new(syms, dx, num, powers, vid, max_terms)))
 }
 
 // --- report -------------------------------------------------------------------
@@ -963,13 +1082,12 @@ pub struct Ctx<'a> {
 /// may cause.
 const OMIT_REL: f64 = 1e-9;
 
-type Form = Option<((XPoly, XPoly), Vec<Sym>)>;
-
 /// Picks one rational quantity out of a closed form.
-type Getter<'a> = &'a dyn Fn(&Closed) -> Result<(XPoly, XPoly), String>;
+type Getter<'a> = &'a dyn Fn(&Closed) -> Option<&Quantity>;
 
-fn view(x: &Form) -> Option<(&(XPoly, XPoly), &[Sym])> {
-    x.as_ref().map(|(p, s)| (p, s.as_slice()))
+/// The quantity `f` picks out of `cl` (den/num when `inverted`), if built.
+fn pick<'a>(cl: &'a Option<Closed>, f: Getter, inverted: bool) -> Option<View<'a>> {
+    cl.as_ref().and_then(|cl| f(cl).map(|q| q.view(&cl.syms, inverted)))
 }
 
 fn num_or_null(v: f64) -> Value {
@@ -1001,21 +1119,24 @@ fn value(e: Option<&Expr>) -> f64 {
     e.map(|e| e.eval(Complex64::new(0.0, 0.0)).re).unwrap_or(0.0)
 }
 
-fn lead(p: &(XPoly, XPoly), syms: &[Sym]) -> (XPoly, XPoly) {
-    (sym::leading_order(&p.0, syms), sym::leading_order(&p.1, syms))
+fn lead(num: &XPoly, den: &XPoly, syms: &[Sym]) -> (XPoly, XPoly) {
+    (sym::leading_order(num, syms), sym::leading_order(den, syms))
+}
+
+fn leaky(e: &[u8], syms: &[Sym]) -> bool {
+    e.iter().zip(syms).any(|(&x, s)| s.leakage && x > 0)
 }
 
 /// num/den without junction-leakage terms (r_bs, r_bd, r_μ → ∞).
-fn drop_leak(p: &(XPoly, XPoly), syms: &[Sym]) -> (XPoly, XPoly) {
-    let leaky = |e: &[u8]| e.iter().zip(syms).any(|(&x, s)| s.leakage && x > 0);
+fn drop_leak(num: &XPoly, den: &XPoly, syms: &[Sym]) -> (XPoly, XPoly) {
     let f = |q: &XPoly| XPoly {
-        terms: q.terms.iter().filter(|(e, _)| !leaky(e)).cloned().collect(),
+        terms: q.terms.iter().filter(|(e, _)| !leaky(e, syms)).cloned().collect(),
     };
-    (f(&p.0), f(&p.1))
+    (f(num), f(den))
 }
 
-fn has_leak(p: &(XPoly, XPoly), syms: &[Sym]) -> bool {
-    drop_leak(p, syms) != *p
+fn has_leak(num: &XPoly, den: &XPoly, syms: &[Sym]) -> bool {
+    num.terms.iter().chain(&den.terms).any(|(e, _)| leaky(e, syms))
 }
 
 /// How a quantity is shown: a LaTeX wrapper (e.g. `\frac{A}{2}\left|…\right|`)
@@ -1054,13 +1175,7 @@ fn form(e: Option<&Expr>, syms: &[Sym], shape: &Shape) -> Value {
 /// the exact one is too large), and simplified (the r_o → ∞ leading order
 /// of the display form, then the coarsest magnitude pruning, within `tol`
 /// of the reference value).
-fn quantity(
-    exact: Option<(&(XPoly, XPoly), &[Sym])>,
-    noleak: Option<(&(XPoly, XPoly), &[Sym])>,
-    reference: f64,
-    shape: &Shape,
-    tol: f64,
-) -> Value {
+fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &Shape, tol: f64) -> Value {
     let rel = |a: f64| {
         if reference != 0.0 {
             (a - reference).abs() / reference.abs()
@@ -1069,79 +1184,109 @@ fn quantity(
         }
     };
     let mut q = match exact {
-        Some((p, syms)) => form(expr(&p.0, &p.1, syms).as_ref(), syms, shape),
+        Some(v) => form(v.expr(), v.syms, shape),
         None => json!({ "latex": null, "plain": null, "terms": null, "value": num_or_null(reference),
                         "skipped": "too large for the exact closed form" }),
     };
-    // Display candidate: (pair, syms, same-as-exact).
-    let display: Option<((XPoly, XPoly), &[Sym], bool)> = match (exact, noleak) {
-        (Some((p, syms)), _) if !has_leak(p, syms) => Some((p.clone(), syms, true)),
-        (Some((p, syms)), _) => Some((drop_leak(p, syms), syms, false)),
-        (None, Some((p, syms))) => Some((p.clone(), syms, false)),
+    // Display candidate: num, den, syms, same-as-exact, and its expression
+    // (built only for a candidate that is kept: zero, or a nonzero den).
+    type Display<'a> = (Cow<'a, XPoly>, Cow<'a, XPoly>, &'a [Sym], bool, Option<Cow<'a, Expr>>);
+    let keep = |n: &XPoly, d: &XPoly| n.is_zero() || !d.is_zero();
+    let display: Option<Display> = match (exact, noleak) {
+        (Some(v), _) if !has_leak(v.num, v.den, v.syms) => {
+            let e = v.expr().map(Cow::Borrowed);
+            Some((Cow::Borrowed(v.num), Cow::Borrowed(v.den), v.syms, true, e))
+        }
+        // Without leakage the denominator can vanish (a node held only by a
+        // junction): there is no leakage-free form then, and leakage matters.
+        (Some(v), _) => {
+            let (n, d) = drop_leak(v.num, v.den, v.syms);
+            let e = if keep(&n, &d) {
+                expr(&n, &d, v.syms).map(Cow::Owned)
+            } else {
+                None
+            };
+            Some((Cow::Owned(n), Cow::Owned(d), v.syms, false, e))
+        }
+        (None, Some(v)) => keep(v.num, v.den).then(|| {
+            let e = v.expr().map(Cow::Borrowed);
+            (Cow::Borrowed(v.num), Cow::Borrowed(v.den), v.syms, false, e)
+        }),
         (None, None) => None,
     };
-    // Without leakage the denominator can vanish (a node held only by a
-    // junction): there is no leakage-free form then, and leakage matters.
-    let display = display.filter(|(p, _, _)| exact.is_some() || p.0.is_zero() || !p.1.is_zero());
-    let mut base: Option<(Expr, &[Sym], (XPoly, XPoly))> = None;
+    // Base of the simplified form: expression, symbols, num, den.
+    type Base<'a> = (Cow<'a, Expr>, &'a [Sym], Cow<'a, XPoly>, Cow<'a, XPoly>);
+    let mut base: Option<Base> = None;
     match display {
-        Some((p, syms, same)) => {
-            let vanishes = p.1.is_zero() && !p.0.is_zero();
-            let e = if vanishes { None } else { expr(&p.0, &p.1, syms) };
-            let err = if vanishes {
+        Some((n, d, syms, same, e)) => {
+            let err = if d.is_zero() && !n.is_zero() {
                 f64::INFINITY
             } else {
-                rel((shape.map)(value(e.as_ref())))
+                rel((shape.map)(value(e.as_deref())))
             };
             if same || err <= crate::analyze::LEAKAGE_REL {
-                let mut d = form(e.as_ref(), syms, shape);
-                d["same"] = json!(same);
-                d["relError"] = num_or_null(err);
-                q["display"] = d;
+                let mut df = form(e.as_deref(), syms, shape);
+                df["same"] = json!(same);
+                df["relError"] = num_or_null(err);
+                q["display"] = df;
                 if let Some(e) = e {
-                    base = Some((e, syms, p));
+                    base = Some((e, syms, n, d));
                 }
             } else {
                 q["display"] = q.clone();
                 q["display"]["same"] = json!(true);
                 q["display"]["leakageMatters"] = json!(true);
-                if let Some((p, syms)) = exact {
-                    if let Some(e) = expr(&p.0, &p.1, syms) {
-                        base = Some((e, syms, p.clone()));
+                // Simplify the exact form: the leakage-free one is wrong here.
+                if let Some(v) = exact {
+                    if let Some(e) = v.expr() {
+                        base = Some((Cow::Borrowed(e), v.syms, Cow::Borrowed(v.num), Cow::Borrowed(v.den)));
                     }
                 }
             }
         }
         None => q["display"] = Value::Null,
     }
-    let Some((be, syms, bp)) = base else {
+    let Some((be, syms, bn, bd)) = base else {
         q["simplified"] = q["display"].clone();
         return q;
     };
     // Simplified: leading order, then pruning, coarsest within tol.
-    let mut cands: Vec<(Expr, &str)> = Vec::new();
-    let l = lead(&bp, syms);
-    if let Some(le) = expr(&l.0, &l.1, syms) {
-        cands.push((le, "leading order (ro ≫ R, 1/gm)"));
-    }
-    let start = match cands.first() {
-        Some((le, _)) if rel((shape.map)(value(Some(le)))) <= tol => le.clone(),
-        _ => be.clone(),
+    let l = lead(&bn, &bd, syms);
+    let le = expr(&l.0, &l.1, syms).map(|e| {
+        let v = value(Some(&e));
+        (e, v)
+    });
+    let start: &Expr = match &le {
+        Some((e, v)) if rel((shape.map)(*v)) <= tol => e,
+        _ => &be,
     };
+    let mut pruned: Option<(Expr, f64)> = None;
     for eps in [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001] {
         let p = start.prune(eps, syms);
-        if p.term_count() < start.term_count() && rel((shape.map)(value(Some(&p)))) <= tol {
-            cands.push((p, "leading order, small terms dropped"));
-            break;
+        if p.term_count() < start.term_count() {
+            let v = value(Some(&p));
+            if rel((shape.map)(v)) <= tol {
+                pruned = Some((p, v));
+                break;
+            }
         }
     }
-    let best = cands
+    let cands = le
+        .map(|(e, v)| (e, v, "leading order (ro ≫ R, 1/gm)"))
         .into_iter()
-        .filter(|(e, _)| rel((shape.map)(value(Some(e)))) <= tol)
-        .min_by_key(|(e, _)| e.term_count());
-    let (e, method) = best.unwrap_or((be, "display form"));
+        .chain(pruned.map(|(e, v)| (e, v, "leading order, small terms dropped")));
+    let best = cands
+        .filter(|(_, v, _)| rel((shape.map)(*v)) <= tol)
+        .min_by_key(|(e, _, _)| e.term_count());
+    let (e, v, method) = match best {
+        Some((e, v, m)) => (Cow::Owned(e), v, m),
+        None => {
+            let v = value(Some(&be));
+            (be, v, "display form")
+        }
+    };
     let mut sform = form(Some(&e), syms, shape);
-    sform["relError"] = num_or_null(rel((shape.map)(value(Some(&e)))));
+    sform["relError"] = num_or_null(rel((shape.map)(v)));
     sform["method"] = json!(method);
     sform["tolerance"] = json!(tol);
     q["simplified"] = sform;
@@ -1234,10 +1379,8 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         let mut worst = 0.0f64;
         let mut ok = true;
         for (n, &r) in a_num.iter().enumerate().take(cl.num.len()) {
-            let p = cl.a(n, mt).ok()?;
-            let e = expr(&p.0, &p.1, &cl.syms);
+            let e = cl.a(n)?.view(&cl.syms, false).expr();
             let (v, bound) = e
-                .as_ref()
                 .map(|e| {
                     let (z, b) = e.eval_with_bound(Complex64::new(0.0, 0.0));
                     (z.re, b)
@@ -1291,16 +1434,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     resp.insert("taylor".into(), json!(taylor));
     resp.insert("omissionError".into(), json!(omit_err));
 
-    let pick = |cl: &Option<Closed>, f: Getter| -> Form {
-        cl.as_ref().and_then(|cl| f(cl).ok().map(|p| (p, cl.syms.clone())))
-    };
-    let both = |f: Getter| (pick(&exact, f), pick(&noleak, f));
+    let both = |f: Getter, inverted: bool| (pick(&exact, f, inverted), pick(&noleak, f, inverted));
     let id = |s: &str| s.to_string();
     let ident = |x: f64| x;
     let mut coefs_json = Vec::new();
     for n in 0..c.order as usize {
-        let (e, nl) = both(&|cl| cl.a(n, mt));
-        let mut q = quantity(view(&e), view(&nl), a(n), &Shape { wrap: &id, map: &ident }, c.tol);
+        let (e, nl) = both(&|cl| cl.a(n), false);
+        let mut q = quantity(e, nl, a(n), &Shape { wrap: &id, map: &ident }, c.tol);
         q["order"] = json!(n + 1);
         q["numeric"] = json!(a(n));
         coefs_json.push(q);
@@ -1308,12 +1448,12 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     resp.insert("coefficients".into(), json!(coefs_json));
     let w2 = |l: &str| format!("\\frac{{A}}{{2}}\\left|{l}\\right|");
     let m2 = |x: f64| x.abs() * amp / 2.0;
-    let (e, nl) = both(&|cl| cl.ratio(1, mt));
+    let (e, nl) = both(&|cl| cl.ratio(1), false);
     resp.insert(
         "hd2".into(),
         quantity(
-            view(&e),
-            view(&nl),
+            e,
+            nl,
             a(1).abs() * amp / (2.0 * a(0).abs()),
             &Shape { wrap: &w2, map: &m2 },
             c.tol,
@@ -1322,12 +1462,12 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     if c.order >= 3 {
         let w3 = |l: &str| format!("\\frac{{A^{{2}}}}{{4}}\\left|{l}\\right|");
         let m3 = |x: f64| x.abs() * amp * amp / 4.0;
-        let (e, nl) = both(&|cl| cl.ratio(2, mt));
+        let (e, nl) = both(&|cl| cl.ratio(2), false);
         resp.insert(
             "hd3".into(),
             quantity(
-                view(&e),
-                view(&nl),
+                e,
+                nl,
                 a(2).abs() * amp * amp / (4.0 * a(0).abs()),
                 &Shape { wrap: &w3, map: &m3 },
                 c.tol,
@@ -1338,11 +1478,10 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         } else {
             let wi = |l: &str| format!("\\sqrt{{\\frac{{4}}{{3}}\\left|{l}\\right|}}");
             let mi = |x: f64| (4.0 * x.abs() / 3.0).sqrt();
-            let inv = |cl: &Closed| cl.ratio(2, mt).map(|(n, d)| (d, n));
-            let (e, nl) = both(&inv);
+            let (e, nl) = both(&|cl| cl.ratio(2), true);
             quantity(
-                view(&e),
-                view(&nl),
+                e,
+                nl,
                 (4.0 * a(0).abs() / (3.0 * a(2).abs())).sqrt(),
                 &Shape { wrap: &wi, map: &mi },
                 c.tol,
