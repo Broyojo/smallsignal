@@ -699,16 +699,19 @@ fn node_size(
 }
 
 /// Coefficients that may be left out of the closed form: exact zeros, then
-/// (smallest current first) every one whose omission moves no a_n by more
-/// than `rel` relative (an a_n that is exactly 0 must stay exactly 0).
+/// (smallest current first) every one whose omission moves no requested
+/// a_n (n ≤ `order`) by more than `rel` relative (an a_n that is exactly 0
+/// must stay exactly 0). a3 is NaN in the reference unless `order` is 3.
 pub fn prove_omission(
     probe: &Probe,
     devs: &[NlDev],
     coefs: &[Coef],
     rel: f64,
+    order: u8,
 ) -> Option<(Vec<bool>, f64, [Complex64; 3])> {
+    let (third, requested) = (order >= 3, order as usize);
     let all: Vec<f64> = coefs.iter().map(|c| c.value).collect();
-    let reference = probe.volterra(devs, coefs, &all, 0.0, true)?;
+    let reference = probe.volterra(devs, coefs, &all, 0.0, third)?;
     let mut keep: Vec<bool> = all.iter().map(|&v| v != 0.0).collect();
     // Size of each coefficient's current at the order-1 solution.
     let lu = probe.lu(Complex64::new(0.0, 0.0))?;
@@ -734,9 +737,9 @@ pub fn prove_omission(
             .zip(&keep)
             .map(|(c, &kp)| if kp { c.value } else { 0.0 })
             .collect();
-        let ok = probe.volterra(devs, coefs, &vals, 0.0, true).and_then(|got| {
+        let ok = probe.volterra(devs, coefs, &vals, 0.0, third).and_then(|got| {
             let mut w = 0.0f64;
-            for n in 1..3 {
+            for n in 1..requested {
                 let (r, g) = (reference[n], got[n]);
                 if r == Complex64::default() {
                     if g != r {
@@ -879,7 +882,8 @@ impl Closed {
 
     /// a_n as (numerator, denominator), n = 0 for a1.
     pub fn a(&self, n: usize) -> Option<&Quantity> {
-        self.a_memo[n]
+        self.a_memo
+            .get(n)?
             .get_or_init(|| {
                 let k = self.vid.pow(n as u32 + 1);
                 let den = self.with_d_pow(self.pow[n], |p| p.scaled(k)).ok()?;
@@ -891,7 +895,8 @@ impl Closed {
     /// a_n / a1 without multiplying D back in: num[n]·vid^{1−n}... as
     /// (num[n], vid^n · D^{pow[n]−1} · num[0]).
     pub fn ratio(&self, n: usize) -> Option<&Quantity> {
-        self.ratio_memo[n]
+        self.ratio_memo
+            .get(n)?
             .get_or_init(|| {
                 let k = self.vid.pow(n as u32);
                 let den = self
@@ -1083,107 +1088,116 @@ pub fn closed(
     };
     let mul = |a: &XPoly, b: &XPoly| a.mul(b, mt);
     let sub = |a: &XPoly, b: &XPoly| fit(a.sub(b)?);
-    // Order-1 control voltages (numerators over D).
-    let mut u1: Vec<Vec<XPoly>> = Vec::new();
-    for dv in devs {
-        let mut u = Vec::new();
-        for &(p, q) in &dv.controls {
-            u.push(fit(n1(p)?.sub_owned(n1(q)?)?)?);
-        }
-        u.resize(3, XPoly::default());
-        u1.push(u);
-    }
     let na = fit(n1(out)?.sub_owned(n1(rf)?)?)?;
-    let kvar = |k: usize| XPoly::var(cidx[k].expect("kept"), nsym);
-    let pow = |u: &[XPoly], m: &[u8; 3]| -> Result<XPoly, String> {
-        let mut p = XPoly::constant(1, nsym);
-        for (v, &e) in m.iter().enumerate() {
-            for _ in 0..e {
-                p = mul(&p, &u[v])?;
+    let mut num = vec![na];
+    let mut powers = vec![1];
+    // Each higher order needs the lower ones' parts, and the budget holds
+    // per quantity: the first order over it (or failing otherwise) ends the
+    // build there, keeping the orders below it.
+    let mut higher = || -> Result<(), String> {
+        if order < 2 {
+            return Ok(());
+        }
+        // Order-1 control voltages (numerators over D).
+        let mut u1: Vec<Vec<XPoly>> = Vec::new();
+        for dv in devs {
+            let mut u = Vec::new();
+            for &(p, q) in &dv.controls {
+                u.push(fit(n1(p)?.sub_owned(n1(q)?)?)?);
+            }
+            u.resize(3, XPoly::default());
+            u1.push(u);
+        }
+        let kvar = |k: usize| XPoly::var(cidx[k].expect("kept"), nsym);
+        let pow = |u: &[XPoly], m: &[u8; 3]| -> Result<XPoly, String> {
+            let mut p = XPoly::constant(1, nsym);
+            for (v, &e) in m.iter().enumerate() {
+                for _ in 0..e {
+                    p = mul(&p, &u[v])?;
+                }
+            }
+            Ok(p)
+        };
+        // Order-2 currents per device output (numerators over D²).
+        let mut i2: HashMap<(usize, usize), XPoly> = HashMap::new();
+        for (k, c) in coefs.iter().enumerate() {
+            if cidx[k].is_some() && c.order() == 2 {
+                let t = mul(&kvar(k), &pow(&u1[c.dev], &c.mono)?)?;
+                let e = i2.entry((c.dev, c.out)).or_default();
+                *e = fit(std::mem::take(e).add_owned(t)?)?;
             }
         }
-        Ok(p)
-    };
-    // Order-2 currents per device output (numerators over D²).
-    let mut i2: HashMap<(usize, usize), XPoly> = HashMap::new();
-    for (k, c) in coefs.iter().enumerate() {
-        if cidx[k].is_some() && c.order() == 2 {
-            let t = mul(&kvar(k), &pow(&u1[c.dev], &c.mono)?)?;
-            let e = i2.entry((c.dev, c.out)).or_default();
-            *e = fit(std::mem::take(e).add_owned(t)?)?;
-        }
-    }
-    // Response of node n to the order-2 currents: numerator over D³.
-    let mut respond = |n: usize, cur: &HashMap<(usize, usize), XPoly>| -> Result<XPoly, String> {
-        let mut acc = XPoly::default();
-        for (&(dv, o), i) in cur {
-            let ot = &devs[dv].outs[o];
-            // The current leaves node a and enters node b.
-            let t = fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?)?;
-            acc = fit(acc.add_owned(mul(&t, i)?)?)?;
-        }
-        Ok(acc)
-    };
-    // Each node's response to the order-2 currents, computed once.
-    let mut r2: HashMap<usize, XPoly> = HashMap::new();
-    if order >= 2 {
-        let controls = devs.iter().flat_map(|dv| dv.controls.iter().flat_map(|&(p, q)| [p, q]));
-        let nodes: Vec<usize> = if order >= 3 {
-            [out, rf].into_iter().chain(controls).collect()
-        } else {
-            vec![out, rf]
+        // Response of node n to the order-2 currents: numerator over D³.
+        let mut respond = |n: usize, cur: &HashMap<(usize, usize), XPoly>| -> Result<XPoly, String> {
+            let mut acc = XPoly::default();
+            for (&(dv, o), i) in cur {
+                let ot = &devs[dv].outs[o];
+                // The current leaves node a and enters node b.
+                let t = fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?)?;
+                acc = fit(acc.add_owned(mul(&t, i)?)?)?;
+            }
+            Ok(acc)
         };
-        for n in nodes {
+        // Each node's response to the order-2 currents, computed once.
+        let mut r2: HashMap<usize, XPoly> = HashMap::new();
+        for n in [out, rf] {
             if let Entry::Vacant(v) = r2.entry(n) {
                 v.insert(respond(n, &i2)?);
             }
         }
-    }
-    let mut num = vec![na.clone()];
-    let mut powers = vec![1];
-    if order >= 2 {
         num.push(sub(&r2[&out], &r2[&rf])?);
         powers.push(3);
-    }
-    if order >= 3 {
-        // Order-2 control voltages (over D³).
-        let mut u2: Vec<Vec<XPoly>> = Vec::new();
-        for dv in devs {
-            let mut u = Vec::new();
-            for &(p, q) in &dv.controls {
-                u.push(sub(&r2[&p], &r2[&q])?);
+        if order >= 3 {
+            let controls: Vec<usize> = devs
+                .iter()
+                .flat_map(|dv| dv.controls.iter().flat_map(|&(p, q)| [p, q]))
+                .collect();
+            for n in controls {
+                if let Entry::Vacant(v) = r2.entry(n) {
+                    v.insert(respond(n, &i2)?);
+                }
             }
-            u.resize(3, XPoly::default());
-            u2.push(u);
+            // Order-2 control voltages (over D³).
+            let mut u2: Vec<Vec<XPoly>> = Vec::new();
+            for dv in devs {
+                let mut u = Vec::new();
+                for &(p, q) in &dv.controls {
+                    u.push(sub(&r2[&p], &r2[&q])?);
+                }
+                u.resize(3, XPoly::default());
+                u2.push(u);
+            }
+            // Order-3 currents (over D⁴): K₃·u₁³·D + K₂·(u₁u₂ + u₂u₁). A BJT's
+            // two currents share each monomial's product.
+            let mut prods: HashMap<(usize, [u8; 3]), XPoly> = HashMap::new();
+            let mut i3: HashMap<(usize, usize), XPoly> = HashMap::new();
+            for (k, c) in coefs.iter().enumerate() {
+                if cidx[k].is_none() || !(2..=3).contains(&c.order()) {
+                    continue;
+                }
+                if let Entry::Vacant(v) = prods.entry((c.dev, c.mono)) {
+                    let t = match c.order() {
+                        3 => mul(&pow(&u1[c.dev], &c.mono)?, &dx)?,
+                        _ => {
+                            let ix: Vec<usize> = (0..3)
+                                .flat_map(|v| std::iter::repeat_n(v, c.mono[v] as usize))
+                                .collect();
+                            let (i, j) = (ix[0], ix[1]);
+                            fit(mul(&u1[c.dev][i], &u2[c.dev][j])?.add_owned(mul(&u2[c.dev][i], &u1[c.dev][j])?)?)?
+                        }
+                    };
+                    v.insert(t);
+                }
+                let t = mul(&kvar(k), &prods[&(c.dev, c.mono)])?;
+                let e = i3.entry((c.dev, c.out)).or_default();
+                *e = fit(std::mem::take(e).add_owned(t)?)?;
+            }
+            num.push(fit(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?)?);
+            powers.push(5);
         }
-        // Order-3 currents (over D⁴): K₃·u₁³·D + K₂·(u₁u₂ + u₂u₁). A BJT's
-        // two currents share each monomial's product.
-        let mut prods: HashMap<(usize, [u8; 3]), XPoly> = HashMap::new();
-        let mut i3: HashMap<(usize, usize), XPoly> = HashMap::new();
-        for (k, c) in coefs.iter().enumerate() {
-            if cidx[k].is_none() || !(2..=3).contains(&c.order()) {
-                continue;
-            }
-            if let Entry::Vacant(v) = prods.entry((c.dev, c.mono)) {
-                let t = match c.order() {
-                    3 => mul(&pow(&u1[c.dev], &c.mono)?, &dx)?,
-                    _ => {
-                        let ix: Vec<usize> = (0..3)
-                            .flat_map(|v| std::iter::repeat_n(v, c.mono[v] as usize))
-                            .collect();
-                        let (i, j) = (ix[0], ix[1]);
-                        fit(mul(&u1[c.dev][i], &u2[c.dev][j])?.add_owned(mul(&u2[c.dev][i], &u1[c.dev][j])?)?)?
-                    }
-                };
-                v.insert(t);
-            }
-            let t = mul(&kvar(k), &prods[&(c.dev, c.mono)])?;
-            let e = i3.entry((c.dev, c.out)).or_default();
-            *e = fit(std::mem::take(e).add_owned(t)?)?;
-        }
-        num.push(fit(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?)?);
-        powers.push(5);
-    }
+        Ok(())
+    };
+    let _ = higher();
     let mut cl = Closed::new(syms, dx, num, powers, vid, max_terms);
     cl.coef_sym = cidx;
     Ok(Ok(cl))
@@ -1607,7 +1621,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         vid: c.vid as f64,
     };
     let (keep, omit_err, reference) =
-        prove_omission(&probe, &devs, &coefs, OMIT_REL).ok_or("distortion: the circuit is singular at DC")?;
+        prove_omission(&probe, &devs, &coefs, OMIT_REL, c.order).ok_or("distortion: the circuit is singular at DC")?;
     let a_num: Vec<f64> = reference.iter().map(|z| z.re).collect();
 
     // Device Taylor coefficients (exact zeros left out).
@@ -1882,12 +1896,31 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         resp.insert("hd3".into(), Value::Null);
         resp.insert("iip3".into(), Value::Null);
     }
-    // The K symbols of the forms shown (exact first; empty when neither
-    // closed form was built).
+    // The K symbols of the forms shown, exact first: those in the
+    // numerator of an a_n or HD_n (and so IIP3) that the closed form
+    // supplies (a1 has none; empty when no closed form supplies one).
     let mut ksyms: Vec<&Sym> = Vec::new();
-    for cl in [&exact, &noleak].into_iter().flatten() {
-        for s in cl.syms.iter().filter(|s| s.role == Role::Coeff) {
-            if !ksyms.iter().any(|k| k.name == s.name) {
+    for (which, cl) in [&exact, &noleak].into_iter().enumerate() {
+        let Some(cl) = cl.as_ref() else { continue };
+        let mut used = vec![false; cl.syms.len()];
+        for n in 1..order.min(cl.num.len()) {
+            let by_exact = |f: &dyn Fn(&Closed) -> bool| exact.as_ref().is_some_and(f);
+            let shown = if which == 0 {
+                cl.a(n).is_some() || cl.ratio(n).is_some()
+            } else {
+                (cl.a(n).is_some() && !by_exact(&|e| e.a(n).is_some()))
+                    || (cl.ratio(n).is_some() && !by_exact(&|e| e.ratio(n).is_some()))
+            };
+            if shown {
+                for (e, _) in &cl.num[n].terms {
+                    for (k, &x) in e.iter().enumerate() {
+                        used[k] |= x > 0;
+                    }
+                }
+            }
+        }
+        for (k, s) in cl.syms.iter().enumerate() {
+            if used[k] && s.role == Role::Coeff && !ksyms.iter().any(|q| q.name == s.name) {
                 ksyms.push(s);
             }
         }

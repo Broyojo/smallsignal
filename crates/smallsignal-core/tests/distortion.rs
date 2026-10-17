@@ -431,8 +431,8 @@ R1 o1 vr 10k\nM2 inn g o2 o2 nm W=10u L=1u\nR2 o2 vr 10k\n.model nm nmos (level=
 #[test]
 fn a_rejected_reduced_form_is_not_kept() {
     // RD = 100 Ω: r_bd moves the gain by < 1e-9, so it is omitted, but the
-    // reduced a_n are off by ~1e-10. The full model's forms exceed
-    // maxTerms here, so there is no exact form (not the reduced one).
+    // reduced a_n are off by ~1e-10, so the full model's forms are used
+    // (never the reduced one), each only if within maxTerms.
     let net = "cs\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD vdd out 100\nM1 out in 0 0 nm W=10u L=1u\n\
 .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
     let rq = |mt: usize| {
@@ -447,14 +447,17 @@ fn a_rejected_reduced_form_is_not_kept() {
         .as_str()
         .unwrap()
         .contains("r_{bd1}"));
+    // At maxTerms 20 the full model's a1, a2 fit (with r_bd, not the
+    // reduced forms) and are checked; a3 is over budget.
     let r = rq(20);
     let d = &r["distortion"];
-    assert!(d["check"].is_null());
-    for q in d["coefficients"].as_array().unwrap() {
-        assert!(q["skipped"].is_string(), "{q}");
-        assert!(q["latex"].is_null());
-        assert!(q["display"]["relError"].as_f64().unwrap() <= 1e-3);
+    assert_eq!(d["check"]["orders"], json!([1, 2]));
+    let c = d["coefficients"].as_array().unwrap();
+    for q in &c[..2] {
+        assert!(q["latex"].as_str().unwrap().contains("r_{bd1}"), "{q}");
     }
+    assert!(c[2]["skipped"].is_string() && c[2]["latex"].is_null(), "{}", c[2]);
+    assert!(c[2]["display"]["relError"].as_f64().unwrap() <= 1e-3);
 }
 
 #[test]
@@ -578,7 +581,9 @@ fn response_has_every_contract_field() {
     let r = rq(json!({ "order": 3 }));
     has_keys(&r);
     assert!(r["distortion"]["hd3"].is_object() && r["distortion"]["iip3"].is_object());
-    // Both closed forms over the term budget: numeric only, no symbols.
+    // a2 and a3 over the term budget (a1 fits): the budget holds per
+    // quantity, so a1 stays exact and only it is checked; a2 comes from the
+    // leakage-free model, a3 is numeric only.
     let r = run(
         OTA,
         &req(
@@ -588,12 +593,15 @@ fn response_has_every_contract_field() {
     );
     has_keys(&r);
     let d = &r["distortion"];
-    for q in d["coefficients"].as_array().unwrap() {
-        assert!(q["skipped"].is_string() && q["display"].is_null(), "{q}");
-    }
-    assert_eq!(d["symbols"], json!([]));
-    // No exact coefficient materialized: nothing to check.
-    assert!(d["check"].is_null());
+    let c = &d["coefficients"];
+    assert!(c[0]["skipped"].is_null() && c[0]["latex"].is_string(), "{}", c[0]);
+    assert!(
+        c[1]["skipped"].is_string() && c[1]["display"]["latex"].is_string(),
+        "{}",
+        c[1]
+    );
+    assert!(c[2]["skipped"].is_string() && c[2]["display"].is_null(), "{}", c[2]);
+    assert_eq!(d["check"]["orders"], json!([1]));
     assert!(d["hd3"]["value"].as_f64().unwrap() > 0.0);
 }
 
@@ -926,8 +934,9 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n";
 fn a_difference_of_affordable_responses_is_held_to_the_budget() {
     // Two cascaded common-source stages: the gain g_m1 g_m2 R_D1 R_D2 is
     // one term, but a2 sums both devices' parts, two terms. With maxTerms 1
-    // that sum is over budget like any product: no exact form (numeric
-    // values only) while the gain stays exact; with maxTerms 2 it fits.
+    // that sum is over budget like any product. The budget holds per
+    // quantity: a1 stays exact, a2 and a3 (built from a2's parts) are
+    // numeric only, and no K symbol is shown. With maxTerms 2 all fit.
     let net = "casc\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 20k\nRD2 vdd o2 1k\n\
 M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 o1 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
     let rq = |mt: usize| {
@@ -939,11 +948,14 @@ M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 o1 0 0 nm W=10u L=1u\n.model nm nmos (level=1 
     let r = rq(1);
     assert_eq!(r["gain"]["exact"]["latex"], "g_{m1} g_{m2} R_{D1} R_{D2}");
     let d = &r["distortion"];
-    for (n, q) in d["coefficients"].as_array().unwrap().iter().enumerate() {
+    assert_eq!(d["coefficients"][0]["latex"], "g_{m1} g_{m2} R_{D1} R_{D2}");
+    for (n, q) in d["coefficients"].as_array().unwrap().iter().enumerate().skip(1) {
         assert!(q["skipped"].is_string() && q["latex"].is_null(), "{q}");
         assert_eq!(q["value"], q["numeric"], "a{}", n + 1);
     }
-    assert!(d["check"].is_null());
+    assert!(d["hd2"]["skipped"].is_string());
+    assert_eq!(d["symbols"], json!([]));
+    assert_eq!(d["check"]["orders"], json!([1]));
     let r = rq(2);
     let d = &r["distortion"];
     assert_eq!(
@@ -983,4 +995,55 @@ VIP bp 0 DC 0.3 AC 1\nVINN bn 0 0.3\n.model nm nmos (level=1 kp=200u vto=0.5 lam
     assert_eq!(d["coefficients"][1]["numeric"], 0.0);
     assert!(coef(&r, 2) != 0.0);
     assert_eq!(d["check"]["ok"], true);
+}
+
+#[test]
+fn order_two_omits_what_only_a3_would_need() {
+    // Two cascaded stages with a 1 µΩ first load: M2's K_2g moves a2 by
+    // 3e-10 (its input carries almost no linear signal) but is all of a3
+    // (2·K_2g,M1·K_2g,M2 cascaded). An order-2 request proves omissions
+    // against a1, a2 only and leaves it out; order 3 keeps it.
+    let net = "casc\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 1e-6\nRD2 vdd o2 1k\n\
+M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 bias 0 0 nm W=10u L=1u\nVB bias o1 -3.5\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let kept = |order: u8| {
+        let r = run(
+            net,
+            &req(json!({ "input": "VIN", "output": "o2", "nonlinear": ["M1", "M2"], "order": order })),
+        );
+        assert_eq!(r["distortion"]["check"]["ok"], true);
+        let t = &r["distortion"]["taylor"];
+        let m2 = t.as_array().unwrap().iter().find(|t| t["element"] == "M2").unwrap();
+        (m2["kept"] == true, r["distortion"]["omissionError"].as_f64().unwrap())
+    };
+    let (k2, err2) = kept(2);
+    assert!(!k2 && err2 > 0.0 && err2 <= 1e-9, "{k2} {err2}");
+    let (k3, _) = kept(3);
+    assert!(k3);
+}
+
+#[test]
+fn a_match_the_full_model_rejects_is_reported() {
+    // M1 and M2 differ only in their bulk junctions' IS, which the gain
+    // omits, so the match is accepted there; distortion rebuilds on the
+    // full model (the junctions move a3 by more than 1e-11), where they
+    // do not match, and says so once.
+    let net = "dp\n.options gmin=1e-18\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail 0 na W=10u L=1u\n\
+M2 o2 inn tail 0 nb W=10u L=1u\nITAIL tail 0 200u\nVIP inp 0 DC 0.8 AC 1\nVINN inn 0 0.8\n\
+.model na nmos (level=1 kp=200u vto=0.5 lambda=0.05 is=1e-14)\n\
+.model nb nmos (level=1 kp=200u vto=0.5 lambda=0.05 is=1.1e-14)\n";
+    let r = run(
+        net,
+        &req(
+            json!({ "input": "VIP", "inputNeg": "VINN", "output": "o1", "ref": "o2", "nonlinear": ["M1", "M2"],
+                     "match": [["M1", "M2"], ["RD1", "RD2"]] }),
+        ),
+    );
+    assert!(r["params"].as_array().unwrap().iter().any(|p| p["latex"] == "g_{m1,2}"));
+    let n = r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|w| *w == "M1 and M2 differ, not matched")
+        .count();
+    assert_eq!(n, 1, "{}", r["warnings"]);
 }

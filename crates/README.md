@@ -201,8 +201,9 @@ each within 1e-9 V) gets a warning: its expansion is one-sided. Names: `K_{2g,M1
 parameters merged into one symbol: g_m, or r_bs for a MOSFET in cutoff)
 with equal coefficients share one symbol
 (`K_{2g,M1,2}`), so a matched pair's even orders cancel exactly. Coefficients
-that are exactly zero, or whose omission moves no a_n by more than 1e-9
-(proven on the full numeric model, smallest first), are left out of the closed
+that are exactly zero, or whose omission moves no requested a_n (n ≤
+`order`) by more than 1e-9 (proven on the full numeric model, smallest
+first), are left out of the closed
 form. Junction leakage coefficients (bulk junctions, and the collector-base
 branch i_μ = I_BC/BR + gmin·v_BC in I_C and I_B) go with r_bs, r_bd, r_μ.
 
@@ -230,7 +231,8 @@ transfer cofactors. Response `distortion`:
   present only when it is infinite (H₁ = 0, H₂ (H₃) ≠ 0, each by the same
   1e-12 rule at that frequency: a notch at f leaves H₁ a roundoff residual).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
-  `symbols`: the K symbols used (`[]` when no closed form was built);
+  `symbols`: the K symbols in the numerators of the a_n and HD_n shown in
+  closed form (`[]` when none is);
   `omissionError`; `check` `{ok, maxRelDiff, orders, matchBound}`: each
   exact a_n that materialized against the numeric reference (`orders` lists
   which; null when none did), allowing 4× `matchBound`, the relative effect
@@ -246,13 +248,17 @@ transfer cofactors. Response `distortion`:
   row, so a buffered node is as large as what it buffers. An a_n that
   cancels exactly (a matched pair's a₂) is then not compared with its
   numeric roundoff alone.
-- Every field is always present. A quantity whose exact closed form would
-  exceed 100k terms or `maxTerms` (its numerator, or the D^{2n−1} under it;
-  e.g. a 5T OTA's a₃ with junction leakage kept), or every quantity when the
-  analysis model's form misses the full numeric a_n by more than 1e-11 and
-  the full model's would exceed that, is `skipped` (value numeric) and its
-  `display` comes from the leakage-free model (its Taylor coefficients
-  without leakage), accepted only within 1e-3.
+- Every field is always present. The term budget holds per quantity: one
+  whose exact closed form would exceed 100k terms or `maxTerms` (its
+  numerator or the parts it is built from, which for a_n include
+  a_{n−1}'s, or the D^{2n−1} under it; e.g. a 5T OTA's a₃ with junction
+  leakage kept) is `skipped` (value numeric) while lower orders stay exact,
+  and its `display` comes from the leakage-free model (its Taylor
+  coefficients without leakage), accepted only within 1e-3. When the
+  analysis model's form misses the full numeric a_n by more than 1e-11 the
+  full model's forms are used instead (each under the same budget), and a
+  match the full model's junctions break is warned
+  (`"M1 and M2 differ, not matched"`).
 - `display`/`simplified` work as for the other quantities; simplified is the
   r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
   as output conductances), then magnitude pruning, within `tolerance`.

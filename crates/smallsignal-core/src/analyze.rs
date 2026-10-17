@@ -400,8 +400,12 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
 
     if !req.nonlinear.is_empty() {
-        let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new());
-        let noleak_symbols = |m: &SsCircuit| sym::symbols(&net, m, &matched, symbolic, &mut Vec::new());
+        // Symbols of the models distortion may rebuild on: their matching
+        // warnings (a match those junctions break) reach the response.
+        let rebuild_warnings = std::cell::RefCell::new(Vec::new());
+        let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut rebuild_warnings.borrow_mut());
+        let noleak_symbols =
+            |m: &SsCircuit| sym::symbols(&net, m, &matched, symbolic, &mut rebuild_warnings.borrow_mut());
         let ctx = crate::distortion::Ctx {
             net: &net,
             op: op.as_ref(),
@@ -424,6 +428,11 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             max_terms,
         };
         resp.insert("distortion".into(), crate::distortion::report(&ctx, &mut warnings)?);
+        for w in rebuild_warnings.into_inner() {
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
+        }
     }
 
     if req.rin {
