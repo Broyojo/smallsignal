@@ -760,6 +760,36 @@ test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async 
   await expect(noise).toContainText("nV/√Hz", { timeout: 30_000 });
   await expect(noise).toContainText("Too large for the exact closed form.");
   await expect(noise).not.toContainText("simplify the circuit");
+
+  // With Noise open, a new request waits for the main solve's budget
+  // status: one noise solve, numeric only, never an exact one beside it.
+  await page.evaluate(() => {
+    const sent: string[] = [];
+    (window as unknown as { solves: string[] }).solves = sent;
+    const post = Worker.prototype.postMessage as (
+      this: Worker,
+      ...args: unknown[]
+    ) => void;
+    Worker.prototype.postMessage = function (this: Worker, ...args: unknown[]) {
+      const request = (args[0] as { request?: unknown }).request;
+      if (typeof request === "string") sent.push(request);
+      post.apply(this, args);
+    } as Worker["postMessage"];
+  });
+  await panel.getByText("Options", { exact: true }).click();
+  await panel.getByLabel("Frequencies").fill("10k");
+  // 10.61 Hz × 68,823 / 10 kHz.
+  await expect
+    .poll(() => cardValue(panel, "Gain"), { timeout: 30_000 })
+    .toBeCloseTo(73, -1);
+  await expect(noise).toContainText("nV/√Hz", { timeout: 30_000 });
+  const noiseSolves = await page.evaluate(() =>
+    (window as unknown as { solves: string[] }).solves
+      .map((text) => JSON.parse(text) as { noise?: boolean; maxTerms?: number })
+      .filter((request) => request.noise)
+      .map((request) => request.maxTerms ?? null),
+  );
+  expect(noiseSolves).toEqual([1]);
 });
 
 /** The Assumptions section, open. */

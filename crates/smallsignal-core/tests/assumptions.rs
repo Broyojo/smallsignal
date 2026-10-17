@@ -17,7 +17,7 @@ fn with(req: &Request, assume: Value) -> Request {
     serde_json::from_value(v).unwrap()
 }
 
-/// The request's own fields, as JSON (Request is Deserialize only).
+/// The request's fields the tests set, as JSON (Request is Deserialize only).
 #[derive(serde::Serialize)]
 struct RequestJson {
     input: String,
@@ -30,6 +30,13 @@ struct RequestJson {
     nonlinear: Vec<String>,
     #[serde(rename = "match")]
     matched: Vec<Vec<String>>,
+    #[serde(rename = "ref")]
+    reference: Option<String>,
+    #[serde(rename = "inputNeg")]
+    input_neg: Option<String>,
+    mode: Option<String>,
+    #[serde(rename = "maxTerms")]
+    max_terms: Option<usize>,
 }
 
 impl From<&Request> for RequestJson {
@@ -44,6 +51,10 @@ impl From<&Request> for RequestJson {
             noise: r.noise,
             nonlinear: r.nonlinear.clone(),
             matched: r.matched.clone(),
+            reference: r.reference.clone(),
+            input_neg: r.input_neg.clone(),
+            mode: r.mode.clone(),
+            max_terms: r.max_terms,
         }
     }
 }
@@ -492,4 +503,105 @@ fn certificates_cover_the_assumed_element_list() {
     let c = smallsignal_core::certificate::certificate(net, &r).unwrap();
     assert_eq!(c["elems"].as_array().unwrap().len(), 1, "{c}");
     assert_eq!(c["nodes"].as_array().unwrap().len(), 1, "{c}");
+}
+
+#[test]
+fn matched_members_with_different_regions_are_not_matched() {
+    // Symbolic mode: a declared triode region keeps M1's r_o finite in the
+    // hand form, M2's not. Merged, the form would follow whichever member
+    // came first; so they are not matched, in either order.
+    let net = "diff pair\nVDD vdd 0\nVIP ip 0\nVIN in 0\nIT t 0\nM1 o1 ip t 0\nM2 o2 in t 0\nR1 vdd o1\nR2 vdd o2\n";
+    for (a, b) in [("triode", "saturation"), ("saturation", "triode")] {
+        let mut r = req("VIP", "o1", &[]);
+        r.input_neg = Some("VIN".into());
+        r.matched = vec![vec!["M1".into(), "M2".into()]];
+        let regions = json!({ "regions": [{ "element": "M1", "region": a }, { "element": "M2", "region": b }] });
+        let v = run(net, &with(&r, regions));
+        let w = v["warnings"].as_array().unwrap();
+        assert!(
+            w.contains(&json!("M1 and M2 have different assumptions, not matched")),
+            "{a}: {w:?}"
+        );
+        let latex: Vec<&str> = v["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["latex"].as_str().unwrap())
+            .collect();
+        assert!(latex.contains(&"r_{o1}") && latex.contains(&"r_{o2}"), "{a}: {latex:?}");
+    }
+}
+
+#[test]
+fn an_unbounded_quantity_has_no_error_metric() {
+    // Zin looking into a gate is infinite in both models: nothing to
+    // compare, so null rather than 0, on the exact and the numeric path.
+    let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.8 AC 1\nRD vdd out 10k\nM1 out in 0 0 nch W=10u L=1u\n\
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n";
+    for budget in [None, Some(1)] {
+        let mut r = req("VIN", "out", &[1e3, 1e6]);
+        r.rin = true;
+        r.max_terms = budget;
+        let v = run(net, &with(&r, ignore(&[("M1", "ro")])));
+        let rin = &v["rin"];
+        assert_eq!(rin["infinite"], true, "{budget:?}");
+        assert_eq!(rin["assumed"]["maxRelError"], Value::Null, "{budget:?} {rin}");
+        assert_eq!(rin["assumed"]["relError"], json!([null, null]), "{budget:?}");
+        if budget.is_none() {
+            assert_eq!(rin["exact"]["fullModelError"], Value::Null, "{rin}");
+        }
+        // A finite quantity next to it is still measured.
+        assert!(v["gain"]["assumed"]["maxRelError"].as_f64().is_some_and(|e| e > 0.0));
+    }
+}
+
+#[test]
+fn stability_is_the_full_models() {
+    // Positive feedback through E1 (k = 3): a right-half-plane pole at
+    // 1/(2π R C). With C1 open the assumed circuit has no pole at all, yet
+    // the warning stays: stability is a property of the full circuit.
+    let net = "pf\nVIN in 0 AC 1\nR1 in a 1k\nR2 out a 1k\nC1 a 0 1n\nE1 out 0 a 0 3\n";
+    for budget in [None, Some(1)] {
+        let mut r = req("VIN", "out", &[1e3]);
+        r.max_terms = budget;
+        let v = run(net, &with(&r, ignore(&[("C1", "open")])));
+        assert_eq!(
+            v["warnings"],
+            json!(["Unstable at this bias: a right-half-plane pole."]),
+            "{budget:?}"
+        );
+        assert_eq!(v["gain"]["poleCount"], 1, "{budget:?}");
+        let pairs = v["gain"]["assumed"]["poles"].as_array().unwrap();
+        assert_eq!(pairs.len(), 1, "{budget:?}");
+        assert_eq!(pairs[0]["assumed"], Value::Null, "{budget:?}");
+    }
+}
+
+#[test]
+fn an_assumed_model_over_budget_keeps_its_matched_classes() {
+    // A matched pair driven in common mode, output o1 − o2: the merged
+    // numerator cancels exactly, so the assumed values are exactly 0 even
+    // on the numeric path (the full model's too, as before).
+    let net = "diff pair\nVDD vdd 0 1.8\nVIP ip 0 DC 0.9 AC 1\nVIN in 0 DC 0.9\nRT t 0 2.5k\n\
+M1 o1 ip t 0 nch W=10u L=1u\nM2 o2 in t 0 nch W=10u L=1u\nR1 vdd o1 5k\nR2 vdd o2 5k\n\
+C1 o1 0 1p\nC2 o2 0 1p\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n";
+    let mut r = req("VIP", "o1", &[1e3, 1e6]);
+    r.reference = Some("o2".into());
+    r.input_neg = Some("VIN".into());
+    r.mode = Some("common".into());
+    r.matched = vec![
+        vec!["M1".into(), "M2".into()],
+        vec!["R1".into(), "R2".into()],
+        vec!["C1".into(), "C2".into()],
+    ];
+    r.max_terms = Some(1);
+    let v = run(net, &with(&r, ignore(&[("M1", "ro"), ("M2", "ro")])));
+    let g = &v["gain"];
+    assert_eq!(g["skipped"], "too large for the exact closed form", "{g}");
+    for p in g["assumed"]["values"].as_array().unwrap() {
+        assert_eq!((p["re"].as_f64(), p["im"].as_f64()), (Some(0.0), Some(0.0)), "{p}");
+    }
+    assert!(g["assumed"]["zeros"].as_array().unwrap().is_empty(), "{g}");
+    // Unmerged, the numerator would not vanish and its roots not be found.
+    assert_eq!(v["warnings"], json!(["No signal reaches o1 − o2"]));
 }

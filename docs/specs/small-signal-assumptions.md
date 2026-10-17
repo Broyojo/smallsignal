@@ -36,11 +36,14 @@ assumptions is a later change.
   at DC, or no solution), with junction leakage left out as hand analysis
   leaves it out, where the full model's does not, gets back the union of the
   smallest sets of assumption units (one unit per term and matched group)
-  that avoid it, searched up to three units, else an irreducible set. It is
-  listed in `assumed.restored` and warned:
+  that avoid it. Every set of one or two units is searched, and of three
+  while there are at most 30 units. Past that it is an irreducible set,
+  found in group and term order, never the request's. It is listed in
+  `assumed.restored` and warned:
   `ro of M1 kept, gain is unbounded without it` (gain, Zin, Zout).
-- Matched elements share assumptions: a group whose members differ is not
-  matched (`M1 and M2 have different assumptions, not matched`).
+- Matched elements share assumptions, terms and declared regions alike: a
+  group whose members differ is not matched
+  (`M1 and M2 have different assumptions, not matched`).
 - Noise drops a source from the closed form only where an assumption takes
   its PSD to 0 or shorts it: r_π (β → ∞, so I_B → 0) drops base shot and
   flicker, an open or shorted R or diode drops its sources.

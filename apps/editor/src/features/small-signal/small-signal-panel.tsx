@@ -853,6 +853,25 @@ export function noiseBandRange(text: string): [number, number] | null {
     : null;
 }
 
+/**
+ * The Noise solve's job as a key, or null while there is none to run: the
+ * section closed, no circuit, or the main solve for this very request not
+ * answered yet. That answer says whether the exact forms are over the term
+ * budget (then Noise skips them), so an exact noise solve never runs
+ * alongside the main one.
+ */
+export function noiseJobKey(
+  open: boolean,
+  requestKey: string | null,
+  responseKey: string | null,
+  band: [number, number] | null,
+  overBudget: boolean,
+): string | null {
+  return open && requestKey && responseKey === requestKey
+    ? JSON.stringify([requestKey, band, overBudget])
+    : null;
+}
+
 /** A solver note as a sentence: capitalized, with a full stop. */
 function sentence(text: string): string {
   const trimmed = text.trim();
@@ -2382,10 +2401,13 @@ export function SmallSignalPanel({
   );
   const numericOnly = (over: boolean) => (over ? { maxTerms: 1 } : {});
   const band = noiseBandRange(noiseBand);
-  const noiseKey =
-    noiseOpen && requestKey
-      ? JSON.stringify([requestKey, band, overBudget])
-      : null;
+  const noiseKey = noiseJobKey(
+    noiseOpen,
+    requestKey,
+    responseKey,
+    band,
+    overBudget,
+  );
   useEffect(() => {
     // A new job, or none: drop the old result and any solve in flight, so
     // the section never shows numbers for a different circuit or band.
