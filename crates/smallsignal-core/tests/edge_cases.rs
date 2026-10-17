@@ -121,6 +121,21 @@ fn hitting_the_term_limit_is_a_clean_error() {
     assert!(run_err(&net, &r).contains("too large"));
 }
 
+#[test]
+fn a_difference_of_affordable_numerators_is_held_to_the_term_limit() {
+    // Two independent common-source branches measured differentially: each
+    // drain's numerator is one term, their difference two. maxTerms 1 must
+    // fail as an over-budget determinant does; maxTerms 2 fits.
+    let net = "two\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 5k\nRD2 vdd o2 5k\n\
+M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let rq = |mt: usize| req(json!({ "input": "VIN", "output": "o1", "ref": "o2", "rout": true, "maxTerms": mt }));
+    let e = run_err(net, &rq(1));
+    assert!(e.contains("too large (over 1 terms)"), "{e}");
+    let r = run(net, &rq(2));
+    assert_eq!(r["gain"]["exact"]["latex"], "g_{m2} R_{D2} - g_{m1} R_{D1}");
+    assert!(r["rout"]["exact"]["latex"].is_string());
+}
+
 // ---- Controlled sources -----------------------------------------------------
 
 #[test]

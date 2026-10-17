@@ -65,7 +65,9 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
 `symbolic`, `maxTerms`). The response is JSON, or
-`{"error": "..."}` on failure.
+`{"error": "..."}` on failure, including when an exact polynomial of
+gain, rin or rout (a determinant, or the sum or difference of two) would
+exceed `maxTerms` terms (default 2,000,000).
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
   With `inputNeg`, `mode` "differential" (the default) drives the two sources

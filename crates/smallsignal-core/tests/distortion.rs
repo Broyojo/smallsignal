@@ -924,30 +924,32 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n";
 
 #[test]
 fn a_difference_of_affordable_responses_is_held_to_the_budget() {
-    // Two independent common-source branches measured differentially:
-    // each drain's response is one term, their difference two. With
-    // maxTerms 1 that difference is over budget like any product: no
-    // exact form (numeric values only); with maxTerms 2 it fits.
-    let net = "two\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 5k\nRD2 vdd o2 5k\n\
-M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    // Two cascaded common-source stages: the gain g_m1 g_m2 R_D1 R_D2 is
+    // one term, but a2 sums both devices' parts, two terms. With maxTerms 1
+    // that sum is over budget like any product: no exact form (numeric
+    // values only) while the gain stays exact; with maxTerms 2 it fits.
+    let net = "casc\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 20k\nRD2 vdd o2 1k\n\
+M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 o1 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
     let rq = |mt: usize| {
         run(
             net,
-            &req(json!({ "input": "VIN", "output": "o1", "ref": "o2", "nonlinear": ["M1", "M2"], "maxTerms": mt })),
+            &req(json!({ "input": "VIN", "output": "o2", "nonlinear": ["M1", "M2"], "maxTerms": mt })),
         )
     };
     let r = rq(1);
+    assert_eq!(r["gain"]["exact"]["latex"], "g_{m1} g_{m2} R_{D1} R_{D2}");
     let d = &r["distortion"];
     for (n, q) in d["coefficients"].as_array().unwrap().iter().enumerate() {
         assert!(q["skipped"].is_string() && q["latex"].is_null(), "{q}");
         assert_eq!(q["value"], q["numeric"], "a{}", n + 1);
     }
     assert!(d["check"].is_null());
-    // a1 = (β2·Vov − β1·Vov)·RD with β1 = 2 mA/V², β2 = 4 mA/V², Vov = 0.4.
-    assert!(rel(coef(&r, 0), 0.4 * (4e-3 - 2e-3) * 5e3) < 1e-9, "{}", coef(&r, 0));
     let r = rq(2);
     let d = &r["distortion"];
-    assert_eq!(d["coefficients"][0]["latex"], "g_{m2} R_{D2} - g_{m1} R_{D1}");
-    assert_eq!(d["coefficients"][1]["latex"], "K_{2g,M2} R_{D2} - K_{2g,M1} R_{D1}");
+    assert_eq!(
+        d["coefficients"][1]["latex"],
+        "R_{D1} R_{D2} \\left(-K_{2g,M2} {g_{m1}}^{2} R_{D1} + K_{2g,M1} g_{m2}\\right)"
+    );
+    assert!(rel(coef(&r, 1), d["coefficients"][1]["numeric"].as_f64().unwrap()) < 1e-12);
     assert_eq!(d["check"]["ok"], true);
 }

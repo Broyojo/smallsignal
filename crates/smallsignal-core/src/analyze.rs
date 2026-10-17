@@ -331,7 +331,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     if d.is_zero() {
         return Err("small-signal circuit is singular (floating node or source loop)".to_string());
     }
-    let n_out = sub(&node_num(&gsys, out, max_terms)?, &node_num(&gsys, rf, max_terms)?);
+    let n_out = fit(
+        sub(&node_num(&gsys, out, max_terms)?, &node_num(&gsys, rf, max_terms)?),
+        max_terms,
+    )?;
     if n_out.is_zero() {
         let at = match &req.reference {
             Some(r) if !r.trim().is_empty() => format!("{} − {}", req.output, r.trim()),
@@ -437,10 +440,13 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     },
                 );
                 let id = crate::det::det(&isys.a, max_terms)?;
-                let inum = sub(
-                    &node_num(&isys, *into, max_terms)?,
-                    &node_num(&isys, *outof, max_terms)?,
-                );
+                let inum = fit(
+                    sub(
+                        &node_num(&isys, *into, max_terms)?,
+                        &node_num(&isys, *outof, max_terms)?,
+                    ),
+                    max_terms,
+                )?;
                 resp.insert(
                     "rin".into(),
                     q.json(
@@ -456,7 +462,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             Some(RinKind::Common { neg: ng }) => {
                 // Both inputs at the same 1 V: Z = 1 / (total current in).
                 let (k1, k2) = (gsys.branch_col[&input], gsys.branch_col[ng]);
-                let total = poly_add(&gsys.cramer(k1, max_terms)?, &gsys.cramer(k2, max_terms)?);
+                let total = fit(
+                    poly_add(&gsys.cramer(k1, max_terms)?, &gsys.cramer(k2, max_terms)?),
+                    max_terms,
+                )?;
                 resp.insert(
                     "rin".into(),
                     q.json(
@@ -477,7 +486,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     (d.clone(), gsys.cramer(k, max_terms)?.neg())
                 } else {
                     (
-                        sub(&node_num(&gsys, *n, max_terms)?, &node_num(&gsys, *p, max_terms)?),
+                        fit(
+                            sub(&node_num(&gsys, *n, max_terms)?, &node_num(&gsys, *p, max_terms)?),
+                            max_terms,
+                        )?,
                         d.clone(),
                     )
                 };
@@ -499,7 +511,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     if req.rout {
         let osys = ss::system(&net, &ss, &Excite::Inject { into: out, outof: rf });
         let od = crate::det::det(&osys.a, max_terms)?;
-        let on = sub(&node_num(&osys, out, max_terms)?, &node_num(&osys, rf, max_terms)?);
+        let on = fit(
+            sub(&node_num(&osys, out, max_terms)?, &node_num(&osys, rf, max_terms)?),
+            max_terms,
+        )?;
         resp.insert(
             "rout".into(),
             q.json(
@@ -767,6 +782,18 @@ fn check_grid(has_reactive: bool, freqs: &[f64]) -> Vec<f64> {
     }
     g.extend_from_slice(freqs);
     g
+}
+
+/// `p` (a sum or difference of two numerators, up to twice their terms)
+/// within the term budget, failing as an over-budget determinant does.
+fn fit(p: Poly, max_terms: usize) -> Result<Poly, String> {
+    if p.len() > max_terms {
+        Err(format!(
+            "exact expression too large (over {max_terms} terms); simplify the circuit or analyze a smaller block"
+        ))
+    } else {
+        Ok(p)
+    }
 }
 
 fn poly_add(a: &Poly, b: &Poly) -> Poly {
