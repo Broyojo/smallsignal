@@ -425,14 +425,16 @@ test("model parameters are editable: the bias follows the square law", async ({
   const models = panel.locator("details.small-signal-options", {
     has: page.locator("summary", { hasText: /^Models/u }),
   });
-  await models.locator("summary").click();
-  await expect(models.locator("summary")).toHaveText("Models");
+  await models.locator(":scope > summary").click();
+  await expect(models.locator(":scope > summary")).toHaveText("Models");
   const kp = panel.getByLabel("NMOS KP");
   await expect(kp).toHaveAttribute("placeholder", "200u");
 
   // Twice µCox: more current at the same overdrive.
   await kp.fill("400u");
-  await expect(models.locator("summary")).toHaveText("Models (edited)");
+  await expect(models.locator(":scope > summary")).toHaveText(
+    "Models (edited)",
+  );
   await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.3);
   const strong = await biasLine(panel, "M1");
   expect(strong.id).toBeGreaterThan(base.id);
@@ -463,7 +465,7 @@ test("model parameters are editable: the bias follows the square law", async ({
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
   await panel.getByLabel("NMOS LAMBDA").fill("0");
   await panel.getByRole("button", { name: "Reset to defaults" }).click();
-  await expect(models.locator("summary")).toHaveText("Models");
+  await expect(models.locator(":scope > summary")).toHaveText("Models");
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
 });
 
