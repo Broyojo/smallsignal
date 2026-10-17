@@ -164,7 +164,7 @@ export interface SmallSignalNoise {
   integrated: {
     fLow: number;
     fHigh: number;
-    /** null, with `unavailable`, when the gain is zero inside the band. */
+    /** inputRms null, with `unavailable`, when the gain is zero inside the band (outputRms too when the output noise cannot be integrated). */
     outputRms: number | null;
     inputRms: number | null;
     relError?: number;

@@ -290,3 +290,198 @@ fn ac_coupled_input_has_no_dc_closed_form() {
     assert_eq!(r["noise"]["inputLowFreq"]["unavailable"], "no gain at DC");
     assert!(r["noise"]["input"][0]["v2"].as_f64().is_some());
 }
+
+fn warns(r: &Value, text: &str) -> bool {
+    r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains(text))
+}
+
+#[test]
+fn bands_too_wide_to_grid_are_rejected() {
+    // 600 decades: hi/lo overflows; the grid must be bounded before allocating.
+    for band in [json!([1e-300, 1e300]), json!([5e-324, 1e308]), json!([1e-6, 1e40])] {
+        let e = analyze(CS, &req(json!({ "input": "VIN", "output": "out", "noiseBand": band }))).unwrap_err();
+        assert!(e.contains("noiseBand") && e.contains("decades"), "{e}");
+    }
+}
+
+/// A series LC trap from `a` to ground: gain zero at 1/(2π√(LC)) ≈ 159.15 kHz.
+const TRAP: &str = "trap\nVIN in 0 DC 0 AC 1\nR1 in a 1k\nL1 a x 1m\nC1 x 0 1n\n";
+
+#[test]
+fn a_transmission_zero_in_the_band_makes_the_input_integral_unbounded() {
+    // Noise added after the notch (buffer, then a noisy divider) does not
+    // vanish at the zero: S_in = S_out/|H|² is not integrable across it.
+    let net = format!("{TRAP}E1 o 0 a 0 1\nR2 o out 1k\nR3 out 0 1k\n");
+    let rq = |band: [f64; 2]| req(json!({ "input": "VIN", "output": "out", "noiseBand": band }));
+    let it = &run(&net, &rq([1e3, 1e7]))["noise"]["integrated"];
+    assert!(it["inputV2"].is_null(), "{it}");
+    assert!(it["unavailable"].as_str().unwrap().contains("zero"), "{it}");
+    // The output integral is still finite and reported.
+    assert!(it["outputV2"].as_f64().unwrap() > 0.0, "{it}");
+    // A band clear of the zero integrates as usual.
+    let it = &run(&net, &rq([1e3, 1e5]))["noise"]["integrated"];
+    assert!(it["inputV2"].as_f64().unwrap() > 0.0, "{it}");
+}
+
+#[test]
+fn a_lossy_notch_keeps_a_finite_integral() {
+    // Rs = 0.1 Ω in the trap (Q = 1e4): the zero is off the axis and the
+    // Lorentzian peak of S_in integrates. With Z = Rs + j(ωL − 1/ωC),
+    // S_in = 4kT·(R1 + 2000 + (R1²(Rs + 2000) + 4000·R1·Rs)/|Z|²), and
+    // ∫ df/|Z|² over the band is 1/(4·Rs·L) less the tail above fHigh,
+    // 1/((2πL)²·fHigh) (the tail below fLow is ~1e-8).
+    let net = format!("{TRAP}E1 o 0 a 0 1\nR2 o out 1k\nR3 out 0 1k\n").replace("L1 a x 1m", "L1 a y 1m\nRS y x 0.1");
+    let r = run(
+        &net,
+        &req(json!({ "input": "VIN", "output": "out", "noiseBand": [1e3, 1e7] })),
+    );
+    let it = &r["noise"]["integrated"];
+    let (r1, rs, l, hi) = (1e3, 0.1, 1e-3, 1e7);
+    let tail = 1.0 / ((2.0 * std::f64::consts::PI * l).powi(2) * hi);
+    let want = FOUR_KT
+        * ((r1 + 2000.0) * (hi - 1e3) + (r1 * r1 * (rs + 2000.0) + 4000.0 * r1 * rs) * (1.0 / (4.0 * rs * l) - tail));
+    assert!(rel(it["inputV2"].as_f64().unwrap(), want) < 1e-5, "{it} vs {want}");
+    assert_eq!(it["converged"], true);
+}
+
+#[test]
+fn a_zero_shared_by_every_noise_transfer_keeps_the_integral() {
+    // Only R1's noise, which sees the same divider as the input: S_in = 4kT·R1
+    // exactly, flat through the notch.
+    let r = run(
+        TRAP,
+        &req(json!({ "input": "VIN", "output": "a", "noiseBand": [1e3, 1e7] })),
+    );
+    let it = &r["noise"]["integrated"];
+    let want = FOUR_KT * 1e3 * (1e7 - 1e3);
+    assert!(rel(it["inputV2"].as_f64().unwrap(), want) < 1e-6, "{it}");
+}
+
+#[test]
+fn flicker_with_af_zero_is_finite_at_dc() {
+    // KF·gm²/(Cox·W·L·f⁰) is white, including at f = 0.
+    let net = CS.replace("af=1.3", "af=0");
+    let r = run(
+        &net,
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [0.0, 1.0, 1e3], "noise": true })),
+    );
+    let out = &r["noise"]["output"];
+    let v0 = out[0]["v2"].as_f64().expect("finite at DC");
+    assert!(rel(v0, out[1]["v2"].as_f64().unwrap()) < 1e-12);
+    assert!(rel(v0, out[2]["v2"].as_f64().unwrap()) < 1e-12);
+    let fl = r["noise"]["contributors"][0]["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "flicker")
+        .unwrap();
+    assert!(fl["v2"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn mos_multiplicity_shows_in_the_flicker_psd() {
+    let psd = |net: &str| {
+        let r = run(net, &req(json!({ "input": "VIN", "output": "out", "noise": true })));
+        r["noise"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "flicker")
+            .unwrap()["psd"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(psd(CS), "\\frac{K_F g_m^{2}}{C_{ox} W L f^{A_F}}");
+    assert_eq!(
+        psd(&CS.replace("L=1u", "L=1u M=2")),
+        "\\frac{K_F g_m^{2}}{C_{ox} M W L f^{A_F}}"
+    );
+}
+
+#[test]
+fn matched_diodes_share_one_current_symbol() {
+    let net = "dd\nVIN in 0 DC 5 AC 1\nVDD vdd 0 5\nR1 in a 10k\nR2 vdd b 10k\nD1 a 0 dd\nD2 b 0 dd\n\
+.model dd d (is=1e-14)\n";
+    let r = run(
+        net,
+        &req(
+            json!({ "input": "VIN", "output": "a", "ref": "b", "noise": true, "match": [["D1", "D2"], ["R1", "R2"]] }),
+        ),
+    );
+    let lf = &r["noise"]["inputLowFreq"];
+    let cur = lf["currents"].as_array().unwrap();
+    assert_eq!(cur.len(), 1, "{}", lf["currents"]);
+    assert_eq!(cur[0]["latex"], "I_{D1,2}");
+    assert_eq!(cur[0]["elements"], json!(["D1", "D2"]));
+    assert_eq!(lf["check"]["ok"], true);
+}
+
+/// A resistor bridge, output a − b: gain R2/(R1+R2) − R4/(R3+R4).
+fn bridge(r: [&str; 4]) -> String {
+    format!(
+        "br\nVIN in 0 DC 1 AC 1\nR1 in a {}\nR2 a 0 {}\nR3 in b {}\nR4 b 0 {}\n",
+        r[0], r[1], r[2], r[3]
+    )
+}
+
+#[test]
+fn a_balanced_bridge_has_no_dc_gain() {
+    let rq = |m: Value| req(json!({ "input": "VIN", "output": "a", "ref": "b", "noise": true, "match": m }));
+    // Nonzero symbolically, zero at these values (the products round
+    // differently: the numerator is ~1e-22 against terms of ~1e-7).
+    let r = run(&bridge(["1.1k", "3.3k", "1.1k", "3.3k"]), &rq(json!([])));
+    assert_eq!(
+        r["noise"]["inputLowFreq"]["unavailable"], "no gain at DC",
+        "{}",
+        r["noise"]["inputLowFreq"]
+    );
+    assert!(!warns(&r, "closed form and numeric"));
+    // Zero once matching merges the arms.
+    let r = run(
+        &bridge(["1k", "2k", "1k", "2k"]),
+        &rq(json!([["R1", "R3"], ["R2", "R4"]])),
+    );
+    assert_eq!(
+        r["noise"]["inputLowFreq"]["unavailable"], "no gain at DC",
+        "{}",
+        r["noise"]["inputLowFreq"]
+    );
+}
+
+#[test]
+fn the_closed_form_check_allows_for_the_match_tolerance() {
+    // R1 and R3 merge (they differ by 9e-10 < MATCH_REL), and the small gain
+    // (≈ −2.5e-4) amplifies that into ~2e-6 of the input noise.
+    let r = run(
+        &bridge(["1k", "1k", "1000.0000009", "1001"]),
+        &req(json!({ "input": "VIN", "output": "a", "ref": "b", "noise": true, "match": [["R1", "R3"]] })),
+    );
+    let lf = &r["noise"]["inputLowFreq"];
+    let diff = lf["check"]["maxRelDiff"].as_f64().unwrap();
+    assert!(diff > 1e-7, "the merge must actually move the value: {diff}");
+    assert_eq!(lf["check"]["ok"], true, "{}", lf["check"]);
+    assert!(!warns(&r, "closed form and numeric"), "{}", r["warnings"]);
+}
+
+#[test]
+fn band_rel_error_comes_from_the_band_solves() {
+    // 100 F to ground: the MNA matrix is ill-conditioned at high frequency
+    // only (κ·eps ≈ 1e-4 at 1 GHz, ≈ 1e-11 below 10 Hz).
+    let net = "rc\nVIN in 0 DC 0 AC 1\nR1 in out 1k\nC1 out 0 100\n";
+    let rel_err = |freqs: [f64; 1], band: [f64; 2]| {
+        let r = run(
+            net,
+            &req(json!({ "input": "VIN", "output": "out", "freqs": freqs, "noiseBand": band })),
+        );
+        r["noise"]["integrated"]["relError"].as_f64().unwrap()
+    };
+    // Ill-conditioned spectrum point, well-conditioned band.
+    assert!(rel_err([1e9], [1.0, 10.0]) < 1e-6);
+    // Well-conditioned spectrum point, ill-conditioned band.
+    assert!(rel_err([1.0], [1e8, 1e9]) > 1e-5);
+}

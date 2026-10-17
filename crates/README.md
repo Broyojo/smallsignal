@@ -39,7 +39,7 @@ with numeric values, poles and zeros, and the operating point.
 
 ## Correctness checks
 
-- `oracle/`: 29 hand-built circuits plus a seeded random-circuit fuzzer, each
+- `oracle/`: hand-built circuits (`corpus/`) plus a seeded random-circuit fuzzer, each
   compared with ngspice (`.op`, `.ac`) at 1e-6. See `oracle/README.md`.
 - `verify: true`: an exact check of the symbolic solution, A·N = b·D as a
   polynomial identity, tested modulo 2⁶¹−1 at random points (Schwartz–Zippel).
@@ -126,22 +126,26 @@ to 1e-6 (`oracle/`):
 | diode | `shot`, `flicker` | 2q·\|Id\|, KF·\|Id\|^AF/f |
 
 Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
-ngspice. (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
+ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
+noise does (2q·gmin·|v| ≈ 3e-31 A²/Hz at 1 V and gmin = 1e-12). (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
 KF·Id^AF/(Cox·L²·f). With TOX given and KP not, KP = UO·Cox, UO default 600.)
 
 Output PSD S_out = Σ|Z_k|²·S_k with every transfer Z_k from one adjoint LU
 solve per frequency on the full model (input source zeroed); input-referred
 S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 
-- `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite, e.g. flicker at 0 Hz).
+- `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite, e.g. flicker with AF > 0 at 0 Hz).
 - `contributors`: `[{f, sources: [{element, kind, v2, fraction}]}]`, per
   frequency, sorted by output contribution; fractions sum to 1.
-- `sources`: `[{element, kind, psd (LaTeX), white, flicker: {coef, exp}}]`.
-- `integrated` (with `noiseBand`): `{fLow, fHigh, outputRms, inputRms,
-  outputV2, inputV2, relError, evaluations, converged}`. Adaptive Simpson in
-  ln f (10 panels per decade plus the gain's pole frequencies as
-  breakpoints) to 1e-6; `relError` is the Richardson estimate plus LU
-  rounding. (ngspice's own `inoise_total` can be off by percent; compare
+- `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
+- `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
+  decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
+  evaluations, converged}`. Adaptive Simpson in ln f (10 panels per decade
+  plus the gain's pole and zero frequencies as breakpoints) to 1e-6;
+  `relError` is the Richardson estimate plus the LU rounding of the band's
+  solves. A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the band where the
+  output noise does not vanish makes `inputV2`/`inputRms` null, with
+  `unavailable`. (ngspice's own `inoise_total` can be off by percent; compare
   with an integral of its spectrum.)
 - `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
   `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
@@ -149,8 +153,11 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form, then
   magnitude pruning; the smallest form within `tolerance`), each `{latex,
   value, thermal: {num, den}, shot: {num, den}, terms}`; `currents` lists the
-  bias-current symbols I_{C1}, I_{B1}, I_{D1}; `check` compares the exact
-  value with the numeric DC solve. Flicker is numeric only. `unavailable`
-  says why when there is no DC limit (no gain at DC, or singular at s = 0).
+  bias-current symbols I_{C1}, I_{B1}, I_{D1} (one per matched group, e.g.
+  I_{D1,2}); `check` compares the exact value with the numeric DC solve,
+  within rounding and the match tolerance. Flicker is numeric only.
+  `unavailable` says why when there is no DC limit: no gain at DC (also when
+  it vanishes at the values or once matched symbols merge), or singular at
+  s = 0.
   Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
   system at s = 0, so the determinant cancels exactly.

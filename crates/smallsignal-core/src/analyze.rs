@@ -167,6 +167,9 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     if freqs.len() > MAX_FREQS {
         return Err(format!("too many frequencies ({}; limit {MAX_FREQS})", freqs.len()));
     }
+    if let Some(band) = req.noise_band {
+        crate::noise::check_band(band)?;
+    }
     let inputs: Vec<usize> = std::iter::once(input).chain(neg).collect();
     let bound = unknowns_lower_bound(&net, &inputs);
     if bound > MAX_UNKNOWNS {
@@ -352,6 +355,15 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             let e = Expr::from_mna(&XPoly::constant(1, symbols.syms.len()), &x(&d)?, &symbols.syms);
             roots(&e.s_coeffs().1).iter().map(|p| p.norm() / (2.0 * PI)).collect()
         };
+        // The gain's zeros as reported (Hz), after common factors cancel.
+        let zeros_hz: Vec<(f64, f64)> = resp["gain"]["zeros"]
+            .as_array()
+            .map(|zs| {
+                zs.iter()
+                    .filter_map(|z| Some((z["re"].as_f64()?, z["im"].as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
         let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new());
         let ctx = crate::noise::Ctx {
             net: &net,
@@ -370,6 +382,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             tol,
             max_terms,
             poles_hz,
+            zeros_hz,
         };
         resp.insert("noise".into(), crate::noise::report(&ctx, &mut warnings)?);
     }

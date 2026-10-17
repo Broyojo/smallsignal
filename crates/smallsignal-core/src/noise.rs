@@ -87,6 +87,14 @@ impl Source {
     pub fn psd(&self, f: f64) -> f64 {
         match self.flicker {
             Some((c, x)) if f > 0.0 => c / f.powf(x),
+            // c/f^x as f → 0: unbounded for x > 0, constant for x = 0.
+            Some((c, x)) if x <= 0.0 => {
+                if x == 0.0 {
+                    c
+                } else {
+                    0.0
+                }
+            }
             Some(_) => f64::INFINITY,
             None => self.white,
         }
@@ -316,6 +324,24 @@ pub struct Integral {
 
 const MAX_EVALS: usize = 200_000;
 
+/// Widest band integrated, in decades (10 starting panels per decade).
+pub const MAX_BAND_DECADES: f64 = 40.0;
+
+/// A band must be finite with 0 < fLow < fHigh, at most MAX_BAND_DECADES
+/// wide (measured as a difference of logarithms, which cannot overflow).
+pub fn check_band([lo, hi]: [f64; 2]) -> Result<(), String> {
+    if !(lo > 0.0 && hi > lo && hi.is_finite()) {
+        return Err(format!("noiseBand must satisfy 0 < fLow < fHigh (got [{lo}, {hi}])"));
+    }
+    let decades = hi.log10() - lo.log10();
+    if decades > MAX_BAND_DECADES {
+        return Err(format!(
+            "noiseBand spans {decades:.0} decades (limit {MAX_BAND_DECADES:.0})"
+        ));
+    }
+    Ok(())
+}
+
 /// ∫_{lo}^{hi} g(f) df for two integrands at once, by adaptive Simpson in
 /// u = ln f (integrand g(e^u)·e^u), starting from 10 panels per decade plus
 /// the given breakpoints (pole frequencies), refined until each panel's
@@ -328,7 +354,12 @@ pub fn integrate_log(
     rtol: f64,
 ) -> Option<Integral> {
     let (u_lo, u_hi) = (lo.ln(), hi.ln());
-    let decades = (hi / lo).log10();
+    // Callers validate the band (check_band); the bound keeps the grid finite
+    // regardless.
+    let decades = (hi.log10() - lo.log10()).min(MAX_BAND_DECADES);
+    if decades.is_nan() || decades <= 0.0 {
+        return None;
+    }
     let n = ((decades * 10.0).ceil() as usize).max(8);
     let mut us: Vec<f64> = (0..=n).map(|k| u_lo + (u_hi - u_lo) * k as f64 / n as f64).collect();
     us.extend(breaks.iter().filter(|&&b| b > lo && b < hi).map(|b| b.ln()));
@@ -402,6 +433,9 @@ pub struct LowFreq {
     pub syms: Vec<Sym>,
     pub thermal: (XPoly, XPoly),
     pub shot: (XPoly, XPoly),
+    /// Largest relative difference between merged (matched) values: the
+    /// parameters' and the bias currents'.
+    pub mismatch: f64,
 }
 
 /// `a` with every reactive term removed: the s → 0 limit of each entry.
@@ -455,9 +489,10 @@ pub fn low_freq(
         let pick = |c: Option<usize>| c.map(|c| cramer_with(&a0, c, b, max_terms)).unwrap_or(Ok(Poly::zero()));
         Ok(sub(&pick(co)?, &pick(cr)?))
     };
+    let no_gain = || Ok(Err("no gain at DC".to_string()));
     let na = num_for(&sys.b)?;
     if na.is_zero() {
-        return Ok(Err("no gain at DC".to_string()));
+        return no_gain();
     }
     // Transfer numerators per node (current injected there), memoized.
     let mut per_node: HashMap<usize, Poly> = HashMap::new();
@@ -482,7 +517,13 @@ pub fn low_freq(
     let mut syms = symbols.syms.clone();
     let nbase = syms.len();
     let param_index = |name: &str| ss.params.iter().position(|p| p.name == name);
-    let gm_class = |el: &str| param_index(&format!("gm_{el}")).map(|p| symbols.class[p]);
+    // A device's match class: its gm (MOSFET, BJT) or r_d (diode).
+    let dev_class = |el: &str| {
+        param_index(&format!("gm_{el}"))
+            .or_else(|| param_index(&format!("rd_{el}")))
+            .map(|p| symbols.class[p])
+    };
+    let mut mismatch = symbols.mismatch;
     let mut cur_index: Vec<Option<usize>> = Vec::new();
     for s in srcs {
         let Some(SymPsd {
@@ -495,13 +536,17 @@ pub fn low_freq(
         let twin = (nbase..syms.len()).find(|&k| {
             let t = &syms[k];
             t.name.split('_').next() == c.name.split('_').next()
-                && gm_class(&t.elements[0]).is_some()
-                && gm_class(&t.elements[0]) == gm_class(&s.element)
+                && dev_class(&t.elements[0]).is_some()
+                && dev_class(&t.elements[0]) == dev_class(&s.element)
                 && (c.value.is_nan() && t.value.is_nan()
                     || (t.value - c.value).abs() <= MATCH_REL * t.value.abs().max(c.value.abs()))
         });
         match twin {
             Some(k) => {
+                if !c.value.is_nan() {
+                    let t = syms[k].value;
+                    mismatch = mismatch.max((t - c.value).abs() / t.abs().max(c.value.abs()));
+                }
                 syms[k].elements.push(s.element.clone());
                 syms[k].latex = sym::merged_dev_latex(c.base, c.sub, &syms[k].elements);
                 cur_index.push(Some(k));
@@ -526,6 +571,16 @@ pub fn low_freq(
     let nsym = syms.len();
     let x = |p: &Poly| -> Result<XPoly, String> { Ok(XPoly::from_poly(p, &symbols.class, nbase)?.padded(nsym)) };
     let xa = x(&na)?;
+    // The gain at s = 0 can vanish once matched symbols merge, or at the
+    // numeric values (a balanced bridge): zero within its evaluation bound.
+    if xa.is_zero() {
+        return no_gain();
+    }
+    let (g0, g0_err) = Expr::from_mna(&xa, &XPoly::constant(1, nsym), &syms).eval_with_bound(Complex64::new(0.0, 0.0));
+    // (Symbolic mode: no values, g0 is NaN.)
+    if !g0.re.is_nan() && (g0.norm() == 0.0 || g0_err >= 1.0) {
+        return no_gain();
+    }
     let na2 = xa.mul(&xa, max_terms)?;
     let mut groups: [(XPoly, i128); 2] = [(XPoly::default(), 1), (XPoly::default(), 1)];
     // Common denominator per group: the lcm of the PSD fractions' denominators.
@@ -556,6 +611,7 @@ pub fn low_freq(
         syms,
         thermal: (th, na2.scaled(lt)?),
         shot: (sh, na2.scaled(ls)?),
+        mismatch,
     }))
 }
 
@@ -671,14 +727,24 @@ pub struct Ctx<'a> {
     pub max_terms: usize,
     /// Pole frequencies (Hz): breakpoints for the band integral.
     pub poles_hz: Vec<f64>,
+    /// The gain's zeros (re, im) in Hz: breakpoints, and on the jω axis a
+    /// singularity of the input-referred spectrum.
+    pub zeros_hz: Vec<(f64, f64)>,
 }
+
+/// A zero with |re| ≤ AXIS_REL·|im| is taken to lie on the jω axis: root
+/// finding leaves |re| ~ 1e-15·|im| on lossless LC and twin-T notches, while
+/// a notch of Q up to 5e8 is integrated (its zero is a breakpoint).
+const AXIS_REL: f64 = 1e-9;
 
 /// Relative accuracy asked of the band integral.
 const INTEGRAL_RTOL: f64 = 1e-6;
 
-fn kind_latex(s: &Source) -> String {
+/// The source's PSD formula; `mult` is a MOSFET's multiplicity M.
+fn kind_latex(s: &Source, mult: f64) -> String {
     match (s.kind, &s.sym) {
         ("flicker", _) => match s.element.chars().next().map(|c| c.to_ascii_uppercase()) {
+            Some('M') if mult != 1.0 => "\\frac{K_F g_m^{2}}{C_{ox} M W L f^{A_F}}".to_string(),
             Some('M') => "\\frac{K_F g_m^{2}}{C_{ox} W L f^{A_F}}".to_string(),
             Some('Q') => "\\frac{K_F I_B^{A_F}}{f}".to_string(),
             _ => "\\frac{K_F I_D^{A_F}}{f}".to_string(),
@@ -692,18 +758,26 @@ fn kind_latex(s: &Source) -> String {
 }
 
 pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
-    if let Some([lo, hi]) = c.band {
-        if !(lo > 0.0 && hi > lo && hi.is_finite()) {
-            return Err(format!("noiseBand must satisfy 0 < fLow < fHigh (got [{lo}, {hi}])"));
-        }
+    if let Some(band) = c.band {
+        check_band(band)?;
     }
     let srcs = sources(c.net, c.op);
+    let mult_of = |name: &str| {
+        c.net
+            .elements
+            .iter()
+            .find_map(|e| match &e.kind {
+                Kind::M { mult, .. } if e.name == name => Some(*mult),
+                _ => None,
+            })
+            .unwrap_or(1.0)
+    };
     let in_unit = if c.input_is_v { "V^2/Hz" } else { "A^2/Hz" };
     let src_json: Vec<Value> = srcs
         .iter()
         .map(|s| {
             json!({
-                "element": s.element, "kind": s.kind, "psd": kind_latex(s),
+                "element": s.element, "kind": s.kind, "psd": kind_latex(s, mult_of(&s.element)),
                 "white": if s.flicker.is_some() { Value::Null } else { json!(s.white).as_f64().map(Value::from).unwrap_or(Value::Null) },
                 "flicker": s.flicker.map(|(k, x)| json!({ "coef": k, "exp": x })),
             })
@@ -780,13 +854,64 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let integrated = match c.band {
         None => Value::Null,
         Some([lo, hi]) => {
-            let mut g = |f: f64| -> Option<[f64; 2]> {
-                let p = num.at(f, &srcs)?;
-                let (total, _) = output_psd(&p, &srcs, f);
-                Some([total, total / p.gain.norm_sqr()])
+            // A gain zero on the jω axis in the band: S_in = S_out/|H|² is not
+            // integrable across it unless every noise transfer vanishes there
+            // too (then S_in stays level). Without that, S_in at the zero
+            // stands far above its neighbours (|H|² falls by (1e-4/root error)²).
+            let s_in = |f: f64| {
+                num.at(f, &srcs).map(|p| {
+                    let (total, _) = output_psd(&p, &srcs, f);
+                    total / p.gain.norm_sqr()
+                })
             };
-            match integrate_log(&mut g, lo, hi, &c.poles_hz, INTEGRAL_RTOL) {
-                Some(r) if r.value.iter().all(|v| v.is_finite()) => {
+            let singular = c
+                .zeros_hz
+                .iter()
+                .filter(|&&(re, im)| im != 0.0 && re.abs() <= AXIS_REL * im.abs())
+                .map(|&(_, im)| im.abs())
+                .filter(|&f0| f0 >= lo * (1.0 - 1e-9) && f0 <= hi * (1.0 + 1e-9))
+                .find(|&f0| match s_in(f0) {
+                    Some(v) if v.is_infinite() => true,
+                    Some(v) => [1.0 - 1e-4, 1.0 + 1e-4]
+                        .iter()
+                        .all(|k| matches!(s_in(f0 * k), Some(n) if v > 100.0 * n)),
+                    None => false,
+                });
+            let mut breaks = c.poles_hz.clone();
+            breaks.extend(c.zeros_hz.iter().map(|&(re, im)| re.hypot(im)));
+            // LU accuracy of the solves the quadrature actually makes.
+            let mut band_lu = 0.0f64;
+            let mut g = |f: f64| -> Option<[f64; 2]> {
+                let (p, err) = num.at_with_cond(f, &srcs, true)?;
+                band_lu = band_lu.max(err);
+                let (total, _) = output_psd(&p, &srcs, f);
+                let input = if singular.is_some() {
+                    0.0
+                } else {
+                    total / p.gain.norm_sqr()
+                };
+                Some([total, input])
+            };
+            let r = integrate_log(&mut g, lo, hi, &breaks, INTEGRAL_RTOL);
+            match (r, singular) {
+                (Some(r), Some(f0)) if r.value[0].is_finite() => {
+                    if !r.converged {
+                        warnings.push("noise: the band integral did not fully converge".to_string());
+                    }
+                    let rel = if r.value[0] > 0.0 { r.err[0] / r.value[0] } else { 0.0 };
+                    json!({
+                        "fLow": lo, "fHigh": hi,
+                        "outputRms": r.value[0].sqrt(), "inputRms": null,
+                        "outputV2": r.value[0], "inputV2": null,
+                        "relError": rel + band_lu,
+                        "evaluations": r.evals, "converged": r.converged,
+                        "unavailable": format!(
+                            "the input-referred spectrum is unbounded in the band (the gain is zero at {})",
+                            hz_text(f0)
+                        ),
+                    })
+                }
+                (Some(r), None) if r.value.iter().all(|v| v.is_finite()) => {
                     if !r.converged {
                         warnings.push("noise: the band integral did not fully converge".to_string());
                     }
@@ -799,7 +924,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                         "outputV2": r.value[0], "inputV2": r.value[1],
                         // Estimated relative error of the integrals (the rms
                         // values' is half of it), plus LU rounding.
-                        "relError": rel + lu_worst,
+                        "relError": rel + band_lu,
                         "evaluations": r.evals, "converged": r.converged,
                     })
                 }
@@ -846,6 +971,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     }))
 }
 
+/// 159.155 kHz.
+fn hz_text(f: f64) -> String {
+    let (v, unit) = [(1e9, "GHz"), (1e6, "MHz"), (1e3, "kHz")]
+        .into_iter()
+        .find(|&(k, _)| f >= k)
+        .map(|(k, u)| (f / k, u))
+        .unwrap_or((f, "Hz"));
+    format!("{} {unit}", (v * 1e3).round() / 1e3)
+}
+
 fn num_or_null(v: f64) -> Value {
     if v.is_finite() {
         json!(v)
@@ -854,25 +989,30 @@ fn num_or_null(v: f64) -> Value {
     }
 }
 
-/// LaTeX and value of 4kT·thermal + 2q·shot.
-fn render_pair(th: Option<&Expr>, sh: Option<&Expr>, syms: &[Sym]) -> (String, f64, f64) {
+/// Value of 4kT·thermal + 2q·shot and its relative evaluation bound.
+fn pair_value(th: Option<&Expr>, sh: Option<&Expr>) -> (f64, f64) {
+    let bound = [th, sh]
+        .into_iter()
+        .flatten()
+        .map(|e| e.eval_with_bound(Complex64::new(0.0, 0.0)).1)
+        .fold(0.0, f64::max);
+    (group_value(th, Scale::FourKT) + group_value(sh, Scale::TwoQ), bound)
+}
+
+/// LaTeX of 4kT·thermal + 2q·shot.
+fn pair_latex(th: Option<&Expr>, sh: Option<&Expr>, syms: &[Sym]) -> String {
     let mut parts = Vec::new();
-    let mut bound = 0.0f64;
     if let Some(e) = th {
         parts.push(group_latex(e, "4kT", syms));
-        bound = bound.max(e.eval_with_bound(Complex64::new(0.0, 0.0)).1);
     }
     if let Some(e) = sh {
         parts.push(group_latex(e, "2q", syms));
-        bound = bound.max(e.eval_with_bound(Complex64::new(0.0, 0.0)).1);
     }
-    let latex = if parts.is_empty() {
+    if parts.is_empty() {
         "0".to_string()
     } else {
         parts.join(" + ")
-    };
-    let value = group_value(th, Scale::FourKT) + group_value(sh, Scale::TwoQ);
-    (latex, value, bound)
+    }
 }
 
 /// A thermal + shot pair of expressions.
@@ -892,8 +1032,10 @@ fn terms(p: &Pair) -> usize {
 /// JSON of one form: LaTeX and plain num/den per group (coefficients of 4kT
 /// and of 2q) only when small enough to read.
 fn pair_json(p: &Pair, syms: &[Sym]) -> (Value, f64, f64) {
-    let (latex, value, bound) = render_pair(p.0.as_ref(), p.1.as_ref(), syms);
+    let (value, bound) = pair_value(p.0.as_ref(), p.1.as_ref());
     let small = terms(p) <= crate::analyze::LATEX_TERM_LIMIT;
+    // LaTeX only when it will be shown: building it walks every term.
+    let latex = small.then(|| pair_latex(p.0.as_ref(), p.1.as_ref(), syms));
     let readable = terms(p) <= PLAIN_TERM_LIMIT;
     let plain = |e: Option<&Expr>| {
         e.map(|e| {
@@ -902,7 +1044,7 @@ fn pair_json(p: &Pair, syms: &[Sym]) -> (Value, f64, f64) {
         })
     };
     let v = json!({
-        "latex": if small { json!(latex) } else { Value::Null },
+        "latex": latex,
         "value": num_or_null(value),
         "thermal": if readable { json!(plain(p.0.as_ref())) } else { Value::Null },
         "shot": if readable { json!(plain(p.1.as_ref())) } else { Value::Null },
@@ -998,7 +1140,19 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
             } else {
                 0.0
             };
-            json!({ "ok": diff <= 1e-9 + 8.0 * lu + 4.0 * bound, "maxRelDiff": diff })
+            // Merged matched values take the first member's; members agree to
+            // `mismatch`, which moves each group by at most that per merged
+            // factor, amplified by cancellation (as the other quantities' check).
+            let merge = if lf.mismatch > 0.0 {
+                [&exact.0, &exact.1]
+                    .into_iter()
+                    .flatten()
+                    .map(|e| lf.mismatch * e.max_degree() as f64 * e.cancellation(Complex64::new(0.0, 0.0)))
+                    .fold(0.0, f64::max)
+            } else {
+                0.0
+            };
+            json!({ "ok": diff <= 1e-9 + 8.0 * lu + 4.0 * bound + 4.0 * merge, "maxRelDiff": diff })
         }
         _ => Value::Null,
     };
