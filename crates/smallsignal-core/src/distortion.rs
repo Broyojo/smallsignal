@@ -441,6 +441,88 @@ fn mono_sub(m: &[u8; 3], vars: &[&str]) -> (String, String) {
 
 // --- numeric Volterra ---------------------------------------------------------
 
+/// A factorization of A whose solves are refined against the stamps
+/// themselves: the residual b − A·x is summed over every stamp term
+/// (each conductance, gain, s·C… alone, not their rounded sum per entry)
+/// with error-free products and sums, so x solves the circuit whose
+/// elements are each rounded once, not a matrix whose entries add a tiny
+/// conductance to a large one and lose most of it (a node held only by a
+/// gmin-sized junction next to a 640 Ω resistor: the f64 entry keeps 6 of
+/// its digits). The refinement converges while κ·eps < 1.
+/// Relative error of an LU solve (normwise) above which it is refined.
+const REFINE_REL: f64 = 1e-12;
+
+struct Refined {
+    /// Per row: (column, value) of each stamp term.
+    rows: Vec<Vec<(usize, Complex64)>>,
+    lu: LuComplex,
+}
+
+impl Refined {
+    /// A·x = b. When the LU solution is off by more than REFINE_REL of its
+    /// size (normwise; the check compares to 1e-8), it is refined while
+    /// each step shrinks the residual (at most 3 steps). Otherwise the LU
+    /// solution stands, with its exact structural zeros (a refined pair of
+    /// equal node voltages can differ by an ulp, which would make an
+    /// exactly-zero a_n numerically nonzero).
+    fn solve(&self, b: &[Complex64]) -> Vec<Complex64> {
+        let n = b.len();
+        let norm = |v: &[Complex64]| v.iter().map(|z| z.norm()).fold(0.0, f64::max);
+        let res = |x: &[Complex64]| -> (Vec<Complex64>, f64) {
+            let r: Vec<Complex64> = (0..n).map(|i| residual(&self.rows[i], x, b[i])).collect();
+            let size = norm(&r);
+            (r, size)
+        };
+        let mut x = self.lu.solve(b);
+        let (mut r, mut size) = res(&x);
+        for step in 0..3 {
+            // Zero, or NaN (an unsolved order): nothing to refine.
+            if size.is_nan() || size == 0.0 {
+                break;
+            }
+            let dx = self.lu.solve(&r);
+            let small = norm(&dx) <= REFINE_REL * norm(&x);
+            if step == 0 && (small || dx.iter().any(|z| z.re.is_nan())) {
+                break;
+            }
+            let next: Vec<Complex64> = x.iter().zip(&dx).map(|(a, d)| a + d).collect();
+            let (nr, nsize) = res(&next);
+            if nsize.is_nan() || nsize >= size {
+                break;
+            }
+            (x, r, size) = (next, nr, nsize);
+        }
+        x
+    }
+}
+
+/// bᵢ − Σ term·x_col, each part summed with error-free transformations
+/// (Ogita–Rump–Oishi Dot2) and rounded once.
+fn residual(row: &[(usize, Complex64)], x: &[Complex64], bi: Complex64) -> Complex64 {
+    let dot2 = |init: f64, terms: &mut dyn Iterator<Item = (f64, f64)>| {
+        let (mut s, mut c) = (init, 0.0f64);
+        for (u, v) in terms {
+            let p = u * v;
+            let pe = u.mul_add(v, -p);
+            let t = s + p;
+            let bb = t - s;
+            let se = (s - (t - bb)) + (p - bb);
+            s = t;
+            c += se + pe;
+        }
+        s + c
+    };
+    let re = dot2(
+        bi.re,
+        &mut row.iter().flat_map(|&(c, a)| [(-a.re, x[c].re), (a.im, x[c].im)]),
+    );
+    let im = dot2(
+        bi.im,
+        &mut row.iter().flat_map(|&(c, a)| [(-a.re, x[c].im), (-a.im, x[c].re)]),
+    );
+    Complex64::new(re, im)
+}
+
 /// Output and input scale of the analysis (the gain system's excitation).
 pub struct Probe<'a> {
     pub sys: &'a System,
@@ -469,10 +551,30 @@ fn bilinear(u1: &[Complex64], u2: &[Complex64], m: &[u8; 3]) -> Complex64 {
 }
 
 impl Probe<'_> {
-    fn lu(&self, s: Complex64) -> Option<LuComplex> {
+    fn lu(&self, s: Complex64) -> Option<Refined> {
         #[cfg(test)]
         tests::FACTORED.with(|v| v.borrow_mut().push(s.im));
-        LuComplex::factor(self.sys.dim, matrix_at(self.sys, self.ss, s))
+        let lu = LuComplex::factor(self.sys.dim, matrix_at(self.sys, self.ss, s))?;
+        // Each entry's terms (one per stamp monomial) evaluated alone.
+        let n = self.sys.dim;
+        let rows = (0..n)
+            .map(|r| {
+                let mut t = Vec::new();
+                for c in 0..n {
+                    for (&m, &k) in &self.sys.a[r][c].terms {
+                        let mut v = k as f64;
+                        let mut bits = m;
+                        while bits != 0 {
+                            v *= self.ss.params[bits.trailing_zeros() as usize].mna_value();
+                            bits &= bits - 1;
+                        }
+                        t.push((c, v * s.powu((m & self.ss.reactive_mask).count_ones())));
+                    }
+                }
+                t
+            })
+            .collect();
+        Some(Refined { rows, lu })
     }
 
     fn node(&self, x: &[Complex64], n: usize) -> Complex64 {

@@ -1047,3 +1047,38 @@ M2 o2 inn tail 0 nb W=10u L=1u\nITAIL tail 0 200u\nVIP inp 0 DC 0.8 AC 1\nVINN i
         .count();
     assert_eq!(n, 1, "{}", r["warnings"]);
 }
+
+#[test]
+fn a_tiny_conductance_beside_a_large_one_keeps_its_digits() {
+    // oracle/regressions/dc_nonconv_mos: the vdd/n2 island hangs on M1's
+    // bulk-drain junction alone (3.9e-13 S) and on R2 (1.6e-3 S) to a dead
+    // end, so v(n2) = v(n1) and a1 = 1 exactly, a2 = a3 = 0 (the closed
+    // form). Summed into one f64 matrix entry, g_R2 + g_bd keeps only 6
+    // digits of g_bd, and a numeric solve of that matrix gives
+    // a1 = 1 + 2.4e-7 (and a2 = −1.1e-12): a failed check. The reference
+    // is refined against each stamp term, so it agrees.
+    let net = "wild\n.options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000\n\
+V2 in 0 DC 0.893 AC 1\nR1 n3 m1 5286\nR2 n2 vdd 639.8\nM1 vdd in n1 n1 pch W=11.97u L=0.5u\nV3 m1 in DC 0\n\
+H1 n3 n1 V3 10.54\n.model pch PMOS (LEVEL=1 KP=0.0003912 VTO=-0.4293 LAMBDA=0.02821 GAMMA=0.7669 PHI=0.7)\n";
+    let r = run(net, &req(json!({ "input": "V2", "output": "n2", "nonlinear": ["M1"] })));
+    let d = &r["distortion"];
+    assert_eq!(d["check"]["ok"], true, "{}", d["check"]);
+    assert_eq!(d["coefficients"][0]["latex"], "1");
+    assert!(
+        rel(d["coefficients"][0]["numeric"].as_f64().unwrap(), 1.0) < 1e-12,
+        "{}",
+        d["coefficients"][0]
+    );
+    for n in 1..3 {
+        assert!(
+            d["coefficients"][n]["numeric"].as_f64().unwrap().abs() < 1e-20,
+            "{}",
+            d["coefficients"][n]
+        );
+    }
+    assert!(!r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains("closed form and numeric")));
+}
