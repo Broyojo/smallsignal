@@ -462,3 +462,33 @@ test("model parameters are editable: the bias follows the square law", async ({
   await expect(models.locator("summary")).toHaveText("Models");
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
 });
+
+test("stored model values: malformed ones are dropped, every edit shows, Reset clears all", async ({
+  page,
+}) => {
+  // A PMOS override from another circuit, next to a malformed NMOS entry.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { KP: 1, VTO: "0.4" }, pmos: { VTO: "-0.3" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.csWired);
+  const summary = panel.getByText(/^Models/u);
+  await expect(summary).toHaveText("Models (edited)");
+  await summary.click();
+  await expect(panel.getByLabel("NMOS KP")).toHaveValue("");
+  await expect(panel.getByLabel("NMOS VTO")).toHaveValue("0.4");
+  // Not in this circuit, but edited: shown rather than applied unseen.
+  await expect(panel.getByLabel("PMOS VTO")).toHaveValue("-0.3");
+
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(summary).toHaveText("Models");
+  await expect(panel.getByLabel("PMOS VTO")).toHaveCount(0);
+  await expect(panel.getByLabel("NMOS VTO")).toHaveValue("");
+  expect(
+    await page.evaluate(() => localStorage.getItem("smallsignal.models")),
+  ).toBe("{}");
+});

@@ -45,41 +45,51 @@ import {
 import "./small-signal-panel.css";
 
 const SOLVE_DEBOUNCE_MS = 120;
-const SI = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*(meg|[fpnumkgt])?/iu;
-const SI_SCALE: Record<string, number> = {
-  f: 1e-15,
-  p: 1e-12,
-  n: 1e-9,
-  u: 1e-6,
-  m: 1e-3,
-  k: 1e3,
-  meg: 1e6,
-  g: 1e9,
-  t: 1e12,
+/** SPICE scale suffixes as decimal exponents (`meg` and `mil` aside). */
+const SPICE_EXPONENT: Record<string, number> = {
+  t: 12,
+  g: 9,
+  k: 3,
+  m: -3,
+  u: -6,
+  // The micro sign (U+00B5) and the Greek mu (U+03BC) look the same.
+  "\u00b5": -6,
+  "\u03bc": -6,
+  n: -9,
+  p: -12,
+  f: -15,
+  a: -18,
 };
 
-/** `1k, 10meg` → [1000, 1e7]; anything unreadable is dropped. */
+/**
+ * One SPICE number, read as the solver's `parse_value` reads it: `-0.45`,
+ * `200u`, `1.2meg`, `10kohm`, `1a`, `5mil`. It refuses more (spaces, stray
+ * characters, overflow) but never reads a different value.
+ */
+export function parseSpiceNumber(text: string): number | null {
+  const match =
+    /^([+-]?(?:\d+\.?\d*|\.\d+))(?:e([+-]?\d+))?([a-z\u00b5\u03bcΩ]*)$/iu.exec(
+      text.trim(),
+    );
+  if (!match) return null;
+  const [, mantissa = "", exponent = "0", unit = ""] = match;
+  const letters = unit.toLowerCase();
+  const scale = letters.startsWith("meg")
+    ? 6
+    : (SPICE_EXPONENT[letters[0] ?? ""] ?? 0);
+  // The suffix moves the decimal exponent, so `2.5u` reads like `2.5e-6`.
+  const value = letters.startsWith("mil")
+    ? Number(`${mantissa}e${exponent}`) * 25.4e-6
+    : Number(`${mantissa}e${Number(exponent) + scale}`);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** `1k, 10meg` → [1000, 1e7]; anything unreadable or negative is dropped. */
 export function parseFrequencies(text: string): number[] {
   return text
     .split(/[\s,;]+/u)
-    .map((token) => {
-      const match = SI.exec(token);
-      if (!match) return NaN;
-      return Number(match[1]) * (SI_SCALE[match[2]?.toLowerCase() ?? ""] ?? 1);
-    })
-    .filter((value) => Number.isFinite(value) && value >= 0);
-}
-
-/** One SPICE number: `-0.5`, `200u`, `1.2meg`, `50V`. Null if unreadable. */
-export function parseSpiceNumber(text: string): number | null {
-  const match =
-    /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(meg|[fpnumkgt])?[a-z]*\s*$/iu.exec(
-      text,
-    );
-  if (!match) return null;
-  const value =
-    Number(match[1]) * (SI_SCALE[match[2]?.toLowerCase() ?? ""] ?? 1);
-  return Number.isFinite(value) ? value : null;
+    .map(parseSpiceNumber)
+    .filter((value): value is number => value !== null && value >= 0);
 }
 
 /** A SPICE number as an engineer writes it: 0.5, 50, 200u, 1f. */
@@ -136,12 +146,38 @@ export function modelValue(name: string, text: string): number | null {
 type ModelText = Partial<Record<ModelKind, Record<string, string>>>;
 const MODEL_STORAGE_KEY = "smallsignal.models";
 
+/** Stored model text, keeping only known kinds and string parameters. */
+export function readModelText(stored: string | null): ModelText {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored ?? "{}");
+  } catch {
+    return {};
+  }
+  const text: ModelText = {};
+  if (!parsed || typeof parsed !== "object") return text;
+  for (const kind of Object.keys(DEFAULT_MODEL_PARAMETERS) as ModelKind[]) {
+    const params: unknown = (parsed as Record<string, unknown>)[kind];
+    if (!params || typeof params !== "object") continue;
+    for (const name of Object.keys(DEFAULT_MODEL_PARAMETERS[kind])) {
+      const typed = (params as Record<string, unknown>)[name];
+      if (typeof typed === "string" && typed.trim())
+        (text[kind] ??= {})[name] = typed;
+    }
+  }
+  return text;
+}
+
+/** Whether any model parameter is typed in, valid or not. */
+export function modelTextEdited(text: ModelText): boolean {
+  return Object.values(text).some((params) =>
+    Object.values(params ?? {}).some((typed) => typed.trim()),
+  );
+}
+
 function loadModelText(): ModelText {
   try {
-    const stored = JSON.parse(
-      window.localStorage.getItem(MODEL_STORAGE_KEY) ?? "{}",
-    ) as unknown;
-    return stored && typeof stored === "object" ? (stored as ModelText) : {};
+    return readModelText(window.localStorage.getItem(MODEL_STORAGE_KEY));
   } catch {
     return {};
   }
@@ -176,12 +212,15 @@ function ModelFields({
   text: ModelText;
   onChange: (text: ModelText) => void;
 }) {
-  const edited = kinds.some((kind) =>
-    Object.values(text[kind] ?? {}).some((typed) => typed.trim()),
+  // Every edited kind shows, used here or not: nothing applies unseen.
+  const shown = (Object.keys(MODEL_TITLE) as ModelKind[]).filter(
+    (kind) =>
+      kinds.includes(kind) ||
+      Object.values(text[kind] ?? {}).some((typed) => typed.trim()),
   );
   return (
     <>
-      {kinds.map((kind) => (
+      {shown.map((kind) => (
         <fieldset key={kind} className="small-signal-model">
           <legend>{MODEL_TITLE[kind]}</legend>
           {Object.entries(DEFAULT_MODEL_PARAMETERS[kind]).map(
@@ -214,15 +253,11 @@ function ModelFields({
           )}
         </fieldset>
       ))}
-      {edited ? (
+      {modelTextEdited(text) ? (
         <button
           type="button"
           className="small-signal-reset"
-          onClick={() => {
-            const next = { ...text };
-            for (const kind of kinds) delete next[kind];
-            onChange(next);
-          }}
+          onClick={() => onChange({})}
         >
           Reset to defaults
         </button>
@@ -753,8 +788,8 @@ export function SmallSignalPanel({
   const pinBias = useMemo(() => {
     const values: Record<string, number> = {};
     for (const [pin, text] of Object.entries(pinBiasText)) {
-      const value = Number.parseFloat(text);
-      if (text.trim() && Number.isFinite(value)) values[pin] = value;
+      const value = parseSpiceNumber(text);
+      if (value !== null) values[pin] = value;
     }
     return values;
   }, [pinBiasText]);
@@ -1081,6 +1116,12 @@ export function SmallSignalPanel({
                       {pin} DC
                       <input
                         aria-label={`${pin} DC voltage`}
+                        aria-invalid={
+                          (pinBiasText[pin] ?? "").trim() !== "" &&
+                          parseSpiceNumber(pinBiasText[pin] ?? "") === null
+                            ? true
+                            : undefined
+                        }
                         inputMode="decimal"
                         placeholder="V"
                         value={pinBiasText[pin] ?? ""}
@@ -1194,11 +1235,7 @@ export function SmallSignalPanel({
             {netlist.models.length ? (
               <details className="small-signal-options">
                 <summary>
-                  {Object.keys(models).some((kind) =>
-                    netlist.models.includes(kind as ModelKind),
-                  )
-                    ? "Models (edited)"
-                    : "Models"}
+                  {modelTextEdited(modelText) ? "Models (edited)" : "Models"}
                 </summary>
                 <div>
                   {netlist.models.some((kind) => kind.endsWith("mos")) ? (

@@ -5,9 +5,12 @@ import {
   formatPlain,
   formatSpiceNumber,
   modelOverrides,
+  modelTextEdited,
   modelValue,
+  parseFrequencies,
   parseSpiceNumber,
   preferredOutput,
+  readModelText,
   signalLabel,
 } from "./small-signal-panel";
 
@@ -89,15 +92,49 @@ describe("real values", () => {
 });
 
 describe("model parameters", () => {
-  it("reads SPICE numbers, signed, with scale and unit letters", () => {
-    expect(parseSpiceNumber("200u")).toBeCloseTo(200e-6, 18);
-    expect(parseSpiceNumber("-0.45")).toBe(-0.45);
-    expect(parseSpiceNumber("1.2meg")).toBe(1.2e6);
-    expect(parseSpiceNumber("50V")).toBe(50);
-    expect(parseSpiceNumber(" 1e-15 ")).toBe(1e-15);
-    expect(parseSpiceNumber("")).toBeNull();
-    expect(parseSpiceNumber("abc")).toBeNull();
-    expect(parseSpiceNumber("1 2")).toBeNull();
+  it("reads every SPICE number exactly as the solver does", () => {
+    // Cases from crates/smallsignal-core/src/units.rs, plus a, µ and mil.
+    const cases: [string, number | null][] = [
+      ["10k", 10e3],
+      ["1meg", 1e6],
+      ["1MEG", 1e6],
+      ["2.5u", 2.5e-6],
+      ["1e-3", 1e-3],
+      ["1.5E3", 1.5e3],
+      ["10kohm", 10e3],
+      ["1.8v", 1.8],
+      ["-3m", -3e-3],
+      [".5p", 0.5e-12],
+      ["100f", 100e-15],
+      ["1a", 1e-18],
+      ["1A", 1e-18],
+      ["2\u00b5", 2e-6],
+      ["10\u03bcF", 10e-6],
+      ["10µF", 10e-6],
+      ["5mil", 5 * 25.4e-6],
+      ["1e5k", 1e8],
+      ["1T", 1e12],
+      ["3G", 3e9],
+      ["10kΩ", 10e3],
+      [" 200u ", 200e-6],
+      ["1e-400", 0],
+      ["abc", null],
+      ["1e400", null],
+      ["-1e400", null],
+      ["1e308k", null],
+      [".", null],
+      ["", null],
+      ["1 k", null],
+      ["1,5", null],
+      ["1k2", null],
+    ];
+    for (const [text, value] of cases)
+      expect([text, parseSpiceNumber(text)]).toEqual([text, value]);
+  });
+
+  it("reads frequency lists with the same grammar", () => {
+    expect(parseFrequencies("1k, 10meg 1a")).toEqual([1e3, 1e7, 1e-18]);
+    expect(parseFrequencies("-1k, 5")).toEqual([5]);
   });
 
   it("writes defaults the way SPICE cards do", () => {
@@ -118,6 +155,27 @@ describe("model parameters", () => {
     expect(modelValue("LAMBDA", "-0.1")).toBeNull();
     expect(modelValue("VAF", "0")).toBe(0);
     expect(modelValue("IS", "0")).toBeNull();
+  });
+
+  it("reads stored model text defensively", () => {
+    expect(readModelText(null)).toEqual({});
+    expect(readModelText("not json")).toEqual({});
+    expect(readModelText("[1]")).toEqual({});
+    expect(
+      readModelText(
+        JSON.stringify({
+          nmos: { KP: 1, VTO: "0.4", W: "2u", LAMBDA: " " },
+          pmos: "x",
+          bjt: { IS: "1f" },
+        }),
+      ),
+    ).toEqual({ nmos: { VTO: "0.4" } });
+  });
+
+  it("counts any typed value, valid or not, as edited", () => {
+    expect(modelTextEdited({})).toBe(false);
+    expect(modelTextEdited({ nmos: { KP: "  " } })).toBe(false);
+    expect(modelTextEdited({ pmos: { KP: "bad" } })).toBe(true);
   });
 
   it("keeps only valid, known parameters as overrides", () => {

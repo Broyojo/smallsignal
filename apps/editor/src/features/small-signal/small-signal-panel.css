@@ -371,7 +371,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.small-signal-panel .small-signal-model input[aria-invalid="true"] {
+.small-signal-panel input[aria-invalid="true"] {
   border-color: var(--icm-error);
 }
 
