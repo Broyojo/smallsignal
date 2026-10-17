@@ -472,6 +472,18 @@
   gap: 4px;
 }
 
+/* A capacitance's neglect, then its Miller split where it has one. */
+.small-signal-cap-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.small-signal-miller {
+  display: block;
+}
+
 .small-signal-assumptions tbody th {
   font-weight: 650;
 }

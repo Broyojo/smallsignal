@@ -7,6 +7,7 @@ import {
   assumptionColumns,
   assumptionRows,
   resultForCircuit,
+  kText,
   formatPercent,
   countText,
   differentialPairs,
@@ -383,12 +384,37 @@ describe("formatPercent", () => {
 describe("assumption table", () => {
   const NONE = { defaults: {}, parts: {} };
   const assumable = [
-    { element: "R1", type: "resistor" as const, terms: ["open", "short"] },
-    { element: "M2", type: "nmos" as const, terms: ["ro", "rbs", "rbd"] },
-    { element: "M10", type: "nmos" as const, terms: ["ro", "gmb", "rbd"] },
-    { element: "M1", type: "nmos" as const, terms: ["ro", "rbs", "rbd"] },
-    { element: "M3", type: "pmos" as const, terms: ["ro", "rbd"] },
-    { element: "Q1", type: "npn" as const, terms: ["ro", "rpi", "rmu"] },
+    {
+      element: "R1",
+      type: "resistor" as const,
+      terms: ["open", "short"],
+      miller: [],
+    },
+    {
+      element: "M2",
+      type: "nmos" as const,
+      terms: ["ro", "rbs", "rbd", "cgd"],
+      miller: ["cgd"],
+    },
+    {
+      element: "M10",
+      type: "nmos" as const,
+      terms: ["ro", "gmb", "rbd"],
+      miller: [],
+    },
+    {
+      element: "M1",
+      type: "nmos" as const,
+      terms: ["ro", "rbs", "rbd", "cgd"],
+      miller: ["cgd"],
+    },
+    { element: "M3", type: "pmos" as const, terms: ["ro", "rbd"], miller: [] },
+    {
+      element: "Q1",
+      type: "npn" as const,
+      terms: ["ro", "rpi", "rmu"],
+      miller: [],
+    },
   ] as Parameters<typeof assumptionRows>[0];
   const elements = [
     { name: "R1", instancePath: ["r1"], kind: "resistor" as const },
@@ -448,6 +474,26 @@ describe("assumption table", () => {
       parts: { [partKey(["x1", "m1"])]: { ignore: { ro: true } } },
     });
     expect(shared.some((row) => row.label === "M1 = M2")).toBe(true);
+    // A Miller split on one member only: two rows, as the solver unmatches.
+    const split = assumptionRows(assumable, elements, [["M1", "M2"]], {
+      defaults: {},
+      parts: { [partKey(["x1", "m1"])]: { miller: ["cgd"] } },
+    });
+    expect(split.some((row) => row.label === "M1 = M2")).toBe(false);
+    const both = assumptionRows(assumable, elements, [["M1", "M2"]], {
+      defaults: {},
+      parts: {
+        [partKey(["x1", "m1"])]: { miller: ["cgd"] },
+        [partKey(["x1", "m2"])]: { miller: ["cgd"] },
+      },
+    });
+    expect(both.some((row) => row.label === "M1 = M2")).toBe(true);
+  });
+
+  it("writes K to three digits with a minus sign", () => {
+    expect(kText(-84.0968)).toBe("−84.1");
+    expect(kText(0.912345)).toBe("0.912");
+    expect(kText(-1234.5)).toBe("−1230");
   });
 
   it("a part whose type changed since the last solve is no row", () => {
@@ -489,7 +535,12 @@ describe("assumption table", () => {
     const rows = assumptionRows(
       [
         ...assumable,
-        { element: "M4", type: "pmos", terms: ["ro", "cgs", "cgd", "cbd"] },
+        {
+          element: "M4",
+          type: "pmos",
+          terms: ["ro", "cgs", "cgd", "cbd"],
+          miller: [],
+        },
       ] as Parameters<typeof assumptionRows>[0],
       [...elements, { name: "M4", instancePath: ["m4"], kind: "pmos" }],
       [],

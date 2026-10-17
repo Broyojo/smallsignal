@@ -25,12 +25,24 @@ export type AssumptionTerm =
   | "open"
   | "short";
 
+/**
+ * A capacitance split by the Miller approximation: an explicit capacitor
+ * (no term, or null), or a device's capacitance by its term (C_gd: "cgd").
+ */
+export interface MillerAssumption {
+  element: string;
+  term?: AssumptionTerm | null;
+}
+
 /** Per-device assumptions: terms neglected and regions expected. */
 export interface SmallSignalAssumptions {
   ignore?: { element: string; term: AssumptionTerm }[];
   /** MOS saturation, triode, cutoff; BJT forward-active, saturation,
    * reverse-active, cutoff. Checked against the operating point only. */
   regions?: { element: string; region: string }[];
+  /** Feedback capacitances split into C(1 − K) at a and C(K − 1)/K at b,
+   * K = v_b(0)/v_a(0) under the gain's excitation. */
+  miller?: MillerAssumption[];
 }
 
 export interface SmallSignalRequest {
@@ -143,6 +155,23 @@ export interface SmallSignalAssumptionReport {
    * body on the source). */
   absent: { element: string; term: AssumptionTerm }[];
   regions: { element: string; assumed: string; actual: string | null }[];
+  /** The Miller splits made (a refused one is a warning instead). */
+  miller: MillerReport[];
+}
+
+/** A Miller split: the forms are exact for the split model, over C and K. */
+export interface MillerReport {
+  element: string;
+  /** Null for an explicit capacitor. */
+  term: AssumptionTerm | null;
+  /** The capacitance, e.g. C_{C} or C_{gd2}. */
+  latex: string;
+  /** Its K, e.g. K_{CC} or K_{gd2} (also in `params`). */
+  symbol: string;
+  /** K's value; null in symbolic mode. */
+  k: number | null;
+  /** K = v_b/v_a at s = 0 in closed form; null over the budget. */
+  definition: { latex: string; num: string; den: string } | null;
 }
 
 /** An element that can take assumptions, with the terms its model has. */
@@ -158,6 +187,9 @@ export interface AssumableElement {
     | "capacitor"
     | "inductor";
   terms: AssumptionTerm[];
+  /** Its capacitances between two signal nodes, which a Miller split can
+   * take: the term, or null for a capacitor's own. */
+  miller: (AssumptionTerm | null)[];
 }
 
 const MOS_TERMS: readonly AssumptionTerm[] = [
