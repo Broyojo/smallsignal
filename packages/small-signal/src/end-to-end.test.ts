@@ -3,11 +3,16 @@ import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
 import { smallSignalNetlist } from "./netlist.js";
 import type {
+  AssumableElement,
+  AssumedQuantity,
   DistortionForm,
   DistortionQuantity,
   DistortionVsFreqPoint,
   NoiseExpression,
   NoiseSource,
+  RestoredAssumption,
+  RootPair,
+  SmallSignalAssumptionReport,
   SmallSignalDistortion,
   SmallSignalNoise,
   SmallSignalQuantity,
@@ -220,6 +225,7 @@ const EXPRESSION_KEYS = allKeys<NoiseExpression>()([
   "method",
   "assumption",
   "tolerance",
+  "fullModelError",
 ] as const);
 const INTEGRATED_KEYS = allKeys<Integrated>()([
   "fLow",
@@ -239,6 +245,7 @@ const SOURCE_KEYS = allKeys<NoiseSource>()([
   "psd",
   "white",
   "flicker",
+  "ignored",
 ] as const);
 
 describe.skipIf(!built)(
@@ -306,6 +313,7 @@ const GAIN_KEYS = allKeys<SmallSignalQuantity>()([
   "zeroCount",
   "check",
   "skipped",
+  "assumed",
 ] as const);
 
 describe.skipIf(!built)("the gain JSON matches the TypeScript contract", () => {
@@ -374,6 +382,7 @@ const FORM_KEYS = allKeys<DistortionForm>()([
   "leakageMatters",
   "method",
   "tolerance",
+  "fullModelError",
 ] as const);
 const QUANTITY_KEYS = allKeys<DistortionQuantity>()([
   ...FORM_KEYS,
@@ -531,3 +540,122 @@ describe.skipIf(!built)(
     });
   },
 );
+
+const ASSUMED_KEYS = allKeys<AssumedQuantity>()([
+  "values",
+  "relError",
+  "maxRelError",
+  "infinite",
+  "resolution",
+  "restored",
+  "poles",
+  "zeros",
+] as const);
+const ROOT_PAIR_KEYS = allKeys<RootPair>()([
+  "assumed",
+  "full",
+  "relError",
+] as const);
+const REPORT_KEYS = allKeys<SmallSignalAssumptionReport>()([
+  "applied",
+  "absent",
+  "regions",
+] as const);
+const RESTORED_KEYS = allKeys<RestoredAssumption>()([
+  "element",
+  "term",
+  "latex",
+] as const);
+const ASSUMABLE_KEYS = allKeys<AssumableElement>()([
+  "element",
+  "type",
+  "terms",
+] as const);
+
+describe.skipIf(!built)("assumptions match the TypeScript contract", () => {
+  it("every assumption field is present and declared", async () => {
+    const wasm = await import(
+      /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+    );
+    wasm.initSync({
+      module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+    });
+    const netlist = smallSignalNetlist(
+      parseProject(
+        readFileSync(
+          new URL(
+            "../test-fixtures/cs-vdd-pin-wired.icproj.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      ),
+    )!;
+    const plain = { input: "V1", output: "Vout", rin: true, rout: true };
+    const request = {
+      ...plain,
+      freqs: [1e3, 1e6],
+      noise: true,
+      nonlinear: ["M1"],
+      assume: {
+        ignore: [
+          { element: "M1", term: "ro" },
+          { element: "M1", term: "gmb" },
+        ],
+        regions: [{ element: "M1", region: "saturation" }],
+      },
+    };
+    const result = JSON.parse(
+      wasm.analyze(netlist.text, JSON.stringify(request)),
+    );
+    expect(result.error).toBeUndefined();
+    const keys = (value: object, want: readonly string[]) =>
+      expect(Object.keys(value).sort()).toEqual([...want].sort());
+    const declared = (value: object, allowed: readonly string[]) =>
+      expect(
+        Object.keys(value).filter((key) => !allowed.includes(key)),
+      ).toEqual([]);
+    keys(result.assumptions, REPORT_KEYS);
+    expect(result.assumptions.applied).toEqual([
+      { element: "M1", term: "ro", latex: "r_{o1} \\to \\infty" },
+    ]);
+    expect(result.assumptions.absent).toEqual([{ element: "M1", term: "gmb" }]);
+    expect(result.assumptions.regions).toEqual([
+      { element: "M1", assumed: "saturation", actual: "saturation" },
+    ]);
+    for (const element of result.assumable) keys(element, ASSUMABLE_KEYS);
+    for (const name of ["gain", "rin", "rout"]) {
+      const q = result[name];
+      declared(q, GAIN_KEYS);
+      declared(q.assumed, ASSUMED_KEYS);
+      for (const pair of [...q.assumed.poles, ...q.assumed.zeros])
+        keys(pair, ROOT_PAIR_KEYS);
+      for (const r of q.assumed.restored) keys(r, RESTORED_KEYS);
+      // Zin looks into a gate: infinite, with only an exact form.
+      for (const form of ["exact", "display", "simplified"])
+        if (q[form]) expect(q[form]).toHaveProperty("fullModelError");
+    }
+    expect(result.rin.assumed.infinite).toBe(true);
+    // ro → ∞ with a resistor load: −g_m R_1, a few percent from the full
+    // model, whose values are unchanged.
+    expect(result.gain.display.latex).toBe("-g_{m1} R_{1}");
+    expect(result.gain.assumed.maxRelError).toBeGreaterThan(0.001);
+    const full = JSON.parse(
+      wasm.analyze(
+        netlist.text,
+        JSON.stringify({ ...plain, freqs: [1e3, 1e6] }),
+      ),
+    );
+    expect(result.gain.values).toEqual(full.gain.values);
+    for (const source of result.noise.sources) declared(source, SOURCE_KEYS);
+    for (const form of ["exact", "display", "simplified"])
+      expect(result.noise.inputLowFreq[form]).toHaveProperty("fullModelError");
+    const ignored = result.distortion.taylor.filter(
+      (t: { ignored?: true }) => t.ignored,
+    );
+    expect(ignored.length).toBeGreaterThan(0);
+    for (const t of ignored) expect(t.monomial).toContain("d");
+    for (const c of result.distortion.coefficients)
+      expect(c).toHaveProperty("fullModelError");
+  });
+});
