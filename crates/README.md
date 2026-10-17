@@ -155,7 +155,8 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   panel with the largest |S₂ − S₁| is split) until those differences sum to
   ≤ 1e-6 of each integral (`converged`) or 200 000 evaluations. `relError` is
   that sum relative to the integral plus κ₁·eps of the band's solves (on the
-  row- and column-equilibrated matrix). A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the closed band
+  row- and column-equilibrated matrix); when that LU bound exceeds 1e-6 a
+  warning says so ("ill-conditioned in the band"), as for the spectra. A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the closed band
   (within 1e-12 of an endpoint counts as at it) where the output noise does
   not vanish makes `inputV2`/`inputRms` null, with
   `unavailable`. (ngspice's own `inoise_total` can be off by percent; compare
@@ -164,7 +165,9 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
   for a CS stage. `exact`, `display` (junction leakage dropped when that moves
   it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form, then
-  magnitude pruning; the smallest form within `tolerance`), each `{latex,
+  magnitude pruning; the smallest form within `tolerance`; when even the
+  display form misses `tolerance`, the exact form, `method: "exact form"`),
+  each `{latex,
   value, thermal: {num, den}, shot: {num, den}, terms}`; `currents` lists the
   bias-current symbols I_{C1}, I_{B1}, I_{D1} (one per matched group, e.g.
   I_{D1,2}); `check` compares the exact value with the numeric DC solve,

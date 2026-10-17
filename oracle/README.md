@@ -67,7 +67,12 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   `noise_indep.py` recomputes every source on the independent 60-digit
   rebuild, with the source models in
   [crates/README.md, Noise](../crates/README.md#noise-noise-true-optional-noiseband-flow-fhigh).
-  compare.py checks noise at rtol 1e-6, as AC.
+  compare.py checks noise at rtol 1e-6, as AC, pairing each reference
+  frequency one-to-one with the closest solver row within relative 1e-9. A
+  band integral must report `converged: true` and a finite `relError`, unless
+  the sidecar sets `noise.solverConverged: false` (copied into the
+  reference). Element lines are tokenized as the solver does (`W=10u,L=1u`
+  is two parameters).
 - `textbook_nd.py`: textbook noise cases (CS, degenerated CS, SF, diff pair,
   5T OTA, BJT CE), hand-derived (KCL with noise injections), checked against
   ngspice and the quoted closed forms.
