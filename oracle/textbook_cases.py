@@ -73,6 +73,20 @@ class Quantity:
 
 
 @dataclass
+class Noise:
+    """Input-referred white noise PSD at s → 0, as S_in = 4kT·thermal + 2q·shot
+    (the solver's `noise.inputLowFreq` thermal and shot groups)."""
+    hand: Callable[[], tuple[sp.Expr, sp.Expr]]
+    """Hand KCL result: (thermal, shot)."""
+    closed: Callable[[], tuple[sp.Expr, sp.Expr]] | None = None
+    """Textbook closed form, when it is exact."""
+    lead: Callable[[], tuple[sp.Expr, sp.Expr]] | None = None
+    """Textbook hand-analysis form (r_o → ∞), asserted equal to the solver's
+    `simplified` form. None: the exact form, with r_o → ∞ taken as a limit."""
+    matched: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class Case:
     name: str
     netlist: str
@@ -91,6 +105,7 @@ class Case:
     """Matched element groups passed to the solver."""
     numeric_netlist: str | None = None
     """Same circuit with values, for the numeric-mode checks."""
+    noise: Noise | None = None
 
 
 # --- hand derivations -------------------------------------------------------
@@ -261,6 +276,107 @@ def rlc():
     return solve(eqs, [va, vo], vo)
 
 
+# --- noise: hand KCL with explicit noise-current injections -----------------
+#
+# Each source is a current n_k in parallel with its element (MOSFET channel
+# d–s, resistor, BJT c–e and b–e), with PSD 4kT·(1/R), 4kT·(2/3)·gm, 2q·I_C,
+# 2q·I_B. With out = H·v_in + Σ Z_k·n_k from one linear solve,
+# S_in = Σ S_k (Z_k/H)², split into its 4kT and 2q parts.
+
+def noise_hand(build, unknowns, out, sources):
+    """build(vin, n) → KCL equations, n[name] the injected current symbol;
+    sources: [(name, "thermal" | "shot", PSD factor)]."""
+    vin = sp.Symbol("vin")
+    n = {name: sp.Symbol(f"n_{name}") for name, _, _ in sources}
+    sol = sp.solve(build(vin, n), unknowns, dict=True)
+    assert len(sol) == 1
+    o = sp.expand(out.subs(sol[0]))
+    h = sp.diff(o, vin)
+    parts = {"thermal": 0, "shot": 0}
+    for name, kind, factor in sources:
+        parts[kind] += factor * (sp.diff(o, n[name]) / h) ** 2
+    return sp.simplify(parts["thermal"]), sp.simplify(parts["shot"])
+
+
+def mos_n(name, vd, vg, vs, vb=None):
+    return lambda n: mos(name, vd, vg, vs, vb) + n[name]
+
+
+TWO3 = sp.Rational(2, 3)
+
+
+def cs_rd_noise():
+    vo = sp.Symbol("vo")
+    return noise_hand(
+        lambda vin, n: [vo / sym("RD") + n["RD"] + mos("M1", vo, vin, 0) + n["M1"]],
+        [vo], vo, [("RD", "thermal", 1 / sym("RD")), ("M1", "thermal", TWO3 * sym("gm_M1"))])
+
+
+def degen_noise():
+    vo, vs = sp.symbols("vo vs")
+
+    def build(vin, n):
+        i = mos("M1", vo, vin, vs, 0) + n["M1"]
+        return [vo / sym("RD") + n["RD"] + i, i - vs / sym("RS") - n["RS"]]
+    return noise_hand(build, [vo, vs], vo, [("RD", "thermal", 1 / sym("RD")), ("RS", "thermal", 1 / sym("RS")),
+                                             ("M1", "thermal", TWO3 * sym("gm_M1"))])
+
+
+def sf_noise():
+    vo = sp.Symbol("vo")
+    return noise_hand(
+        lambda vin, n: [mos("M1", 0, vin, vo, 0) + n["M1"] - vo / sym("RL") - n["RL"]],
+        [vo], vo, [("RL", "thermal", 1 / sym("RL")), ("M1", "thermal", TWO3 * sym("gm_M1"))])
+
+
+def diffpair_noise():
+    v1, v2, vt = sp.symbols("v1 v2 vt")
+
+    def build(vin, n):
+        i1 = mos("M1", v1, vin, vt, 0) + n["M1"]
+        i2 = mos("M2", v2, 0, vt, 0) + n["M2"]
+        return [v1 / sym("RD1") + n["RD1"] + i1, v2 / sym("RD2") + n["RD2"] + i2, i1 + i2]
+    return noise_hand(build, [v1, v2, vt], v1 - v2,
+                      [("RD1", "thermal", 1 / sym("RD1")), ("RD2", "thermal", 1 / sym("RD2")),
+                       ("M1", "thermal", TWO3 * sym("gm_M1")), ("M2", "thermal", TWO3 * sym("gm_M2"))])
+
+
+def ota5t_noise():
+    vx, vo, vt = sp.symbols("vx vo vt")
+
+    def build(vin, n):
+        i1 = mos("M1", vx, vin, vt, 0) + n["M1"]
+        i2 = mos("M2", vo, 0, vt, 0) + n["M2"]
+        i3 = mos("M3", vx, vx, 0) + n["M3"]
+        i4 = mos("M4", vo, vx, 0) + n["M4"]
+        return [i1 + i3, i2 + i4, i1 + i2]
+    return noise_hand(build, [vx, vo, vt], vo,
+                      [(m, "thermal", TWO3 * sym(f"gm_{m}")) for m in ("M1", "M2", "M3", "M4")])
+
+
+def ce_noise():
+    vc = sp.Symbol("vc")
+
+    def build(vin, n):
+        ic, _ = bjt("Q1", vc, vin, 0)
+        return [vc / sym("RC") + n["RC"] + ic + n["QC"]]
+    return noise_hand(build, [vc], vc, [("RC", "thermal", 1 / sym("RC")), ("QC", "shot", sym("IC_Q1"))])
+
+
+def ce_degen_noise(lead=False):
+    vc, ve = sp.symbols("vc ve")
+
+    def build(vin, n):
+        ic, ib = bjt("Q1", vc, vin, ve)
+        if lead:
+            ic = ic.subs(sym("ro_Q1"), sp.oo)
+        ic, ib = ic + n["QC"], ib + n["QB"]
+        return [vc / sym("RC") + n["RC"] + ic, ic + ib - ve / sym("RE") - n["RE"]]
+    return noise_hand(build, [vc, ve], vc,
+                      [("RC", "thermal", 1 / sym("RC")), ("RE", "thermal", 1 / sym("RE")),
+                       ("QC", "shot", sym("IC_Q1")), ("QB", "shot", sym("IB_Q1"))])
+
+
 g, ro, gmb = sym("gm_M1"), sym("ro_M1"), sym("gmb_M1")
 RD, RS, RL = sym("RD"), sym("RS"), sym("RL")
 g2, ro1, ro2, gmb2 = sym("gm_M2"), sym("ro_M1"), sym("ro_M2"), sym("gmb_M2")
@@ -277,6 +393,7 @@ CASES: list[Case] = [
         # gmin 1e-18: the hand formula has no junction leakage (see textbook.py).
         numeric_netlist="cs\n.options gmin=1e-18\nVIN in 0 DC 0.7\nVDD vdd 0 1.8\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n",
+        noise=Noise(cs_rd_noise, closed=lambda: (2 / (3 * g) + 1 / (g**2 * RD), 0)),
     ),
     Case(
         "cs_degen_body",
@@ -285,6 +402,7 @@ CASES: list[Case] = [
         gain=Quantity(degen_gain, closed=lambda: -g * RD * ro / (RD + RS + ro + (g + gmb) * RS * ro),
                       lead=lambda: -g * RD / (1 + (g + gmb) * RS)),
         rout=Quantity(degen_rout, closed=lambda: par(RD, ro + RS + (g + gmb) * ro * RS), lead=lambda: RD),
+        noise=Noise(degen_noise, lead=lambda: (2 / (3 * g) + RS * (g + gmb)**2 / g**2 + (1 + (g + gmb) * RS)**2 / (g**2 * RD), 0)),
     ),
     Case(
         "cg",
@@ -304,6 +422,7 @@ CASES: list[Case] = [
         parallel=["gain", "rout"],
         numeric_netlist="sf\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN in 0 1.2\nM1 vdd in out 0 nm W=10u L=1u\nRL out 0 10k\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.4)\n",
+        noise=Noise(sf_noise, closed=lambda: (2 / (3 * g) + 1 / (g**2 * RL), 0)),
     ),
     Case(
         "cascode_rd",
@@ -335,6 +454,8 @@ CASES: list[Case] = [
         "VID", "o1", ref="o2", match=[["M1", "M2"], ["RD1", "RD2"]],
         gain=Quantity(diffpair_mos, closed=lambda: -g * par(ro, RD), lead=lambda: -g * RD,
                       matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "RD2": "RD", "RD1": "RD"}),
+        noise=Noise(diffpair_noise, closed=lambda: (2 * (2 / (3 * g) + 1 / (g**2 * RD)), 0),
+                    matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "RD2": "RD", "RD1": "RD"}),
     ),
     Case(
         "ota_5t",
@@ -343,6 +464,8 @@ CASES: list[Case] = [
         "VIP", "out", match=[["M1", "M2"], ["M3", "M4"]],
         gain=Quantity(ota5t_gain, approx=lambda: g * par(ro2, sym("ro_M4")), lead=lambda: g * par(ro, sym("ro_M3")),
                       matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "gm_M4": "gm_M3", "ro_M4": "ro_M3"}),
+        noise=Noise(ota5t_noise, lead=lambda: (2 * TWO3 / g * (1 + sym("gm_M3") / g), 0),
+                    matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "gm_M4": "gm_M3", "ro_M4": "ro_M3"}),
     ),
     Case(
         "ce_degen",
@@ -352,6 +475,13 @@ CASES: list[Case] = [
                       approx=lambda: -sym("gm_Q1") * sym("RC") / (1 + sym("gm_Q1") * sym("RE")),
                       # r_o → ∞ only (finite β): −gm RC / (1 + gm RE + RE/rπ).
                       lead=lambda: -sym("gm_Q1") * sym("RC") / (1 + sym("gm_Q1") * sym("RE") + sym("RE") / sym("rpi_Q1"))),
+        noise=Noise(ce_degen_noise, lead=lambda: ce_degen_noise(lead=True)),
+    ),
+    Case(
+        "ce",
+        "ce\nVCC vcc 0\nVIN in 0\nRC vcc c\nQ1 c in 0\n",
+        "VIN", "c",
+        noise=Noise(ce_noise, closed=lambda: (1 / (sym("gm_Q1")**2 * sym("RC")), sym("IC_Q1") / sym("gm_Q1")**2)),
     ),
     Case(
         "ef",

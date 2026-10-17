@@ -854,3 +854,80 @@ fn matching_candidates_never_changes_values() {
     }
     assert!(merged > CASES / 2, "only {merged} merged");
 }
+
+/// The noise output PSD is Σ |Z_k|²·S_k with each transfer Z_k found
+/// independently: a separate analysis driven by a test current source in
+/// the noise source's place (not the adjoint solve the noise analysis uses).
+fn check_noise_superposition(net: &str, input: &str, out: &str, freqs: &[f64]) -> bool {
+    let req = req_json(serde_json::json!({ "input": input, "output": out, "freqs": freqs, "noise": true }));
+    let Some(r) = try_run(net, &req) else { return false };
+    let parsed = netlist::parse(net).unwrap();
+    let op = dc::operating_point(&parsed).unwrap();
+    let srcs = smallsignal_core::noise::sources(&parsed, Some(&op));
+    let mut want = vec![0.0; freqs.len()];
+    for (k, s) in srcs.iter().enumerate() {
+        let body = net.trim_end().trim_end_matches(".end").to_string();
+        let inj = format!(
+            "{body}\nIZ{k} {} {} DC 0 AC 1\n.end\n",
+            parsed.nodes[s.a], parsed.nodes[s.b]
+        );
+        let rz = run(
+            &inj,
+            &req_json(serde_json::json!({ "input": format!("IZ{k}"), "output": out, "freqs": freqs })),
+        );
+        for (i, &f) in freqs.iter().enumerate() {
+            let (re, im) = value(&rz, "gain", i);
+            want[i] += (re * re + im * im) * s.psd(f);
+        }
+    }
+    for (i, &w) in want.iter().enumerate() {
+        let got = r["noise"]["output"][i]["v2"].as_f64().unwrap();
+        assert!(
+            (got - w).abs() <= 1e-8 * got.abs().max(w.abs()) + 1e-40,
+            "f={}: {got} vs {w}\n{net}",
+            freqs[i]
+        );
+    }
+    let lf = &r["noise"]["inputLowFreq"];
+    if lf["check"].is_object() {
+        assert_eq!(lf["check"]["ok"], true, "{}\n{net}", lf["check"]);
+    }
+    true
+}
+
+#[test]
+fn noise_is_the_sum_of_independently_solved_transfers() {
+    let freqs = [1.0, 1e3, 1e6, 1e9];
+    let mut rng = Rng::new(31);
+    let mut solved = 0;
+    for _ in 0..CASES / 3 {
+        let controlled = rng.below(2) == 0;
+        let c = linear(&mut rng, controlled, true);
+        let mut lines = c.lines.clone();
+        lines.push("VIN n1 0 AC 1".into());
+        let net = netlist_text("nz", &lines);
+        solved += check_noise_superposition(&net, "VIN", &format!("n{}", 1 + rng.below(c.nodes)), &freqs) as usize;
+    }
+    for _ in 0..CASES / 3 {
+        let kind = rng.below(4);
+        let vals = [
+            1.5 + rng.unit() * 2.0,
+            0.3 + rng.unit() * 1.2,
+            rng.decade(1e2, 1e6),
+            rng.decade(1e2, 1e6),
+            rng.decade(10e-6, 1e-3),
+            rng.unit() * 0.2,
+            rng.unit() * 0.8,
+            rng.unit() * 3.0,
+        ];
+        let pol = if rng.below(2) == 0 { 1.0 } else { -1.0 };
+        let mut lines = stage(&mut rng, pol, kind, &vals);
+        // Flicker on every device model.
+        for l in lines.iter_mut().filter(|l| l.starts_with(".model")) {
+            *l = l.replace(')', " kf=1e-24 af=1.2)");
+        }
+        let net = netlist_text("st", &lines);
+        solved += check_noise_superposition(&net, "VIN", "out", &freqs) as usize;
+    }
+    assert!(solved > CASES / 3, "only {solved} circuits solved");
+}

@@ -41,6 +41,22 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   - `mpverify.py`: 60-digit solve of the solver's own `--certificate`.
   - `physical.py`: junction-current sanity, used by both generators and the
     minimizer.
+- Noise (`"noise": true` in a sidecar, frequencies = `freqs` or `noise.freqs`):
+  `expected/<name>.json` gets `noise.output` / `noise.input` as [{f, v2}] in
+  V²/Hz (A²/Hz input-referred for an I-source input; ngspice prints V/√Hz
+  densities, which are squared) and `noise.contributors` [{element, source,
+  values}] from `set noisedetail` (sources: thermal for R; id, 1overf, rd, rs
+  for MOS; ic, ib, 1overf, rb, rc, re for BJT; id, rs, 1overf for diodes).
+  `noise_indep.py` recomputes every source with ngspice's formulas on the
+  independent 60-digit rebuild: ≤ 2e-14 on the whole noise corpus. ngspice-47
+  level-1 MOS formulas (measured): channel 4kT·(2/3)·gm; flicker
+  KF·gm²/(Cox·W·Leff·f^AF) — not SPICE2's KF·Id^AF/(f·Cox·L²); AF is the
+  frequency exponent; Cox = 3.9·ε0/TOX, TOX = 1e-7 m by default. ngspice's
+  noise moves ≤ 1.5e-14 when reltol goes 1e-6 → 1e-12, so compare.py uses
+  rtol 1e-6 (as AC; the budget is the operating-point agreement).
+- `textbook_nd.py`: textbook noise cases (CS, degenerated CS, SF, diff pair,
+  5T OTA, BJT CE), hand-derived (KCL with noise injections), checked against
+  ngspice and the quoted closed forms.
 - `run_ngspice.options_override(...)` changes ngspice options per thread;
   never assign `run_ngspice.OPTIONS` (the evidence tools run threads).
 

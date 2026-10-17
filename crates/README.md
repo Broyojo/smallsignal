@@ -59,10 +59,12 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 
 `smallsignal analyze <netlist> --input <V|I source> --output <node>[:<ref>]
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
-[--freq f1,f2] [--rin] [--rout] [--tol 0.05] [--verify] [--symbolic]`, or
+[--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
+[--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
-`tolerance`, `verify`, `symbolic`, `maxTerms`). The response is JSON, or
+`noise`, `noiseBand`, `tolerance`, `verify`,
+`symbolic`, `maxTerms`). The response is JSON, or
 `{"error": "..."}` on failure.
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
@@ -107,3 +109,48 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
+
+## Noise (`noise: true`, optional `noiseBand: [fLow, fHigh]`)
+
+Sources are ngspice's at 27 °C (k = 1.38064852e-23, q = 1.6021766208e-19,
+T = 300.15 K), each a current between two nodes, checked against ngspice-47
+to 1e-6 (`oracle/`):
+
+| element | source (`kind`) | PSD (A²/Hz) |
+|---|---|---|
+| R | `thermal` | 4kT/R |
+| MOSFET | `thermal` (every region) | (2/3)·4kT·gm |
+| MOSFET | `flicker` | KF·gm²/(Cox·M·W·L·f^AF), Cox = 3.9ε₀/TOX (TOX default 1e-7) |
+| BJT | `shot_c` (c–e), `shot_b` (b–e) | 2q·\|Ic\|, 2q·\|Ib\| |
+| BJT | `flicker` (b–e) | KF·\|Ib\|^AF/f |
+| diode | `shot`, `flicker` | 2q·\|Id\|, KF·\|Id\|^AF/f |
+
+Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
+ngspice. (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
+KF·Id^AF/(Cox·L²·f). With TOX given and KP not, KP = UO·Cox, UO default 600.)
+
+Output PSD S_out = Σ|Z_k|²·S_k with every transfer Z_k from one adjoint LU
+solve per frequency on the full model (input source zeroed); input-referred
+S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
+
+- `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite, e.g. flicker at 0 Hz).
+- `contributors`: `[{f, sources: [{element, kind, v2, fraction}]}]`, per
+  frequency, sorted by output contribution; fractions sum to 1.
+- `sources`: `[{element, kind, psd (LaTeX), white, flicker: {coef, exp}}]`.
+- `integrated` (with `noiseBand`): `{fLow, fHigh, outputRms, inputRms,
+  outputV2, inputV2, relError, evaluations, converged}`. Adaptive Simpson in
+  ln f (10 panels per decade plus the gain's pole frequencies as
+  breakpoints) to 1e-6; `relError` is the Richardson estimate plus LU
+  rounding. (ngspice's own `inoise_total` can be off by percent; compare
+  with an integral of its spectrum.)
+- `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
+  `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
+  for a CS stage. `exact`, `display` (junction leakage dropped when that moves
+  it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form, then
+  magnitude pruning; the smallest form within `tolerance`), each `{latex,
+  value, thermal: {num, den}, shot: {num, den}, terms}`; `currents` lists the
+  bias-current symbols I_{C1}, I_{B1}, I_{D1}; `check` compares the exact
+  value with the numeric DC solve. Flicker is numeric only. `unavailable`
+  says why when there is no DC limit (no gain at DC, or singular at s = 0).
+  Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
+  system at s = 0, so the determinant cancels exactly.

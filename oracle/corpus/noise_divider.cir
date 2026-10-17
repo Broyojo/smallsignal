@@ -1,0 +1,5 @@
+Resistor divider: pure thermal noise, S_out = 4kT(R1||R2) exactly
+VIN in 0 DC 0 AC 1
+R1 in out 1k
+R2 out 0 3k
+.end

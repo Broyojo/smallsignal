@@ -1,0 +1,15 @@
+{
+ "input": "VIN",
+ "output": "c",
+ "ref": null,
+ "freqs": [
+  10.0,
+  1000.0,
+  100000.0,
+  10000000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "noise": true,
+ "description": "BJT CE with emitter degeneration and base flicker noise (KF, AF)"
+}

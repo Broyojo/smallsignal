@@ -69,6 +69,9 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         args += ["--mode", side["mode"]]
     if side.get("match"):
         args += ["--match", ";".join(",".join(g) for g in side["match"])]
+    if side.get("noise"):
+        band = side["noise"].get("band") if isinstance(side["noise"], dict) else None
+        args += ["--noise-band", ",".join(repr(float(f)) for f in band)] if band else ["--noise"]
     try:
         proc = subprocess.run(args, cwd=REPO, capture_output=True, text=True, timeout=120)
     finally:
@@ -157,6 +160,73 @@ def by_freq(values: list[dict] | None, f: float) -> dict | None:
     return None
 
 
+# Noise: ngspice's PSDs equal an independent exact recomputation from its own
+# linearization to <= 2e-14 (noise_indep.py over the noise corpus), so the
+# error budget is the operating-point agreement (~1e-9): same rtol as AC.
+NOISE_RTOL = 1e-6
+NOISE_INT_RTOL = 1e-4
+
+
+def compare_noise(got: dict, want: dict, rep: Report):
+    gn = got.get("noise") or {}
+    for q in ("output", "input"):
+        for w in want["noise"][q]:
+            g = next((x for x in gn.get(q) or [] if math.isclose(x["f"], w["f"], rel_tol=1e-9)), None)
+            what = f"noise.{q}@{w['f']:g}"
+            if g is None or g.get("v2") is None:
+                rep.failures.append(f"{what}: missing")
+                continue
+            err = abs(g["v2"] - w["v2"])
+            rep.worst = max(rep.worst, err / max(w["v2"], 1e-300))
+            if err > NOISE_RTOL * w["v2"] + 1e-40:
+                rep.failures.append(f"{what}: got {g['v2']:.10e}, want {w['v2']:.10e}")
+    # Per-source contributions: the solver lists them per frequency as
+    # [{f, sources: [{element, kind, v2}]}]; its kinds map to ngspice's.
+    kind_map = {("r", "thermal"): "thermal", ("m", "thermal"): "id", ("m", "flicker"): "1overf",
+                ("q", "shot_c"): "ic", ("q", "shot_b"): "ib", ("q", "flicker"): "1overf",
+                ("d", "shot"): "id", ("d", "flicker"): "1overf"}
+    have = {}
+    for row in gn.get("contributors") or []:
+        for src in row.get("sources", []):
+            el = src.get("element", "").lower()
+            ng_src = kind_map.get((el[:1], src.get("kind")))
+            if ng_src:
+                have[(el, ng_src, round(math.log10(row["f"]), 9))] = src.get("v2")
+    if gn.get("contributors") is not None:
+        for c in want["noise"]["contributors"]:
+            if c["source"] == "total":
+                continue
+            for w in c["values"]:
+                if w["v2"] == 0:
+                    continue
+                g = have.get((c["element"], c["source"], round(math.log10(w["f"]), 9)))
+                what = f"noise.{c['element']}.{c['source']}@{w['f']:g}"
+                if g is None:
+                    rep.failures.append(f"{what}: missing (ngspice {w['v2']:.3e})")
+                elif abs(g - w["v2"]) > NOISE_RTOL * w["v2"] + 1e-40:
+                    rep.failures.append(f"{what}: got {g:.10e}, want {w['v2']:.10e}")
+    # Integrated noise over a band: the reference is an adaptive 60-digit
+    # quadrature of the independently rebuilt PSD, confirmed by a Richardson
+    # trapezoid of ngspice's own spectrum to ~1e-10 (not ngspice's
+    # onoise_total, which is percent-level off). rtol 1e-4 matches the
+    # solver's integrator target; its own relError claim must also hold.
+    if "integrated" in want["noise"]:
+        gi = gn.get("integrated") or {}
+        for key in ("outputV2", "inputV2"):
+            w, g = want["noise"]["integrated"][key], gi.get(key)
+            what = f"noise.integrated.{key}"
+            if g is None:
+                rep.failures.append(f"{what}: missing")
+                continue
+            err = abs(g - w) / w
+            rep.worst = max(rep.worst, err)
+            if err > NOISE_INT_RTOL:
+                rep.failures.append(f"{what}: got {g:.8e}, want {w:.8e} (rel {err:.1e})")
+            claimed = gi.get("relError")
+            if claimed is not None and err > max(2 * claimed, 1e-9):
+                rep.failures.append(f"{what}: error {err:.1e} exceeds the solver's own relError {claimed:.1e}")
+
+
 def compare(got: dict, want: dict, rep: Report):
     gnodes = lower_keys(got.get("op", {}).get("nodes"))
     for n, v in want["op"]["nodes"].items():
@@ -178,6 +248,8 @@ def compare(got: dict, want: dict, rep: Report):
         gq = got.get(q) or {}
         for w in want[q]["values"]:
             rep.complex(f"{q}@{w['f']:g}", by_freq(gq.get("values"), w["f"]), w, kind)
+    if "noise" in want:
+        compare_noise(got, want, rep)
 
 
 def main() -> int:

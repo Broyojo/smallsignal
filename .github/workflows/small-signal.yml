@@ -32,6 +32,8 @@ jobs:
       - run: cargo clippy --locked --workspace --release -- -D warnings
       - run: cargo test --locked --workspace --release
       - run: cargo build --locked --release -p smallsignal-cli
+      # textbook_nd.py runs ngspice itself (the corpus compares against stored results).
+      - run: sudo apt-get update && sudo apt-get install -y ngspice
       - uses: astral-sh/setup-uv@v6
       - name: ngspice corpus, regressions and textbook identities
         working-directory: oracle
@@ -60,6 +62,7 @@ jobs:
           uv run --locked compare.py
           uv run --locked compare.py --corpus regressions --expected regressions/expected
           uv run --locked textbook.py
+          uv run --locked textbook_nd.py
 
   editor:
     name: Panel

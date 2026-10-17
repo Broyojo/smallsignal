@@ -13,6 +13,7 @@ pub mod devices;
 pub mod gcd;
 pub mod linalg;
 pub mod netlist;
+pub mod noise;
 pub mod poly;
 pub mod render;
 pub mod roots;

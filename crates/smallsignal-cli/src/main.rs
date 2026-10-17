@@ -1,12 +1,12 @@
 //! `smallsignal analyze <netlist> --input VIN --output out[:ref] [--freq 1,1k]
-//! [--rin] [--rout] [--tol 0.05] [--verify] [--pretty]`
+//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--tol 0.05] [--verify] [--pretty]`
 
 use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
-[--freq f1,f2,...] [--rin] [--rout] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -25,23 +25,7 @@ fn run() -> Result<(), String> {
     }
     let path = &args[1];
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    let mut req = Request {
-        input: String::new(),
-        output: String::new(),
-        reference: None,
-        freqs: Vec::new(),
-        rin: false,
-        rout: false,
-        tolerance: None,
-        verify: false,
-        max_terms: None,
-        symbolic: false,
-        input_neg: None,
-        mode: None,
-        matched: Vec::new(),
-        match_auto: false,
-        unmatch: Vec::new(),
-    };
+    let mut req: Request = serde_json::from_value(serde_json::json!({ "input": "", "output": "" })).unwrap();
     let mut pretty = false;
     let mut certificate = false;
     let mut it = args[2..].iter();
@@ -86,6 +70,19 @@ fn run() -> Result<(), String> {
                         req.matched.push(names);
                     }
                 }
+            }
+            "--noise" => req.noise = true,
+            "--noise-band" => {
+                let v = value(&mut it, a)?;
+                let parts: Vec<f64> = v
+                    .split(',')
+                    .map(|f| smallsignal_core::units::parse_value(f).ok_or(format!("bad frequency '{f}'")))
+                    .collect::<Result<_, _>>()?;
+                let [lo, hi] = parts[..] else {
+                    return Err("--noise-band needs fLow,fHigh".to_string());
+                };
+                req.noise = true;
+                req.noise_band = Some([lo, hi]);
             }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,

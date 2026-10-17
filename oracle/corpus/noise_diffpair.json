@@ -1,0 +1,15 @@
+{
+ "input": "VIN",
+ "output": "o2",
+ "ref": "o1",
+ "freqs": [
+  10.0,
+  1000.0,
+  100000.0,
+  10000000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "noise": true,
+ "description": "NMOS differential pair, differential output, ideal tail (tail noise is common-mode)"
+}

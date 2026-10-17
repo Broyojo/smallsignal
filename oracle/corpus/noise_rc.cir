@@ -1,0 +1,5 @@
+RC lowpass: thermal noise shaped by C, S_out = 4kT R / (1 + (wRC)^2), total kT/C
+VIN in 0 DC 0 AC 1
+R1 in out 10k
+C1 out 0 1n
+.end

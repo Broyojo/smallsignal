@@ -22,6 +22,14 @@ import Certs.nmos_diffpair_dm
 import Certs.nmos_mirror
 import Certs.nmos_sf
 import Certs.nmos_triode
+import Certs.noise_bjt_ce
+import Certs.noise_cs
+import Certs.noise_cs_degen
+import Certs.noise_diffpair
+import Certs.noise_divider
+import Certs.noise_ota_5t
+import Certs.noise_rc
+import Certs.noise_sf
 import Certs.ota_5t
 import Certs.ota_5t_cm
 import Certs.ota_5t_dm

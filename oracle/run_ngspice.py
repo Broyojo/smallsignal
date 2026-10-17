@@ -68,6 +68,11 @@ NGSPICE_TIMEOUT_S = 30
 
 
 def run_deck(deck: str, keep: Path | None, tag: str) -> dict[str, complex | float]:
+    return parse_values(run_deck_text(deck, keep, tag))
+
+
+def run_deck_text(deck: str, keep: Path | None, tag: str) -> str:
+    """Run a deck; return ngspice's output, raising on its error messages."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / f"{tag}.cir"
         path.write_text(deck)
@@ -86,6 +91,10 @@ def run_deck(deck: str, keep: Path | None, tag: str) -> dict[str, complex | floa
     errors = [l for l in text.splitlines() if re.search(r"\berror\b|singular|no convergence|timestep too small", l, re.I)]
     if errors:
         raise NgspiceError(f"{tag}: " + "; ".join(errors[:5]))
+    return text
+
+
+def parse_values(text: str) -> dict[str, complex | float]:
     values: dict[str, complex | float] = {}
     for line in text.splitlines():
         m = LINE.match(line.strip())
@@ -277,6 +286,86 @@ def zin_differential(net: spice.Netlist, side: dict, keep: Path | None, name: st
     return out
 
 
+def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
+    """ngspice .noise at the sidecar's noise frequencies (default: freqs).
+
+    ngspice prints spectral *densities* (V/√Hz, or A/√Hz input-referred for an
+    I-source input); they are squared here, so every value is a power spectral
+    density in V²/Hz (A²/Hz). `set noisedetail` adds one vector per element
+    (onoise_<element>) and per noise source of it (onoise_<element>_<source>:
+    id, 1overf, rd, rs for MOS; thermal, 1overf for R; ib, ic, rb, rc, re,
+    1overf for BJT; id, rs, 1overf for diodes), each the output-referred
+    density that source alone produces.
+    """
+    spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
+    freqs = spec.get("freqs") or side.get("freqs", [])
+    out, ref = side["output"], side.get("ref")
+    inp = net.element(side["input"])
+    vout = f"v({out},{ref})" if ref else f"v({out})"
+    lines = ["set noisedetail"]
+    for k, f in enumerate(freqs):
+        lines += [f"echo @@noise {k}", f"noise {vout} {inp.name} lin 1 {f!r} {f!r} 1", "print all", f"echo @@end {k}"]
+    deck = spice.render(net, inp.name) + "\n".join(control(lines)) + "\n"
+    text = run_deck_text(deck, keep, name + ".noise")
+    output, inputs, contrib = [], [], {}
+    for k, f in enumerate(freqs):
+        block = text.split(f"@@noise {k}", 1)[1].split(f"@@end {k}", 1)[0]
+        vals = parse_values(block)
+        output.append({"f": f, "v2": float(vals["onoise_spectrum"]) ** 2})
+        inputs.append({"f": f, "v2": float(vals["inoise_spectrum"]) ** 2})
+        for key, v in vals.items():
+            if not key.startswith("onoise_") or key == "onoise_spectrum":
+                continue
+            body = key[len("onoise_"):]
+            elem, _, source = body.partition("_")
+            contrib.setdefault((elem, source or "total"), []).append({"f": f, "v2": float(v) ** 2})
+    result = {
+        "units": "V^2/Hz (input: V^2/Hz for a V-source input, A^2/Hz for an I source)",
+        "output": output,
+        "input": inputs,
+        "contributors": [{"element": e, "source": s_, "values": vals_} for (e, s_), vals_ in sorted(contrib.items())],
+    }
+    if spec.get("band"):
+        result["integrated"] = noise_band(net, side, spec["band"], keep, name)
+    return result
+
+
+def noise_band(net: spice.Netlist, side: dict, band: list[float], keep: Path | None, name: str) -> dict:
+    """∫ PSD df over band, from ngspice's own spectrum (NOT ngspice's
+    onoise_total/inoise_total, which are percent-level inaccurate): log-spaced
+    sweeps at 100 and 200 points/decade, trapezoid in ln f, Richardson-
+    extrapolated (error ∝ h²). The oracle's reference is the adaptive 60-digit
+    quadrature of the independently rebuilt PSD (noise_indep.integrated),
+    filled in by process(); both must agree."""
+    out, ref = side["output"], side.get("ref")
+    inp = net.element(side["input"])
+    vout = f"v({out},{ref})" if ref else f"v({out})"
+    f_low, f_high = band
+
+    def sweep(ppd: int) -> tuple[float, float]:
+        # The swept run leaves the integrated plot (noise2) current; the
+        # spectrum is noise1 (one sweep per deck).
+        lines = [f"noise {vout} {inp.name} dec {ppd} {f_low!r} {f_high!r}", "setplot noise1",
+                 "print onoise_spectrum inoise_spectrum"]
+        deck = spice.render(net, inp.name) + "\n".join(control(lines)) + "\n"
+        text = run_deck_text(deck, keep, f"{name}.band{ppd}")
+        rows = [tuple(float(x) for x in m.groups()) for m in
+                re.finditer(r"^\d+\s+(\S+)\s+(\S+)\s+(\S+)\s*$", text, re.M)]
+        def trap(col):
+            tot = 0.0
+            for (f0, *a0), (f1, *a1) in zip(rows, rows[1:]):
+                y0, y1 = a0[col] ** 2 * f0, a1[col] ** 2 * f1  # S·f, integrated over ln f
+                tot += 0.5 * (y0 + y1) * math.log(f1 / f0)
+            return tot
+        return trap(0), trap(1)
+
+    o1, i1 = sweep(100)
+    o2, i2 = sweep(200)
+    return {"fLow": f_low, "fHigh": f_high,
+            "ngspice_trapezoid": {"outputV2": o2 + (o2 - o1) / 3, "inputV2": i2 + (i2 - i1) / 3,
+                                  "richardson_correction": abs(o2 - o1) / 3 / o2}}
+
+
 def cval(f: float, z: complex | None) -> dict:
     if z is None or not (math.isfinite(z.real) and math.isfinite(z.imag)):
         return {"f": f, "re": None, "im": None, "inf": True}
@@ -308,6 +397,18 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
         result["rin"] = {"values": zin}
     if side.get("rout"):
         result["rout"] = {"values": zout(net, side, keep, name)}
+    if side.get("noise"):
+        result["noise"] = noise(net, side, keep, name)
+        if "integrated" in result["noise"]:
+            import noise_indep  # noqa: PLC0415 - noise_indep imports this module
+            band = result["noise"]["integrated"]
+            exact = noise_indep.integrated(cir, result, band["fLow"], band["fHigh"])
+            band.update({"outputV2": exact["outputV2"], "inputV2": exact["inputV2"],
+                         "outputRms": math.sqrt(exact["outputV2"]), "inputRms": math.sqrt(exact["inputV2"]),
+                         "method": "adaptive quadrature of the 60-digit independent PSD"})
+            tr = band["ngspice_trapezoid"]
+            band["agreement"] = max(abs(tr["outputV2"] - exact["outputV2"]) / exact["outputV2"],
+                                    abs(tr["inputV2"] - exact["inputV2"]) / exact["inputV2"])
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result

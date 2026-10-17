@@ -55,6 +55,13 @@ pub struct Request {
     pub match_auto: bool,
     #[serde(default)]
     pub unmatch: Vec<Vec<String>>,
+    /// Noise analysis (see `noise`): spectra at `freqs`, contributors, and
+    /// the input-referred low-frequency PSD in closed form.
+    #[serde(default)]
+    pub noise: bool,
+    /// [fLow, fHigh] (Hz): also integrate the noise over this band.
+    #[serde(default)]
+    pub noise_band: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,7 +72,7 @@ enum Mode {
 }
 
 /// Exact LaTeX is emitted only up to this many terms (UI readability).
-const LATEX_TERM_LIMIT: usize = 400;
+pub(crate) const LATEX_TERM_LIMIT: usize = 400;
 /// The symbolic determinant handles at most 64 unknowns.
 const MAX_UNKNOWNS: usize = 64;
 const MAX_FREQS: usize = 10_000;
@@ -338,6 +345,35 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         ),
     );
 
+    if req.noise || req.noise_band.is_some() {
+        let poles_hz: Vec<f64> = if symbolic {
+            Vec::new()
+        } else {
+            let e = Expr::from_mna(&XPoly::constant(1, symbols.syms.len()), &x(&d)?, &symbols.syms);
+            roots(&e.s_coeffs().1).iter().map(|p| p.norm() / (2.0 * PI)).collect()
+        };
+        let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new());
+        let ctx = crate::noise::Ctx {
+            net: &net,
+            op: op.as_ref(),
+            full: &full,
+            ss: &ss,
+            symbols: &symbols,
+            full_symbols: &full_symbols,
+            excite: &excite,
+            out,
+            rf,
+            vid: if mode == Mode::Differential { 2 } else { 1 },
+            input_is_v,
+            freqs: &freqs,
+            band: req.noise_band,
+            tol,
+            max_terms,
+            poles_hz,
+        };
+        resp.insert("noise".into(), crate::noise::report(&ctx, &mut warnings)?);
+    }
+
     if req.rin {
         match &probe.rin {
             Some(RinKind::Ports { into, outof, open }) => {
@@ -451,7 +487,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
 
 /// Largest relative error the `display` form may have from dropping junction
 /// leakage; beyond it the display form keeps the junctions.
-const LEAKAGE_REL: f64 = 1e-3;
+pub(crate) const LEAKAGE_REL: f64 = 1e-3;
 
 /// Largest relative change of any reported value that omitting junction
 /// conductances may cause (absolute floors: 1e-12 for gains, 1e-9 Ω).
@@ -824,7 +860,7 @@ const GCD_TERM_LIMIT: usize = 1_000;
 
 /// num/den with their greatest common divisor cancelled (exactly; nothing is
 /// cancelled if the GCD cannot be found within its budget).
-fn cancel(num: &XPoly, den: &XPoly) -> (XPoly, XPoly) {
+pub(crate) fn cancel(num: &XPoly, den: &XPoly) -> (XPoly, XPoly) {
     if num.is_zero() || num.terms.len() + den.terms.len() > GCD_TERM_LIMIT {
         return (num.clone(), den.clone());
     }
@@ -914,7 +950,7 @@ fn eval_poly(p: &Poly, ss: &SsCircuit, s: Complex64) -> Complex64 {
 /// Independent numeric solve of the same system (complex LU), used to
 /// cross-check every symbolic result. Returns the solution and its normwise
 /// forward-error bound κ₁(A)·eps·‖x‖ (an absolute bound on each component).
-fn solve_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Option<(Vec<Complex64>, f64)> {
+pub(crate) fn matrix_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Vec<Complex64> {
     let n = sys.dim;
     let mut a = vec![Complex64::new(0.0, 0.0); n * n];
     for r in 0..n {
@@ -924,6 +960,12 @@ fn solve_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Option<(Vec<Complex64
             }
         }
     }
+    a
+}
+
+fn solve_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Option<(Vec<Complex64>, f64)> {
+    let n = sys.dim;
+    let a = matrix_at(sys, ss, s);
     let b: Vec<Complex64> = sys.b.iter().map(|&v| Complex64::new(v as f64, 0.0)).collect();
     let lu = LuComplex::factor(n, a)?;
     let x = lu.solve(&b);
@@ -944,7 +986,7 @@ struct Quantities<'a> {
     omit_err: f64,
 }
 
-fn jw(f: f64) -> Complex64 {
+pub(crate) fn jw(f: f64) -> Complex64 {
     Complex64::new(0.0, 2.0 * PI * f)
 }
 

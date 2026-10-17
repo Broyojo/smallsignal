@@ -52,7 +52,8 @@ def model_params(text: str) -> dict[str, dict[str, float]]:
 
 
 def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
-                    kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt")) -> dict[str, object]:
+                    kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt"),
+                    want_system: bool = False):
     """variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
     "solverlike" (only the junction / g_mu terms in `kept`, the solver's own
     parameter names such as rbd_m1, rmu_q2, each as ngspice has it) or
@@ -176,6 +177,10 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 b[r_] -= 1
         return A, b
 
+    if want_system:
+        # system(s, mode): mode "gain" excites the input source, "rout" injects
+        # 1 A at the output, anything else leaves every source at zero.
+        return system, ni, bidx, net, side, models
     out: dict[str, object] = {}
     at = lambda x, n: x[ni(n)] if n is not None and ni(n) is not None else 0
     eps = mp.mpf(2) ** -52
