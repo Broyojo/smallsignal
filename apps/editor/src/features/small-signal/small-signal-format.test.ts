@@ -3,6 +3,7 @@ import type { SmallSignalSource } from "@icm/small-signal";
 import {
   differentialPairs,
   formatDensity,
+  formatDistortion,
   formatPlain,
   formatSpiceNumber,
   modelOverrides,
@@ -250,5 +251,13 @@ describe("noise values", () => {
       { label: "R1 thermal", fraction: 0.5 },
       { label: "others", fraction: 0.5 },
     ]);
+  });
+});
+
+describe("distortion numbers", () => {
+  it("writes distortion as a percentage and in dBc", () => {
+    expect(formatDistortion(0.0115)).toEqual(["1.15%", "-38.8 dBc"]);
+    expect(formatDistortion(2.35e-5)).toEqual(["2.35e-3%", "-92.6 dBc"]);
+    expect(formatDistortion(0)).toEqual(["0%", ""]);
   });
 });

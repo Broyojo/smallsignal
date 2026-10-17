@@ -26,6 +26,11 @@ export interface SmallSignalRequest {
   noise?: boolean;
   /** Integrate the noise over [fLow, fHigh] in Hz (implies `noise`). */
   noiseBand?: [number, number];
+  /** Devices whose currents are expanded to `order`: distortion. */
+  nonlinear?: string[];
+  order?: 2 | 3;
+  /** Input amplitude for HD2, HD3 (V, or A for a current input). */
+  amplitude?: number;
 }
 
 export interface ComplexPoint {
@@ -229,6 +234,45 @@ export interface SmallSignalNoise {
     | { unavailable: string };
 }
 
+/** One closed form of a distortion quantity. */
+export interface DistortionForm {
+  latex: string | null;
+  value: number | null;
+  terms?: number;
+  relError?: number;
+  same?: boolean;
+  /** Simplified forms: how they were made, e.g. "leading order (ro ≫ R, 1/gm)". */
+  method?: string;
+}
+
+export interface DistortionQuantity extends DistortionForm {
+  display?: DistortionForm | null;
+  simplified?: DistortionForm | null;
+}
+
+export interface SmallSignalDistortion {
+  /** v_out = a1·v_in + a2·v_in² + a3·v_in³ around the bias. */
+  coefficients: (DistortionQuantity & { order: number })[];
+  hd2: DistortionQuantity | null;
+  hd3: DistortionQuantity | null;
+  iip3: DistortionQuantity | null;
+  amplitude: number;
+  /** "V" or "A". */
+  inputUnit: string;
+  nonlinear: string[];
+  order: number;
+  /** HD2 and HD3 at each frequency (Volterra kernels). */
+  vsFreq: { f: number; hd2: number | null; hd3: number | null }[];
+  /** The devices' Taylor coefficients, e.g. K_{2g,M1} = ½∂²I_D/∂v_GS². */
+  symbols: {
+    name: string;
+    latex: string;
+    value: number | null;
+    unit: string;
+    elements: string[];
+  }[];
+}
+
 export interface SmallSignalResult {
   /** True when no operating point was computed (missing values or requested). */
   symbolic?: boolean;
@@ -248,6 +292,7 @@ export interface SmallSignalResult {
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;
   noise?: SmallSignalNoise;
+  distortion?: SmallSignalDistortion;
 }
 
 export type SmallSignalResponse = SmallSignalResult | { error: string };

@@ -606,3 +606,67 @@ test("noise: flicker set in Models shows up in the densities and sources", async
     noise.getByRole("table", { name: "Noise sources" }),
   ).not.toContainText("flicker");
 });
+
+test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { LAMBDA: "0" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "M1 is in saturation.",
+  );
+  const { id, gm, ro } = await biasLine(panel, "M1");
+  expect(ro).toBe(Infinity);
+  const overdrive = (2 * id) / gm;
+
+  await panel.getByText("Distortion", { exact: true }).click();
+  const section = panel.locator("details.small-signal-distortion");
+  await expect(
+    section
+      .getByRole("group", { name: "Nonlinear devices" })
+      .getByRole("button"),
+  ).toHaveText(["M1"]);
+  const percent = async (row: string) => {
+    const text = await section
+      .locator(`tr[data-quantity="${row}"] td`)
+      .first()
+      .innerText();
+    return Number(text.replace("%", "")) / 100;
+  };
+  const hd2 = section.locator('tr[data-quantity="hd2"]');
+  await expect(hd2).toBeVisible({ timeout: 15_000 });
+  // 10 mV by default; 4 significant digits shown, V_ov from 4-digit I and gm.
+  expect(
+    Math.abs((await percent("hd2")) / (0.01 / (4 * overdrive)) - 1),
+  ).toBeLessThan(3e-3);
+  expect(await percent("hd3")).toBeLessThan(1e-9);
+  // The output swing the numbers assume: |a₁|·A = gm·R1·A with λ = 0.
+  const swing = engineering(
+    await section.locator('tr[data-quantity="output"] td').first().innerText(),
+  );
+  expect(Math.abs(swing / (gm * 10e3 * 0.01) - 1)).toBeLessThan(2e-3);
+  // a₃ is exactly zero for a square law with a resistor load.
+  const images = section.locator("img.small-signal-formula");
+  await expect(images.first()).toBeVisible();
+  const alts = await images.evaluateAll((all) =>
+    all.map((img) => img.getAttribute("alt") ?? ""),
+  );
+  expect(alts.some((alt) => /^a_\{3\} = 0$/u.test(alt))).toBe(true);
+
+  // HD2 grows linearly with the amplitude.
+  await section.getByLabel("Distortion amplitude").fill("20m");
+  await expect
+    .poll(async () => (await percent("hd2")) / (0.02 / (4 * overdrive)))
+    .toBeCloseTo(1, 2);
+
+  // With no device expanded there is nothing to compute.
+  await section.getByRole("button", { name: "M1" }).click();
+  await expect(section).toContainText("Pick a device to expand.");
+});
