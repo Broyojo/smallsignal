@@ -1259,17 +1259,18 @@ impl Quantities<'_> {
         let display_err = err_of(&display);
 
         // Simplified form: the coarsest pruning of the display form whose
-        // error (against the full model) stays in budget.
+        // error (against the full model) stays in budget, with no single
+        // coefficient moved by more than the tolerance.
         let mut simplified = display.clone();
         let mut simp_err = display_err;
-        for eps in [1.0, 0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4] {
+        for eps in Expr::prune_levels(self.tol) {
             let cand = display.prune(eps, syms);
             if cand.term_count() >= display.term_count() {
                 break;
             }
             let err = err_of(&cand);
             if err <= self.tol {
-                simplified = cand;
+                simplified = cand.cancelled(syms);
                 simp_err = err;
                 break;
             }

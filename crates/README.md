@@ -35,7 +35,10 @@ with numeric values, poles and zeros, and the operating point.
 5. **Display**: conductances become resistances, common factors cancel, and
    terms are sorted by magnitude. The simplified form drops the smallest terms
    within each power of s, up to the coarsest pruning whose error over
-   1 Hz–100 GHz stays within `tolerance`.
+   1 Hz–100 GHz stays within `tolerance`. Magnitude pruning (here, in noise
+   and in distortion) moves no coefficient of a numerator or denominator by
+   more than `tolerance` of itself, drops terms of equal size together, and
+   cancels the common factors left.
 
 ## Correctness checks
 

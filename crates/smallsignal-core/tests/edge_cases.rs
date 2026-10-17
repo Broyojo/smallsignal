@@ -484,6 +484,66 @@ fn symbolic_leading_order_is_labelled() {
     );
 }
 
+/// A numeric simplified form may not drop terms from the numerator and the
+/// denominator whose errors cancel: each coefficient stays within the
+/// tolerance on its own. Before, a transconductor with R1/R2 feedback
+/// (gm·RD = 2.3) showed R1/R2 (1, with R1 = 40k and R2 = 60k), which is no
+/// limit of the gain (exact 1.045), and a matched CMOS inverter showed
+/// −g_{m1} r_{o2}, half of each part.
+#[test]
+fn simplified_parts_are_each_within_tolerance() {
+    let feedback = "fb\nVIN in 0 AC 1\nRD 0 out 5k\nR1 out f 50k\nR2 f 0 50k\nG1 out in f in 0.46m\n";
+    let r = run(feedback, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{G_{1} R_{D} \\left(R_{1} + R_{2}\\right)}{G_{1} R_{D} R_{2} + R_{1} + R_{2}}"
+    );
+    assert_eq!(
+        r["rout"]["simplified"]["latex"],
+        "\\frac{R_{D} \\left(R_{1} + R_{2}\\right)}{G_{1} R_{D} R_{2} + R_{1} + R_{2}}"
+    );
+    let r = run(
+        &feedback.replace("50k\nR2 f 0 50k", "40k\nR2 f 0 60k"),
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{G_{1} R_{D} \\left(R_{2} + R_{1}\\right)}{G_{1} R_{D} R_{2} + R_{2} + R_{1}}"
+    );
+    let inverter = "inv\nVDD vdd 0 1.8\nVIN in 0 DC 0.9 AC 1\nM1 out in 0 0 nch W=10u L=1u\n\
+                    M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n\
+                    .model pch PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.1)\n";
+    let r = run(inverter, &request("VIN", "out"));
+    assert_eq!(r["gain"]["simplified"]["same"], false);
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "-\\frac{r_{o1} r_{o2} \\left(g_{m1} + g_{m2}\\right)}{r_{o1} + r_{o2}}"
+    );
+}
+
+/// Terms of equal size are dropped together or not at all: a matched pair
+/// keeps a symmetric simplified form (before, r_{o2} but not r_{o1}).
+#[test]
+fn simplified_drops_equal_terms_together() {
+    let pair = "bjt pair\nVCC vcc 0 5\nVEE vee 0 -5\nVCM cm 0 0\nVIN inp cm DC 0 AC 1\nQ1 c1 inp tail qn\n\
+                Q2 c2 cm tail qn\nITAIL tail vee DC 1m\nRC1 vcc c1 5k\nRC2 vcc c2 5k\n.model qn NPN (IS=1e-15 BF=100 VAF=50)\n";
+    let r = run(pair, &req(json!({ "input": "VIN", "output": "c2", "ref": "c1" })));
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{g_{m1} g_{m2} r_{o1} r_{o2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} r_{o1} r_{o2} + g_{m2} r_{o1} r_{o2} + g_{m1} r_{o1} R_{C2} + g_{m2} r_{o2} R_{C1}}"
+    );
+}
+
+/// A common factor left once terms are dropped is cancelled: r_o → ∞ in a
+/// degenerated stage leaves R_D, not R_D(1 + g_m R_S)/(1 + g_m R_S).
+#[test]
+fn simplified_cancels_common_factors() {
+    let net = "deg\nVDD vdd 0 1.8\nVIN in 0 DC 1.0 AC 1\nRD vdd out 5k\nM1 out in s 0 nm W=10u L=1u\nRS s 0 1k\n\
+               .model nm NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.5 PHI=0.7)\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    assert_eq!(r["rout"]["simplified"]["latex"], "R_{D}");
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported

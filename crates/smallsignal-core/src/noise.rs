@@ -1582,7 +1582,7 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
         // form itself: only the former assumes r_o → ∞.
         let from_lead = rel(val(&lp)) <= tol;
         let start = if from_lead { lp } else { bp.clone() };
-        for eps in [0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001] {
+        for eps in Expr::prune_levels(tol) {
             let p = (
                 start.0.as_ref().map(|e| e.prune(eps, syms)),
                 start.1.as_ref().map(|e| e.prune(eps, syms)),
@@ -1593,7 +1593,7 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
                 } else {
                     "small terms dropped"
                 };
-                cands.push((p, method));
+                cands.push(((p.0.map(|e| e.cancelled(syms)), p.1.map(|e| e.cancelled(syms))), method));
                 break;
             }
         }
