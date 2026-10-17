@@ -101,7 +101,10 @@ exceed `maxTerms` terms (default 2,000,000).
   `simplified` drops numerically small terms within `maxRelError`; in symbolic
   mode it is the hand-analysis limit r_o → ∞ (every device output resistance
   r_o, r_μ, bulk junction scaled as r/ε, the lowest order in ε kept for each
-  power of s), labelled `assumption: "ro ≫ R, 1/gm"`. The r_o of a device
+  power of s), labelled `assumption: "ro ≫ R, 1/gm"`, then the same limit
+  g_mb → 0 (labelled `"ro ≫ R, 1/gm and gmb ≪ gm"` when that drops a term),
+  except where it leaves a pure number (a follower into an ideal current
+  source keeps g_m/(g_m + g_mb)). The r_o of a device
   outside saturation (MOS triode, BJT saturation) stays finite in every
   leading-order form, with the region warning. Symbolic mode, which has no
   operating point, knows one such case: two MOSFETs of one type and model
@@ -174,7 +177,8 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 - `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
   `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
   for a CS stage. `exact`, `display` (junction leakage dropped when that moves
-  it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form, then
+  it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form,
+  in symbolic mode then g_mb → 0 with the same labels as above, then
   magnitude pruning; the smallest form within `tolerance`; when even the
   display form misses `tolerance`, the exact form, `method: "exact form"`),
   each `{latex,

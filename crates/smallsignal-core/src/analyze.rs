@@ -1011,6 +1011,27 @@ pub(crate) fn cancel(num: &XPoly, den: &XPoly) -> (XPoly, XPoly) {
     }
 }
 
+/// Assumption labels of the symbolic hand-analysis forms.
+pub(crate) const HAND: &str = "ro ≫ R, 1/gm";
+pub(crate) const HAND_BODY: &str = "ro ≫ R, 1/gm and gmb ≪ gm";
+
+/// Symbolic hand analysis of num/den: the leading order as r_o → ∞, then as
+/// g_mb → 0 (textbook analysis neglects channel-length modulation and body
+/// effect together), cancelled. The body effect stays where neglecting it
+/// leaves a pure number: a follower into an ideal current source would read
+/// 1 instead of g_m/(g_m + g_mb), which body effect alone sets. Also says
+/// whether g_mb was dropped.
+pub(crate) fn hand_form(num: &XPoly, den: &XPoly, syms: &[Sym]) -> (XPoly, XPoly, bool) {
+    let (ln, ld) = cancel(&sym::leading_order(num, syms), &sym::leading_order(den, syms));
+    let (bn, bd) = cancel(&sym::body_order(&ln, syms), &sym::body_order(&ld, syms));
+    let number = |p: &XPoly| p.terms.len() == 1 && p.terms[0].0.iter().all(|&x| x == 0);
+    if (bn == ln && bd == ld) || (number(&bn) && number(&bd)) {
+        (ln, ld, false)
+    } else {
+        (bn, bd, true)
+    }
+}
+
 /// Value of an MNA-form symbol polynomial with displayed symbol values
 /// `vals` (resistances as R).
 fn xeval(p: &XPoly, syms: &[Sym], vals: &[f64], s: Complex64) -> Complex64 {
@@ -1168,13 +1189,13 @@ impl Quantities<'_> {
             let mut ex = text(&exact, num, den);
             ex["terms"] = terms;
             // Hand-analysis form: the leading order as every device output
-            // resistance goes to infinity.
-            let (ln, ld) = cancel(&sym::leading_order(num, syms), &sym::leading_order(den, syms));
+            // resistance goes to infinity, then as g_mb → 0.
+            let (ln, ld, body) = hand_form(num, den, syms);
             let lead = Expr::from_mna(&ln, &ld, syms);
             let same = &ln == num && &ld == den;
             let mut simp = if same { ex.clone() } else { text(&lead, &ln, &ld) };
             simp["same"] = json!(same);
-            simp["assumption"] = json!("ro ≫ R, 1/gm");
+            simp["assumption"] = json!(if body { HAND_BODY } else { HAND });
             simp["terms"] = json!({ "num": lead.num.len(), "den": lead.den.len() });
             // No junction leakage in symbolic mode: the display form is exact.
             let mut display = ex.clone();

@@ -544,6 +544,41 @@ fn simplified_cancels_common_factors() {
     assert_eq!(r["rout"]["simplified"]["latex"], "R_{D}");
 }
 
+/// Symbolic hand analysis neglects body effect with channel-length
+/// modulation (g_mb ≪ g_m) and says so, except where that would leave a pure
+/// number: a follower into an ideal current source keeps g_m/(g_m + g_mb),
+/// which body effect alone sets, rather than 1.
+#[test]
+fn symbolic_hand_form_neglects_body_effect() {
+    let degen = run(
+        "deg\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in s 0\nRS s 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        degen["gain"]["simplified"]["latex"],
+        "-\\frac{g_{m1} R_{D}}{g_{m1} R_{S} + 1}"
+    );
+    assert_eq!(degen["gain"]["simplified"]["assumption"], "ro ≫ R, 1/gm and gmb ≪ gm");
+    assert!(degen["gain"]["exact"]["latex"].as_str().unwrap().contains("g_{mb1}"));
+    let sf = run(
+        "sf\nVDD vdd 0\nVIN in 0\nVB vb 0\nM1 vdd in out 0\nM2 out vb 0 0\n",
+        &req(json!({ "input": "VIN", "output": "out", "rout": true })),
+    );
+    assert_eq!(
+        sf["gain"]["simplified"]["latex"],
+        "g_{m1} \\left(\\frac{1}{g_{m1}} \\parallel \\frac{1}{g_{mb1}}\\right)"
+    );
+    assert_eq!(sf["gain"]["simplified"]["assumption"], "ro ≫ R, 1/gm");
+    assert_eq!(sf["rout"]["simplified"]["latex"], "\\frac{1}{g_{m1}}");
+    assert_eq!(sf["rout"]["simplified"]["assumption"], "ro ≫ R, 1/gm and gmb ≪ gm");
+    // A gain through the body alone keeps its leading order in g_mb.
+    let bulk = run(
+        "bulk\nVDD vdd 0\nVIN in 0\nVG g 0\nRD vdd out\nM1 out g 0 in\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(bulk["gain"]["simplified"]["latex"], "-g_{mb1} R_{D}");
+}
+
 /// Symbolic mode keeps r_o finite for a device it knows is in triode, and
 /// says so. Two NMOS on one gate, the inner one's drain on the outer one's
 /// source: the inner one is in triode whenever the outer one conducts (one
