@@ -213,9 +213,12 @@ transfer cofactors. Response `distortion`:
   (LU solves at ω, 2ω, 3ω on the full model).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
   `symbols`: the K symbols used (`[]` when no closed form was built);
-  `omissionError`; `check` `{ok, maxRelDiff, orders}`: each exact a_n that
-  materialized against the numeric reference (`orders` lists which; null
-  when none did).
+  `omissionError`; `check` `{ok, maxRelDiff, orders, matchBound}`: each
+  exact a_n that materialized against the numeric reference (`orders` lists
+  which; null when none did), allowing 4× `matchBound`, the relative effect
+  of the accepted match mismatch (mismatch·Σ|p·∂a_n/∂p| over merged linear
+  parameters and Taylor coefficients; a merged a_n that cancels to 0 keeps
+  that residual numerically).
 - Every field is always present. A quantity whose exact closed form would
   exceed 100k terms or `maxTerms` (its numerator, or the D^{2n−1} under it;
   e.g. a 5T OTA's a₃ with junction leakage kept), or every quantity when the

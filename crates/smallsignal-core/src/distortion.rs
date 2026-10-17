@@ -611,6 +611,9 @@ pub struct Closed {
     pub num: Vec<XPoly>,
     pub pow: Vec<u32>,
     pub vid: i128,
+    /// The symbol of each Taylor coefficient (`coefs` order), None when
+    /// left out.
+    pub coef_sym: Vec<Option<usize>>,
     /// Term budget of every product (as `closed` was given).
     max_terms: usize,
     /// D^0, D^1, … as far as computed, and whether the next power is over
@@ -684,6 +687,7 @@ impl Closed {
             num,
             pow,
             vid,
+            coef_sym: Vec::new(),
             max_terms,
             dpow: RefCell::new((Vec::new(), false)),
             a_memo: (0..n).map(|_| OnceCell::new()).collect(),
@@ -1013,7 +1017,9 @@ pub fn closed(
         num.push(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?);
         powers.push(5);
     }
-    Ok(Ok(Closed::new(syms, dx, num, powers, vid, max_terms)))
+    let mut cl = Closed::new(syms, dx, num, powers, vid, max_terms);
+    cl.coef_sym = cidx;
+    Ok(Ok(cl))
 }
 
 // --- report -------------------------------------------------------------------
@@ -1076,6 +1082,17 @@ pub struct Ctx<'a> {
     pub amplitude: f64,
     pub tol: f64,
     pub max_terms: usize,
+}
+
+/// The closed form against the numeric reference: `ok`, the worst relative
+/// difference, the worst part of it the match mismatch does not explain,
+/// the largest relative effect of that mismatch, and the orders checked.
+struct Check {
+    ok: bool,
+    worst: f64,
+    unexplained: f64,
+    match_bound: f64,
+    orders: Vec<usize>,
 }
 
 /// Largest relative change of a1..a3 that leaving out Taylor coefficients
@@ -1373,16 +1390,96 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             _ => None,
         }
     };
+    let all: Vec<f64> = coefs.iter().map(|cf| cf.value).collect();
+    // Explicitly matched devices: each merged symbol (linear parameter or
+    // Taylor coefficient) takes its first member's value, and the members
+    // agree to within `mismatch`. To first order that moves a_n by at most
+    // mismatch·Σ|p·∂a_n/∂p| over the merged values p (numerically, on the
+    // full model); where the merged form cancels to exactly 0 this is the
+    // residual the numeric a_n keeps. Absolute, per a_n.
+    let merge_effect = |cl: &Closed, model: &SsCircuit, msyms: &Symbols| -> [f64; 3] {
+        let mut members = vec![0usize; msyms.syms.len()];
+        for &k in &msyms.class {
+            members[k] += 1;
+        }
+        let params: Vec<&str> = model
+            .params
+            .iter()
+            .zip(&msyms.class)
+            .filter(|(_, &k)| members[k] > 1)
+            .map(|(p, _)| p.name.as_str())
+            .collect();
+        let mut kmembers = vec![0usize; cl.syms.len()];
+        for k in cl.coef_sym.iter().flatten() {
+            kmembers[*k] += 1;
+        }
+        let mut mismatch = msyms.mismatch;
+        let mut kmerged = Vec::new();
+        for (i, (cf, k)) in coefs.iter().zip(&cl.coef_sym).enumerate() {
+            if let Some(k) = *k {
+                if kmembers[k] > 1 {
+                    let t = cl.syms[k].value;
+                    if t != cf.value {
+                        mismatch = mismatch.max((t - cf.value).abs() / t.abs().max(cf.value.abs()));
+                    }
+                    kmerged.push(i);
+                }
+            }
+        }
+        let mut sens = [0.0f64; 3];
+        if mismatch == 0.0 {
+            return sens;
+        }
+        let h = 1e-6;
+        let mut add = |up: Option<[Complex64; 3]>, down: Option<[Complex64; 3]>| {
+            if let (Some(u), Some(d)) = (up, down) {
+                for n in 0..3 {
+                    sens[n] += (u[n] - d[n]).norm() / (2.0 * h);
+                }
+            }
+        };
+        for name in params {
+            let Some(j) = full.params.iter().position(|p| p.name == name) else {
+                continue;
+            };
+            let at = |f: f64| {
+                let mut m = full.clone();
+                m.params[j].value *= f;
+                let sys = crate::ss::system(c.net, &m, c.excite);
+                Probe {
+                    sys: &sys,
+                    ss: &m,
+                    ..probe
+                }
+                .volterra(&devs, &coefs, &all, 0.0)
+            };
+            add(at(1.0 + h), at(1.0 - h));
+        }
+        for i in kmerged {
+            let at = |f: f64| {
+                let mut v = all.clone();
+                v[i] *= f;
+                probe.volterra(&devs, &coefs, &v, 0.0)
+            };
+            add(at(1.0 + h), at(1.0 - h));
+        }
+        sens.map(|x| mismatch * x)
+    };
     // The closed form's a_n against the numeric reference (full model,
-    // every coefficient), for each a_n that materialized: (ok, worst
-    // relative difference, orders checked); None when none did.
-    let check = |cl: &Closed| -> Option<(bool, f64, Vec<usize>)> {
-        let mut worst = 0.0f64;
-        let mut ok = true;
-        let mut orders = Vec::new();
+    // every coefficient), for each a_n that materialized, allowing for the
+    // accepted match mismatch.
+    let check = |cl: &Closed, model: &SsCircuit, msyms: &Symbols| -> Option<Check> {
+        let merge = merge_effect(cl, model, msyms);
+        let mut ck = Check {
+            ok: true,
+            worst: 0.0,
+            unexplained: 0.0,
+            match_bound: 0.0,
+            orders: Vec::new(),
+        };
         for (n, &r) in a_num.iter().enumerate().take(cl.num.len()) {
             let Some(q) = cl.a(n) else { continue };
-            orders.push(n + 1);
+            ck.orders.push(n + 1);
             let e = q.view(&cl.syms, false).expr();
             let (v, bound) = e
                 .map(|e| {
@@ -1391,28 +1488,39 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 })
                 .unwrap_or((0.0, 0.0));
             let scale = v.abs().max(r.abs());
-            let d = if scale > 0.0 { (v - r).abs() / scale } else { 0.0 };
-            worst = worst.max(d);
-            if d > 1e-8 + 2.0 * omit_err + 8.0 * bound {
-                ok = false;
+            let (d, m) = if scale > 0.0 {
+                ((v - r).abs() / scale, merge[n] / scale)
+            } else {
+                (0.0, 0.0)
+            };
+            ck.worst = ck.worst.max(d);
+            ck.match_bound = ck.match_bound.max(m);
+            ck.unexplained = ck.unexplained.max(d - 4.0 * m);
+            if d > 1e-8 + 2.0 * omit_err + 8.0 * bound + 4.0 * m {
+                ck.ok = false;
             }
         }
-        (!orders.is_empty()).then_some((ok, worst, orders))
+        (!ck.orders.is_empty()).then_some(ck)
     };
     // Exact closed form on the analysis model (redone on the full model if
     // a junction it left out matters here); the leakage-free one when the
     // exact form is too large.
     let mut exact = build(ss, symbols, false);
+    let (mut exact_model, mut exact_syms) = (ss, symbols);
+    let fs;
     if let Some(cl) = &exact {
         // Junctions omitted as negligible for the gain (≤ 1e-9) can move
         // a3 by more (it is cubic in the transfers): use the full model then,
         // and no exact form if that one is too large.
-        if check(cl).is_some_and(|(_, diff, _)| diff > 1e-11) && ss.params.len() != full.params.len() {
-            let mut fs = (c.full_symbols)();
-            if !slopes.is_empty() {
-                fs = sym_values(full, &fs, &slopes);
-            }
+        if check(cl, ss, symbols).is_some_and(|ck| ck.unexplained > 1e-11) && ss.params.len() != full.params.len() {
+            let f = (c.full_symbols)();
+            fs = if slopes.is_empty() {
+                f
+            } else {
+                sym_values(full, &f, &slopes)
+            };
             exact = build(full, &fs, false);
+            (exact_model, exact_syms) = (full, &fs);
         }
     }
     // Every quantity shown must materialize: `build` returns the numerators,
@@ -1516,16 +1624,17 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .map(|s| json!({ "name": s.name, "latex": s.latex, "value": s.value, "unit": s.unit, "elements": s.elements }))
         .collect();
     resp.insert("symbols".into(), json!(ksyms));
-    match exact.as_ref().and_then(check) {
-        Some((ok, diff, orders)) => {
-            if !ok {
+    match exact.as_ref().and_then(|cl| check(cl, exact_model, exact_syms)) {
+        Some(ck) => {
+            if !ck.ok {
                 warnings.push(format!(
-                    "distortion: closed form and numeric solution differ ({diff:.2e})"
+                    "distortion: closed form and numeric solution differ ({:.2e})",
+                    ck.worst
                 ));
             }
             resp.insert(
                 "check".into(),
-                json!({ "ok": ok, "maxRelDiff": diff, "orders": orders }),
+                json!({ "ok": ck.ok, "maxRelDiff": ck.worst, "orders": ck.orders, "matchBound": ck.match_bound }),
             );
         }
         None => {
@@ -1535,7 +1644,6 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 
     // Harmonic distortion versus frequency, numerically on the full model:
     // HD2 = |H2(jω,jω)|·A/(2|H1(jω)|), HD3 = |H3(jω,jω,jω)|·A²/(4|H1(jω)|).
-    let all: Vec<f64> = coefs.iter().map(|cf| cf.value).collect();
     let vs: Vec<Value> = c
         .freqs
         .iter()

@@ -655,3 +655,45 @@ fn current_input_default_amplitude_is_one_microamp() {
     assert_eq!(out["distortion"]["amplitude"].as_f64(), Some(1e-6));
     assert_eq!(out["distortion"]["inputUnit"], "A");
 }
+
+#[test]
+fn accepted_match_mismatch_is_within_the_check() {
+    // M2 is 1e-12 wider than M1, within MATCH_REL: the pair is merged, so
+    // the closed-form a2 cancels to exactly 0 while the numeric a2 keeps a
+    // residual of order mismatch × the cancelled terms. The check allows
+    // the accepted mismatch, and that allowance is tight.
+    let net = |w2: &str| {
+        format!(
+            "dp\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail tail nm W=10u L=1u\n\
+M2 o2 inn tail tail nm W={w2} L=1u\nITAIL tail 0 200u\nVIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n\
+.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n"
+        )
+    };
+    let rq = req(
+        json!({ "input": "VIP", "inputNeg": "VINN", "output": "o1", "ref": "o2", "nonlinear": ["M1", "M2"],
+                 "match": [["M1", "M2"], ["RD1", "RD2"]] }),
+    );
+    let r = run(&net("10.00000000001u"), &rq);
+    let d = &r["distortion"];
+    assert_eq!(d["coefficients"][1]["latex"], "0");
+    let a2 = d["coefficients"][1]["numeric"].as_f64().unwrap();
+    assert!(a2 != 0.0 && a2.abs() < 1e-9 * coef(&r, 0).abs(), "{a2}");
+    let ck = &d["check"];
+    assert_eq!(ck["ok"], true, "{ck}");
+    let warned = r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains("closed form and numeric"));
+    assert!(!warned, "{}", r["warnings"]);
+    // a2's relative difference is 1 (0 against the residual); the bound
+    // explains it without being loose (4.3 here). A mismatch the bound
+    // does not cover cannot be built: merging needs ≤ MATCH_REL.
+    let diff = ck["maxRelDiff"].as_f64().unwrap();
+    let bound = ck["matchBound"].as_f64().unwrap();
+    assert!(diff <= 4.0 * bound && bound <= 10.0 * diff, "{ck}");
+    // Exactly matched: no allowance at all.
+    let r = run(&net("10u"), &rq);
+    assert_eq!(r["distortion"]["check"]["matchBound"], 0.0);
+    assert_eq!(r["distortion"]["check"]["ok"], true);
+}
