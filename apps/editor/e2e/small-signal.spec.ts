@@ -513,3 +513,66 @@ test("stored model edits stay reachable in a circuit without transistors", async
   await panel.getByRole("button", { name: "Reset to defaults" }).click();
   await expect(panel.getByText(/^Models/u)).toHaveCount(0);
 });
+
+/** "3.88 nV/√Hz" or "18.7 µV rms" as a number in base units. */
+function engineering(text: string): number {
+  const match = /(-?[\d.]+(?:e[+-]?\d+)?)\s*([fpnµmkMG]?)[VA]/u.exec(text);
+  if (!match) throw new Error(`no number in "${text}"`);
+  const scale: Record<string, number> = {
+    f: 1e-15,
+    p: 1e-12,
+    n: 1e-9,
+    µ: 1e-6,
+    m: 1e-3,
+    "": 1,
+    k: 1e3,
+    M: 1e6,
+    G: 1e9,
+  };
+  return Number(match[1]) * scale[match[2] ?? ""]!;
+}
+
+test("noise: the input-referred PSD is 4kT(2/(3gm) + 1/(gm² R1)), and the band rms follows", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  const { gm } = await biasLine(panel, "M1");
+  await panel.getByText("Noise", { exact: true }).click();
+  const noise = panel.locator("details.small-signal-noise");
+  const image = noise.locator("img.small-signal-formula").first();
+  await expect(image).toBeVisible({ timeout: 15_000 });
+  const alt = (await image.getAttribute("alt")) ?? "";
+  // Typeset from intact TeX: a lost backslash (\f, \a) shows up here.
+  expect(alt).toMatch(
+    /^\\frac\{\\overline\{v_\{n,in\}\^\{2\}\}\}\{\\Delta f\} = 4kT/u,
+  );
+  expect(
+    await image.evaluate((img: HTMLImageElement) => img.naturalWidth),
+  ).toBeGreaterThan(0);
+  expect(alt).toContain("g_{m1}");
+
+  // ngspice's constants, at its default 27 °C.
+  const kT = 1.38064852e-23 * 300.15;
+  const expected = Math.sqrt(4 * kT * (2 / (3 * gm) + 1 / (gm * gm * 10e3)));
+  const density = engineering(
+    await noise
+      .getByRole("table", { name: "Noise density" })
+      .locator('td[data-quantity="input"]')
+      .first()
+      .innerText(),
+  );
+  expect(Math.abs(density / expected - 1)).toBeLessThan(2e-3);
+  await expect(
+    noise.getByRole("table", { name: "Noise sources" }),
+  ).toContainText("M1 thermal");
+
+  // No capacitors: the input noise is white, so rms = density·√Δf.
+  await noise.getByLabel("Noise band").fill("1, 10meg");
+  const rms = noise.locator('td[data-quantity="input-rms"]');
+  await expect(rms).toBeVisible();
+  const expectedRms = density * Math.sqrt(10e6 - 1);
+  expect(
+    Math.abs(engineering(await rms.innerText()) / expectedRms - 1),
+  ).toBeLessThan(2e-3);
+});

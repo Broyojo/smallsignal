@@ -22,6 +22,10 @@ export interface SmallSignalRequest {
   /** Also match every candidate pair in this solve, except `unmatch`. */
   matchAuto?: boolean;
   unmatch?: string[][];
+  /** Also compute noise: spectra, sources and the input-referred PSD. */
+  noise?: boolean;
+  /** Integrate the noise over [fLow, fHigh] in Hz (implies `noise`). */
+  noiseBand?: [number, number];
 }
 
 export interface ComplexPoint {
@@ -123,6 +127,60 @@ export interface MatchCandidate {
   applied?: boolean;
 }
 
+/** A PSD at one frequency, in the spectrum's unit (V²/Hz or A²/Hz). */
+export interface NoisePoint {
+  f: number;
+  v2: number;
+}
+
+export interface NoiseContribution {
+  element: string;
+  /** thermal, flicker, shot, shot_c (collector) or shot_b (base). */
+  kind: string;
+  /** Its share of the output PSD, in V²/Hz. */
+  v2: number;
+  fraction: number;
+}
+
+/** One closed form of the input-referred white (thermal + shot) PSD. */
+export interface NoiseExpression {
+  latex: string | null;
+  /** null in hand analysis (no operating point). */
+  value: number | null;
+  terms?: number;
+  relError?: number;
+  same?: boolean;
+  assumption?: string;
+}
+
+export interface SmallSignalNoise {
+  temperature: number;
+  /** Units of `input` and `output`: "V^2/Hz" or "A^2/Hz". */
+  inputUnit: string;
+  outputUnit: string;
+  output: NoisePoint[];
+  input: NoisePoint[];
+  contributors: { f: number; sources: NoiseContribution[] }[];
+  integrated: {
+    fLow: number;
+    fHigh: number;
+    /** null, with `unavailable`, when the gain is zero inside the band. */
+    outputRms: number | null;
+    inputRms: number | null;
+    relError?: number;
+    converged?: boolean;
+    unavailable?: string;
+  } | null;
+  inputLowFreq:
+    | {
+        exact: NoiseExpression;
+        display: NoiseExpression;
+        simplified: NoiseExpression;
+        check: { ok: boolean; maxRelDiff: number } | null;
+      }
+    | { unavailable: string };
+}
+
 export interface SmallSignalResult {
   /** True when no operating point was computed (missing values or requested). */
   symbolic?: boolean;
@@ -141,6 +199,7 @@ export interface SmallSignalResult {
   gain?: SmallSignalQuantity;
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;
+  noise?: SmallSignalNoise;
 }
 
 export type SmallSignalResponse = SmallSignalResult | { error: string };
