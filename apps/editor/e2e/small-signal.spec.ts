@@ -679,3 +679,46 @@ test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", as
   await section.getByRole("button", { name: "M1" }).click();
   await expect(section).toContainText("Pick a device to expand.");
 });
+
+test("a wide exact formula scrolls inside the panel instead of being cut off", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await panel.getByText("Distortion", { exact: true }).click();
+  const section = panel.locator("details.small-signal-distortion");
+  await expect(section.locator('tr[data-quantity="hd2"]')).toBeVisible({
+    timeout: 15_000,
+  });
+  // Every section and exact form in the panel, nested ones included.
+  await panel.evaluate((element) => {
+    for (const details of element.querySelectorAll("details"))
+      details.open = true;
+  });
+  const scrollers = panel.locator(".small-signal-formula-scroll");
+  await expect(scrollers.first()).toBeVisible();
+  await expect(panel.locator(".small-signal-formula-pending")).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  const boxes = await scrollers.evaluateAll((all) =>
+    all.map((box) => {
+      const before = box.scrollLeft;
+      box.scrollLeft = box.scrollWidth;
+      const moved = box.scrollLeft > before;
+      box.scrollLeft = before;
+      return {
+        right: box.getBoundingClientRect().right,
+        overflows: box.scrollWidth > box.clientWidth,
+        moved,
+      };
+    }),
+  );
+  const panelRight = await panel.evaluate(
+    (element) => element.getBoundingClientRect().right,
+  );
+  // Every box ends inside the panel; the ones wider than it scroll.
+  for (const box of boxes) {
+    expect(box.right).toBeLessThanOrEqual(panelRight + 0.5);
+    expect(box.moved).toBe(box.overflows);
+  }
+  expect(boxes.some((box) => box.overflows)).toBe(true);
+});
