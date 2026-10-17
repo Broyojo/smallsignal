@@ -31,7 +31,7 @@ def max_junction_current(result: dict, text: str) -> float:
             continue
         mname = e.tokens[5].lower()
         t = -1 if net.models.get(mname) == "pmos" else 1
-        mult = next((float(x.split("=")[1]) for x in e.tokens[6:] if x.lower().startswith("m=")), 1.0)
+        mult = next((spice.value(x.split("=", 1)[1]) for x in e.tokens[6:] if x.lower().startswith("m=")), 1.0)
         isat = params.get(mname, {}).get("is", 1e-14) * mult
         d, _, s, b = e.nodes
         for other in (s, d):

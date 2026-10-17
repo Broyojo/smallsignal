@@ -4,6 +4,10 @@ import type { SmallSignalSource } from "@icm/small-signal";
 import {
   differentialPairs,
   formatDensity,
+  formatDistortion,
+  hdText,
+  taylorLatex,
+  texEscape,
   formatPlain,
   formatSpiceNumber,
   modelOverrides,
@@ -300,4 +304,35 @@ describe("noise values", () => {
       expect(rows.at(-1)).toEqual({ label: "others", fraction: null });
     },
   );
+});
+
+describe("distortion numbers", () => {
+  it("writes distortion as a percentage and in dBc", () => {
+    expect(formatDistortion(0.0115)).toEqual(["1.15%", "-38.8 dBc"]);
+    expect(formatDistortion(2.35e-5)).toEqual(["2.35e-3%", "-92.6 dBc"]);
+    expect(formatDistortion(0)).toEqual(["0%", ""]);
+    expect(hdText(0.0115)).toBe("1.15%");
+    expect(hdText(null, true)).toBe("∞");
+    expect(hdText(null)).toBe("—");
+  });
+});
+
+describe("Taylor coefficient names", () => {
+  it("writes them as the solver's symbols do", () => {
+    const t = (element: string, current: string, monomial: string) =>
+      taylorLatex({ element, current, monomial });
+    expect(t("M1", "D", "2g")).toBe("K_{2g,M1}");
+    expect(t("M1", "D", "gd")).toBe("K_{g\\,d,M1}");
+    expect(t("M1", "D", "2gd")).toBe("K_{2g\\,d,M1}");
+    expect(t("Q1", "C", "2be")).toBe("K^{C}_{2be,Q1}");
+    expect(t("Q1", "C", "bece")).toBe("K^{C}_{be\\,ce,Q1}");
+    expect(t("Q1", "B", "2bece")).toBe("K^{B}_{2be\\,ce,Q1}");
+    // As the solver's symbols: K_{2g,M\_load}.
+    expect(t("M_load", "D", "2g")).toBe("K_{2g,M\\_load}");
+  });
+
+  it("escapes TeX specials as the solver does", () => {
+    expect(texEscape("a_b{c}$&#%")).toBe("a\\_b\\{c\\}\\$\\&\\#\\%");
+    expect(texEscape("a\\b^c~d")).toBe("a\\backslash b\\hat{}c\\sim d");
+  });
 });

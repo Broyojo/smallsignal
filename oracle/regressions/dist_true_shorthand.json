@@ -1,0 +1,10 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [1e3],
+ "rin": false,
+ "rout": false,
+ "distortion": true,
+ "description": "dist_cs with the \"distortion\": true shorthand (default amplitudes, freq, periods and sampling) and its bias written 900m"
+}

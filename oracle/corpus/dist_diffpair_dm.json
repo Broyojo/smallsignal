@@ -1,0 +1,18 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "differential",
+ "output": "o2",
+ "ref": "o1",
+ "freqs": [1e6, 1e8],
+ "rin": false,
+ "rout": false,
+ "match": [["M1", "M2"], ["RD1", "RD2"], ["CL1", "CL2"]],
+ "distortion": {
+  "amplitudes": [0.001, 0.002, 0.005, 0.01],
+  "freq": 1.0,
+  "amplitude": 0.001,
+  "vsFreq": [1e6, 1e8]
+ },
+ "description": "Matched NMOS pair driven by two sources (±v/2): a2 = 0 and HD2 = 0 at every frequency"
+}

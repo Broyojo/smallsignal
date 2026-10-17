@@ -96,6 +96,14 @@ fn merged_rest(elements: &[String]) -> String {
     format!("{}{}", &first[..prefix], tails.join(","))
 }
 
+/// "M1,2" for M1, M2: the elements of a merged symbol, written compactly.
+pub fn merged_name(elements: &[String]) -> String {
+    if elements.len() == 1 {
+        return elements[0].clone();
+    }
+    format!("{}{}", &elements[0][..1], merged_rest(elements))
+}
+
 /// `I_{C1,2}` for a quantity (base, subscript) shared by matched elements.
 pub fn merged_dev_latex(base: &str, sub: &str, elements: &[String]) -> String {
     let name = format!("{}{}", &elements[0][..1], merged_rest(elements));
@@ -440,6 +448,9 @@ pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(
     out
 }
 
+/// Largest left factor `XPoly::mul` multiplies by merging rows.
+const ROW_MERGE_MAX: usize = 16;
+
 /// A polynomial over symbols with exponents, in MNA (conductance) form; the
 /// power of s of a term is the total exponent of its reactive symbols.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -483,6 +494,51 @@ impl XPoly {
         Ok(XPoly { terms })
     }
 
+    /// `add`, taking both operands (their terms move into the sum).
+    pub fn add_owned(self, other: XPoly) -> Result<XPoly, String> {
+        self.merge_owned(other, false)
+    }
+
+    /// `sub`, taking both operands.
+    pub fn sub_owned(self, other: XPoly) -> Result<XPoly, String> {
+        self.merge_owned(other, true)
+    }
+
+    fn merge_owned(self, other: XPoly, negate: bool) -> Result<XPoly, String> {
+        use std::cmp::Ordering::*;
+        if !strictly_sorted(&self.terms) || !strictly_sorted(&other.terms) {
+            return self.merge(&other, negate);
+        }
+        let mut terms = Vec::with_capacity(self.terms.len() + other.terms.len());
+        let mut a = self.terms.into_iter().peekable();
+        let mut b = other
+            .terms
+            .into_iter()
+            .map(|(e, c)| (e, if negate { -c } else { c }))
+            .peekable();
+        loop {
+            let ord = match (a.peek(), b.peek()) {
+                (Some(x), Some(y)) => x.0.cmp(&y.0),
+                (Some(_), None) => Less,
+                (None, Some(_)) => Greater,
+                (None, None) => break,
+            };
+            let (e, c) = match ord {
+                Less => a.next().expect("peeked"),
+                Greater => b.next().expect("peeked"),
+                Equal => {
+                    let (e, x) = a.next().expect("peeked");
+                    let (_, y) = b.next().expect("peeked");
+                    (e, x.checked_add(y).ok_or("coefficient overflow")?)
+                }
+            };
+            if c != 0 {
+                terms.push((e, c));
+            }
+        }
+        Ok(XPoly { terms })
+    }
+
     pub fn neg(&self) -> XPoly {
         XPoly {
             terms: self.terms.iter().map(|(e, c)| (e.clone(), -c)).collect(),
@@ -523,29 +579,117 @@ impl XPoly {
     }
 
     pub fn add(&self, other: &XPoly) -> Result<XPoly, String> {
-        let mut map: std::collections::BTreeMap<Vec<u8>, i128> = self.terms.iter().cloned().collect();
-        for (e, c) in &other.terms {
-            let v = map.entry(e.clone()).or_insert(0);
-            *v = v.checked_add(*c).ok_or("coefficient overflow")?;
+        self.merge(other, false)
+    }
+
+    /// self − other, the same as `self.add(&other.neg())`.
+    pub fn sub(&self, other: &XPoly) -> Result<XPoly, String> {
+        self.merge(other, true)
+    }
+
+    /// self + other, or self − other when `negate`. When both are sorted
+    /// without repeats (as `XPoly`s built here are), a merge: the same sum
+    /// and checks, in the same order, as through the map.
+    fn merge(&self, other: &XPoly, negate: bool) -> Result<XPoly, String> {
+        use std::cmp::Ordering::*;
+        let sign = |c: i128| if negate { -c } else { c };
+        if !strictly_sorted(&self.terms) || !strictly_sorted(&other.terms) {
+            let mut map: std::collections::BTreeMap<Vec<u8>, i128> = self.terms.iter().cloned().collect();
+            for (e, c) in &other.terms {
+                let v = map.entry(e.clone()).or_insert(0);
+                *v = v.checked_add(sign(*c)).ok_or("coefficient overflow")?;
+            }
+            return Ok(XPoly::collect(map));
         }
-        Ok(XPoly::collect(map))
+        let mut terms = Vec::with_capacity(self.terms.len() + other.terms.len());
+        let mut a = self.terms.iter().peekable();
+        let mut b = other.terms.iter().peekable();
+        loop {
+            let (e, c) = match (a.peek(), b.peek()) {
+                (Some(x), Some(y)) if x.0 == y.0 => {
+                    let (e, x) = a.next().expect("peeked");
+                    let (_, y) = b.next().expect("peeked");
+                    (e, x.checked_add(sign(*y)).ok_or("coefficient overflow")?)
+                }
+                (Some(x), Some(y)) if x.0.cmp(&y.0) == Less => a.next().map(|(e, c)| (e, *c)).expect("peeked"),
+                (Some(_), None) => a.next().map(|(e, c)| (e, *c)).expect("peeked"),
+                (_, Some(_)) => b.next().map(|(e, c)| (e, sign(*c))).expect("peeked"),
+                (None, None) => break,
+            };
+            if c != 0 {
+                terms.push((e.clone(), c));
+            }
+        }
+        Ok(XPoly { terms })
     }
 
     /// Exact product; fails on coefficient or exponent overflow, or when the
     /// result would exceed `max_terms` terms.
     pub fn mul(&self, other: &XPoly, max_terms: usize) -> Result<XPoly, String> {
+        match (width(&self.terms), width(&other.terms)) {
+            (Some(a), Some(b)) if a == b && other.terms.len() == 1 && strictly_sorted(&self.terms) => {
+                self.mul_monomial(&other.terms[0], false, max_terms)
+            }
+            (Some(a), Some(b)) if a == b && self.terms.len() == 1 && strictly_sorted(&other.terms) => {
+                other.mul_monomial(&self.terms[0], true, max_terms)
+            }
+            (Some(a), Some(b)) if a == b && self.terms.len() <= ROW_MERGE_MAX && strictly_sorted(&other.terms) => {
+                self.mul_rows(other, a, max_terms)
+            }
+            (Some(a), Some(b)) => self.mul_table(other, a.min(b), max_terms),
+            _ => self.mul_map(other, max_terms),
+        }
+    }
+
+    /// `mul` by one term (`m`, as the left factor when `left`) of the same
+    /// exponent length, self sorted without repeats: adding one exponent
+    /// vector to each keeps them distinct and in order, so each product is
+    /// a term of the result, in place (with `mul`'s checks, in its order).
+    fn mul_monomial(&self, m: &(Vec<u8>, i128), left: bool, max_terms: usize) -> Result<XPoly, String> {
+        let (em, cm) = m;
+        let mut terms = Vec::with_capacity(self.terms.len());
+        let mut count = 0;
+        for (e, c) in &self.terms {
+            let s = e
+                .iter()
+                .zip(em)
+                .map(|(&x, &y)| x.checked_add(y))
+                .collect::<Option<Vec<u8>>>()
+                .ok_or("exponent overflow")?;
+            let p = if left { cm.checked_mul(*c) } else { c.checked_mul(*cm) };
+            let p = p.ok_or("coefficient overflow")?;
+            count += 1;
+            // `mul` checks the size after each term of its left factor.
+            if !left && count > max_terms {
+                return Err(format!("expression too large (over {max_terms} terms)"));
+            }
+            if p != 0 {
+                terms.push((s, p));
+            }
+        }
+        if count > max_terms {
+            return Err(format!("expression too large (over {max_terms} terms)"));
+        }
+        Ok(XPoly { terms })
+    }
+
+    /// `mul` for any exponent lengths (each product as long as the shorter).
+    fn mul_map(&self, other: &XPoly, max_terms: usize) -> Result<XPoly, String> {
         let mut map: std::collections::BTreeMap<Vec<u8>, i128> = std::collections::BTreeMap::new();
+        let mut e: Vec<u8> = Vec::new();
         for (ea, ca) in &self.terms {
             for (eb, cb) in &other.terms {
-                let e = ea
-                    .iter()
-                    .zip(eb)
-                    .map(|(&x, &y)| x.checked_add(y))
-                    .collect::<Option<Vec<u8>>>()
-                    .ok_or("exponent overflow")?;
+                e.clear();
+                for (&x, &y) in ea.iter().zip(eb) {
+                    e.push(x.checked_add(y).ok_or("exponent overflow")?);
+                }
                 let c = ca.checked_mul(*cb).ok_or("coefficient overflow")?;
-                let v = map.entry(e).or_insert(0);
-                *v = v.checked_add(c).ok_or("coefficient overflow")?;
+                match map.get_mut(e.as_slice()) {
+                    Some(v) => *v = v.checked_add(c).ok_or("coefficient overflow")?,
+                    None => {
+                        map.insert(e.clone(), c);
+                    }
+                }
             }
             if map.len() > max_terms {
                 return Err(format!("expression too large (over {max_terms} terms)"));
@@ -553,6 +697,217 @@ impl XPoly {
         }
         Ok(XPoly::collect(map))
     }
+
+    /// `mul` when every exponent vector of each factor has one length (`w`
+    /// is the shorter): the same products, summed in the same order, in an
+    /// open-addressing table, then sorted. The hash is linear in the packed
+    /// words, so a product's hash is the sum of its factors'.
+    fn mul_table(&self, other: &XPoly, w: usize, max_terms: usize) -> Result<XPoly, String> {
+        const EMPTY: u32 = u32::MAX;
+        let nw = words(w);
+        let (pa, pb) = (pack(&self.terms, w), pack(&other.terms, w));
+        // Odd multipliers per word (splitmix64).
+        let mult: Vec<u64> = (0..nw as u64)
+            .map(|k| {
+                let mut z = k.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                (z ^ (z >> 31)) | 1
+            })
+            .collect();
+        let hash = |ws: &[u64]| -> u64 {
+            ws.iter()
+                .zip(&mult)
+                .fold(0u64, |h, (&x, &m)| h.wrapping_add(x.wrapping_mul(m)))
+        };
+        let hb: Vec<u64> = pb.chunks_exact(nw).map(hash).collect();
+        let sb: Vec<bool> = other.terms.iter().map(|(_, c)| small(*c)).collect();
+        let mut keys: Vec<u64> = Vec::new();
+        let mut coefs: Vec<i128> = Vec::new();
+        let mut hashes: Vec<u64> = Vec::new();
+        let mut slots: Vec<u32> = vec![EMPTY; 64];
+        let slot_of = |h: u64, mask: usize| ((h ^ (h >> 29)).wrapping_mul(0xBF58_476D_1CE4_E5B9) >> 17) as usize & mask;
+        let mut e = vec![0u64; nw];
+        for ((_, ca), wa) in self.terms.iter().zip(pa.chunks_exact(nw)) {
+            let ha = hash(wa);
+            let sa = small(*ca);
+            for ((((_, cb), wb), &h), &sb) in other.terms.iter().zip(pb.chunks_exact(nw)).zip(&hb).zip(&sb) {
+                if add_words(wa, wb, &mut e) {
+                    return Err("exponent overflow".to_string());
+                }
+                let c = if sa && sb {
+                    ca * cb
+                } else {
+                    ca.checked_mul(*cb).ok_or("coefficient overflow")?
+                };
+                let h = ha.wrapping_add(h);
+                let mask = slots.len() - 1;
+                let mut i = slot_of(h, mask);
+                loop {
+                    let k = slots[i];
+                    if k == EMPTY {
+                        slots[i] = coefs.len() as u32;
+                        keys.extend_from_slice(&e);
+                        coefs.push(c);
+                        hashes.push(h);
+                        break;
+                    }
+                    let k = k as usize;
+                    if hashes[k] == h && keys[k * nw..(k + 1) * nw].iter().zip(&e).all(|(a, b)| a == b) {
+                        coefs[k] = coefs[k].checked_add(c).ok_or("coefficient overflow")?;
+                        break;
+                    }
+                    i = (i + 1) & mask;
+                }
+                if 2 * coefs.len() > slots.len() {
+                    slots = vec![EMPTY; 2 * slots.len()];
+                    let mask = slots.len() - 1;
+                    for (k, &h) in hashes.iter().enumerate() {
+                        let mut i = slot_of(h, mask);
+                        while slots[i] != EMPTY {
+                            i = (i + 1) & mask;
+                        }
+                        slots[i] = k as u32;
+                    }
+                }
+            }
+            if coefs.len() > max_terms {
+                return Err(format!("expression too large (over {max_terms} terms)"));
+            }
+        }
+        // Sorted by the first two words, then the rest (keys are distinct).
+        let word = |k: usize, j: usize| if j < nw { keys[k * nw + j] } else { 0 };
+        let mut order: Vec<(u128, usize)> = (0..coefs.len())
+            .filter(|&k| coefs[k] != 0)
+            .map(|k| ((word(k, 0) as u128) << 64 | word(k, 1) as u128, k))
+            .collect();
+        order.sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0).then_with(|| {
+                let (x, y) = (a.1, b.1);
+                keys[x * nw + 2.min(nw)..(x + 1) * nw].cmp(&keys[y * nw + 2.min(nw)..(y + 1) * nw])
+            })
+        });
+        Ok(XPoly {
+            terms: order
+                .into_iter()
+                .map(|(_, k)| (unpack(&keys[k * nw..(k + 1) * nw], w), coefs[k]))
+                .collect(),
+        })
+    }
+
+    /// `mul` of a few terms by `other` sorted without repeats, every
+    /// exponent vector of length `w`: each term of self times `other` is
+    /// sorted, so the result is built by merging one such row at a time
+    /// into the sorted sum so far (with `mul`'s checks, in its order; terms
+    /// that sum to zero stay until the end, as `mul` counts them).
+    fn mul_rows(&self, other: &XPoly, w: usize, max_terms: usize) -> Result<XPoly, String> {
+        let nw = words(w);
+        let (pa, pb) = (pack(&self.terms, w), pack(&other.terms, w));
+        let sb: Vec<bool> = other.terms.iter().map(|(_, c)| small(*c)).collect();
+        let (mut keys, mut coefs): (Vec<u64>, Vec<i128>) = (Vec::new(), Vec::new());
+        let mut e = vec![0u64; nw];
+        for ((_, ca), wa) in self.terms.iter().zip(pa.chunks_exact(nw)) {
+            let sa = small(*ca);
+            let mut nkeys: Vec<u64> = Vec::with_capacity(keys.len() + pb.len());
+            let mut ncoefs: Vec<i128> = Vec::with_capacity(coefs.len() + other.terms.len());
+            let mut i = 0;
+            for (((_, cb), wb), &sb) in other.terms.iter().zip(pb.chunks_exact(nw)).zip(&sb) {
+                if add_words(wa, wb, &mut e) {
+                    return Err("exponent overflow".to_string());
+                }
+                let c = if sa && sb {
+                    ca * cb
+                } else {
+                    ca.checked_mul(*cb).ok_or("coefficient overflow")?
+                };
+                while i < coefs.len() && keys[i * nw..(i + 1) * nw] < e[..] {
+                    nkeys.extend_from_slice(&keys[i * nw..(i + 1) * nw]);
+                    ncoefs.push(coefs[i]);
+                    i += 1;
+                }
+                nkeys.extend_from_slice(&e);
+                if i < coefs.len() && keys[i * nw..(i + 1) * nw] == e[..] {
+                    ncoefs.push(coefs[i].checked_add(c).ok_or("coefficient overflow")?);
+                    i += 1;
+                } else {
+                    ncoefs.push(c);
+                }
+            }
+            nkeys.extend_from_slice(&keys[i * nw..]);
+            ncoefs.extend_from_slice(&coefs[i..]);
+            (keys, coefs) = (nkeys, ncoefs);
+            if coefs.len() > max_terms {
+                return Err(format!("expression too large (over {max_terms} terms)"));
+            }
+        }
+        Ok(XPoly {
+            terms: (0..coefs.len())
+                .filter(|&k| coefs[k] != 0)
+                .map(|k| (unpack(&keys[k * nw..(k + 1) * nw], w), coefs[k]))
+                .collect(),
+        })
+    }
+}
+
+/// u64 words per packed exponent vector of length `w`.
+fn words(w: usize) -> usize {
+    w.div_ceil(8).max(1)
+}
+
+/// Exponent vectors (their first `w` entries) packed big-endian into u64
+/// words, so that word order is the vectors' order.
+fn pack(terms: &[(Vec<u8>, i128)], w: usize) -> Vec<u64> {
+    let mut out = Vec::with_capacity(terms.len() * words(w));
+    for (e, _) in terms {
+        let mut chunks = e[..w].chunks(8);
+        for _ in 0..words(w) {
+            let mut b = [0u8; 8];
+            if let Some(c) = chunks.next() {
+                b[..c.len()].copy_from_slice(c);
+            }
+            out.push(u64::from_be_bytes(b));
+        }
+    }
+    out
+}
+
+fn unpack(ws: &[u64], w: usize) -> Vec<u8> {
+    let mut e = Vec::with_capacity(w);
+    for x in ws {
+        let b = x.to_be_bytes();
+        e.extend_from_slice(&b[..(w - e.len()).min(8)]);
+    }
+    e
+}
+
+/// Bytewise sum of packed exponents into `out`; true when any byte would
+/// exceed 255 (a carry out of its bit 7).
+fn add_words(a: &[u64], b: &[u64], out: &mut [u64]) -> bool {
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let mut over = 0u64;
+    for ((s, &x), &y) in out.iter_mut().zip(a).zip(b) {
+        let low = (x & !HIGH) + (y & !HIGH);
+        over |= ((x & y) | ((x | y) & low)) & HIGH;
+        *s = x.wrapping_add(y);
+    }
+    over != 0
+}
+
+/// A coefficient that fits in i64 (a product of two cannot overflow i128).
+fn small(c: i128) -> bool {
+    i64::try_from(c).is_ok()
+}
+
+/// The common length of the exponent vectors (None when they differ or
+/// there are none).
+fn width(terms: &[(Vec<u8>, i128)]) -> Option<usize> {
+    let w = terms.first()?.0.len();
+    terms.iter().all(|(e, _)| e.len() == w).then_some(w)
+}
+
+/// Exponent vectors in strictly increasing order (so without repeats).
+fn strictly_sorted(terms: &[(Vec<u8>, i128)]) -> bool {
+    terms.windows(2).all(|w| w[0].0 < w[1].0)
 }
 
 pub fn spow(e: &[u8], syms: &[Sym]) -> u32 {
@@ -567,26 +922,29 @@ pub fn spow(e: &[u8], syms: &[Sym]) -> u32 {
 /// as r_o/ε (its conductance as ε·g_o), keep, for each power of s, only the
 /// terms of lowest order in ε.
 pub fn leading_order(p: &XPoly, syms: &[Sym]) -> XPoly {
-    let order = |e: &[u8]| -> u32 {
-        e.iter()
-            .zip(syms)
-            .filter(|(_, s)| s.output_r)
-            .map(|(&k, _)| k as u32)
-            .sum()
+    // Σ e[k] over the symbols with `flag`, as e.iter().zip(syms).filter(..).
+    let sum_of = |flag: fn(&Sym) -> bool| {
+        let idx: Vec<usize> = (0..syms.len()).filter(|&k| flag(&syms[k])).collect();
+        move |e: &[u8]| -> u32 { idx.iter().filter_map(|&k| e.get(k)).map(|&x| x as u32).sum() }
     };
-    let mut best: HashMap<u32, u32> = HashMap::new();
-    for (e, _) in &p.terms {
-        let k = spow(e, syms);
-        let o = order(e);
-        let b = best.entry(k).or_insert(o);
-        *b = (*b).min(o);
+    let (spow, order) = (sum_of(|s| s.reactive), sum_of(|s| s.output_r));
+    let keys: Vec<(u32, u32)> = p.terms.iter().map(|(e, _)| (spow(e), order(e))).collect();
+    // Lowest order per power of s (few powers: a short list).
+    let mut best: Vec<(u32, u32)> = Vec::new();
+    for &(k, o) in &keys {
+        match best.iter_mut().find(|b| b.0 == k) {
+            Some(b) => b.1 = b.1.min(o),
+            None => best.push((k, o)),
+        }
     }
+    let best_of = |k: u32| best.iter().find(|b| b.0 == k).map(|b| b.1);
     XPoly {
         terms: p
             .terms
             .iter()
-            .filter(|(e, _)| order(e) == best[&spow(e, syms)])
-            .cloned()
+            .zip(&keys)
+            .filter(|(_, &(k, o))| best_of(k) == Some(o))
+            .map(|(t, _)| t.clone())
             .collect(),
     }
 }

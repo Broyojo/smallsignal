@@ -1,0 +1,21 @@
+{
+ "input": "VIN",
+ "output": "o2",
+ "ref": "o1",
+ "freqs": [
+  1000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "distortion": {
+  "amplitudes": [
+   0.001,
+   0.002,
+   0.005,
+   0.01
+  ],
+  "freq": 1000.0,
+  "amplitude": 0.001
+ },
+ "description": "NMOS differential pair, differential output: HD2 = 0 by symmetry, HD3 from the square law"
+}

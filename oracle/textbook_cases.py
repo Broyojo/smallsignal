@@ -87,6 +87,23 @@ class Noise:
 
 
 @dataclass
+class Dist:
+    """Memoryless distortion: v_out = a1·v_in + a2·v_in² + a3·v_in³ in terms
+    of the devices' Taylor coefficients (the solver's `distortion`)."""
+    netlist: str
+    """Numeric netlist (distortion needs an operating point)."""
+    nonlinear: list[str]
+    hand: Callable[..., tuple[sp.Expr, sp.Expr, sp.Expr]]
+    """Hand implicit-series result (a1, a2, a3); called with a `restrict`
+    map that sets the Taylor coefficients the solver proved zero to zero."""
+    closed: Callable[[], tuple] | None = None
+    """Textbook closed form (a1, a2, a3), when exact."""
+    hd2: Callable[[dict, float], float] | None = None
+    """Textbook HD2 from the operating point (device dict) at amplitude A."""
+    matched: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class Case:
     name: str
     netlist: str
@@ -106,6 +123,7 @@ class Case:
     numeric_netlist: str | None = None
     """Same circuit with values, for the numeric-mode checks."""
     noise: Noise | None = None
+    dist: Dist | None = None
 
 
 # --- hand derivations -------------------------------------------------------
@@ -377,6 +395,113 @@ def ce_degen_noise(lead=False):
                        ("QC", "shot", sym("IC_Q1")), ("QB", "shot", sym("IB_Q1"))])
 
 
+# --- distortion: implicit series of KCL with Taylor-expanded devices ---------
+#
+# I_D = gm·u_g + u_d/ro + gmb·u_b + Σ K_α·u^α over 2 ≤ |α| ≤ 3, with
+# u_g = v_G − v_S, u_d = v_D − v_S, u_b = v_B − v_S and the solver's names
+# (K2g_M1 = ½∂²I_D/∂v_GS², Kgd_M1, K2gd_M1 = ½∂³I_D/∂v_GS²∂v_DS, …).
+
+MOS_MONOS = [(2, 0, 0), (1, 1, 0), (1, 0, 1), (0, 2, 0), (0, 1, 1), (0, 0, 2),
+             (3, 0, 0), (2, 1, 0), (2, 0, 1), (1, 2, 0), (1, 1, 1), (1, 0, 2), (0, 3, 0), (0, 2, 1), (0, 1, 2), (0, 0, 3)]
+
+
+def k_name(mono, name, vars=("g", "d", "b")):
+    sub = "".join((str(x) if x > 1 else "") + v for x, v in zip(mono, vars) if x)
+    return f"K{sub}_{name}"
+
+
+def mos_nl(name, vd, vg, vs, vb=None, ro=True):
+    ug, ud = vg - vs, vd - vs
+    ub = 0 if vb is None else vb - vs
+    i = sym(f"gm_{name}") * ug + (ud / sym(f"ro_{name}") if ro else 0)
+    if vb is not None:
+        i += sym(f"gmb_{name}") * ub
+    for m in MOS_MONOS:
+        i += sym(k_name(m, name)) * ug ** m[0] * ud ** m[1] * ub ** m[2]
+    return i
+
+
+def volterra_hand(build, unknowns, out, restrict=lambda e: e):
+    """build(x) → KCL equations with v_in = x; (a1, a2, a3) of out.
+    `restrict` maps each equation first (e.g. drops coefficients known to be
+    zero), which keeps the series small."""
+    x = sp.Symbol("x")
+    c = {u: [sp.Symbol(f"c_{u}_{n}") for n in (1, 2, 3)] for u in unknowns}
+    series = {u: sum(c[u][n - 1] * x**n for n in (1, 2, 3)) for u in unknowns}
+    eqs = [sp.expand(restrict(e).subs(series, simultaneous=True)) for e in build(x)]
+    sol: dict = {}
+    for n in (1, 2, 3):
+        lin = [sp.expand(e.coeff(x, n).subs(sol)) for e in eqs]
+        s = sp.solve(lin, [c[u][n - 1] for u in unknowns], dict=True)
+        assert len(s) == 1
+        sol.update({k: sp.factor(sp.cancel(v)) for k, v in s[0].items()})
+    o = sp.expand(out.subs(series, simultaneous=True))
+    return tuple(sp.factor(sp.cancel(o.coeff(x, n).subs(sol))) for n in (1, 2, 3))
+
+
+def cs_dist(restrict=lambda e: e):
+    vo = sp.Symbol("vo")
+    return volterra_hand(lambda x: [vo / sym("RD") + mos_nl("M1", vo, x, 0)], [vo], vo, restrict)
+
+
+def degen_dist(restrict=lambda e: e):
+    vo, vs = sp.symbols("vo vs")
+
+    def build(x):
+        i = mos_nl("M1", vo, x, vs)
+        return [vo / sym("RD") + i, i - vs / sym("RS")]
+    return volterra_hand(build, [vo, vs], vo, restrict)
+
+
+def sf_dist(restrict=lambda e: e):
+    vo = sp.Symbol("vo")
+    return volterra_hand(lambda x: [mos_nl("M1", 0, x, vo) - vo / sym("RL")], [vo], vo, restrict)
+
+
+def diffpair_dist(restrict=lambda e: e):
+    v1, v2, vt = sp.symbols("v1 v2 vt")
+
+    def build(x):
+        i1, i2 = mos_nl("M1", v1, x, vt), mos_nl("M2", v2, 0, vt)
+        return [v1 / sym("RD1") + i1, v2 / sym("RD2") + i2, i1 + i2]
+    return volterra_hand(build, [v1, v2, vt], v1 - v2, restrict)
+
+
+def ota5t_dist(restrict=lambda e: e):
+    vx, vo, vt = sp.symbols("vx vo vt")
+
+    def build(x):
+        i1, i2 = mos_nl("M1", vx, x, vt), mos_nl("M2", vo, 0, vt)
+        i3, i4 = mos_nl("M3", vx, vx, 0), mos_nl("M4", vo, vx, 0)
+        return [i1 + i3, i2 + i4, i1 + i2]
+    return volterra_hand(build, [vx, vo, vt], vo, restrict)
+
+
+def ce_dist(restrict=lambda e: e):
+    """I_C(v_BE, v_CE) and I_B(v_BE, v_CE) expanded likewise (KC…, KB…)."""
+    vc = sp.Symbol("vc")
+
+    def build(x):
+        ube, uce = x, vc
+        ic = sym("gm_Q1") * ube + uce / sym("ro_Q1")
+        for a in range(4):
+            for b in range(4 - a):
+                if a + b >= 2:
+                    ic += sym(k_name((a, b, 0), "Q1", ("be", "ce", "")).replace("K", "KC", 1)) * ube**a * uce**b
+        return [vc / sym("RC") + ic]
+    return volterra_hand(build, [vc], vc, restrict)
+
+
+T_DEG = sym("gm_M1") * sym("RS")
+T_SF = sym("gm_M1") * sym("RL")
+K2G = sym("K2g_M1")
+DIST_MODELS = ".model nm nmos (level=1 kp=200u vto=0.5 lambda=LAM)\n"
+
+
+def dist_net(body: str, lam=0.0) -> str:
+    return "d\n.options gmin=1e-18\n" + body + DIST_MODELS.replace("LAM", str(lam))
+
+
 g, ro, gmb = sym("gm_M1"), sym("ro_M1"), sym("gmb_M1")
 RD, RS, RL = sym("RD"), sym("RS"), sym("RL")
 g2, ro1, ro2, gmb2 = sym("gm_M2"), sym("ro_M1"), sym("ro_M2"), sym("gmb_M2")
@@ -394,6 +519,8 @@ CASES: list[Case] = [
         numeric_netlist="cs\n.options gmin=1e-18\nVIN in 0 DC 0.7\nVDD vdd 0 1.8\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n",
         noise=Noise(cs_rd_noise, closed=lambda: (2 / (3 * g) + 1 / (g**2 * RD), 0)),
+        dist=Dist(dist_net("VDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD vdd out 5k\nM1 out in 0 0 nm W=10u L=1u\n", lam=0.05),
+                  ["M1"], cs_dist),
     ),
     Case(
         "cs_degen_body",
@@ -403,6 +530,9 @@ CASES: list[Case] = [
                       lead=lambda: -g * RD / (1 + (g + gmb) * RS)),
         rout=Quantity(degen_rout, closed=lambda: par(RD, ro + RS + (g + gmb) * ro * RS), lead=lambda: RD),
         noise=Noise(degen_noise, lead=lambda: (2 / (3 * g) + RS * (g + gmb)**2 / g**2 + (1 + (g + gmb) * RS)**2 / (g**2 * RD), 0)),
+        dist=Dist(dist_net("VDD vdd 0 5\nVIN in 0 DC 1.0 AC 1\nRD vdd out 5k\nM1 out in sn sn nm W=10u L=1u\nRS sn 0 1k\n"),
+                  ["M1"], degen_dist,
+                  closed=lambda: (-g * RD / (1 + T_DEG), -K2G * RD / (1 + T_DEG)**3, 2 * K2G**2 * RS * RD / (1 + T_DEG)**5)),
     ),
     Case(
         "cg",
@@ -423,6 +553,9 @@ CASES: list[Case] = [
         numeric_netlist="sf\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN in 0 1.2\nM1 vdd in out 0 nm W=10u L=1u\nRL out 0 10k\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.4)\n",
         noise=Noise(sf_noise, closed=lambda: (2 / (3 * g) + 1 / (g**2 * RL), 0)),
+        dist=Dist(dist_net("VDD vdd 0 5\nVIN in 0 DC 1.3 AC 1\nM1 vdd in out out nm W=20u L=1u\nRL out 0 5k\n"),
+                  ["M1"], sf_dist,
+                  closed=lambda: (T_SF / (1 + T_SF), K2G * RL / (1 + T_SF)**3, -2 * K2G**2 * RL**2 / (1 + T_SF)**5)),
     ),
     Case(
         "cascode_rd",
@@ -456,6 +589,10 @@ CASES: list[Case] = [
                       matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "RD2": "RD", "RD1": "RD"}),
         noise=Noise(diffpair_noise, closed=lambda: (2 * (2 / (3 * g) + 1 / (g**2 * RD)), 0),
                     matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "RD2": "RD", "RD1": "RD"}),
+        dist=Dist(dist_net("VDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail tail nm W=10u L=1u\n"
+                           "M2 o2 inn tail tail nm W=10u L=1u\nITAIL tail 0 200u\nVID inp inn DC 0 AC 1\nVCM inn 0 1.2\n", lam=0.05),
+                  ["M1", "M2"], diffpair_dist,
+                  matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "RD2": "RD1", **{k_name(m, "M2"): k_name(m, "M1") for m in MOS_MONOS}}),
     ),
     Case(
         "ota_5t",
@@ -466,6 +603,13 @@ CASES: list[Case] = [
                       matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "gm_M4": "gm_M3", "ro_M4": "ro_M3"}),
         noise=Noise(ota5t_noise, lead=lambda: (2 * TWO3 / g * (1 + sym("gm_M3") / g), 0),
                     matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gmb_M2": "gmb_M1", "gm_M4": "gm_M3", "ro_M4": "ro_M3"}),
+        dist=Dist(dist_net("VDD vdd 0 3\nVIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\nITAIL tail 0 100u\nM1 x inp tail tail nm W=10u L=1u\n"
+                           "M2 out inn tail tail nm W=10u L=1u\nM3 x x vdd vdd pm W=20u L=1u\nM4 out x vdd vdd pm W=20u L=1u\n"
+                           ".model pm pmos (level=1 kp=100u vto=-0.5 lambda=0.05)\n", lam=0.05),
+                  ["M1", "M2", "M3", "M4"], ota5t_dist,
+                  matched={"gm_M2": "gm_M1", "ro_M2": "ro_M1", "gm_M4": "gm_M3", "ro_M4": "ro_M3",
+                           **{k_name(m, "M2"): k_name(m, "M1") for m in MOS_MONOS},
+                           **{k_name(m, "M4"): k_name(m, "M3") for m in MOS_MONOS}}),
     ),
     Case(
         "ce_degen",
@@ -482,6 +626,21 @@ CASES: list[Case] = [
         "ce\nVCC vcc 0\nVIN in 0\nRC vcc c\nQ1 c in 0\n",
         "VIN", "c",
         noise=Noise(ce_noise, closed=lambda: (1 / (sym("gm_Q1")**2 * sym("RC")), sym("IC_Q1") / sym("gm_Q1")**2)),
+        dist=Dist("ce\n.options gmin=1e-18\nVCC vcc 0 5\nVIN in 0 DC 0.65 AC 1\nRC vcc c 2k\nQ1 c in 0 qn\n"
+                  ".model qn npn (is=1e-16 bf=100 vaf=50)\n", ["Q1"], ce_dist,
+                  # a2 also has the Early cross term K_{be ce}·gm·(ro ∥ RC)².
+                closed=lambda: (-sym("gm_Q1") * par(sym("ro_Q1"), sym("RC")),
+                                  -sym("KC2be_Q1") * par(sym("ro_Q1"), sym("RC"))
+                                  + sym("KCbece_Q1") * sym("gm_Q1") * par(sym("ro_Q1"), sym("RC"))**2, None)),
+    ),
+    Case(
+        "cs_square_law",
+        "cs\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in 0 0\n",
+        "VIN", "out",
+        # λ = 0: a2/a1 = K2g/gm = 1/(2 Vov), so HD2 = A/(4 Vov), and a3 = 0.
+        dist=Dist(dist_net("VDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD vdd out 5k\nM1 out in 0 0 nm W=10u L=1u\n"),
+                  ["M1"], cs_dist, closed=lambda: (-g * RD, -K2G * RD, 0),
+                  hd2=lambda dev, A: A / (4 * dev["vdsat"])),
     ),
     Case(
         "ef",

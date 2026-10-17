@@ -1,0 +1,15 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [1e5, 1e6, 1e7, 1e8],
+ "rin": false,
+ "rout": false,
+ "distortion": {
+  "amplitudes": [0.001, 0.002, 0.005, 0.01],
+  "freq": 1.0,
+  "amplitude": 0.001,
+  "vsFreq": [1e5, 1e6, 1e7, 1e8]
+ },
+ "description": "NMOS CS, resistor load with load capacitor (distortion above the pole)"
+}

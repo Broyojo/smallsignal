@@ -1467,9 +1467,6 @@ fn pair_of(t: &(XPoly, XPoly), h: &(XPoly, XPoly), syms: &[Sym]) -> Pair {
     (group_expr(t, syms), group_expr(h, syms))
 }
 
-/// Plain text (for checking tools, not display) up to this many terms.
-const PLAIN_TERM_LIMIT: usize = 20_000;
-
 fn terms(p: &Pair) -> usize {
     p.0.as_ref().map(|e| e.term_count()).unwrap_or(0) + p.1.as_ref().map(|e| e.term_count()).unwrap_or(0)
 }
@@ -1481,7 +1478,7 @@ fn pair_json(p: &Pair, syms: &[Sym]) -> (Value, f64, f64) {
     let small = terms(p) <= crate::analyze::LATEX_TERM_LIMIT;
     // LaTeX only when it will be shown: building it walks every term.
     let latex = small.then(|| pair_latex(p.0.as_ref(), p.1.as_ref(), syms));
-    let readable = terms(p) <= PLAIN_TERM_LIMIT;
+    let readable = terms(p) <= crate::distortion::PLAIN_TERM_LIMIT;
     let plain = |e: Option<&Expr>| {
         e.map(|e| {
             let (n, d) = e.plain(syms);

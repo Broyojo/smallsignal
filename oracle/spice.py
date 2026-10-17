@@ -8,8 +8,31 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 GROUND = {"0", "gnd"}
+
+# SPICE scale suffixes, longest first; letters after a number and its
+# suffix are ignored (900mV is 0.9, 1MEGohm is 1e6).
+SUFFIX = [("meg", Decimal("1e6")), ("mil", Decimal("25.4e-6")), ("t", Decimal("1e12")), ("g", Decimal("1e9")),
+          ("k", Decimal("1e3")), ("m", Decimal("1e-3")), ("u", Decimal("1e-6")), ("n", Decimal("1e-9")),
+          ("p", Decimal("1e-12")), ("f", Decimal("1e-15")), ("a", Decimal("1e-18"))]
+_NUMBER = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)([a-zA-Z]*)$")
+
+
+def decimal(tok: str) -> Decimal:
+    """A netlist number in the dialect (1u, 900m, 2.2k, 1meg, 3e-3) exactly."""
+    m = _NUMBER.match(tok.strip())
+    if not m:
+        raise ValueError(f"bad number {tok!r}")
+    rest = m.group(2).lower()
+    mult = next((v for s, v in SUFFIX if rest.startswith(s)), Decimal(1))
+    return Decimal(m.group(1)) * mult
+
+
+def value(tok: str) -> float:
+    """A netlist number in the dialect as the nearest float."""
+    return float(decimal(tok))
 
 
 @dataclass

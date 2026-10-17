@@ -60,12 +60,14 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 `smallsignal analyze <netlist> --input <V|I source> --output <node>[:<ref>]
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
-[--tol 0.05] [--verify] [--symbolic]`, or
+[--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
-`noise`, `noiseBand`, `tolerance`, `verify`,
+`noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
 `symbolic`, `maxTerms`). The response is JSON, or
-`{"error": "..."}` on failure.
+`{"error": "..."}` on failure, including when an exact polynomial of
+gain, rin or rout (a determinant, or the sum or difference of two) would
+exceed `maxTerms` terms (default 2,000,000).
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
   With `inputNeg`, `mode` "differential" (the default) drives the two sources
@@ -179,3 +181,97 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   form, needed when the junctions omitted for the gain matter for the noise.
   Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
   system at s = 0, so the determinant cancels exactly.
+
+## Distortion (`nonlinear: ["M1", ...]`, `order` 2|3 (default 3), `amplitude` (default 10 mV, or 1 µA for a current input))
+
+Each listed device's DC current is expanded to `order` about the operating
+point in all of its controlling voltages, exactly (truncated Taylor
+arithmetic on the device equations). MOSFET I_D(v_GS, v_DS, v_BS) (in the
+effective frame when v_DS < 0) and its bulk junction currents I_BS, I_BD,
+BJT I_C and I_B in (v_BE, v_CE), diode I_D(v_D):
+i = (small-signal model) + Σ K_α·u^α over 2 ≤ |α| ≤ order, where u are the
+small-signal control voltages. The linear part is the derivative of the DC
+current, so a₁ is the slope of the DC transfer curve: under forward body bias
+(v_BS > 0) g_mb is γ·g_m/(2√φ), not ngspice's AC γ·g_m/(2·sarg), and a warning
+says so (a₁ can then differ from the gain). Matched devices whose corrected
+g_mb differ by more than MATCH_REL get one g_mb symbol each (with a
+warning); otherwise their difference joins the match mismatch. A device biased where its
+equations switch branch (v_GS = V_TH, v_DS = V_DSAT, v_DS = 0 with λ or γ,
+v_BS = 0 with γ and the bulk not tied to the source, a junction at −3·V_T,
+each within 1e-9 V) gets a warning: its expansion is one-sided. Past the
+exponential's clamp (709·V_T forward) a junction's current is linear, as in
+the DC model, so it has no higher-order coefficients. Names: `K_{2g,M1}` (plain `K2g_M1`) =
+½∂²I_D/∂v_GS²; `K_{g\,d,M1}` = ∂²I_D/∂v_GS∂v_DS; `K_{2g\,d,M1}` =
+½∂³I_D/∂v_GS²∂v_DS; variables g, d, b; BJT `K^{C}_{2be,Q1}`,
+`K^{B}_{be\,ce,Q1}` (`KC2be_Q1`, `KBbece_Q1`); MOS bulk junction
+`K^{BS}_{2b,M1}` (`KBS2b_M1`); diode `K_{2,D1}`. Matched devices (any of their
+parameters merged into one symbol: g_m, or r_bs for a MOSFET in cutoff)
+with equal coefficients share one symbol
+(`K_{2g,M1,2}`), so a matched pair's even orders cancel exactly. Coefficients
+that are exactly zero, or whose omission moves no requested a_n (n ≤
+`order`) by more than 1e-9 (proven on the full numeric model, smallest
+first), are left out of the closed
+form. Junction leakage coefficients (bulk junctions, and the collector-base
+branch i_μ = I_BC/BR + gmin·v_BC in I_C and I_B) go with r_bs, r_bd, r_μ.
+
+Method of nonlinear currents: A·x₁ = b, A·x₂ = −i₂(u₁), A·x₃ = −i₃(u₁, u₂)
+with the same MNA matrix, so v_out = a₁v_in + a₂v_in² + a₃v_in³ (memoryless,
+s → 0) in closed form: a_n = N_n/(vid^n·D^{2n−1}) from Cramer numerators and
+transfer cofactors. Response `distortion`:
+
+- `coefficients`: `[{order, value, numeric, latex, plain, terms, display, simplified}]`
+  for a₁…a_order (`numeric` from the direct numeric solve, full model).
+- `hd2` = |a₂|A/(2|a₁|), `hd3` = |a₃|A²/(4|a₁|), `iip3` = √(4|a₁|/(3|a₃|)) (input
+  amplitude), each `{latex, value, display, simplified}`,
+  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`. Infinite
+  (HD with a₁ = 0 and the other a_n ≠ 0, IIP3 with a₃ = 0) is
+  `{latex: "\infty", value: null, display: {latex: "\infty", value: null},
+  simplified: (same)}`. Null means unavailable: `hd3` and `iip3` for
+  `order` 2, and any of the three where it is 0/0 at DC (a₁ = 0 with a₂ or
+  a₃ = 0, e.g. an input blocked by a coupling capacitor), or where the
+  value exceeds f64 at a huge amplitude (with a warning; never `\infty`,
+  which only a₁ = 0 gives). An a_n (a₁ included) counts as 0 here when
+  within 1e-12 of the size of its terms (see `check`).
+- `vsFreq`: `[{f, hd2, hd3}]` at `freqs` from H₂(jω,jω) and H₃(jω,jω,jω)
+  (LU solves at ω, 2ω and, for `order` 3, 3ω on the full model; a singular
+  system at 2ω or 3ω leaves only that order null). A value is null when
+  unavailable (also beyond f64, warned) or infinite; `hd2Infinite: true` (`hd3Infinite: true`) is
+  present only when it is infinite (H₁ = 0, H₂ (H₃) ≠ 0, each by the same
+  1e-12 rule at that frequency: a notch at f leaves H₁ a roundoff residual).
+- `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
+  `symbols`: the K symbols in the numerators of the a_n and HD_n shown in
+  closed form (`[]` when none is);
+  `omissionError`; `check` `{ok, maxRelDiff, orders, matchBound}`: each
+  exact a_n that materialized against the numeric reference (`orders` lists
+  which; null when none did), allowing 4× `matchBound`, the relative effect
+  of the accepted match mismatch (mismatch·Σ|p·∂a_n/∂p| over merged linear
+  parameters and Taylor coefficients; a merged a_n that cancels to 0 keeps
+  that residual numerically). The difference is
+  relative to the largest of the two values and the size of the terms a_n
+  sums: each Taylor coefficient's part Σ|K·∂a_n/∂K|, and for v_out and
+  v_ref the largest size of the sum a defining row gives for x_c,
+  (|rhs_r| + Σ_{k≠c} |A_rk|·s_k)/|A_rc|, over its KCL row (A_cc ≠ 0) and
+  each constraint row on it (voltage source, VCVS, inductor), where s_k is
+  |x_k| in a KCL row and node k's own size (recursively) in a constraint
+  row, so a buffered node is as large as what it buffers. An a_n that
+  cancels exactly (a matched pair's a₂) is then not compared with its
+  numeric roundoff alone.
+- Every field is always present. Sums are taken in a canonical order and
+  held to the term budget whole, so terms that cancel never decide it. The
+  term budget holds per quantity: one
+  whose exact closed form would exceed 100k terms or `maxTerms` (its
+  numerator or the parts it is built from, which for a_n include
+  a_{n−1}'s, or the D^{2n−1} under it; e.g. a 5T OTA's a₃ with junction
+  leakage kept) is `skipped` (value numeric) while lower orders stay exact,
+  and its `display` comes from the leakage-free model (its Taylor
+  coefficients without leakage), accepted only within 1e-3; a leakage-free
+  form with a₁ = 0 (leakage carries the fundamental) is no display, so a
+  finite numeric value is shown with `leakageMatters`, never null or
+  `\infty`. When the
+  analysis model's form misses the full numeric a_n by more than 1e-11 the
+  full model's forms are used instead (each under the same budget), and a
+  match the full model's junctions break is warned
+  (`"M1 and M2 differ, not matched"`).
+- `display`/`simplified` work as for the other quantities; simplified is the
+  r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
+  as output conductances), then magnitude pruning, within `tolerance`.

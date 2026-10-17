@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
-[--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -83,6 +83,18 @@ fn run() -> Result<(), String> {
                 };
                 req.noise = true;
                 req.noise_band = Some([lo, hi]);
+            }
+            "--nonlinear" => {
+                req.nonlinear = value(&mut it, a)?
+                    .split(',')
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            }
+            "--order" => req.order = Some(value(&mut it, a)?.parse().map_err(|_| "bad --order")?),
+            "--amplitude" => {
+                let v = value(&mut it, a)?;
+                req.amplitude = Some(smallsignal_core::units::parse_value(&v).ok_or(format!("bad amplitude '{v}'"))?);
             }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,

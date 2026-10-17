@@ -1,0 +1,7 @@
+NMOS source follower with body effect
+VDD vdd 0 3
+VIN in 0 DC 1.5 AC 1
+M1 vdd in out 0 nchb W=20u L=1u
+RS out 0 5k
+.model nchb NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4 PHI=0.7)
+.end

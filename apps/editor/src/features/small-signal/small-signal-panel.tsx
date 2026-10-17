@@ -38,6 +38,8 @@ import {
   type SmallSignalResponse,
   type NoiseContribution,
   type SmallSignalNoise,
+  type DistortionQuantity,
+  type SmallSignalDistortion,
 } from "@icm/small-signal";
 import {
   browserStaleBuildRecovery,
@@ -694,6 +696,382 @@ function ExtraWarnings({
   );
 }
 
+/** One form of an equation, as the caller knows it. */
+interface ShownForm {
+  latex: string | null;
+  terms?: number | null;
+  /** Relative error against the exact form (junction leakage dropped). */
+  relError?: number | null;
+}
+
+/**
+ * An equation in its most readable faithful form, labelled honestly:
+ * - the shown form with "=" when it is exact (or its error is invisible),
+ *   else "≈" and the leakage it neglects, with the simpler form under it;
+ * - the simpler form first when the shown one is long or missing (as on
+ *   the result cards);
+ * - "Exact" a click away when the lead is not exact: the exact form, or a
+ *   note that it is too large to typeset. Nothing inexact is labelled exact.
+ */
+function LeadFormula({
+  symbol,
+  shown,
+  shownIsExact,
+  simpler,
+  simplerNote,
+  exact,
+}: {
+  symbol: string;
+  shown: ShownForm | null;
+  shownIsExact: boolean;
+  simpler: { latex: string | null } | null;
+  simplerNote: string;
+  /** The exact form's LaTeX; null when it is too large to typeset. */
+  exact: string | null;
+}) {
+  const exactDisclosure = (
+    <details className="small-signal-exact">
+      <summary>Exact</summary>
+      {exact ? (
+        <Formula latex={`${symbol} = ${exact}`} />
+      ) : (
+        <p className="small-signal-muted">
+          The exact expression is too large to typeset.
+        </p>
+      )}
+    </details>
+  );
+  const long =
+    !shown?.latex ||
+    (shown.terms ?? 0) > 6 ||
+    shown.latex.length > FORMULA_MAX_LATEX_LENGTH;
+  if (simpler?.latex && long) {
+    return (
+      <>
+        <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
+        <small className="small-signal-muted">{simplerNote}</small>
+        {exactDisclosure}
+      </>
+    );
+  }
+  if (!shown?.latex) {
+    // No form small enough to typeset: say so rather than show nothing.
+    return (
+      <>
+        <Formula latex={`${symbol} = \\ldots`} />
+        <small className="small-signal-muted">too large to typeset</small>
+      </>
+    );
+  }
+  const error = shown.relError ?? 0;
+  const equals = shownIsExact || error < INVISIBLE_ERROR;
+  return (
+    <>
+      <Formula
+        latex={`${symbol} ${equals ? "=" : "\\approx"} ${shown.latex}`}
+      />
+      {equals ? null : (
+        <small className="small-signal-muted">
+          neglecting junction leakage ({formatPercent(error)})
+        </small>
+      )}
+      {simpler?.latex ? (
+        <div className="small-signal-simpler">
+          <Formula latex={`\\approx ${simpler.latex}`} />
+          <small>{simplerNote}</small>
+        </div>
+      ) : null}
+      {shownIsExact ? null : exactDisclosure}
+    </>
+  );
+}
+
+/** A distortion quantity: its display form, simpler form and exact form. */
+function DistortionFormula({
+  symbol,
+  quantity,
+}: {
+  symbol: string;
+  quantity: DistortionQuantity;
+}) {
+  // The display form (leakage dropped), else the exact form itself.
+  const display = quantity.display?.latex ? quantity.display : null;
+  const shown: ShownForm | null = display ?? (quantity.latex ? quantity : null);
+  const shownIsExact = Boolean(
+    shown &&
+    (shown === quantity ||
+      display?.same ||
+      (quantity.latex !== null && quantity.latex === display?.latex)),
+  );
+  const simpler =
+    quantity.simplified?.latex && quantity.simplified.latex !== shown?.latex
+      ? quantity.simplified
+      : null;
+  return (
+    <LeadFormula
+      symbol={symbol}
+      shown={shown}
+      shownIsExact={shownIsExact}
+      simpler={simpler}
+      simplerNote={
+        simpler?.method?.startsWith("leading order")
+          ? "assuming ro ≫ R, 1/gm"
+          : `within ${formatPercent(simpler?.relError ?? 0)} of exact`
+      }
+      exact={shownIsExact ? (shown?.latex ?? null) : quantity.latex}
+    />
+  );
+}
+
+/**
+ * A device Taylor coefficient as the solver writes it: K_{2g,M1},
+ * K_{g\\,d,M1}, K^{C}_{2be\\,ce,Q1} (the current is omitted for a drain).
+ */
+export function taylorLatex(term: {
+  element: string;
+  current: string;
+  monomial: string;
+}): string {
+  const factors =
+    term.monomial.match(/\d?(?:be|ce|bc|bs|bd|g|d|b)/gu)?.join("\\,") ??
+    term.monomial;
+  const current = term.current === "D" ? "" : `^{${term.current}}`;
+  return `K${current}_{${factors},${texEscape(term.element)}}`;
+}
+
+/**
+ * TeX specials in a name, escaped as the solver's `ss::esc` does, so a name
+ * like `M_load` renders as text and can never inject a macro.
+ */
+export function texEscape(text: string): string {
+  return text.replace(/[_{}$&#%\\^~]/gu, (c) =>
+    c === "\\"
+      ? "\\backslash "
+      : c === "^"
+        ? "\\hat{}"
+        : c === "~"
+          ? "\\sim "
+          : `\\${c}`,
+  );
+}
+
+/** The solver writes an infinite quantity as `\\infty` with no value. */
+function isInfinite(quantity: DistortionQuantity | null | undefined): boolean {
+  return quantity?.value == null && quantity?.latex === "\\infty";
+}
+
+/** HD as shown: a percentage, ∞ when infinite, "—" when unavailable. */
+export function hdText(value: number | null, infinite?: boolean): string {
+  if (value != null) return formatDistortion(value)[0];
+  return infinite ? "∞" : "—";
+}
+
+/** A distortion ratio as a percentage and in dBc. */
+export function formatDistortion(ratio: number): [string, string] {
+  const percent = ratio * 100;
+  const text =
+    percent === 0
+      ? "0%"
+      : percent >= 0.01
+        ? `${Number(percent.toPrecision(3))}%`
+        : `${percent.toExponential(2)}%`;
+  return [text, ratio > 0 ? `${(20 * Math.log10(ratio)).toFixed(1)} dBc` : ""];
+}
+
+/** Above this, a 3rd-order expansion no longer describes the output. */
+const LARGE_DISTORTION = 0.1;
+
+/**
+ * Distortion: the output's Taylor coefficients a₁…a₃ as equations, HD2,
+ * HD3 and IIP3 at the input amplitude, and each device's coefficients.
+ */
+function DistortionDetails({
+  distortion,
+  current,
+}: {
+  distortion: SmallSignalDistortion;
+  current: boolean;
+}) {
+  const v = current ? "i" : "v";
+  const rows: [string, DistortionQuantity | null][] = [
+    ["HD2", distortion.hd2],
+    ["HD3", distortion.hd3],
+  ];
+  // The summary is the low-frequency (s → 0) value. Show HD at the asked
+  // frequencies too wherever it differs from that, even at one frequency
+  // (near a pole): never let the low-frequency value pass for it.
+  const differs = (at: number | null, low: number | null | undefined) =>
+    at === null || low == null
+      ? // Available at one and not the other, either way round.
+        (at === null) !== (low == null)
+      : Math.abs(at - low) > 1e-6 * Math.max(Math.abs(low), Math.abs(at));
+  const varies = distortion.vsFreq.some(
+    (point) =>
+      differs(point.hd2, distortion.hd2?.value) ||
+      differs(point.hd3, distortion.hd3?.value) ||
+      Boolean(point.hd2Infinite) !== isInfinite(distortion.hd2) ||
+      Boolean(point.hd3Infinite) !== isInfinite(distortion.hd3),
+  );
+  const a1 = distortion.coefficients.find(
+    (coefficient) => coefficient.order === 1,
+  )?.value;
+  // a₁ = 0 (the input's fundamental never reaches this output): HD is
+  // infinite whatever the amplitude.
+  // a₁ = 0 at low frequency: no fundamental at all. Otherwise only at the
+  // frequencies (transfer notches) marked infinite.
+  const noFundamental =
+    isInfinite(distortion.hd2) || isInfinite(distortion.hd3);
+  const notchFrequencies = distortion.vsFreq
+    .filter((point) => point.hd2Infinite || point.hd3Infinite)
+    .map((point) => formatEngineering(point.f, "Hz"));
+  const large = [
+    distortion.hd2?.value,
+    distortion.hd3?.value,
+    ...distortion.vsFreq.flatMap((point) => [point.hd2, point.hd3]),
+  ].some((value) => (value ?? 0) > LARGE_DISTORTION);
+  return (
+    <>
+      <table className="small-signal-values" aria-label="Distortion">
+        {varies ? <caption>At low frequency</caption> : null}
+        <tbody>
+          {a1 != null ? (
+            // The swing these numbers assume: an unrealistic one is obvious.
+            <tr data-quantity="output">
+              <th scope="row">Output</th>
+              <td>
+                {formatEngineering(Math.abs(a1) * distortion.amplitude, "V")}
+              </td>
+              <td />
+            </tr>
+          ) : null}
+          {rows.map(([name, quantity]) =>
+            quantity ? (
+              <tr key={name} data-quantity={name.toLowerCase()}>
+                <th scope="row">{name}</th>
+                <td>{hdText(quantity.value, isInfinite(quantity))}</td>
+                <td className="small-signal-muted">
+                  {quantity.value != null
+                    ? formatDistortion(quantity.value)[1]
+                    : ""}
+                </td>
+              </tr>
+            ) : null,
+          )}
+          {distortion.iip3 ? (
+            // a₃ = 0 makes the intercept infinite, which is a result too.
+            <tr data-quantity="iip3">
+              <th scope="row">IIP3</th>
+              <td>
+                {distortion.iip3.value != null
+                  ? formatEngineering(
+                      distortion.iip3.value,
+                      distortion.inputUnit,
+                    )
+                  : distortion.iip3.latex === "\\infty"
+                    ? "∞"
+                    : "—"}
+              </td>
+              <td />
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+      {noFundamental ? (
+        <p className="small-signal-muted" role="note">
+          The input's fundamental does not reach this output.
+        </p>
+      ) : notchFrequencies.length ? (
+        <p className="small-signal-muted" role="note">
+          The input's fundamental does not reach this output at{" "}
+          {notchFrequencies.join(", ")}.
+        </p>
+      ) : null}
+      {!noFundamental && large ? (
+        <p className="small-signal-muted" role="note">
+          The amplitude is too large for a 3rd-order expansion.
+        </p>
+      ) : null}
+      <Formula
+        latex={`v_{out} = a_{1} ${v}_{in} + a_{2} ${v}_{in}^{2}${distortion.order >= 3 ? ` + a_{3} ${v}_{in}^{3}` : ""}`}
+      />
+      {distortion.coefficients.map((coefficient) => (
+        <DistortionFormula
+          key={coefficient.order}
+          symbol={`a_{${coefficient.order}}`}
+          quantity={coefficient}
+        />
+      ))}
+      <details className="small-signal-exact">
+        <summary>HD2, HD3, IIP3</summary>
+        {distortion.hd2 ? (
+          <DistortionFormula symbol="HD_{2}" quantity={distortion.hd2} />
+        ) : null}
+        {distortion.hd3 ? (
+          <DistortionFormula symbol="HD_{3}" quantity={distortion.hd3} />
+        ) : null}
+        {distortion.iip3 ? (
+          <DistortionFormula symbol="IIP_{3}" quantity={distortion.iip3} />
+        ) : null}
+      </details>
+      {varies ? (
+        <table
+          className="small-signal-values"
+          aria-label="Distortion by frequency"
+        >
+          <thead>
+            <tr>
+              <th />
+              <th scope="col">HD2</th>
+              <th scope="col">HD3</th>
+            </tr>
+          </thead>
+          <tbody>
+            {distortion.vsFreq.map((point) => (
+              <tr key={point.f}>
+                <th scope="row">{formatEngineering(point.f, "Hz")}</th>
+                <td>{hdText(point.hd2, point.hd2Infinite)}</td>
+                <td>{hdText(point.hd3, point.hd3Infinite)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {distortion.taylor.length ? (
+        <details className="small-signal-exact">
+          <summary>Device coefficients</summary>
+          <table
+            className="small-signal-values"
+            aria-label="Device coefficients"
+          >
+            <tbody>
+              {distortion.taylor.map((term) => {
+                const label = taylorLatex(term);
+                return (
+                  <tr
+                    key={`${term.element} ${term.current} ${term.monomial}`}
+                    className={term.kept ? undefined : "small-signal-muted"}
+                  >
+                    <th scope="row">
+                      <Formula latex={label} />
+                    </th>
+                    <td>
+                      {formatEngineering(
+                        term.value,
+                        `A/V${term.order === 2 ? "²" : term.order === 3 ? "³" : `^${term.order}`}`,
+                      )}
+                    </td>
+                    <td>{term.kept ? "" : "not in the equations"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * Noise: the input-referred white PSD as an equation, input and output
  * densities per frequency, the largest sources, and the band rms.
@@ -722,71 +1100,27 @@ function NoiseDetails({
   const displayIsExact = Boolean(
     display && (display.same || exactLatex === display.latex),
   );
-  const exactContent =
-    exactLatex && exactLatex !== display?.latex
-      ? exactLatex
-      : displayIsExact
-        ? display!.latex
-        : null;
-  const displayError = display?.relError ?? 0;
-  const displayEquals = displayIsExact || displayError < INVISIBLE_ERROR;
-  // As on the result cards: a long form would bury the readable one.
-  const long =
-    !display?.latex ||
-    (display.terms ?? 0) > 6 ||
-    display.latex.length > FORMULA_MAX_LATEX_LENGTH;
-  const leadSimpler = simpler && long;
-  const simplerNote = simpler?.assumption
-    ? `assuming ${simpler.assumption}`
-    : `within ${formatPercent(simpler?.relError ?? 0)} of exact`;
   // From every source: the contributor lists stop at the 32 largest.
   const flicker = noise.sources.some((source) => source.kind === "flicker");
   const sources = noise.contributors[0];
   const integrated = noise.integrated;
-  const exactDisclosure = (
-    <details className="small-signal-exact">
-      <summary>Exact</summary>
-      {exactContent ? (
-        <Formula latex={`${symbol} = ${exactContent}`} />
-      ) : (
-        <p className="small-signal-muted">
-          The exact expression is too large to typeset.
-        </p>
-      )}
-    </details>
-  );
+
   return (
     <>
-      {leadSimpler ? (
-        <>
-          <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
-          <small className="small-signal-muted">{simplerNote}</small>
-          {exactDisclosure}
-        </>
-      ) : display ? (
-        <>
-          <Formula
-            latex={`${symbol} ${displayEquals ? "=" : "\\approx"} ${display.latex}`}
-          />
-          {displayEquals ? null : (
-            <small className="small-signal-muted">
-              neglecting junction leakage ({formatPercent(displayError)})
-            </small>
-          )}
-          {simpler ? (
-            <div className="small-signal-simpler">
-              <Formula latex={`\\approx ${simpler.latex}`} />
-              <small>{simplerNote}</small>
-            </div>
-          ) : null}
-          {displayIsExact ? null : exactDisclosure}
-        </>
-      ) : low ? (
-        // Every form is over the typesetting limit: say so, not nothing.
-        <>
-          <Formula latex={`${symbol} = \\ldots`} />
-          <small className="small-signal-muted">too large to typeset</small>
-        </>
+      {low ? (
+        // LeadFormula says "too large to typeset" when no form fits.
+        <LeadFormula
+          symbol={symbol}
+          shown={display}
+          shownIsExact={displayIsExact}
+          simpler={simpler}
+          simplerNote={
+            simpler?.assumption
+              ? `assuming ${simpler.assumption}`
+              : `within ${formatPercent(simpler?.relError ?? 0)} of exact`
+          }
+          exact={displayIsExact ? (display?.latex ?? null) : exactLatex}
+        />
       ) : null}
       {low && flicker ? (
         <small className="small-signal-muted">
@@ -1149,6 +1483,9 @@ export function SmallSignalPanel({
   // matches every other candidate pair in the same solve.
   const [unmatched, setUnmatched] = useState<ReadonlySet<string>>(new Set());
   const [response, setResponse] = useState<SmallSignalResponse | null>(null);
+  // The request the response answers: a queued solve can still deliver an
+  // older circuit's result after the circuit changed.
+  const [responseKey, setResponseKey] = useState<string | null>(null);
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);
@@ -1161,9 +1498,43 @@ export function SmallSignalPanel({
   const [noiseResponse, setNoiseResponse] =
     useState<SmallSignalResponse | null>(null);
   const noiseClientRef = useRef<SmallSignalClient | null>(null);
+  // Distortion likewise has its own worker, so stopping one never stops
+  // the other.
+  const distortionClientRef = useRef<SmallSignalClient | null>(null);
+  const distortionBusy = useRef(false);
   // A noise solve was sent and its job is still the current one.
   const noiseBusy = useRef(false);
   const noiseGeneration = useRef(0);
+  // Distortion likewise: devices left linear (all expand by default) and
+  // the input amplitude for HD2, HD3.
+  const [distortionOpen, setDistortionOpen] = useState(false);
+  // Devices left linear, per circuit (cell): another cell's M1 is another
+  // device, expanded by default.
+  const [linearByCircuit, setLinearByCircuit] = useState<
+    Readonly<Record<string, readonly string[]>>
+  >({});
+  const circuitKey = rootDocumentId ?? "";
+  const linearDevices = new Set(linearByCircuit[circuitKey] ?? []);
+  const setLinearDevices = (
+    update: (previous: ReadonlySet<string>) => ReadonlySet<string>,
+  ) =>
+    setLinearByCircuit((all) => ({
+      ...all,
+      [circuitKey]: [...update(new Set(all[circuitKey] ?? []))],
+    }));
+  // Typed amplitude per input unit: "10m" for a voltage input must never
+  // become 10 mA when the input is a current source.
+  const [amplitudeByUnit, setAmplitudeByUnit] = useState<
+    Readonly<Record<"V" | "A", string>>
+  >({ V: "", A: "" });
+  const [distortionResponse, setDistortionResponse] =
+    useState<SmallSignalResponse | null>(null);
+  // The job the distortion response answers: shown only while it is the
+  // current one, so a new amplitude never sits beside old numbers.
+  const [distortionResponseKey, setDistortionResponseKey] = useState<
+    string | null
+  >(null);
+  const distortionGeneration = useRef(0);
 
   useEffect(() => {
     // Start loading the typesetter now, before the first result arrives.
@@ -1180,6 +1551,8 @@ export function SmallSignalPanel({
       clientRef.current = null;
       noiseClientRef.current?.dispose();
       noiseClientRef.current = null;
+      distortionClientRef.current?.dispose();
+      distortionClientRef.current = null;
     };
   }, []);
 
@@ -1260,6 +1633,7 @@ export function SmallSignalPanel({
       void client.analyze(text, job).then((next) => {
         if (current !== generation.current) return;
         setResponse(next);
+        setResponseKey(requestKey);
         setSolving(false);
       });
     }, SOLVE_DEBOUNCE_MS);
@@ -1307,6 +1681,79 @@ export function SmallSignalPanel({
       }
     };
   }, [noiseKey]);
+
+  // Every transistor and diode with a bias point can be expanded.
+  // Devices from the response to this very request, never an older one.
+  const nonlinearCandidates = Object.keys(
+    response && !isSmallSignalError(response) && responseKey === requestKey
+      ? (response.op?.devices ?? {})
+      : {},
+  );
+  const nonlinear = nonlinearCandidates.filter(
+    (name) => !linearDevices.has(name),
+  );
+  const currentInput =
+    sources.find(
+      (source) =>
+        source.name === (differential ? differential[0] : chosenInput),
+    )?.kind === "current";
+  const defaultAmplitude = currentInput ? 1e-6 : 0.01;
+  const amplitudeUnit = currentInput ? "A" : "V";
+  const amplitudeText = amplitudeByUnit[amplitudeUnit];
+  const typedAmplitude = parseSpiceNumber(amplitudeText);
+  // Blank means the default; anything else must be a positive number, or
+  // nothing is solved (never numbers for an amplitude other than the shown).
+  const amplitude = !amplitudeText.trim()
+    ? defaultAmplitude
+    : typedAmplitude !== null && typedAmplitude > 0
+      ? typedAmplitude
+      : null;
+  const distortionKey =
+    distortionOpen &&
+    requestKey &&
+    !handAnalysis &&
+    nonlinear.length &&
+    amplitude !== null
+      ? JSON.stringify([requestKey, nonlinear, amplitude])
+      : null;
+  useEffect(() => {
+    // A new job, or none: drop the old result and any solve in flight.
+    const current = ++distortionGeneration.current;
+    setDistortionResponse(null);
+    if (!distortionKey) return;
+    const [key, devices, size] = JSON.parse(distortionKey) as [
+      string,
+      string[],
+      number,
+    ];
+    const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
+    const timer = setTimeout(() => {
+      distortionClientRef.current ??= createSmallSignalClient();
+      distortionBusy.current = true;
+      void distortionClientRef.current
+        .analyze(text, {
+          ...job,
+          nonlinear: devices,
+          order: 3,
+          amplitude: size,
+        })
+        .then((next) => {
+          if (current !== distortionGeneration.current) return;
+          distortionBusy.current = false;
+          setDistortionResponse(next);
+          setDistortionResponseKey(distortionKey);
+        });
+    }, SOLVE_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      // As for Noise: stop a solve whose job is no longer wanted.
+      if (distortionBusy.current) {
+        distortionClientRef.current?.dispose();
+        distortionClientRef.current = null;
+        distortionBusy.current = false;
+      }
+    };
+  }, [distortionKey]);
 
   const blocked = unconnected.length > 0 || noDcPath.length > 0 || noOutput;
   const result =
@@ -1582,6 +2029,97 @@ export function SmallSignalPanel({
                       />
                     </>
                   ) : null}
+                </div>
+              </details>
+            ) : null}
+
+            {result ? (
+              <details
+                className="small-signal-options small-signal-distortion"
+                open={distortionOpen}
+                onToggle={(event) =>
+                  setDistortionOpen(event.currentTarget.open)
+                }
+              >
+                <summary>Distortion</summary>
+                <div>
+                  {handAnalysis ? (
+                    <p className="small-signal-muted">
+                      Distortion needs a bias point.
+                    </p>
+                  ) : (
+                    <>
+                      <div
+                        className="small-signal-match"
+                        role="group"
+                        aria-label="Nonlinear devices"
+                      >
+                        <span>Nonlinear</span>
+                        {nonlinearCandidates.map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            aria-pressed={!linearDevices.has(name)}
+                            onClick={() =>
+                              setLinearDevices((previous) => {
+                                const next = new Set(previous);
+                                if (next.has(name)) next.delete(name);
+                                else next.add(name);
+                                return next;
+                              })
+                            }
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                      <label>
+                        Amplitude ({currentInput ? "A" : "V"})
+                        <input
+                          aria-label="Distortion amplitude"
+                          aria-invalid={amplitude === null ? true : undefined}
+                          placeholder={currentInput ? "1u" : "10m"}
+                          value={amplitudeText}
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          onChange={(event) =>
+                            setAmplitudeByUnit({
+                              ...amplitudeByUnit,
+                              [amplitudeUnit]: event.currentTarget.value,
+                            })
+                          }
+                        />
+                      </label>
+                      {!nonlinear.length ? (
+                        <p className="small-signal-muted">
+                          Pick a device to expand.
+                        </p>
+                      ) : amplitude === null ? (
+                        <p className="small-signal-muted">
+                          Enter an amplitude above 0.
+                        </p>
+                      ) : !distortionResponse ||
+                        distortionResponseKey !== distortionKey ? (
+                        <span className="small-signal-formula-pending" />
+                      ) : isSmallSignalError(distortionResponse) ? (
+                        <p className="small-signal-muted">
+                          {distortionResponse.error}
+                        </p>
+                      ) : distortionResponse.distortion ? (
+                        <>
+                          <ExtraWarnings
+                            warnings={distortionResponse.warnings}
+                            shown={result.warnings}
+                          />
+                          <DistortionDetails
+                            distortion={distortionResponse.distortion}
+                            current={currentInput}
+                          />
+                        </>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </details>
             ) : null}

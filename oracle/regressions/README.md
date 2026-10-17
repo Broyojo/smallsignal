@@ -17,6 +17,12 @@ SMALLSIGNAL_BIN=... uv run compare.py -v --corpus regressions --expected regress
 | `dc_nonconv_mos`, `dc_nonconv_mos2`, `dc_nonconv_mixed` | DC non-convergence on leakage-held nodes, F/H loops and reverse-mode devices. |
 | `bjt_reverse_active_label` | A reverse-active BJT was labelled `cutoff`. |
 
+## Oracle sidecar handling
+
+| File | What it guards |
+|---|---|
+| `dist_true_shorthand` | `"distortion": true` means the default settings in generation and in compare.py (`run_ngspice.settings`), and a bias written `900m` parses in the dialect (`spice.value`). Its distortion block equals `dist_cs`'s. |
+
 ## Round 2: gate fuzz `fuzz-gate/` (seeds 500–509), solver binary `gate-bin` (= 2d7f3f01)
 
 All seven repros below fail against `gate-bin`. They were minimized by

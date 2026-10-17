@@ -374,7 +374,7 @@ def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
     produces. Element names that make those vectors ambiguous are rejected
     (noise_name_clashes).
     """
-    spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
+    spec = settings(side, "noise") or {}
     freqs = spec.get("freqs") or side.get("freqs", [])
     out, ref = side["output"], side.get("ref")
     if clashes := noise_name_clashes(net):
@@ -487,7 +487,7 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
         result["rin"] = {"values": zin}
     if side.get("rout"):
         result["rout"] = {"values": zout(net, side, keep, name)}
-    if side.get("noise"):
+    if requested(side, "noise"):
         result["noise"] = noise(net, side, keep, name)
         if "integrated" in result["noise"]:
             import noise_indep  # noqa: PLC0415 - noise_indep imports this module
@@ -497,8 +497,8 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
                          "outputRms": math.sqrt(exact["outputV2"]), "inputRms": math.sqrt(exact["inputV2"]),
                          "method": "adaptive quadrature of the 60-digit independent PSD"})
             # A band the solver is known not to converge on says so.
-            if "solverConverged" in side["noise"]:
-                band["solverConverged"] = side["noise"]["solverConverged"]
+            if "solverConverged" in (noise_spec := settings(side, "noise")):
+                band["solverConverged"] = noise_spec["solverConverged"]
             tr = band["ngspice_trapezoid"]
             band["agreement"] = max(rel_diff(tr["outputV2"], exact["outputV2"]),
                                     rel_diff(tr["inputV2"], exact["inputV2"]))
@@ -507,9 +507,32 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
             if not band["agreement"] <= AGREEMENT_RTOL:
                 raise NgspiceError(f"{name}: band integral disagrees with ngspice's spectrum by "
                                    f"{band['agreement']:.1e} (limit {AGREEMENT_RTOL:g})")
+    if requested(side, "distortion"):
+        import distortion  # noqa: PLC0415 - distortion imports this module
+        result["distortion"] = distortion.analyze(cir, net, side, keep)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
+
+
+def settings(side: dict, key: str) -> dict | None:
+    """The sidecar's `noise` or `distortion` settings, the one place both
+    generation and compare.py read them: an object as given, true as the
+    defaults ({}), None when absent, null or false (not requested).
+    Anything else is a ValueError."""
+    v = side.get(key)
+    if v is None or v is False:
+        return None
+    if v is True:
+        return {}
+    if isinstance(v, dict):
+        return v
+    raise ValueError(f"sidecar {key!r} must be true or an object, got {v!r}")
+
+
+def requested(side: dict, key: str) -> bool:
+    """Whether the sidecar asks for the `noise` or `distortion` analysis."""
+    return settings(side, key) is not None
 
 
 def main() -> int:

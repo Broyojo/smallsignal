@@ -1,0 +1,16 @@
+{
+ "input": "VIP",
+ "inputNeg": "VINN",
+ "mode": "common",
+ "output": "o1",
+ "ref": null,
+ "freqs": [1000.0],
+ "rin": false,
+ "rout": false,
+ "distortion": {
+  "amplitudes": [0.001, 0.002, 0.005, 0.01],
+  "freq": 1000.0,
+  "amplitude": 0.001
+ },
+ "description": "Both sources driven together (+v each): the common-mode transfer of a degenerated pair"
+}

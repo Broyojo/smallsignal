@@ -26,6 +26,11 @@ export interface SmallSignalRequest {
   noise?: boolean;
   /** Integrate the noise over [fLow, fHigh] in Hz (implies `noise`). */
   noiseBand?: [number, number];
+  /** Devices whose currents are expanded to `order`: distortion. */
+  nonlinear?: string[];
+  order?: 2 | 3;
+  /** Input amplitude for HD2, HD3 (V, or A for a current input). */
+  amplitude?: number;
 }
 
 export interface ComplexPoint {
@@ -229,6 +234,91 @@ export interface SmallSignalNoise {
     | { unavailable: string };
 }
 
+/** One closed form of a distortion quantity. */
+export interface DistortionForm {
+  /** null when too large to typeset. */
+  latex: string | null;
+  value: number | null;
+  /** Plain numerator/denominator for checking tools, when small enough. */
+  plain?: PlainFraction | null;
+  terms?: number | null;
+  relError?: number | null;
+  same?: boolean;
+  leakageMatters?: boolean;
+  /** Simplified forms: how they were made, e.g. "leading order (ro ≫ R, 1/gm)". */
+  method?: string;
+  tolerance?: number;
+}
+
+export interface DistortionQuantity extends DistortionForm {
+  display?: DistortionForm | null;
+  simplified?: DistortionForm | null;
+  /** Why there is no exact form, e.g. "too large for the exact closed form". */
+  skipped?: string;
+}
+
+/** HD2 and HD3 at one frequency; null when unavailable or infinite. */
+export interface DistortionVsFreqPoint {
+  f: number;
+  hd2: number | null;
+  hd3: number | null;
+  /** Present (true) only when HD2 is infinite (H1 = 0, H2 ≠ 0). */
+  hd2Infinite?: true;
+  /** Present (true) only when HD3 is infinite (H1 = 0, H3 ≠ 0). */
+  hd3Infinite?: true;
+}
+
+export interface SmallSignalDistortion {
+  /** v_out = a1·v_in + a2·v_in² + a3·v_in³ around the bias. */
+  coefficients: (DistortionQuantity & {
+    order: number;
+    /** The value from the numeric expansion (the closed forms' check). */
+    numeric: number | null;
+  })[];
+  /**
+   * null when unavailable (order 2 for hd3/iip3, or 0/0 at DC). An infinite
+   * value (HD with a1 = 0, IIP3 with a3 = 0) is `latex: "\\infty"`,
+   * `value: null`, and so its display and simplified forms.
+   */
+  hd2: DistortionQuantity | null;
+  hd3: DistortionQuantity | null;
+  iip3: DistortionQuantity | null;
+  amplitude: number;
+  /** "V" or "A". */
+  inputUnit: string;
+  nonlinear: string[];
+  order: number;
+  /** HD2 and HD3 at each frequency (Volterra kernels). */
+  vsFreq: DistortionVsFreqPoint[];
+  /** The devices' Taylor coefficients, e.g. K_{2g,M1} = ½∂²I_D/∂v_GS². */
+  symbols: {
+    name: string;
+    latex: string;
+    value: number | null;
+    unit: string;
+    elements: string[];
+  }[];
+  /** Each device current's Taylor terms, e.g. 2g = v_GS², with its value. */
+  taylor: {
+    element: string;
+    current: string;
+    monomial: string;
+    order: number;
+    value: number;
+    kept: boolean;
+  }[];
+  /** The exact aₙ that materialized, against the numeric expansion. */
+  check: {
+    ok: boolean;
+    maxRelDiff: number;
+    orders: number[];
+    /** The accepted matching mismatch's largest relative effect on aₙ. */
+    matchBound: number;
+  } | null;
+  /** Largest relative change from junctions left out of the model. */
+  omissionError: number | null;
+}
+
 export interface SmallSignalResult {
   /** True when no operating point was computed (missing values or requested). */
   symbolic?: boolean;
@@ -248,6 +338,7 @@ export interface SmallSignalResult {
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;
   noise?: SmallSignalNoise;
+  distortion?: SmallSignalDistortion;
 }
 
 export type SmallSignalResponse = SmallSignalResult | { error: string };
