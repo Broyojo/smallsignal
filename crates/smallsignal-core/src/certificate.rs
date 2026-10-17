@@ -135,6 +135,8 @@ pub fn certificate(text: &str, req: &Request) -> Result<Value, String> {
             Stamp::Ind { e, a, b, p } => {
                 branches[bidx(e)] = json!({ "kind": "ind", "a": col(a), "b": col(b), "z": value(&ssc, p) })
             }
+            // An assumed short has no element: its nodes share one column.
+            Stamp::Short { .. } => {}
         }
     }
     let params: Vec<Value> = (0..ssc.params.len())
