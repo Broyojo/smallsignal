@@ -137,26 +137,39 @@ async function formula(panel: Locator, name: string): Promise<string> {
 async function biasLine(panel: Locator, device: string) {
   const row = card(panel, "Bias point").locator(`tr[data-device="${device}"]`);
   await expect(row).toHaveCount(1);
-  const quantity = async (name: string, unit: string) => {
-    const text = await row.locator(`td[data-quantity="${name}"]`).innerText();
+  // One snapshot of the row, so every number comes from the same solve.
+  const cells = await row.evaluate((tr) => {
+    const text = (name: string) =>
+      tr.querySelector(`td[data-quantity="${name}"]`)?.textContent ?? "";
+    return {
+      id: text("id"),
+      gm: text("gm"),
+      ro: text("ro"),
+      // The region column only appears when some transistor is not saturated.
+      region:
+        tr.querySelector(".small-signal-region")?.textContent ?? "saturation",
+    };
+  });
+  const scale: Record<string, number> = {
+    n: 1e-9,
+    µ: 1e-6,
+    m: 1e-3,
+    "": 1,
+    k: 1e3,
+    M: 1e6,
+  };
+  const quantity = (name: "id" | "gm" | "ro", unit: string) => {
+    const text = cells[name];
+    if (name === "ro" && text.includes("∞")) return Infinity;
     const match = new RegExp(`([\\d.]+)\\s*([nµmkM]?)${unit}`, "u").exec(text);
     if (!match) throw new Error(`no ${name} in "${text}"`);
-    const scale: Record<string, number> = {
-      n: 1e-9,
-      µ: 1e-6,
-      m: 1e-3,
-      "": 1,
-      k: 1e3,
-      M: 1e6,
-    };
     return Number(match[1]) * scale[match[2] ?? ""]!;
   };
-  // The region column only appears when some transistor is not saturated.
-  const chip = row.locator(".small-signal-region");
   return {
-    region: (await chip.count()) ? await chip.innerText() : "saturation",
-    gm: await quantity("gm", "S"),
-    ro: await quantity("ro", "Ω"),
+    region: cells.region,
+    id: quantity("id", "A"),
+    gm: quantity("gm", "S"),
+    ro: quantity("ro", "Ω"),
   };
 }
 
@@ -183,7 +196,7 @@ test("common-source drawn with a VDD Pin: −gm(ro ∥ R1), saturated, follows t
   );
 
   // A higher supply raises V_DS, so I_D and gm grow (level 1: β(1+λV_DS)).
-  await panel.locator("details.small-signal-options > summary").click();
+  await panel.getByText("Options", { exact: true }).click();
   await panel.getByLabel("Supply voltage").fill("3.3");
   await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.2);
   await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
@@ -394,4 +407,109 @@ test("editing R1 re-solves: −gm(ro ∥ 20k)", async ({ page }) => {
     2,
   );
   expect(await formula(panel, "Gain")).toContain("\\parallel R_{1}");
+});
+
+test("model parameters are editable: the bias follows the square law", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  const base = await biasLine(panel, "M1");
+  // Saturated level 1: gm / I_D = 2 / V_ov, whatever KP and λ are.
+  const overdrive = (line: { id: number; gm: number }) =>
+    (2 * line.id) / line.gm;
+
+  const models = panel.locator("details.small-signal-options", {
+    has: page.locator("summary", { hasText: /^Models/u }),
+  });
+  await models.locator("summary").click();
+  await expect(models.locator("summary")).toHaveText("Models");
+  const kp = panel.getByLabel("NMOS KP");
+  await expect(kp).toHaveAttribute("placeholder", "200u");
+
+  // Twice µCox: more current at the same overdrive.
+  await kp.fill("400u");
+  await expect(models.locator("summary")).toHaveText("Models (edited)");
+  await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.3);
+  const strong = await biasLine(panel, "M1");
+  expect(strong.id).toBeGreaterThan(base.id);
+  expect(overdrive(strong)).toBeCloseTo(overdrive(base), 2);
+
+  // 0.1 V lower threshold: exactly 0.1 V more overdrive.
+  await kp.fill("");
+  await panel.getByLabel("NMOS VTO").fill("0.4");
+  await expect
+    .poll(async () => overdrive(await biasLine(panel, "M1")))
+    .toBeCloseTo(overdrive(base) + 0.1, 2);
+
+  // λ = 0: no channel-length modulation, so r_o is infinite and A = −gm R1.
+  await panel.getByLabel("NMOS VTO").fill("");
+  await panel.getByLabel("NMOS LAMBDA").fill("0");
+  await expect
+    .poll(async () => (await biasLine(panel, "M1")).ro)
+    .toBe(Infinity);
+  const ideal = await biasLine(panel, "M1");
+  expect(await cardValue(panel, "Gain")).toBeCloseTo(-ideal.gm * 10e3, 2);
+
+  // An unreadable value is marked and ignored; Reset restores the defaults.
+  await panel.getByLabel("NMOS LAMBDA").fill("abc");
+  await expect(panel.getByLabel("NMOS LAMBDA")).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  await panel.getByLabel("NMOS LAMBDA").fill("0");
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(models.locator("summary")).toHaveText("Models");
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+});
+
+test("stored model values: malformed ones are dropped, every edit shows, Reset clears all", async ({
+  page,
+}) => {
+  // A PMOS override from another circuit, next to a malformed NMOS entry.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { KP: 1, VTO: "0.4" }, pmos: { VTO: "-0.3" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.csWired);
+  const summary = panel.getByText(/^Models/u);
+  await expect(summary).toHaveText("Models (edited)");
+  await summary.click();
+  await expect(panel.getByLabel("NMOS KP")).toHaveValue("");
+  await expect(panel.getByLabel("NMOS VTO")).toHaveValue("0.4");
+  // Not in this circuit, but edited: shown rather than applied unseen.
+  await expect(panel.getByLabel("PMOS VTO")).toHaveValue("-0.3");
+
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(summary).toHaveText("Models");
+  await expect(panel.getByLabel("PMOS VTO")).toHaveCount(0);
+  await expect(panel.getByLabel("NMOS VTO")).toHaveValue("");
+  expect(
+    await page.evaluate(() => localStorage.getItem("smallsignal.models")),
+  ).toBe("{}");
+});
+
+test("stored model edits stay reachable in a circuit without transistors", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { KP: "300u" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.rc);
+  const summary = panel.getByText(/^Models/u);
+  await expect(summary).toHaveText("Models (edited)");
+  await summary.click();
+  await expect(panel.getByLabel("NMOS KP")).toHaveValue("300u");
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(panel.getByText(/^Models/u)).toHaveCount(0);
 });

@@ -56,7 +56,8 @@ fn parse_raw(s: &str) -> Option<f64> {
             Some('g') => 9,
             Some('k') => 3,
             Some('m') => -3,
-            Some('u') | Some('µ') => -6,
+            // The micro sign (U+00B5) and the Greek mu (U+03BC) look the same.
+            Some('u') | Some('\u{b5}') | Some('\u{3bc}') => -6,
             Some('n') => -9,
             Some('p') => -12,
             Some('f') => -15,
@@ -94,6 +95,10 @@ mod tests {
         assert_eq!(p("-3m"), Some(-3e-3));
         assert_eq!(p(".5p"), Some(0.5e-12));
         assert_eq!(p("100f"), Some(100e-15));
+        assert_eq!(p("2\u{b5}"), Some(2e-6));
+        assert_eq!(p("10\u{3bc}F"), Some(10e-6));
+        assert_eq!(p("1a"), Some(1e-18));
+        assert_eq!(p("5mil"), Some(5.0 * 25.4e-6));
         assert_eq!(p("abc"), None);
         assert_eq!(p("1e400"), None);
         assert_eq!(p("-1e400"), None);

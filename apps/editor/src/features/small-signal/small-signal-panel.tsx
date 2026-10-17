@@ -19,6 +19,7 @@ import {
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
   createSmallSignalClient,
+  DEFAULT_MODEL_PARAMETERS,
   DEFAULT_SUPPLY_VOLTAGE,
   isSmallSignalError,
   smallSignalNetlist,
@@ -28,6 +29,8 @@ import {
   type MosOperatingPoint,
   type SmallSignalClient,
   type DeviceOperatingPoint,
+  type ModelKind,
+  type ModelOverrides,
   type SmallSignalSource,
   type SmallSignalQuantity,
   type SmallSignalRequest,
@@ -42,29 +45,251 @@ import {
 import "./small-signal-panel.css";
 
 const SOLVE_DEBOUNCE_MS = 120;
-const SI = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*(meg|[fpnumkgt])?/iu;
-const SI_SCALE: Record<string, number> = {
-  f: 1e-15,
-  p: 1e-12,
-  n: 1e-9,
-  u: 1e-6,
-  m: 1e-3,
-  k: 1e3,
-  meg: 1e6,
-  g: 1e9,
-  t: 1e12,
+/** SPICE scale suffixes as decimal exponents (`meg` and `mil` aside). */
+const SPICE_EXPONENT: Record<string, number> = {
+  t: 12,
+  g: 9,
+  k: 3,
+  m: -3,
+  u: -6,
+  // The micro sign (U+00B5) and the Greek mu (U+03BC) look the same.
+  "\u00b5": -6,
+  "\u03bc": -6,
+  n: -9,
+  p: -12,
+  f: -15,
+  a: -18,
 };
 
-/** `1k, 10meg` → [1000, 1e7]; anything unreadable is dropped. */
+const SPACE =
+  "[\\t-\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*";
+const SPICE_NUMBER = new RegExp(
+  `^${SPACE}([+-]?(?:\\d+\\.?\\d*|\\.\\d+))(?:[eE]([+-]?\\d+))?([A-Za-z\\u00b5\\u03bc\\u03a9]*)${SPACE}$`,
+  "u",
+);
+
+/**
+ * One SPICE number, read as the solver's `parse_value` reads it: `-0.45`,
+ * `200u`, `1.2meg`, `10kohm`, `1a`, `5mil`. It refuses more (spaces, stray
+ * characters, overflow) but never reads a different value.
+ */
+export function parseSpiceNumber(text: string): number | null {
+  // Rust's trim() set (Unicode White_Space), and ASCII-only case folding as
+  // in to_ascii_lowercase(): `/i` would also fold K (Kelvin) to k.
+  const match = SPICE_NUMBER.exec(text);
+  if (!match) return null;
+  const [, mantissa = "", exponent = "0", unit = ""] = match;
+  const letters = unit.replace(/[A-Z]/gu, (letter) => letter.toLowerCase());
+  const scale = letters.startsWith("meg")
+    ? 6
+    : (SPICE_EXPONENT[letters[0] ?? ""] ?? 0);
+  // The suffix moves the decimal exponent, so `2.5u` reads like `2.5e-6`.
+  const value = letters.startsWith("mil")
+    ? Number(`${mantissa}e${exponent}`) * 25.4e-6
+    : Number(`${mantissa}e${Number(exponent) + scale}`);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** `1k, 10meg` → [1000, 1e7]; anything unreadable or negative is dropped. */
 export function parseFrequencies(text: string): number[] {
   return text
     .split(/[\s,;]+/u)
-    .map((token) => {
-      const match = SI.exec(token);
-      if (!match) return NaN;
-      return Number(match[1]) * (SI_SCALE[match[2]?.toLowerCase() ?? ""] ?? 1);
-    })
-    .filter((value) => Number.isFinite(value) && value >= 0);
+    .map(parseSpiceNumber)
+    .filter((value): value is number => value !== null && value >= 0);
+}
+
+/** A SPICE number as an engineer writes it: 0.5, 50, 200u, 1f. */
+export function formatSpiceNumber(value: number): string {
+  const magnitude = Math.abs(value);
+  if (value === 0 || (magnitude >= 1e-3 && magnitude < 1e4))
+    return String(Number(value.toPrecision(4)));
+  const scales: [number, string][] = [
+    [1e6, "meg"],
+    [1e3, "k"],
+    [1e-3, "m"],
+    [1e-6, "u"],
+    [1e-9, "n"],
+    [1e-12, "p"],
+    [1e-15, "f"],
+  ];
+  const [scale, suffix] = scales.find(([scale]) => magnitude >= scale) ?? [
+    1e-15,
+    "f",
+  ];
+  return `${Number((value / scale).toPrecision(4))}${suffix}`;
+}
+
+const MODEL_TITLE: Record<ModelKind, string> = {
+  nmos: "NMOS",
+  pmos: "PMOS",
+  npn: "NPN",
+  pnp: "PNP",
+  diode: "Diode",
+};
+
+/**
+ * The range each parameter accepts. Wider than any real device, narrow
+ * enough that the solver's exponentials and N·V_T stay finite. VTO takes
+ * either sign; VAF = 0 means no Early effect, LAMBDA = 0 no channel-length
+ * modulation, GAMMA = 0 no body effect.
+ */
+const MODEL_RANGE: Record<
+  string,
+  { min: number; max: number; zero?: boolean }
+> = {
+  KP: { min: 1e-12, max: 10 },
+  VTO: { min: -100, max: 100 },
+  LAMBDA: { min: 0, max: 10 },
+  GAMMA: { min: 0, max: 100 },
+  PHI: { min: 1e-3, max: 100 },
+  IS: { min: 1e-30, max: 1 },
+  BF: { min: 1e-3, max: 1e6 },
+  VAF: { min: 0.01, max: 1e6, zero: true },
+  N: { min: 0.01, max: 100 },
+};
+
+export function modelValue(name: string, text: string): number | null {
+  const value = parseSpiceNumber(text);
+  const range = MODEL_RANGE[name];
+  if (value === null || !range) return null;
+  if (value === 0 && range.zero) return 0;
+  return value >= range.min && value <= range.max ? value : null;
+}
+
+/** The accepted range, as a tooltip for a value outside it. */
+function rangeText(name: string): string | undefined {
+  const range = MODEL_RANGE[name];
+  return range
+    ? `${range.zero ? "0, or " : ""}${formatSpiceNumber(range.min)} to ${formatSpiceNumber(range.max)}`
+    : undefined;
+}
+
+/** Typed model parameters, by kind then name, kept as the user wrote them. */
+type ModelText = Partial<Record<ModelKind, Record<string, string>>>;
+const MODEL_STORAGE_KEY = "smallsignal.models";
+
+/** Stored model text, keeping only known kinds and string parameters. */
+export function readModelText(stored: string | null): ModelText {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored ?? "{}");
+  } catch {
+    return {};
+  }
+  const text: ModelText = {};
+  if (!parsed || typeof parsed !== "object") return text;
+  for (const kind of Object.keys(DEFAULT_MODEL_PARAMETERS) as ModelKind[]) {
+    const params: unknown = (parsed as Record<string, unknown>)[kind];
+    if (!params || typeof params !== "object") continue;
+    for (const name of Object.keys(DEFAULT_MODEL_PARAMETERS[kind])) {
+      const typed = (params as Record<string, unknown>)[name];
+      if (typeof typed === "string" && typed.trim())
+        (text[kind] ??= {})[name] = typed;
+    }
+  }
+  return text;
+}
+
+/** Whether any model parameter is typed in, valid or not. */
+export function modelTextEdited(text: ModelText): boolean {
+  return Object.values(text).some((params) =>
+    Object.values(params ?? {}).some((typed) => typed.trim()),
+  );
+}
+
+function loadModelText(): ModelText {
+  try {
+    return readModelText(window.localStorage.getItem(MODEL_STORAGE_KEY));
+  } catch {
+    return {};
+  }
+}
+
+function saveModelText(text: ModelText) {
+  try {
+    window.localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(text));
+  } catch {
+    // Private windows: the values still apply until the page closes.
+  }
+}
+
+export function modelOverrides(text: ModelText): ModelOverrides {
+  // Keys are checked against DEFAULT_MODEL_PARAMETERS below.
+  const overrides: Partial<Record<ModelKind, Record<string, number>>> = {};
+  for (const kind of Object.keys(DEFAULT_MODEL_PARAMETERS) as ModelKind[]) {
+    for (const [name, typed] of Object.entries(text[kind] ?? {})) {
+      if (!(name in DEFAULT_MODEL_PARAMETERS[kind])) continue;
+      const value = modelValue(name, typed);
+      if (value !== null) (overrides[kind] ??= {})[name] = value;
+    }
+  }
+  return overrides as ModelOverrides;
+}
+
+function ModelFields({
+  kinds,
+  text,
+  onChange,
+}: {
+  kinds: readonly ModelKind[];
+  text: ModelText;
+  onChange: (text: ModelText) => void;
+}) {
+  // Every edited kind shows, used here or not: nothing applies unseen.
+  const shown = (Object.keys(MODEL_TITLE) as ModelKind[]).filter(
+    (kind) =>
+      kinds.includes(kind) ||
+      Object.values(text[kind] ?? {}).some((typed) => typed.trim()),
+  );
+  return (
+    <>
+      {shown.map((kind) => (
+        <fieldset key={kind} className="small-signal-model">
+          <legend>{MODEL_TITLE[kind]}</legend>
+          {Object.entries(DEFAULT_MODEL_PARAMETERS[kind]).map(
+            ([name, fallback]) => {
+              const typed = text[kind]?.[name] ?? "";
+              const invalid =
+                typed.trim() !== "" && modelValue(name, typed) === null;
+              return (
+                <label key={name}>
+                  {name}
+                  <input
+                    aria-label={`${MODEL_TITLE[kind]} ${name}`}
+                    aria-invalid={invalid || undefined}
+                    title={invalid ? rangeText(name) : undefined}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder={formatSpiceNumber(fallback)}
+                    value={typed}
+                    onChange={(event) =>
+                      onChange({
+                        ...text,
+                        [kind]: {
+                          ...text[kind],
+                          [name]: event.currentTarget.value,
+                        },
+                      })
+                    }
+                  />
+                </label>
+              );
+            },
+          )}
+        </fieldset>
+      ))}
+      {modelTextEdited(text) ? (
+        <button
+          type="button"
+          className="small-signal-reset"
+          onClick={() => onChange({})}
+        >
+          Reset to defaults
+        </button>
+      ) : null}
+    </>
+  );
 }
 
 export function formatEngineering(value: number, unit = ""): string {
@@ -455,7 +680,7 @@ function BiasTable({
                 </span>
               </td>
             ) : null}
-            <td>{formatEngineering(row.current, "A")}</td>
+            <td data-quantity="id">{formatEngineering(row.current, "A")}</td>
             <td data-quantity="gm">{formatEngineering(row.gm, "S")}</td>
             <td data-quantity="ro">{ohms(row.ro)}</td>
             {hasBjt ? <td>{row.rpi === null ? "" : ohms(row.rpi)}</td> : null}
@@ -589,19 +814,27 @@ export function SmallSignalPanel({
   const pinBias = useMemo(() => {
     const values: Record<string, number> = {};
     for (const [pin, text] of Object.entries(pinBiasText)) {
-      const value = Number.parseFloat(text);
-      if (text.trim() && Number.isFinite(value)) values[pin] = value;
+      const value = parseSpiceNumber(text);
+      if (value !== null) values[pin] = value;
     }
     return values;
   }, [pinBiasText]);
+  // Model parameters typed in the Models section, kept across sessions.
+  const [modelText, setModelText] = useState<ModelText>(loadModelText);
+  const updateModelText = useCallback((text: ModelText) => {
+    setModelText(text);
+    saveModelText(text);
+  }, []);
+  const models = useMemo(() => modelOverrides(modelText), [modelText]);
   const netlist = useMemo(
     () =>
       smallSignalNetlist(project, {
         ...(rootDocumentId ? { rootDocumentId } : {}),
         supplyVoltage,
         pinBias,
+        models,
       }),
-    [project, rootDocumentId, supplyVoltage, pinBias],
+    [project, rootDocumentId, supplyVoltage, pinBias, models],
   );
   const [input, setInput] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
@@ -909,7 +1142,12 @@ export function SmallSignalPanel({
                       {pin} DC
                       <input
                         aria-label={`${pin} DC voltage`}
-                        inputMode="decimal"
+                        aria-invalid={
+                          (pinBiasText[pin] ?? "").trim() !== "" &&
+                          parseSpiceNumber(pinBiasText[pin] ?? "") === null
+                            ? true
+                            : undefined
+                        }
                         placeholder="V"
                         value={pinBiasText[pin] ?? ""}
                         onChange={(event) => {
@@ -997,7 +1235,6 @@ export function SmallSignalPanel({
                     {netlist.supplies.join(", ")} (V)
                     <input
                       aria-label="Supply voltage"
-                      inputMode="decimal"
                       value={supply}
                       onChange={(event) => setSupply(event.currentTarget.value)}
                     />
@@ -1013,15 +1250,31 @@ export function SmallSignalPanel({
                   />
                   Hand analysis (assume saturation)
                 </label>
-                <small className="small-signal-muted">
-                  Transistors use level-1 square-law models (W/L as drawn).
-                </small>
                 <details>
                   <summary>Solver netlist</summary>
                   <pre>{netlist.text}</pre>
                 </details>
               </div>
             </details>
+            {netlist.models.length || modelTextEdited(modelText) ? (
+              <details className="small-signal-options">
+                <summary>
+                  {modelTextEdited(modelText) ? "Models (edited)" : "Models"}
+                </summary>
+                <div>
+                  {netlist.models.some((kind) => kind.endsWith("mos")) ? (
+                    <small className="small-signal-muted">
+                      Level 1. W/L as drawn.
+                    </small>
+                  ) : null}
+                  <ModelFields
+                    kinds={netlist.models}
+                    text={modelText}
+                    onChange={updateModelText}
+                  />
+                </div>
+              </details>
+            ) : null}
           </>
         )}
       </section>

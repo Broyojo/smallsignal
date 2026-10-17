@@ -97,6 +97,13 @@ struct Asm {
     n: usize,
     a: Vec<f64>,
     z: Vec<f64>,
+    /// A stamped value was infinite or NaN (a device equation overflowed).
+    nonfinite: bool,
+    /// The first element whose stamps were not finite.
+    overflow: Option<usize>,
+    /// The element being stamped, and the largest |stamp| any element made.
+    current: Option<usize>,
+    largest: (f64, Option<usize>),
 }
 
 impl Asm {
@@ -105,16 +112,28 @@ impl Asm {
             n,
             a: vec![0.0; n * n],
             z: vec![0.0; n],
+            nonfinite: false,
+            overflow: None,
+            current: None,
+            largest: (0.0, None),
         }
     }
     fn add(&mut self, r: Option<usize>, c: Option<usize>, v: f64) {
         if let (Some(r), Some(c)) = (r, c) {
             self.a[r * self.n + c] += v;
+            self.note(v);
+        }
+    }
+    fn note(&mut self, v: f64) {
+        self.nonfinite |= !v.is_finite();
+        if self.current.is_some() && v.abs() > self.largest.0 {
+            self.largest = (v.abs(), self.current);
         }
     }
     fn rhs(&mut self, r: Option<usize>, v: f64) {
         if let Some(r) = r {
             self.z[r] += v;
+            self.note(v);
         }
     }
 }
@@ -251,6 +270,8 @@ impl Ctx<'_> {
         }
         let mut limited = false;
         for (ei, e) in net.elements.iter().enumerate() {
+            let finite_before = !asm.nonfinite;
+            asm.current = Some(ei);
             match &e.kind {
                 Kind::M { model, w, l, mult } => {
                     let ty = model.ty;
@@ -360,6 +381,9 @@ impl Ctx<'_> {
                 }
                 _ => {}
             }
+            if finite_before && asm.nonfinite {
+                asm.overflow = Some(ei);
+            }
         }
         (asm, limited)
     }
@@ -396,9 +420,27 @@ impl Ctx<'_> {
         let mut polish = 0;
         for iter in 0..300 {
             let (asm, limited) = self.assemble(&x, &mut st, scale, gshunt, use_init, true);
-            let xn = solve_real(lay.dim, asm.a, asm.z).ok_or_else(|| {
-                "singular circuit matrix: a node may have no DC path to ground, or voltage sources form a loop"
-                    .to_string()
+            // An overflowing device equation would otherwise surface as a
+            // "singular matrix" and blame the wiring.
+            let overflow = |ei: usize| {
+                format!(
+                    "{}'s model overflows at this bias. Check its parameters.",
+                    self.net.elements[ei].name
+                )
+            };
+            if let Some(ei) = asm.overflow {
+                return Err(overflow(ei));
+            }
+            // Finite but beyond any device: the solve fails for the device,
+            // not for the wiring.
+            let huge = match asm.largest {
+                (v, Some(ei)) if v > HUGE_STAMP => Some(ei),
+                _ => None,
+            };
+            let xn = solve_real(lay.dim, asm.a, asm.z).ok_or_else(|| match huge {
+                Some(ei) => overflow(ei),
+                None => "singular circuit matrix: a node may have no DC path to ground, or voltage sources form a loop"
+                    .to_string(),
             })?;
             let mut xn = xn;
             // Damped Newton once plain steps have had their chance: a node held
@@ -493,6 +535,10 @@ const MAX_STEP: f64 = 0.5;
 fn stepping_budget(dim: usize) -> usize {
     (2e10 / (dim.max(1) as f64).powi(3)).clamp(300.0, 20_000.0) as usize
 }
+
+/// A device stamp beyond any physical conductance or current (1 GS or 1 GA).
+/// It only chooses the message when the solve has already failed.
+const HUGE_STAMP: f64 = 1e9;
 
 /// Largest relative KCL residual accepted for a DC solution.
 pub const KCL_TOL: f64 = 1e-9;
