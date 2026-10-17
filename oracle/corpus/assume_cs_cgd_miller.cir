@@ -1,0 +1,8 @@
+CS stage with device capacitances, C_gd split by the Miller approximation
+VDD vdd 0 1.8
+VIN in 0 DC 0.8 AC 1
+RS in g 2k
+RD vdd out 10k
+M1 out g 0 0 nch W=10u L=1u AD=20p PD=24u
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CJ=5e-4 CJSW=3e-10 PB=0.85)
+.end
