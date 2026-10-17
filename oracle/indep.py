@@ -45,9 +45,14 @@ def num(tok: str) -> mp.mpf:
 
 
 def model_params(text: str) -> dict[str, dict[str, float]]:
-    """{model: {param: value}}, values with SPICE suffixes (KF=1f, TOX=100n)."""
+    """{model: {param: value}}, values with SPICE suffixes (KF=1f, TOX=100n).
+    Cards are read as the parser's logical lines, so parameters on `+`
+    continuation lines count (and comments do not)."""
     out = {}
-    for m in re.finditer(r"^\.model\s+(\S+)\s+\S+\s*\(?([^)\n]*)\)?", text, re.I | re.M):
+    for line in spice.parse(text).model_lines:
+        m = re.match(r"\.model\s+(\S+)\s+\S+\s*\(?([^)]*)\)?", line, re.I)
+        if not m:
+            continue
         params = {}
         for k, v in re.findall(r"(\w+)\s*=\s*([^\s=()]+)", m.group(2)):
             try:

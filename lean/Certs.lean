@@ -45,6 +45,7 @@ import Certs.noise_many_sources
 import Certs.noise_ota_5t
 import Certs.noise_rc
 import Certs.noise_sf
+import Certs.noise_zero_output
 import Certs.ota_5t
 import Certs.ota_5t_cm
 import Certs.ota_5t_dm

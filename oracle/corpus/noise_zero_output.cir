@@ -1,0 +1,6 @@
+Noiseless VCVS signal path: both resistors are clamped by ideal sources, so the output noise is exactly zero
+VIN in 0 DC 0 AC 1
+R1 in 0 1k
+E1 out 0 in 0 2
+R2 out 0 1k
+.end

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import distortion
 import spice
-from run_ngspice import OPTIONS
+from run_ngspice import OPTIONS, rel_diff
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -190,6 +190,11 @@ def by_freq(values: list[dict] | None, f: float) -> dict | None:
 # error budget is the operating-point agreement (~1e-9): same rtol as AC.
 NOISE_RTOL = 1e-6
 NOISE_INT_RTOL = 1e-4
+# Absolute floor of a noise density (V²/Hz); a band integral's is this times
+# the band width. A reference of exactly zero noise passes only a solver
+# value within it.
+NOISE_FLOOR = 1e-40
+
 # Distortion: coefficients within rtol plus 3x the reference's measured
 # uncertainty (distortion.py: .disto vs DC-Taylor, or a half-span refit).
 DIST_RTOL = 1e-6
@@ -205,8 +210,8 @@ def compare_noise(got: dict, want: dict, rep: Report):
                 rep.failures.append(f"{what}: missing")
                 continue
             err = abs(g["v2"] - w["v2"])
-            rep.worst = max(rep.worst, err / max(w["v2"], 1e-300))
-            if err > NOISE_RTOL * w["v2"] + 1e-40:
+            rep.worst = max(rep.worst, rel_diff(g["v2"], w["v2"], NOISE_FLOOR))
+            if err > NOISE_RTOL * w["v2"] + NOISE_FLOOR:
                 rep.failures.append(f"{what}: got {g['v2']:.10e}, want {w['v2']:.10e}")
     # Per-source contributions: the solver lists the largest MAX_CONTRIBUTORS
     # per frequency as [{f, sources: [{element, kind, v2}], omitted?}] and sums
@@ -247,12 +252,12 @@ def compare_noise(got: dict, want: dict, rep: Report):
             what = f"noise.{el}.{src}@{f:g}"
             g = listed.get((el, src))
             if (el, src) in listed:
-                if g is None or abs(g - w) > NOISE_RTOL * w + 1e-40:
+                if g is None or abs(g - w) > NOISE_RTOL * w + NOISE_FLOOR:
                     rep.failures.append(f"{what}: got {g}, want {w:.10e}")
             elif omitted is not None and (el, src) in solver_sources:
                 rest_v2 += w
                 rest_n += 1
-                if w > smallest * (1 + NOISE_RTOL) + 1e-40:
+                if w > smallest * (1 + NOISE_RTOL) + NOISE_FLOOR:
                     rep.failures.append(f"{what}: {w:.3e} is among the largest but not listed")
             elif w != 0:
                 rep.failures.append(f"{what}: missing (ngspice {w:.3e})")
@@ -261,7 +266,7 @@ def compare_noise(got: dict, want: dict, rep: Report):
             if omitted.get("count") != rest_n:
                 rep.failures.append(f"{what}.count: got {omitted.get('count')}, want {rest_n}")
             g = omitted.get("v2")
-            if g is None or abs(g - rest_v2) > NOISE_RTOL * rest_v2 + 1e-40 * max(rest_n, 1):
+            if g is None or abs(g - rest_v2) > NOISE_RTOL * rest_v2 + NOISE_FLOOR * max(rest_n, 1):
                 rep.failures.append(f"{what}.v2: got {g}, want {rest_v2:.10e}")
     # Integrated noise over a band: the reference is an adaptive 60-digit
     # quadrature of the independently rebuilt PSD, confirmed by a Richardson
@@ -276,7 +281,8 @@ def compare_noise(got: dict, want: dict, rep: Report):
             if g is None:
                 rep.failures.append(f"{what}: missing")
                 continue
-            err = abs(g - w) / w
+            band = want["noise"]["integrated"]
+            err = rel_diff(g, w, NOISE_FLOOR * (band["fHigh"] - band["fLow"]))
             rep.worst = max(rep.worst, err)
             if err > NOISE_INT_RTOL:
                 rep.failures.append(f"{what}: got {g:.8e}, want {w:.8e} (rel {err:.1e})")
