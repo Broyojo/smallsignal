@@ -174,7 +174,11 @@ def check_case(case: Case, verbose: bool) -> list[str]:
     if case.name.startswith("miller"):
         num = sp.numer(sp.together(ours(data["gain"])))
         zeros = sp.solve(num, s)
-        want = sp.Symbol("gm_M1") / sp.Symbol("CGD")
+        # The feedback capacitance: an element, or the device's own C_gd / C_μ.
+        names = {str(x) for x in num.free_symbols}
+        gm, cf = next(((g, c) for g, c in (("gm_Q1", "cmu_Q1"), ("gm_M1", "cgd_M1")) if c in names),
+                      ("gm_M1", "CGD"))
+        want = sp.Symbol(gm) / sp.Symbol(cf)
         if not any(sp.simplify(z - want) == 0 for z in zeros):
             fails.append(f"gain zero: {zeros}, want gm/Cgd")
     if case.numeric_netlist:
