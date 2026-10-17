@@ -476,7 +476,7 @@
   gap: 12px;
 }
 
-.small-signal-suggestions-controls input {
+.small-signal-panel .small-signal-suggestions-controls input {
   width: 5em;
 }
 
