@@ -194,3 +194,24 @@ fn ignoring_cgd_removes_the_rhp_zero() {
     let assumptions = out["assumptions"].to_string();
     assert!(assumptions.contains("C_{gd1} = 0"), "{assumptions}");
 }
+
+/// Distortion vs frequency takes capacitances as linear: exact for overlap
+/// (constant) ones, said in a warning for bias-dependent charges, which
+/// ngspice's .disto expands.
+#[test]
+fn distortion_warns_about_nonlinear_charges() {
+    let net = |card: &str| {
+        format!(
+            "cs\n{OPTIONS}VDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRS in g 5k\nRD vdd out 5k\nM1 out g 0 0 nch W=10u L=1u\n\
+             .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 {card})\n"
+        )
+    };
+    let req: Request = serde_json::from_value(
+        json!({ "input": "VIN", "output": "out", "freqs": [1e6], "nonlinear": ["M1"], "order": 3 }),
+    )
+    .unwrap();
+    let warned = |card: &str| run(&net(card), &req)["warnings"].to_string().contains("as linear");
+    assert!(!warned("CGSO=2e-9 CGDO=1e-9"));
+    assert!(warned("TOX=10n CGDO=1e-9"));
+    assert!(warned("CJ=1e-3"));
+}

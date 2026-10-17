@@ -1,0 +1,32 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "distortion": {
+  "amplitudes": [
+   0.001,
+   0.002,
+   0.005,
+   0.01
+  ],
+  "freq": 1.0,
+  "amplitude": 0.001,
+  "vsFreq": [
+   100000.0,
+   1000000.0,
+   10000000.0,
+   100000000.0,
+   1000000000.0
+  ]
+ },
+ "description": "CS with overlap capacitances only (CGSO, CGDO: constant, so linear in .disto too). HD2 and HD3 vs frequency through the Miller pole and the C_gd feedthrough. Junction (CJ, CJE, CJC, CJO) and Meyer capacitances are bias-dependent, nonlinear charges in ngspice's .disto, which the solver's linear-capacitance Volterra does not model, so they are not in the distortion corpus."
+}

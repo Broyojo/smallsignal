@@ -342,6 +342,29 @@ pub fn diode_cap(m: &DiodeModel, area_mult: f64, vd: f64, gd: f64) -> f64 {
     c.tt * gd + depletion(c.cjo * area_mult, c.vj, c.m, c.fc, vd)
 }
 
+/// Whether a device has a bias-dependent charge: Meyer gate charge,
+/// junction depletion or diffusion charge (overlap capacitances alone are
+/// constant, and so is CJS with MJS = 0).
+pub fn nonlinear_charge(kind: &crate::netlist::Kind) -> bool {
+    use crate::netlist::Kind;
+    match kind {
+        Kind::M { model, .. } => {
+            let c = &model.caps;
+            c.cox > 0.0
+                || c.cj != 0.0
+                || c.cjsw != 0.0
+                || c.cbd.is_some_and(|x| x != 0.0)
+                || c.cbs.is_some_and(|x| x != 0.0)
+        }
+        Kind::Q { model, .. } => {
+            let c = &model.caps;
+            c.cje != 0.0 || c.cjc != 0.0 || c.tf != 0.0 || c.tr != 0.0 || (c.cjs != 0.0 && c.mjs != 0.0)
+        }
+        Kind::D { model, .. } => model.caps.cjo != 0.0 || model.caps.tt != 0.0,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

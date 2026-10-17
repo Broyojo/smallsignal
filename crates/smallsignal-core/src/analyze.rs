@@ -696,6 +696,21 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             assumed: setup.as_ref().map(|_| in_effect.as_slice()),
         };
         resp.insert("distortion".into(), crate::distortion::report(&ctx, &mut warnings)?);
+        // vsFreq takes every capacitance as linear; a bias-dependent device
+        // charge (ngspice's .disto expands it) adds harmonics it leaves out.
+        let charged: Vec<&str> = net
+            .elements
+            .iter()
+            .filter(|e| req.nonlinear.iter().any(|n| n.eq_ignore_ascii_case(&e.name)))
+            .filter(|e| crate::caps::nonlinear_charge(&e.kind))
+            .map(|e| e.name.as_str())
+            .collect();
+        if !charged.is_empty() && freqs.iter().any(|&f| f > 0.0) {
+            warnings.push(format!(
+                "HD vs frequency takes the capacitances of {} as linear",
+                charged.join(", ")
+            ));
+        }
         for w in rebuild_warnings.into_inner() {
             if !warnings.contains(&w) {
                 warnings.push(w);
