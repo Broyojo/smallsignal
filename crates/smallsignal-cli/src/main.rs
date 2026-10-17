@@ -1,5 +1,5 @@
 //! `smallsignal analyze <netlist> --input VIN --output out[:ref] [--freq 1,1k]
-//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--tol 0.05]
+//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--suggest gain:0.01] [--tol 0.05]
 //! [--verify] [--pretty]`
 
 use smallsignal_core::{analyze, Request};
@@ -8,7 +8,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
 [--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] \
-[--ignore M1:ro,C1:short] [--region M3:triode] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--ignore M1:ro,C1:short] [--region M3:triode] [--suggest gain|rin|rout[:threshold]] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -117,6 +117,23 @@ fn run() -> Result<(), String> {
                             .push(smallsignal_core::assume::RegionRequest { element, region: what });
                     }
                 }
+            }
+            // QUANTITY[:THRESHOLD]: further assumptions within the threshold.
+            "--suggest" => {
+                let v = value(&mut it, a)?;
+                let (quantity, threshold) = match v.split_once(':') {
+                    Some((q, t)) => (
+                        q,
+                        Some(t.trim().parse().map_err(|_| format!("bad --suggest threshold '{t}'"))?),
+                    ),
+                    None => (v.as_str(), None),
+                };
+                req.suggest = Some(smallsignal_core::suggest::SuggestRequest {
+                    quantity: quantity.trim().to_string(),
+                    threshold,
+                    time_limit: None,
+                    max_candidates: None,
+                });
             }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,
