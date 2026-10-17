@@ -455,9 +455,13 @@ pub fn check_band([lo, hi]: [f64; 2]) -> Result<(), String> {
 }
 
 /// ∫_{lo}^{hi} g(f) df for two integrands at once, by adaptive Simpson in
-/// u = ln f (integrand g(e^u)·e^u), starting from 10 panels per decade plus
-/// the given breakpoints (pole frequencies), refined until each panel's
-/// Richardson estimate is within its share of `rtol`·|integral|.
+/// u = ln(f/lo) (integrand g(f)·f), starting from 10 panels per decade plus
+/// the given breakpoints (pole and zero frequencies), refined until each
+/// panel's Richardson estimate is within its share of `rtol`·|integral|.
+/// u is measured from lo (u = ln1p((f − lo)/lo), f = lo + lo·expm1(u)), so a
+/// band narrower than the spacing of ln f near it (e.g. two adjacent doubles
+/// at 1e16 Hz) still has a positive width. A breakpoint is never merged
+/// away: one that nearly coincides with a grid point replaces it.
 pub fn integrate_log(
     g: &mut dyn FnMut(f64) -> Option<[f64; 2]>,
     lo: f64,
@@ -465,22 +469,35 @@ pub fn integrate_log(
     breaks: &[f64],
     rtol: f64,
 ) -> Option<Integral> {
-    let (u_lo, u_hi) = (lo.ln(), hi.ln());
-    // Callers validate the band (check_band); the bound keeps the grid finite
-    // regardless.
-    let decades = (hi.log10() - lo.log10()).min(MAX_BAND_DECADES);
-    if decades.is_nan() || decades <= 0.0 {
+    let to_u = |f: f64| ((f - lo) / lo).ln_1p();
+    let width = to_u(hi);
+    if !(width > 0.0 && width.is_finite()) {
         return None;
     }
+    // Callers validate the band (check_band); the bound keeps the grid finite
+    // regardless.
+    let decades = (width / std::f64::consts::LN_10).min(MAX_BAND_DECADES);
     let n = ((decades * 10.0).ceil() as usize).max(8);
-    let mut us: Vec<f64> = (0..=n).map(|k| u_lo + (u_hi - u_lo) * k as f64 / n as f64).collect();
-    us.extend(breaks.iter().filter(|&&b| b > lo && b < hi).map(|b| b.ln()));
+    let mut us: Vec<f64> = (0..=n).map(|k| width * k as f64 / n as f64).collect();
+    let mut replaced = vec![false; n + 1];
+    for b in breaks.iter().filter(|&&b| b > lo && b < hi).map(|&b| to_u(b)) {
+        // The nearest interior grid point, if b is that close to it: the
+        // breakpoint takes its place (a pole's peak can be far narrower than
+        // that distance). Otherwise b is a point of its own.
+        let k = ((b / width * n as f64).round() as usize).clamp(1, n - 1);
+        if (us[k] - b).abs() < 1e-9 * width && !replaced[k] {
+            us[k] = b;
+            replaced[k] = true;
+        } else {
+            us.push(b);
+        }
+    }
     us.sort_by(f64::total_cmp);
-    us.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * (u_hi - u_lo));
+    us.dedup();
     let mut evals = 0usize;
     let mut eval = |u: f64, evals: &mut usize| -> Option<[f64; 2]> {
         *evals += 1;
-        let f = u.exp();
+        let f = (lo + lo * u.exp_m1()).clamp(lo, hi);
         let v = g(f)?;
         Some([v[0] * f, v[1] * f])
     };
@@ -499,7 +516,6 @@ pub fn integrate_log(
         panels.push((a, b, fa, fm, fb, s));
         fa = fb;
     }
-    let width = u_hi - u_lo;
     let mut value = [0.0; 2];
     let mut err = [0.0; 2];
     let mut converged = true;
@@ -1063,42 +1079,40 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 Some([total, input])
             };
             let r = integrate_log(&mut g, lo, hi, &breaks, INTEGRAL_RTOL);
+            if r.as_ref().is_some_and(|r| !r.converged) {
+                warnings.push("noise: the band integral did not fully converge".to_string());
+            }
+            // The output integral alone, the input-referred one unavailable.
+            let output_only = |r: &Integral, why: String| {
+                let rel = if r.value[0] > 0.0 { r.err[0] / r.value[0] } else { 0.0 };
+                json!({
+                    "fLow": lo, "fHigh": hi,
+                    "outputRms": r.value[0].sqrt(), "inputRms": null,
+                    "outputV2": r.value[0], "inputV2": null,
+                    "relError": rel + band_lu,
+                    "evaluations": r.evals, "converged": r.converged,
+                    "unavailable": why,
+                })
+            };
             match (r, singular) {
-                (Some(r), Some(f0)) if r.value[0].is_finite() => {
-                    if !r.converged {
-                        warnings.push("noise: the band integral did not fully converge".to_string());
-                    }
-                    let rel = if r.value[0] > 0.0 { r.err[0] / r.value[0] } else { 0.0 };
-                    json!({
-                        "fLow": lo, "fHigh": hi,
-                        "outputRms": r.value[0].sqrt(), "inputRms": null,
-                        "outputV2": r.value[0], "inputV2": null,
-                        "relError": rel + band_lu,
-                        "evaluations": r.evals, "converged": r.converged,
-                        "unavailable": format!(
-                            "the input-referred spectrum is unbounded in the band (the gain is zero at {})",
-                            hz_text(f0)
-                        ),
-                    })
-                }
-                (Some(r), None) if zero_gain && r.value[0].is_finite() => {
-                    if !r.converged {
-                        warnings.push("noise: the band integral did not fully converge".to_string());
-                    }
-                    let rel = if r.value[0] > 0.0 { r.err[0] / r.value[0] } else { 0.0 };
-                    json!({
-                        "fLow": lo, "fHigh": hi,
-                        "outputRms": r.value[0].sqrt(), "inputRms": null,
-                        "outputV2": r.value[0], "inputV2": null,
-                        "relError": rel + band_lu,
-                        "evaluations": r.evals, "converged": r.converged,
-                        "unavailable": "the input does not reach the output, so there is no input-referred noise",
-                    })
-                }
-                (Some(r), None) if r.value.iter().all(|v| v.is_finite()) => {
-                    if !r.converged {
-                        warnings.push("noise: the band integral did not fully converge".to_string());
-                    }
+                (None, _) => json!({ "fLow": lo, "fHigh": hi, "outputRms": null, "inputRms": null,
+                                     "unavailable": "the circuit has no solution at a frequency in the band" }),
+                (Some(r), _) if !r.value[0].is_finite() => json!({
+                    "fLow": lo, "fHigh": hi, "outputRms": null, "inputRms": null,
+                    "unavailable": "the output spectrum is unbounded in the band",
+                }),
+                (Some(r), Some(f0)) => output_only(
+                    &r,
+                    format!(
+                        "the input-referred spectrum is unbounded in the band (the gain is zero at {})",
+                        hz_text(f0)
+                    ),
+                ),
+                (Some(r), None) if zero_gain => output_only(
+                    &r,
+                    "the input does not reach the output, so there is no input-referred noise".to_string(),
+                ),
+                (Some(r), None) if r.value[1].is_finite() => {
                     let rel = (0..2)
                         .map(|i| if r.value[i] > 0.0 { r.err[i] / r.value[i] } else { 0.0 })
                         .fold(0.0, f64::max);
@@ -1112,8 +1126,11 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                         "evaluations": r.evals, "converged": r.converged,
                     })
                 }
-                _ => json!({ "fLow": lo, "fHigh": hi, "outputRms": null, "inputRms": null,
-                             "unavailable": "the input-referred spectrum is unbounded in the band (zero gain)" }),
+                // A sample landed on a zero of the gain.
+                (Some(r), None) => output_only(
+                    &r,
+                    "the input-referred spectrum is unbounded in the band (the gain is zero in it)".to_string(),
+                ),
             }
         }
     };

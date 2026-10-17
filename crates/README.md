@@ -146,8 +146,9 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 - `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
 - `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
   decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
-  evaluations, converged}`. Adaptive Simpson in ln f (10 panels per decade
-  plus the gain's pole and zero frequencies as breakpoints) to 1e-6;
+  evaluations, converged}`. Adaptive Simpson in ln(f/fLow), so any valid band
+  integrates however narrow (10 panels per decade plus the gain's pole and
+  zero frequencies as breakpoints, none merged away) to 1e-6;
   `relError` is the Richardson estimate plus the LU rounding of the band's
   solves. A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the band where the
   output noise does not vanish makes `inputV2`/`inputRms` null, with

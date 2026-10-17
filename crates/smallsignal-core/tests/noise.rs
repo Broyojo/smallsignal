@@ -628,3 +628,45 @@ M1 d in 0 0 nm W=10u L=1u\nC1 d out 1u\nRL out 0 10k\n\
     let (v0, _, _, _) = flicker_at_dc("3");
     assert!(v0.is_none(), "{v0:?}");
 }
+
+/// A band two representable frequencies wide at 1e16 Hz: ln fLow and
+/// ln fHigh round to the same double, yet the band is valid and the
+/// divider's flat spectrum integrates to 4kT·(R1∥R2)·(fHigh − fLow).
+#[test]
+fn a_band_narrower_than_its_logarithm_still_integrates() {
+    let lo = 1e16f64;
+    let hi = f64::from_bits(lo.to_bits() + 1);
+    assert_eq!(lo.ln(), hi.ln());
+    let net = "div\nVIN in 0 DC 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n";
+    let r = req(json!({ "input": "VIN", "output": "out", "noiseBand": [lo, hi] }));
+    let band = &run(net, &r)["noise"]["integrated"];
+    let want = FOUR_KT * 500.0 * (hi - lo);
+    assert!(
+        rel(band["outputV2"].as_f64().unwrap_or(f64::NAN), want) < 1e-9,
+        "{band}"
+    );
+    assert!(rel(band["outputRms"].as_f64().unwrap(), want.sqrt()) < 1e-9);
+    // Gain 1/2: input-referred 4·S_out.
+    assert!(rel(band["inputV2"].as_f64().unwrap(), 4.0 * want) < 1e-9, "{band}");
+    assert!(band.get("unavailable").is_none(), "{band}");
+}
+
+/// A parallel RLC of Q = 1e9 whose resonance lies 8e-8 (relative) above a
+/// starting grid point (the centre of a 40-decade band, where grid points
+/// within 9e-8 in ln f used to be merged), far beyond its linewidth (5e-10):
+/// the pole must stay a breakpoint, or the samples see only the tails (the
+/// integral came out 78% low). Over the band the output noise is kT/C, to
+/// about 1/(πQ).
+#[test]
+fn a_pole_next_to_a_grid_point_stays_a_breakpoint() {
+    let (c, q) = (1e-12, 1e9);
+    let f0 = 1e6 * (1.0 + 8e-8);
+    let w0 = 2.0 * std::f64::consts::PI * f0;
+    let l = 1.0 / (w0 * w0 * c);
+    let r = q / (w0 * c);
+    let net = format!("rlc\nVIN in 0 DC 0 AC 1\nR1 in out {r:e}\nL1 out 0 {l:e}\nC1 out 0 1p\n");
+    let rq = req(json!({ "input": "VIN", "output": "out", "noiseBand": [1e-14, 1e26] }));
+    let band = &run(&net, &rq)["noise"]["integrated"];
+    let got = band["outputV2"].as_f64().unwrap();
+    assert!(rel(got, K * T / c) < 1e-5, "{got} vs {}: {band}", K * T / c);
+}
