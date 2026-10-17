@@ -96,11 +96,21 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     if "error" in data:
         raise RuntimeError(f"CLI error: {data['error']}")
     # The solver's own exact checks must hold too: KCL identity and the
-    # symbolic-vs-numeric cross-check of every quantity.
-    if not data.get("verify", {}).get("kcl", False):
-        raise RuntimeError("CLI KCL identity check failed")
-    for q in ("gain", "rin", "rout"):
-        check = data.get(q, {}).get("check", {})
+    # symbolic-vs-numeric cross-check of every quantity. A sidecar with
+    # "tooLarge": true expects every quantity over the term budget instead
+    # (numeric only, no exact form to check), and nothing else does.
+    quantities = [q for q in ("gain", "rin", "rout") if q in data]
+    skipped = [q for q in quantities if data[q].get("skipped")]
+    if side.get("tooLarge"):
+        if skipped != quantities or data.get("verify", {}).get("kcl") is not None:
+            raise RuntimeError(f"CLI: expected every quantity over the term budget, got {skipped}")
+    else:
+        if skipped:
+            raise RuntimeError(f"CLI: {skipped} over the term budget")
+        if not data.get("verify", {}).get("kcl", False):
+            raise RuntimeError("CLI KCL identity check failed")
+    for q in quantities:
+        check = data[q].get("check") or {}
         if not check.get("ok", True):
             raise RuntimeError(f"CLI {q}: symbolic vs numeric mismatch {check.get('maxRelDiff', 0):.2e}")
     # The noise closed form at s -> 0 against the numeric DC solve.

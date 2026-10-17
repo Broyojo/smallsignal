@@ -3,9 +3,9 @@
 
 mod common;
 
-use common::{close, request, run, value, Rng};
+use common::{close, numeric_matches_exact, request, run, value, Rng};
 use num_complex::Complex64;
-use serde_json::Value;
+use serde_json::{json, Value};
 use smallsignal_core::poly::Poly;
 use smallsignal_core::ss::{self, Excite, SsCircuit};
 use smallsignal_core::{analyze, dc, det, netlist, render, roots, structure, sym};
@@ -499,6 +499,39 @@ fn poles_are_roots_of_the_denominator() {
             assert!(v.norm() <= 1e-7 * scale, "D({p}) = {v} (scale {scale})\n{text}");
         }
     }
+}
+
+#[test]
+fn the_numeric_path_reproduces_the_exact_path_on_random_circuits() {
+    // R, C, L and controlled sources: capacitor loops, inductor branches and
+    // E/F/G/H outputs all reach the pencil's rank-one reduction.
+    let mut rng = Rng::new(31);
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    for case in 0..CASES {
+        let c = linear(&mut rng, case % 2 == 1, true);
+        let mut lines = c.lines.clone();
+        lines.push("VIN n1 0 AC 1".into());
+        let text = netlist_text("numeric", &lines);
+        let out = format!("n{}", 1 + rng.below(c.nodes));
+        let r = |mt: usize| {
+            req_json(json!({
+                "input": "VIN", "output": out, "rin": true, "rout": true,
+                "freqs": FREQS, "maxTerms": mt,
+            }))
+        };
+        let (Some(exact), Some(numeric)) = (try_run(&text, &r(2_000_000)), try_run(&text, &r(1))) else {
+            continue;
+        };
+        // Roots to 1e-5: the exact path's come from polynomial coefficients,
+        // ill-conditioned when roots span ten decades as here (one case is
+        // off by 8.6e-6 where the numeric root matches a 30-digit solve).
+        let (n, f) = numeric_matches_exact(&text, &exact, &numeric, 1e-5);
+        checked += n;
+        failures.extend(f);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(checked > CASES, "only {checked} quantities took the numeric path");
 }
 
 // ---- Transistor circuits ----------------------------------------------------

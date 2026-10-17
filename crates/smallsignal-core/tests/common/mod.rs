@@ -76,3 +76,94 @@ pub fn close(a: (f64, f64), b: (f64, f64), rtol: f64) -> bool {
         .max((b.0.powi(2) + b.1.powi(2)).sqrt());
     d <= rtol * s + 1e-300
 }
+
+fn complex(p: &Value) -> Option<(f64, f64)> {
+    Some((p["re"].as_f64()?, p["im"].as_f64()?))
+}
+
+fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+/// Each exact root matched one-to-one to a numeric one within `rel`; returns
+/// the numeric roots left over.
+fn match_roots(want: &[Value], got: &[Value], rel: f64) -> Result<Vec<(f64, f64)>, String> {
+    let mut left: Vec<(f64, f64)> = got.iter().filter_map(complex).collect();
+    let size = |z: (f64, f64)| z.0.hypot(z.1);
+    for w in want.iter().filter_map(complex) {
+        let best = (0..left.len()).min_by(|&i, &j| dist(left[i], w).total_cmp(&dist(left[j], w)));
+        match best {
+            Some(i) if dist(left[i], w) <= rel * size(left[i]).max(size(w)) + 1e-9 => {
+                left.remove(i);
+            }
+            _ => return Err(format!("root {w:?} not among {left:?}")),
+        }
+    }
+    Ok(left)
+}
+
+/// Compares a response whose quantities took the numeric path (over the term
+/// budget) with the exact path's: values within the exact path's own
+/// LU-vs-exact difference (the numeric values are that LU solve) plus 1e-8,
+/// poles and zeros within `rel`. The exact form's common factors are
+/// cancelled (GCD); the numeric roots keep them, as an exact form too large
+/// for the GCD does, so extra roots must come in coinciding pole/zero pairs.
+/// Returns how many quantities were numeric, and the failures.
+pub fn numeric_matches_exact(name: &str, exact: &Value, numeric: &Value, rel: f64) -> (usize, Vec<String>) {
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    for q in ["gain", "rin", "rout"] {
+        let (Some(e), Some(n)) = (exact.get(q), numeric.get(q)) else {
+            continue;
+        };
+        if n["skipped"].is_null() {
+            // Fits even in the smaller budget (e.g. a lone resistor).
+            continue;
+        }
+        assert!(n["exact"].is_null() && n["simplified"].is_null(), "{name} {q}: {n}");
+        checked += 1;
+        if e["infinite"] != n["infinite"] {
+            failures.push(format!("{name} {q}: infinite {} vs {}", e["infinite"], n["infinite"]));
+            continue;
+        }
+        let floor = if q == "gain" { 1e-12 } else { 1e-9 };
+        let lu = e["check"]["maxRelDiff"].as_f64().unwrap_or(0.0);
+        let values = |v: &Value| v["values"].as_array().cloned().unwrap_or_default();
+        for (pe, pn) in values(e).iter().zip(&values(n)) {
+            match (complex(pe), complex(pn)) {
+                (Some(a), Some(b)) => {
+                    let scale = a.0.hypot(a.1).max(b.0.hypot(b.1));
+                    if dist(a, b) > (1e-8 + 1.01 * lu) * scale + floor {
+                        failures.push(format!("{name} {q} at {}: {a:?} vs {b:?}", pe["f"]));
+                    }
+                }
+                (None, None) => {}
+                (a, b) => failures.push(format!("{name} {q} at {}: {a:?} vs {b:?}", pe["f"])),
+            }
+        }
+        let list = |v: &Value, k: &str| v[k].as_array().cloned().unwrap_or_default();
+        match (
+            match_roots(&list(e, "poles"), &list(n, "poles"), rel),
+            match_roots(&list(e, "zeros"), &list(n, "zeros"), rel),
+        ) {
+            (Ok(mut poles), Ok(zeros)) => {
+                for z in zeros {
+                    match poles
+                        .iter()
+                        .position(|&p| dist(p, z) <= rel * p.0.hypot(p.1).max(z.0.hypot(z.1)))
+                    {
+                        Some(i) => {
+                            poles.remove(i);
+                        }
+                        None => failures.push(format!("{name} {q}: extra zero {z:?}")),
+                    }
+                }
+                if !poles.is_empty() {
+                    failures.push(format!("{name} {q}: extra poles {poles:?}"));
+                }
+            }
+            (p, z) => failures.push(format!("{name} {q}: poles {p:?} zeros {z:?}")),
+        }
+    }
+    (checked, failures)
+}

@@ -110,30 +110,74 @@ fn zero_resistance_is_rejected() {
 }
 
 #[test]
-fn hitting_the_term_limit_is_a_clean_error() {
-    let mut net = String::from("dense\nVIN n0 0 AC 1\n");
+fn over_the_term_limit_the_numbers_stay_and_the_formula_goes() {
+    let mut net = String::from("dense\nVIN n0 0 AC 1\nC1 n3 0 1n\n");
     for i in 0..6 {
         for j in i + 1..6 {
             net.push_str(&format!("R{i}{j} n{i} n{j} {}k\n", 1 + i + j));
         }
     }
-    let r = req(json!({ "input": "VIN", "output": "n3", "maxTerms": 50 }));
-    assert!(run_err(&net, &r).contains("too large"));
+    let rq = |mt: usize| {
+        req(json!({ "input": "VIN", "output": "n3", "rin": true, "rout": true, "freqs": [0, 1e5], "maxTerms": mt }))
+    };
+    let exact = run(&net, &rq(2_000_000));
+    let numeric = run(&net, &rq(50));
+    for q in ["gain", "rin", "rout"] {
+        let n = &numeric[q];
+        assert_eq!(n["skipped"], "too large for the exact closed form", "{q}");
+        assert!(n["exact"].is_null() && n["display"].is_null() && n["simplified"].is_null(), "{q}");
+        for i in 0..2 {
+            let (a, b) = (value(&exact, q, i), value(&numeric, q, i));
+            // At DC nothing but VIN ties the network to ground: Zin is open
+            // (null) on both paths, not LU rounding on the numeric one.
+            let open = a.0.is_nan() && b.0.is_nan();
+            assert!(open || close(a, b, 1e-12), "{q}: {a:?} vs {b:?}");
+        }
+        // The same poles and zeros (real here: one capacitor), and Zin's
+        // pole at DC exactly at 0.
+        for roots in ["poles", "zeros"] {
+            let list = |v: &Value| {
+                let mut r: Vec<f64> = v[q][roots].as_array().unwrap().iter().map(|z| z["re"].as_f64().unwrap()).collect();
+                r.sort_by(f64::total_cmp);
+                r
+            };
+            let (a, b) = (list(&exact), list(&numeric));
+            assert_eq!(a.len(), b.len(), "{q} {roots}: {a:?} vs {b:?}");
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() <= 1e-12 * x.abs(), "{q} {roots}: {a:?} vs {b:?}");
+            }
+        }
+    }
+    assert!(numeric["verify"].is_null());
+    // Without numbers there is nothing to show: still an error.
+    let mut sym = rq(50);
+    sym.symbolic = true;
+    assert!(run_err(&net, &sym).contains("too large"));
+}
+
+#[test]
+fn over_the_term_limit_a_gate_input_is_still_infinite() {
+    let r = req(json!({ "input": "VIN", "output": "out", "rin": true, "rout": true, "maxTerms": 1 }));
+    let v = run(CS, &r);
+    assert_eq!(v["rin"]["infinite"], true);
+    assert_eq!(v["rin"]["values"][0]["inf"], true);
+    assert_eq!(v["gain"]["skipped"], "too large for the exact closed form");
 }
 
 #[test]
 fn a_difference_of_affordable_numerators_is_held_to_the_term_limit() {
     // Two independent common-source branches measured differentially: each
     // drain's numerator is one term, their difference two. maxTerms 1 must
-    // fail as an over-budget determinant does; maxTerms 2 fits.
+    // give no formula, as an over-budget determinant does; maxTerms 2 fits.
     let net = "two\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 5k\nRD2 vdd o2 5k\n\
 M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
     let rq = |mt: usize| req(json!({ "input": "VIN", "output": "o1", "ref": "o2", "rout": true, "maxTerms": mt }));
-    let e = run_err(net, &rq(1));
-    assert!(e.contains("too large (over 1 terms)"), "{e}");
+    let tight = run(net, &rq(1));
+    assert_eq!(tight["gain"]["skipped"], "too large for the exact closed form");
     let r = run(net, &rq(2));
     assert_eq!(r["gain"]["exact"]["latex"], "g_{m2} R_{D2} - g_{m1} R_{D1}");
     assert!(r["rout"]["exact"]["latex"].is_string());
+    assert!(close(value(&tight, "gain", 0), value(&r, "gain", 0), 1e-12));
 }
 
 // ---- Controlled sources -----------------------------------------------------

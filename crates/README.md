@@ -31,7 +31,10 @@ with numeric values, poles and zeros, and the operating point.
 4. **Symbolic MNA**. The determinant is computed division-free by memoized
    Laplace expansion over the sparse matrix. Monomials are parameter bitsets,
    because every minor is multilinear in the element parameters (and s is
-   implicit in C/L). The numerator comes from Cramer's rule.
+   implicit in C/L). The numerator comes from Cramer's rule. A determinant
+   is over budget once a row holds more than `maxTerms` terms, its minors
+   touch more than 2×`maxTerms` monomials before cancellation, or it takes
+   more than 5·10⁷ term products.
 5. **Display**: conductances become resistances, common factors cancel, and
    terms are sorted by magnitude. The simplified form drops the smallest terms
    within each power of s, up to the coarsest pruning whose error over
@@ -65,9 +68,27 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
 `symbolic`, `maxTerms`). The response is JSON, or
-`{"error": "..."}` on failure, including when an exact polynomial of
-gain, rin or rout (a determinant, or the sum or difference of two) would
-exceed `maxTerms` terms (default 2,000,000).
+`{"error": "..."}` on failure.
+
+- Over budget: when an exact polynomial of gain, rin or rout (a
+  determinant, or the sum or difference of two) would exceed `maxTerms`
+  terms (default 2,000,000) or i128 coefficients, that quantity is numeric:
+  `skipped: "too large for the exact closed form"`, `exact`, `display`,
+  `simplified` and `check` null, `verify` skipped. rin and rout are numeric
+  whenever the gain's determinant is (they expand the same circuit). In
+  symbolic mode (no numbers) it is an error.
+- A numeric quantity comes from the full model: `values` from the
+  cross-check's LU solve, except at 0 Hz where a numerator or denominator
+  that vanishes there (exactly, below) gives 0 or null; `infinite` when its
+  denominator vanishes identically. `poles` and `zeros` are the finite roots
+  of the MNA determinants det(G + sC) (the Cramer numerator as the bordered
+  matrix [[A, b], [wᵀ, 0]]), without expanding them: their lowest and
+  highest power of s, and whether one vanishes identically, are exact
+  (interpolation modulo 2⁶¹−1 at random parameter values); the roots are
+  eigenvalues of Ṽᵀ(G + σC)⁻¹ŨW, with C = ŨWṼᵀ reduced exactly to
+  independent stamp columns, at the trial shift σ whose eigenvalues spread
+  least, then polished by Newton's method on det. No common factor is
+  cancelled, as for an exact form too large for the GCD.
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
   With `inputNeg`, `mode` "differential" (the default) drives the two sources
