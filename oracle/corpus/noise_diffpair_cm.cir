@@ -1,0 +1,11 @@
+NMOS differential pair, resistor tail, single-ended output, driven by two sources
+VDD vdd 0 1.8
+VINP inp 0 DC 1.0
+VINN inn 0 DC 1.0
+M1 o1 inp tail 0 nch W=10u L=1u
+M2 o2 inn tail 0 nch W=10u L=1u
+RTAIL tail 0 2k
+RD1 vdd o1 5k
+RD2 vdd o2 5k
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)
+.end

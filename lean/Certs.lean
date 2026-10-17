@@ -26,7 +26,10 @@ import Certs.noise_bjt_ce
 import Certs.noise_cs
 import Certs.noise_cs_degen
 import Certs.noise_diffpair
+import Certs.noise_diffpair_cm
+import Certs.noise_diffpair_dm
 import Certs.noise_divider
+import Certs.noise_flicker_suffix
 import Certs.noise_ota_5t
 import Certs.noise_rc
 import Certs.noise_sf

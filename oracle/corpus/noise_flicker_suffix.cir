@@ -1,0 +1,11 @@
+Diode and MOS flicker noise, SPICE-suffixed model values, underscore names
+VDD vdd 0 1.8
+VIN in 0 DC 0 AC 1
+I_BIAS vdd a DC 100u
+R_in in a 10k
+D_1 a 0 dfl
+M_1 out a 0 0 nfl W=10u L=1u
+R_load vdd out 10k
+.model dfl D (IS=1e-14 N=1.5 KF=0.1f AF=1.1)
+.model nfl NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 KF=1e-26 AF=1.2)
+.end

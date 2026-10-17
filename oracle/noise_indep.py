@@ -17,6 +17,8 @@ mos1noi.c, bjtnoi.c, dionoi.c):
   BJT             S = 2q·|Ic| (c–e), 2q·|Ib| (b–e)    (shot)
                   S = KF·|Ib|^AF / f (b–e)            (flicker)
   diode           S = 2q·|Id|, KF·|Id|^AF / f         (shot, flicker)
+Model values are read with SPICE suffixes (KF=1f, TOX=100n). With inputNeg the
+gain is that of the pair driven ±1/2 (or both +1 in common mode).
 k = 1.38064852e-23, q = 1.6021766208e-19, T = 300.15 K (ngspice's constants).
 The output is compared to ngspice's per-source and total densities.
 
@@ -80,6 +82,11 @@ def sources(net, want, models, f):
         elif k == "d":
             d = devs[e.name.lower()]
             out.append((e.name, "id", e.nodes[0], e.nodes[1], 2 * Q * abs(indep.P(d["id"]))))
+            mp_ = models.get(t[3].lower(), {})
+            kf, af = mp.mpf(mp_.get("kf", 0)), mp.mpf(mp_.get("af", 1))
+            i_d = abs(indep.P(d["id"]))
+            if kf and i_d:
+                out.append((e.name, "1overf", e.nodes[0], e.nodes[1], kf * mp.exp(af * mp.log(i_d)) / f))
     return out
 
 

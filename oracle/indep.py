@@ -45,9 +45,16 @@ def num(tok: str) -> mp.mpf:
 
 
 def model_params(text: str) -> dict[str, dict[str, float]]:
+    """{model: {param: value}}, values with SPICE suffixes (KF=1f, TOX=100n)."""
     out = {}
     for m in re.finditer(r"^\.model\s+(\S+)\s+\S+\s*\(?([^)\n]*)\)?", text, re.I | re.M):
-        out[m.group(1).lower()] = {k.lower(): float(v) for k, v in re.findall(r"(\w+)=([-+\d.eE]+)", m.group(2))}
+        params = {}
+        for k, v in re.findall(r"(\w+)\s*=\s*([^\s=()]+)", m.group(2)):
+            try:
+                params[k.lower()] = float(num(v))
+            except ValueError:
+                continue
+        out[m.group(1).lower()] = params
     return out
 
 
@@ -90,6 +97,15 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
     v = lambda n: mp.mpf(0) if n in spice.GROUND else volt[n.lower()]
     devs = {k.lower(): d for k, d in want["op"]["devices"].items()}
     inp = side["input"].lower()
+    # Gain excitation: the input alone, or with inputNeg the pair driven
+    # ±1/2 (differential) or both +1 (common), as the solver and the ngspice
+    # reference drive them.
+    excite = {inp: mp.mpf(1)}
+    if side.get("inputNeg"):
+        half = mp.mpf("0.5")
+        neg = side["inputNeg"].lower()
+        excite = ({inp: half, neg: -half} if (side.get("mode") or "differential") == "differential"
+                  else {inp: mp.mpf(1), neg: mp.mpf(1)})
 
     def system(s, mode: str):
         A = mp.matrix(dim, dim)
@@ -119,18 +135,19 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 r = bidx[t[3].lower()]
                 add(ni(e.nodes[0]), r, num(t[4])); add(ni(e.nodes[1]), r, -num(t[4]))
             elif k == "i":
-                if mode == "gain" and e.name.lower() == inp:
-                    # SPICE current flows n+ -> source -> n-: 1 A into n-.
+                w = excite.get(e.name.lower(), 0) if mode == "gain" else 0
+                if w:
+                    # SPICE current flows n+ -> source -> n-: w A into n-.
                     if ni(e.nodes[1]) is not None:
-                        b[ni(e.nodes[1])] += 1
+                        b[ni(e.nodes[1])] += w
                     if ni(e.nodes[0]) is not None:
-                        b[ni(e.nodes[0])] -= 1
+                        b[ni(e.nodes[0])] -= w
             elif k in ("v", "e", "h", "l"):
                 r = bidx[e.name.lower()]
                 p, n = ni(e.nodes[0]), ni(e.nodes[1])
                 add(p, r, 1); add(n, r, -1); add(r, p, 1); add(r, n, -1)
                 if k == "v":
-                    b[r] = 1 if (mode == "gain" and e.name.lower() == inp) else 0
+                    b[r] = excite.get(e.name.lower(), 0) if mode == "gain" else 0
                 elif k == "e":
                     gain = num(t[5])
                     add(r, ni(e.nodes[2]), -gain); add(r, ni(e.nodes[3]), gain)

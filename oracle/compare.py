@@ -57,8 +57,11 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     out = side["output"] + (f":{side['ref']}" if side.get("ref") else "")
     net = with_options(cir)
     args = [*cmd, "analyze", str(net), "--input", side["input"], "--output", out, "--verify"]
-    if side.get("freqs"):
-        args += ["--freq", ",".join(repr(float(f)) for f in side["freqs"])]
+    # The CLI takes one frequency list: the sidecar's freqs plus any noise.freqs.
+    noise_spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
+    freqs = sorted({float(f) for f in [*side.get("freqs", []), *noise_spec.get("freqs", [])]})
+    if freqs:
+        args += ["--freq", ",".join(repr(f) for f in freqs)]
     if side.get("rin"):
         args.append("--rin")
     if side.get("rout"):
@@ -90,6 +93,10 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         check = data.get(q, {}).get("check", {})
         if not check.get("ok", True):
             raise RuntimeError(f"CLI {q}: symbolic vs numeric mismatch {check.get('maxRelDiff', 0):.2e}")
+    # The noise closed form at s -> 0 against the numeric DC solve.
+    low = (data.get("noise") or {}).get("inputLowFreq") or {}
+    if (low.get("check") or {}).get("ok") is False:
+        raise RuntimeError(f"CLI noise.inputLowFreq: closed form vs numeric mismatch {low['check'].get('maxRelDiff')}")
     return data
 
 
@@ -192,7 +199,9 @@ def compare_noise(got: dict, want: dict, rep: Report):
             ng_src = kind_map.get((el[:1], src.get("kind")))
             if ng_src:
                 have[(el, ng_src, round(math.log10(row["f"]), 9))] = src.get("v2")
-    if gn.get("contributors") is not None:
+    if gn.get("contributors") is None:
+        rep.failures.append("noise.contributors: missing")
+    else:
         for c in want["noise"]["contributors"]:
             if c["source"] == "total":
                 continue

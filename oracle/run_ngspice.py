@@ -286,12 +286,56 @@ def zin_differential(net: spice.Netlist, side: dict, keep: Path | None, name: st
     return out
 
 
+def noise_input(net: spice.Netlist, side: dict) -> tuple[str, str]:
+    """(netlist text, input source name) for .noise. A two-source input
+    (inputNeg) becomes one new source VNIN__ (AC 1) driving both through
+    noiseless controlled sources with the solver's weights: ±1/2 in
+    differential mode, +1 each in common mode, so ngspice's input-referred
+    noise divides by the same gain. A V input gets a VCVS in series, an I
+    input a VCCS in parallel (same direction)."""
+    neg = side.get("inputNeg")
+    if not neg:
+        return spice.render(net, side["input"]), side["input"]
+    pos, neg = side["input"].lower(), neg.lower()
+    differential = (side.get("mode") or "differential") == "differential"
+    weight = {pos: 0.5, neg: -0.5} if differential else {pos: 1.0, neg: 1.0}
+    lines = [net.title, "VNIN__ nin__ 0 DC 0 AC 1"]
+    for e in net.elements:
+        w = weight.get(e.name)
+        if e.kind not in "vi":
+            lines.append(" ".join(e.tokens))
+        elif w is None:
+            lines.append(spice.source_line(e, None))
+        elif e.kind == "v":
+            mid = f"{e.name}__in"
+            lines.append(f"{e.tokens[0]} {e.tokens[1]} {mid} DC {spice.source_dc(e)}")
+            lines.append(f"E__{e.name} {mid} {e.tokens[2]} nin__ 0 {w!r}")
+        else:
+            lines.append(spice.source_line(e, None))
+            lines.append(f"G__{e.name} {e.tokens[1]} {e.tokens[2]} nin__ 0 {w!r}")
+    lines += net.model_lines + net.other_lines
+    return "\n".join(lines) + "\n", "VNIN__"
+
+
+def split_contributor(body: str, names: list[str]) -> tuple[str, str]:
+    """(element, source) of onoise_<body>; element names may contain
+    underscores, so the longest element name that prefixes the body wins."""
+    for n in sorted(names, key=len, reverse=True):
+        if body == n:
+            return n, "total"
+        if body.startswith(n + "_"):
+            return n, body[len(n) + 1:]
+    elem, _, source = body.partition("_")
+    return elem, source or "total"
+
+
 def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
     """ngspice .noise at the sidecar's noise frequencies (default: freqs).
 
     ngspice prints spectral *densities* (V/√Hz, or A/√Hz input-referred for an
     I-source input); they are squared here, so every value is a power spectral
-    density in V²/Hz (A²/Hz). `set noisedetail` adds one vector per element
+    density in V²/Hz (A²/Hz). With inputNeg the input is the pair (see
+    noise_input). `set noisedetail` adds one vector per element
     (onoise_<element>) and per noise source of it (onoise_<element>_<source>:
     id, 1overf, rd, rs for MOS; thermal, 1overf for R; ib, ic, rb, rc, re,
     1overf for BJT; id, rs, 1overf for diodes), each the output-referred
@@ -300,12 +344,13 @@ def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
     spec = side["noise"] if isinstance(side.get("noise"), dict) else {}
     freqs = spec.get("freqs") or side.get("freqs", [])
     out, ref = side["output"], side.get("ref")
-    inp = net.element(side["input"])
+    netlist, src = noise_input(net, side)
     vout = f"v({out},{ref})" if ref else f"v({out})"
     lines = ["set noisedetail"]
     for k, f in enumerate(freqs):
-        lines += [f"echo @@noise {k}", f"noise {vout} {inp.name} lin 1 {f!r} {f!r} 1", "print all", f"echo @@end {k}"]
-    deck = spice.render(net, inp.name) + "\n".join(control(lines)) + "\n"
+        lines += [f"echo @@noise {k}", f"noise {vout} {src} lin 1 {f!r} {f!r} 1", "print all", f"echo @@end {k}"]
+    deck = netlist + "\n".join(control(lines)) + "\n"
+    names = [e.name for e in net.elements]
     text = run_deck_text(deck, keep, name + ".noise")
     output, inputs, contrib = [], [], {}
     for k, f in enumerate(freqs):
@@ -316,9 +361,8 @@ def noise(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> dict:
         for key, v in vals.items():
             if not key.startswith("onoise_") or key == "onoise_spectrum":
                 continue
-            body = key[len("onoise_"):]
-            elem, _, source = body.partition("_")
-            contrib.setdefault((elem, source or "total"), []).append({"f": f, "v2": float(v) ** 2})
+            elem, source = split_contributor(key[len("onoise_"):], names)
+            contrib.setdefault((elem, source), []).append({"f": f, "v2": float(v) ** 2})
     result = {
         "units": "V^2/Hz (input: V^2/Hz for a V-source input, A^2/Hz for an I source)",
         "output": output,
@@ -338,16 +382,16 @@ def noise_band(net: spice.Netlist, side: dict, band: list[float], keep: Path | N
     quadrature of the independently rebuilt PSD (noise_indep.integrated),
     filled in by process(); both must agree."""
     out, ref = side["output"], side.get("ref")
-    inp = net.element(side["input"])
+    netlist, src = noise_input(net, side)
     vout = f"v({out},{ref})" if ref else f"v({out})"
     f_low, f_high = band
 
     def sweep(ppd: int) -> tuple[float, float]:
         # The swept run leaves the integrated plot (noise2) current; the
         # spectrum is noise1 (one sweep per deck).
-        lines = [f"noise {vout} {inp.name} dec {ppd} {f_low!r} {f_high!r}", "setplot noise1",
+        lines = [f"noise {vout} {src} dec {ppd} {f_low!r} {f_high!r}", "setplot noise1",
                  "print onoise_spectrum inoise_spectrum"]
-        deck = spice.render(net, inp.name) + "\n".join(control(lines)) + "\n"
+        deck = netlist + "\n".join(control(lines)) + "\n"
         text = run_deck_text(deck, keep, f"{name}.band{ppd}")
         rows = [tuple(float(x) for x in m.groups()) for m in
                 re.finditer(r"^\d+\s+(\S+)\s+(\S+)\s+(\S+)\s*$", text, re.M)]
@@ -364,6 +408,12 @@ def noise_band(net: spice.Netlist, side: dict, band: list[float], keep: Path | N
     return {"fLow": f_low, "fHigh": f_high,
             "ngspice_trapezoid": {"outputV2": o2 + (o2 - o1) / 3, "inputV2": i2 + (i2 - i1) / 3,
                                   "richardson_correction": abs(o2 - o1) / 3 / o2}}
+
+
+# Integrated noise: the independent 60-digit quadrature must agree with the
+# Richardson-extrapolated trapezoid of ngspice's spectrum (~1e-10 measured on
+# the corpus) before it is written as the reference.
+AGREEMENT_RTOL = 1e-6
 
 
 def cval(f: float, z: complex | None) -> dict:
@@ -409,6 +459,11 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
             tr = band["ngspice_trapezoid"]
             band["agreement"] = max(abs(tr["outputV2"] - exact["outputV2"]) / exact["outputV2"],
                                     abs(tr["inputV2"] - exact["inputV2"]) / exact["inputV2"])
+            # The independent quadrature becomes the reference only if
+            # ngspice's own spectrum confirms it.
+            if not band["agreement"] <= AGREEMENT_RTOL:
+                raise NgspiceError(f"{name}: band integral disagrees with ngspice's spectrum by "
+                                   f"{band['agreement']:.1e} (limit {AGREEMENT_RTOL:g})")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result

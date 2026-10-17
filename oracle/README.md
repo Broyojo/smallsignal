@@ -43,12 +43,19 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   - `mpverify.py`: 60-digit solve of the solver's own `--certificate`.
   - `physical.py`: junction-current sanity, used by both generators and the
     minimizer.
-- Noise (`"noise": true` in a sidecar, frequencies = `freqs` or `noise.freqs`):
-  `expected/<name>.json` gets `noise.output` / `noise.input` as [{f, v2}] in
+- Noise (`"noise": true` in a sidecar, frequencies = `freqs` or `noise.freqs`;
+  compare.py runs the CLI at both): `expected/<name>.json` gets
+  `noise.output` / `noise.input` as [{f, v2}] in
   V²/Hz (A²/Hz input-referred for an I-source input; ngspice prints V/√Hz
   densities, which are squared) and `noise.contributors` [{element, source,
   values}] from `set noisedetail` (sources: thermal for R; id, 1overf, rd, rs
   for MOS; ic, ib, 1overf, rb, rc, re for BJT; id, rs, 1overf for diodes).
+  With `inputNeg`, ngspice's input is one new source driving both inputs
+  through controlled sources (±1/2, or +1 each in common mode), as the
+  solver drives them. `noise.band` adds `noise.integrated`: the independent
+  60-digit quadrature, written only if it agrees with a Richardson trapezoid
+  of ngspice's spectrum to 1e-6. compare.py also fails a missing
+  `contributors` list and `inputLowFreq.check.ok: false`.
   `noise_indep.py` recomputes every source with ngspice's formulas on the
   independent 60-digit rebuild: ≤ 2e-14 on the whole noise corpus. ngspice-47
   level-1 MOS formulas (measured): channel 4kT·(2/3)·gm; flicker
