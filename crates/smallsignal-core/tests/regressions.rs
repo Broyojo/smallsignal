@@ -724,3 +724,33 @@ fn match_auto_applies_candidates_in_one_solve() {
     let display = r["gain"]["display"]["latex"].as_str().unwrap();
     assert!(!display.contains("g_{m1,2}") && display.contains("g_{m1}"), "{display}");
 }
+
+/// The ±15 V BJT op-amp (oracle/regressions/dc_opamp_bjt_15v): DC failed
+/// with "Q6's model overflows" at about 5% of input offsets until pnjlim
+/// limited reverse steps as ngspice does. Every offset over the linear
+/// region converges, and the regression's point matches ngspice.
+#[test]
+fn bjt_opamp_dc_converges_at_every_offset() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../oracle/regressions");
+    let text = std::fs::read_to_string(dir.join("dc_opamp_bjt_15v.cir")).unwrap();
+    let line = text.lines().find(|l| l.starts_with("VINP")).unwrap().to_string();
+    for k in 0..=200 {
+        let vos = -0.85e-3 + 0.2e-3 * k as f64 / 200.0;
+        let net = with_options(&text.replace(&line, &format!("VINP INP 0 DC {vos:e}")));
+        let n = netlist::parse(&net).unwrap();
+        if let Err(e) = dc::operating_point(&n) {
+            panic!("VINP {vos:e}: {e}");
+        }
+    }
+    // The regression's own point at its gmin (1e-18) against ngspice.
+    let net = with_options(&text).replace("gmin=1e-15", "gmin=1e-18");
+    let n = netlist::parse(&net).unwrap();
+    let op = dc::operating_point(&n).unwrap();
+    let want: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("expected/dc_opamp_bjt_15v.json")).unwrap()).unwrap();
+    for node in ["out", "o1", "net6", "net9"] {
+        let w = want["op"]["nodes"][node].as_f64().unwrap();
+        let got = op.v[n.node(node).unwrap()];
+        assert!((got - w).abs() <= 1e-6 * w.abs() + 1e-9, "V({node}) {got} vs {w}");
+    }
+}

@@ -30,6 +30,7 @@ const FIXTURES = {
   ota: "apps/editor/src/examples/five-transistor-ota-sky130.icproj.json",
   rc: "apps/editor/src/examples/simulation-rc.icproj.json",
   rlc: "apps/editor/src/examples/simulation-rlc.icproj.json",
+  bjtOpAmp: "packages/small-signal/test-fixtures/bjt-op-amp.icproj.json",
 } as const;
 
 /**
@@ -721,4 +722,70 @@ test("a wide exact formula scrolls inside the panel instead of being cut off", a
     expect(box.moved).toBe(box.overflows);
   }
   expect(boxes.some((box) => box.overflows)).toBe(true);
+});
+
+test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.bjtOpAmp);
+  const started = Date.now();
+  // At the default 1 kHz, past the 10.61 Hz dominant pole: |A| = 730
+  // (68,823 at DC, as ngspice-47), Zout 104 Ω.
+  await expect
+    .poll(() => cardValue(panel, "Gain"), { timeout: 30_000 })
+    .toBeCloseTo(730, -1);
+  const seconds = (Date.now() - started) / 1000;
+  expect(seconds).toBeLessThan(20);
+  expect(await cardValue(panel, "Output impedance")).toBeCloseTo(104, -1);
+  await expect(card(panel, "Gain")).toContainText(/Pole [−-]10\.61 Hz/u);
+  // Said once, on the first card; no formula anywhere.
+  await expect(
+    panel.getByText("Formula too large to derive. Try a smaller block."),
+  ).toHaveCount(1);
+  await expect(
+    card(panel, "Gain").getByText("Formula too large to derive.", {
+      exact: false,
+    }),
+  ).toHaveCount(1);
+  await expect(panel.locator("img.small-signal-formula")).toHaveCount(0);
+  await expect(
+    card(panel, "Bias point").locator("tr[data-device]"),
+  ).toHaveCount(25);
+
+  // Noise: the densities, and the closed form named as too large, briefly.
+  const noise = panel.locator("details.small-signal-noise");
+  await noise.locator("summary", { hasText: "Noise" }).click();
+  await expect(noise).toContainText("nV/√Hz", { timeout: 30_000 });
+  await expect(noise).toContainText("Too large for the exact closed form.");
+  await expect(noise).not.toContainText("simplify the circuit");
+
+  // With Noise open, a new request waits for the main solve's budget
+  // status: one noise solve, numeric only, never an exact one beside it.
+  await page.evaluate(() => {
+    const sent: string[] = [];
+    (window as unknown as { solves: string[] }).solves = sent;
+    const post = Worker.prototype.postMessage as (
+      this: Worker,
+      ...args: unknown[]
+    ) => void;
+    Worker.prototype.postMessage = function (this: Worker, ...args: unknown[]) {
+      const request = (args[0] as { request?: unknown }).request;
+      if (typeof request === "string") sent.push(request);
+      post.apply(this, args);
+    } as Worker["postMessage"];
+  });
+  await panel.getByText("Options", { exact: true }).click();
+  await panel.getByLabel("Frequencies").fill("10k");
+  // 10.61 Hz × 68,823 / 10 kHz.
+  await expect
+    .poll(() => cardValue(panel, "Gain"), { timeout: 30_000 })
+    .toBeCloseTo(73, -1);
+  await expect(noise).toContainText("nV/√Hz", { timeout: 30_000 });
+  const noiseSolves = await page.evaluate(() =>
+    (window as unknown as { solves: string[] }).solves
+      .map((text) => JSON.parse(text) as { noise?: boolean; maxTerms?: number })
+      .filter((request) => request.noise)
+      .map((request) => request.maxTerms ?? null),
+  );
+  expect(noiseSolves).toEqual([1]);
 });

@@ -369,14 +369,16 @@ pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(
                 vec![*w, *l, *mult],
                 "device",
             )),
-            Kind::Q { model, area } if !model.name.is_empty() => Some((
+            Kind::Q { model, area, mult } if !model.name.is_empty() => Some((
                 format!("Q:{}:{}", model.name.to_ascii_lowercase(), model_type(model.ty)),
-                vec![*area],
+                vec![*area, *mult],
                 "device",
             )),
-            Kind::D { model, area } if !model.name.is_empty() => {
-                Some((format!("D:{}", model.name.to_ascii_lowercase()), vec![*area], "device"))
-            }
+            Kind::D { model, area, mult } if !model.name.is_empty() => Some((
+                format!("D:{}", model.name.to_ascii_lowercase()),
+                vec![*area, *mult],
+                "device",
+            )),
             Kind::R { value } | Kind::C { value } | Kind::L { value } if value.is_finite() => {
                 Some((e.name[..1].to_ascii_uppercase(), vec![*value], "passive"))
             }

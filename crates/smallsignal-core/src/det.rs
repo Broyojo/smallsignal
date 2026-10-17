@@ -5,10 +5,16 @@
 
 use crate::poly::{MonoMap, Poly};
 
-/// Upper bound on term products per determinant (about half a second of work), so
+/// Upper bound on term products per determinant (a few seconds of work), so
 /// a dense matrix fails cleanly instead of running away before the per-row
 /// term check sees it.
-pub const MAX_WORK: u64 = 200_000_000;
+pub const MAX_WORK: u64 = 50_000_000;
+
+/// A row whose minors reach this many times the term budget before
+/// cancellation fails at once: cancellation within a row removes far less
+/// (at most about a quarter, measured), so finishing it would only cost time
+/// and memory.
+const ROW_TOUCHED_FACTOR: usize = 2;
 
 pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
     let n = a.len();
@@ -54,8 +60,10 @@ pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
     let mut work: u64 = 0;
     let mut cur: MonoMap<Poly> = MonoMap::default();
     cur.insert(0, Poly::one());
+    let row_cap = max_terms.saturating_mul(ROW_TOUCHED_FACTOR);
     for (r, row) in rows.iter().enumerate() {
         let mut next: MonoMap<Poly> = MonoMap::default();
+        let mut touched = 0usize;
         for (&set, minor) in &cur {
             let set = set as u64;
             for &(c, entry) in row {
@@ -72,10 +80,15 @@ pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
                 if work > MAX_WORK {
                     return Err(too_large());
                 }
-                next.entry(ns as u128)
-                    .or_default()
+                let target = next.entry(ns as u128).or_default();
+                let before = target.len();
+                target
                     .mul_acc(entry, minor, sign)
                     .map_err(|_| "coefficient overflow in determinant".to_string())?;
+                touched += target.len() - before;
+                if touched > row_cap {
+                    return Err(too_large());
+                }
             }
         }
         let mut total = 0;

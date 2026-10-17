@@ -110,30 +110,137 @@ fn zero_resistance_is_rejected() {
 }
 
 #[test]
-fn hitting_the_term_limit_is_a_clean_error() {
-    let mut net = String::from("dense\nVIN n0 0 AC 1\n");
+fn over_the_term_limit_the_numbers_stay_and_the_formula_goes() {
+    let mut net = String::from("dense\nVIN n0 0 AC 1\nC1 n3 0 1n\n");
     for i in 0..6 {
         for j in i + 1..6 {
             net.push_str(&format!("R{i}{j} n{i} n{j} {}k\n", 1 + i + j));
         }
     }
-    let r = req(json!({ "input": "VIN", "output": "n3", "maxTerms": 50 }));
-    assert!(run_err(&net, &r).contains("too large"));
+    let rq = |mt: usize| {
+        req(json!({ "input": "VIN", "output": "n3", "rin": true, "rout": true, "freqs": [0, 1e5], "maxTerms": mt }))
+    };
+    let exact = run(&net, &rq(2_000_000));
+    let numeric = run(&net, &rq(50));
+    for q in ["gain", "rin", "rout"] {
+        let n = &numeric[q];
+        assert_eq!(n["skipped"], "too large for the exact closed form", "{q}");
+        assert!(
+            n["exact"].is_null() && n["display"].is_null() && n["simplified"].is_null(),
+            "{q}"
+        );
+        for i in 0..2 {
+            let (a, b) = (value(&exact, q, i), value(&numeric, q, i));
+            // At DC nothing but VIN ties the network to ground: Zin is open
+            // (null) on both paths, not LU rounding on the numeric one.
+            let open = a.0.is_nan() && b.0.is_nan();
+            assert!(open || close(a, b, 1e-12), "{q}: {a:?} vs {b:?}");
+        }
+        // The same poles and zeros (real here: one capacitor), and Zin's
+        // pole at DC exactly at 0.
+        for roots in ["poles", "zeros"] {
+            let list = |v: &Value| {
+                let mut r: Vec<f64> = v[q][roots]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|z| z["re"].as_f64().unwrap())
+                    .collect();
+                r.sort_by(f64::total_cmp);
+                r
+            };
+            let (a, b) = (list(&exact), list(&numeric));
+            assert_eq!(a.len(), b.len(), "{q} {roots}: {a:?} vs {b:?}");
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() <= 1e-12 * x.abs(), "{q} {roots}: {a:?} vs {b:?}");
+            }
+        }
+    }
+    assert!(numeric["verify"].is_null());
+    // Without numbers there is nothing to show: still an error.
+    let mut sym = rq(50);
+    sym.symbolic = true;
+    assert!(run_err(&net, &sym).contains("too large"));
+}
+
+#[test]
+fn over_the_term_limit_noise_and_distortion_skip_their_closed_forms() {
+    // Once the gain's determinant is over budget, neither closed form is
+    // attempted (both expand the same circuit); the numbers stay.
+    let r = |mt: usize| {
+        run(
+            CS,
+            &req(json!({ "input": "VIN", "output": "out", "noise": true, "nonlinear": ["M1"], "maxTerms": mt })),
+        )
+    };
+    let (exact, tight) = (r(2_000_000), r(1));
+    assert_eq!(tight["gain"]["skipped"], "too large for the exact closed form");
+    assert_eq!(
+        tight["noise"]["inputLowFreq"],
+        json!({ "unavailable": "too large for the exact closed form" })
+    );
+    for (a, b) in exact["noise"]["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(tight["noise"]["output"].as_array().unwrap())
+    {
+        let (a, b) = (a["v2"].as_f64().unwrap(), b["v2"].as_f64().unwrap());
+        assert!((a - b).abs() <= 1e-9 * a.abs(), "{a} vs {b}");
+    }
+    for (a, b) in exact["distortion"]["coefficients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(tight["distortion"]["coefficients"].as_array().unwrap())
+    {
+        assert_eq!(b["skipped"], "too large for the exact closed form");
+        let (a, b) = (a["numeric"].as_f64().unwrap(), b["numeric"].as_f64().unwrap());
+        assert!((a - b).abs() <= 1e-9 * a.abs(), "{a} vs {b}");
+    }
+}
+
+#[test]
+fn over_the_term_limit_a_gate_input_is_still_infinite() {
+    let r = req(json!({ "input": "VIN", "output": "out", "rin": true, "rout": true, "maxTerms": 1 }));
+    let v = run(CS, &r);
+    assert_eq!(v["rin"]["infinite"], true);
+    assert_eq!(v["rin"]["values"][0]["inf"], true);
+    assert_eq!(v["gain"]["skipped"], "too large for the exact closed form");
 }
 
 #[test]
 fn a_difference_of_affordable_numerators_is_held_to_the_term_limit() {
     // Two independent common-source branches measured differentially: each
     // drain's numerator is one term, their difference two. maxTerms 1 must
-    // fail as an over-budget determinant does; maxTerms 2 fits.
+    // give no formula, as an over-budget determinant does; maxTerms 2 fits.
     let net = "two\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD1 vdd o1 5k\nRD2 vdd o2 5k\n\
 M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
     let rq = |mt: usize| req(json!({ "input": "VIN", "output": "o1", "ref": "o2", "rout": true, "maxTerms": mt }));
-    let e = run_err(net, &rq(1));
-    assert!(e.contains("too large (over 1 terms)"), "{e}");
+    let tight = run(net, &rq(1));
+    assert_eq!(tight["gain"]["skipped"], "too large for the exact closed form");
     let r = run(net, &rq(2));
     assert_eq!(r["gain"]["exact"]["latex"], "g_{m2} R_{D2} - g_{m1} R_{D1}");
     assert!(r["rout"]["exact"]["latex"].is_string());
+    assert!(close(value(&tight, "gain", 0), value(&r, "gain", 0), 1e-12));
+}
+
+#[test]
+fn a_bjt_with_m_is_that_many_in_parallel() {
+    // As ngspice: every current and conductance times M, gmin's included,
+    // so even a large gmin gives the same circuit.
+    let base = "m\n.options gmin=1e-9\nVCC vcc 0 5\nVIN b 0 DC 0.62 AC 1\nRC vcc c 2k\n";
+    let card = ".model qn npn is=1e-15 bf=100 vaf=50\n";
+    let one = format!("{base}Q1 c b 0 qn M=3\n{card}");
+    let three = format!("{base}Q1 c b 0 qn\nQ2 c b 0 qn\nQ3 c b 0 qn\n{card}");
+    let r = req(json!({ "input": "VIN", "output": "c", "rout": true, "freqs": [1e3] }));
+    let (a, b) = (run(&one, &r), run(&three, &r));
+    assert!((a["op"]["nodes"]["c"].as_f64().unwrap() - b["op"]["nodes"]["c"].as_f64().unwrap()).abs() < 1e-12);
+    for q in ["gain", "rout"] {
+        assert!(close(value(&a, q, 0), value(&b, q, 0), 1e-12), "{q}");
+    }
+    let ic = |v: &Value| v["op"]["devices"]["Q1"]["ic"].as_f64().unwrap();
+    assert!((ic(&a) / ic(&b) - 3.0).abs() < 1e-9);
 }
 
 // ---- Controlled sources -----------------------------------------------------
@@ -692,13 +799,21 @@ fn stability_uses_the_full_model() {
     let r = run(net, &request("VIN", "out"));
     assert_eq!(r["omittedJunctions"], json!(["rbd_M9"]));
     assert_eq!(r["warnings"], json!(["M9 is off"]));
-    // The reduced determinant fits maxTerms but the full one does not: no
-    // verdict rather than the reduced model's.
-    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "maxTerms": 6 })));
-    assert_eq!(
-        r["warnings"],
-        json!(["M9 is off", "Stability not checked. The full model is too large."])
-    );
+    // The reduced determinant fits maxTerms but the full one does not: the
+    // full model's roots come from its MNA matrix, still stable.
+    let tight = req(json!({ "input": "VIN", "output": "out", "maxTerms": 6 }));
+    let r = run(net, &tight);
+    assert!(r["gain"]["skipped"].is_null());
+    assert_eq!(r["warnings"], json!(["M9 is off"]));
+    // At −1.5 pS without the junction, −0.5 pS with it: unstable both ways.
+    let net = net.replace("1.0000005u", "1.0000015u");
+    for request in [request("VIN", "out"), tight] {
+        let r = run(&net, &request);
+        assert_eq!(
+            r["warnings"],
+            json!(["M9 is off", "Unstable at this bias: a right-half-plane pole."])
+        );
+    }
 }
 
 /// A 0 V source or an inductor with both ends on one node carries no
@@ -789,6 +904,20 @@ fn right_half_plane_poles_are_warned() {
     let lc = "lc\nIIN 0 a AC 1\nL1 a 0 1u\nC1 a 0 1n\nL2 a b 1u\nC2 b 0 1n\n";
     let r = run(lc, &request("IIN", "b"));
     assert_eq!(r["warnings"], json!([]));
+    // The same from the MNA matrix when the exact form is over budget.
+    let tight = |input: &str, out: &str| req(json!({ "input": input, "output": out, "maxTerms": 1 }));
+    let r = run(&net("3"), &tight("VIN", "out"));
+    assert_eq!(r["gain"]["skipped"], "too large for the exact closed form");
+    assert_eq!(
+        r["warnings"],
+        json!(["Unstable at this bias: a right-half-plane pole."])
+    );
+    assert_eq!(r["gain"]["poleCount"], 1);
+    for (text, input, out) in [(net("1.5"), "VIN", "out"), (lc.to_string(), "IIN", "b")] {
+        let r = run(&text, &tight(input, out));
+        assert_eq!(r["gain"]["skipped"], "too large for the exact closed form");
+        assert_eq!(r["warnings"], json!([]), "{text}");
+    }
 }
 
 /// Two transconductances in series read as R_D/(1/g_{m1} + 1/g_{m2}), not

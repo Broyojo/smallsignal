@@ -1,0 +1,14 @@
+{
+ "input": "VIN",
+ "output": "k",
+ "freqs": [
+  10,
+  1000,
+  100000
+ ],
+ "rin": true,
+ "rout": true,
+ "noise": true,
+ "gmin": 1e-09,
+ "description": "M=3 on a diode, as ngspice: the junction scales with AREA\u00b7M (gmin does not), flicker is 3\u00b7KF\u00b7(I_D/3)^AF (AF 1.5). The solver used to ignore M on a diode."
+}

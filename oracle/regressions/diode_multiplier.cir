@@ -1,0 +1,6 @@
+Diode load, D1 with M=3 and AREA=2
+VIN a 0 DC 0.7 AC 1
+RA a k 1k
+D1 k 0 dm area=2 M=3
+.model dm d is=1e-14 n=1.2 kf=1e-12 af=1.5
+.end

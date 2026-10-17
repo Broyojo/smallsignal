@@ -206,8 +206,9 @@ impl BjtEval {
 }
 
 /// Gummel–Poon with IS, BF, BR, VAF (no high injection, no leakage terms,
-/// no parasitic resistances).
-pub fn bjt_eval(m: &BjtModel, area: f64, vbe: f64, vbc: f64, gmin: f64) -> BjtEval {
+/// no parasitic resistances); `mult` devices in parallel (ngspice's M scales
+/// every current and conductance, gmin's included).
+pub fn bjt_eval(m: &BjtModel, area: f64, mult: f64, vbe: f64, vbc: f64, gmin: f64) -> BjtEval {
     let vt = vt();
     let csat = m.is * area;
     let (cbe, gbe) = pn(csat, vbe, vt);
@@ -226,12 +227,12 @@ pub fn bjt_eval(m: &BjtModel, area: f64, vbe: f64, vbc: f64, gmin: f64) -> BjtEv
     let go = (gbc + (cbe - cbc) * dqbdvc / qb) / qb;
     let gm = (gbe - (cbe - cbc) * dqbdve / qb) / qb - go;
     BjtEval {
-        cc,
-        cb,
-        gpi,
-        gmu,
-        gm,
-        go,
+        cc: mult * cc,
+        cb: mult * cb,
+        gpi: mult * gpi,
+        gmu: mult * gmu,
+        gm: mult * gm,
+        go: mult * go,
     }
 }
 
@@ -245,7 +246,10 @@ pub fn vcrit(is: f64, vte: f64) -> f64 {
     vte * (vte / (std::f64::consts::SQRT_2 * is)).ln()
 }
 
-/// DEVpnjlim: limit junction voltage steps during Newton iteration.
+/// DEVpnjlim (ngspice): limit junction voltage steps during Newton iteration.
+/// Forward steps above vcrit grow logarithmically; a reverse step may reach
+/// at most −vold − 1 from a forward-biased junction, else 2·vold − 1, so an
+/// iterate thrown far negative cannot swing back past the exponential.
 pub fn pnjlim(vnew: f64, vold: f64, vte: f64, vcrit: f64) -> f64 {
     if vnew > vcrit && (vnew - vold).abs() > vte + vte {
         if vold > 0.0 {
@@ -258,6 +262,9 @@ pub fn pnjlim(vnew: f64, vold: f64, vte: f64, vcrit: f64) -> f64 {
         } else {
             vte * (vnew / vte).ln()
         }
+    } else if vnew < 0.0 {
+        let floor = if vold > 0.0 { -vold - 1.0 } else { 2.0 * vold - 1.0 };
+        vnew.max(floor)
     } else {
         vnew
     }
@@ -319,5 +326,26 @@ pub fn limvds(vnew: f64, vold: f64) -> f64 {
         vnew.min(4.0)
     } else {
         vnew.max(-0.5)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pnjlim_limits_reverse_steps_as_ngspice() {
+        let vt = vt();
+        let vc = vcrit(1e-15, vt);
+        // From a forward-biased junction a reverse step stops at −vold − 1,
+        assert_eq!(pnjlim(-500.0, 0.7, vt, vc), -1.7);
+        // from a reverse-biased one at 2·vold − 1.
+        assert_eq!(pnjlim(-500.0, -3.0, vt, vc), -7.0);
+        // Steps within those bounds pass unchanged.
+        assert_eq!(pnjlim(-1.0, 0.7, vt, vc), -1.0);
+        assert_eq!(pnjlim(-5.0, -3.0, vt, vc), -5.0);
+        // A forward step past vcrit still grows only logarithmically.
+        let v = pnjlim(5.0, 0.7, vt, vc);
+        assert!(v > 0.7 && v < 0.7 + 10.0 * vt, "{v}");
     }
 }

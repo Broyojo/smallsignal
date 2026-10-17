@@ -1,0 +1,13 @@
+{
+ "input": "VIN",
+ "output": "c",
+ "freqs": [
+  10,
+  1000,
+  100000
+ ],
+ "rin": true,
+ "rout": true,
+ "noise": true,
+ "description": "M=3 on a BJT is three devices in parallel, as ngspice: currents, conductances and gmin's all times 3, flicker 3\u00b7KF\u00b7(I_B/3)^AF (AF 1.5). The solver used to ignore M on a BJT. (At a larger gmin, ngspice's collector-substrate gmin, which the solver does not model, would show.)"
+}

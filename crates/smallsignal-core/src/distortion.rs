@@ -217,7 +217,7 @@ fn bulk_jet(is: f64, v: Jet, gmin: f64) -> Jet {
 /// (cc, cb) as `devices::bjt_eval`, normalized frame, and the same without
 /// the collector–base junction branch i_μ = cbc/BR + gmin·vbc (the part the
 /// leakage-free model drops with r_μ).
-fn bjt_jet(m: &BjtModel, area: f64, vbe: Jet, vbc: Jet, gmin: f64) -> ((Jet, Jet), (Jet, Jet)) {
+fn bjt_jet(m: &BjtModel, area: f64, mult: f64, vbe: Jet, vbc: Jet, gmin: f64) -> ((Jet, Jet), (Jet, Jet)) {
     let vt = vt();
     let csat = m.is * area;
     let cbe = pn_jet(csat, vbe, vt);
@@ -227,7 +227,12 @@ fn bjt_jet(m: &BjtModel, area: f64, vbe: Jet, vbc: Jet, gmin: f64) -> ((Jet, Jet
     let cc_free = cbe.sub(&cbc).mul(&inv_qb);
     let cb_free = cbe.scale(1.0 / m.bf).add(&vbe.scale(gmin));
     let imu = cbc.scale(1.0 / m.br).add(&vbc.scale(gmin));
-    ((cc_free.sub(&imu), cb_free.add(&imu)), (cc_free, cb_free))
+    let (cc, cb) = (cc_free.sub(&imu), cb_free.add(&imu));
+    // M devices in parallel: every current times M, gmin's included.
+    (
+        (cc.scale(mult), cb.scale(mult)),
+        (cc_free.scale(mult), cb_free.scale(mult)),
+    )
 }
 
 /// Within DC-solution accuracy of v = at.
@@ -336,11 +341,11 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                     boundary: mos_boundary(model, vgs, vds, vbs, n[3] != es, &junctions),
                 }
             }
-            (Kind::Q { model, area }, Some(DevOp::Bjt(q))) => {
+            (Kind::Q { model, area, mult }, Some(DevOp::Bjt(q))) => {
                 let ty = model.ty;
                 let vbe = Jet::var(ty * q.vbe, 0, ty);
                 let vce = Jet::var(ty * q.vce, 1, ty);
-                let ((cc, cb), (cc_free, cb_free)) = bjt_jet(model, *area, vbe, vbe.sub(&vce), net.gmin);
+                let ((cc, cb), (cc_free, cb_free)) = bjt_jet(model, *area, *mult, vbe, vbe.sub(&vce), net.gmin);
                 let vbc = ty * (q.vbe - q.vce);
                 NlDev {
                     element: e.name.clone(),
@@ -365,9 +370,9 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                     boundary: [ty * q.vbe, vbc].iter().any(|&v| near(v, -3.0 * vt(), v.abs())),
                 }
             }
-            (Kind::D { model, area }, Some(DevOp::Diode(d))) => {
+            (Kind::D { model, area, mult }, Some(DevOp::Diode(d))) => {
                 let v = Jet::var(d.vd, 0, 1.0);
-                let id = pn_jet(model.is * area, v, model.n * vt()).add(&v.scale(net.gmin));
+                let id = pn_jet(model.is * area * mult, v, model.n * vt()).add(&v.scale(net.gmin));
                 NlDev {
                     element: e.name.clone(),
                     controls: vec![(n[0], n[1])],
@@ -1432,6 +1437,9 @@ pub struct Ctx<'a> {
     pub amplitude: f64,
     pub tol: f64,
     pub max_terms: usize,
+    /// The gain's determinant is already over the term budget: no closed
+    /// form (each a_n is built on it) is attempted.
+    pub over_budget: bool,
 }
 
 /// The closed form against the numeric reference: `ok`, the worst relative
@@ -1798,6 +1806,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 
     let mt = c.max_terms.min(DIST_TERM_LIMIT);
     let build = |ss: &SsCircuit, symbols: &Symbols, free: bool| -> Option<Closed> {
+        if c.over_budget {
+            return None;
+        }
         let sys = crate::ss::system(c.net, ss, c.excite);
         match closed(
             ss, symbols, &sys, &devs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,
@@ -2285,10 +2296,10 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 l
             af: 1.0,
         };
         for (vbe, vbc) in [(0.65, -2.0), (0.7, 0.5), (-1.0, -5.0)] {
-            let ev = bjt_eval(&m, 1.0, vbe, vbc, 1e-12);
+            let ev = bjt_eval(&m, 1.0, 1.0, vbe, vbc, 1e-12);
             let be = Jet::var(vbe, 0, 1.0);
             let ce = Jet::var(vbe - vbc, 1, 1.0);
-            let ((cc, cb), _) = bjt_jet(&m, 1.0, be, be.sub(&ce), 1e-12);
+            let ((cc, cb), _) = bjt_jet(&m, 1.0, 1.0, be, be.sub(&ce), 1e-12);
             let rel = |a: f64, b: f64| (a - b).abs() / a.abs().max(b.abs()).max(1e-300);
             assert!(rel(cc.0[0], ev.cc) < 1e-14 && rel(cb.0[0], ev.cb) < 1e-14);
             // ∂Ic/∂vbe at fixed vce = gm − gμ... in bjt_eval terms

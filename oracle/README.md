@@ -29,6 +29,11 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   with device currents above 1 A, are rejected.
 - ngspice runs time out after 30 s; some pathological circuits make it loop forever.
 - `regressions/`: minimized failures with their diagnoses (see its README).
+- Sidecar `"tooLarge": true`: every quantity must be over the term budget
+  (numeric, no KCL check); without it none may be.
+- Sidecar `"gmin": 1e-18`: both simulators run at that gmin, where a
+  gmin-level gap the solver does not model vanishes (a PNP's base-substrate
+  gmin, amplified by an op-amp's open-loop gain).
 - Evidence tools (all take the solver binary first):
   - `triage.py`: a verdict for every fuzz failure, each from a check that can
     fail. It calls:

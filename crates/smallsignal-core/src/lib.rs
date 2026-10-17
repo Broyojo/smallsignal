@@ -15,6 +15,7 @@ pub mod gcd;
 pub mod linalg;
 pub mod netlist;
 pub mod noise;
+pub mod pencil;
 pub mod poly;
 pub mod render;
 pub mod roots;

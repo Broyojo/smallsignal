@@ -19,6 +19,9 @@ with numeric values, poles and zeros, and the operating point.
    (pnjlim/fetlim/limvds), falling back to gmin and then source stepping. The
    device equations follow ngspice exactly: MOS level 1 with body effect and
    bulk junctions; Gummel–Poon with IS, BF, BR and VAF; diode IS and N.
+   Multiplicity `M=` as ngspice: on a BJT, M devices in parallel (every
+   current and conductance times M, gmin's too); on a diode, the junction
+   scales with AREA·M and gmin does not; on a MOSFET, β and the bulk IS.
 3. **Linearize**: MOSFETs get gm, ro and gmb (gmb only when body ≠ source);
    BJTs get gm, rπ, ro; diodes get rd. Junction conductances (MOS bulk
    gbs/gbd, BJT gμ) are all in the model; a set of them is left out of the
@@ -31,7 +34,10 @@ with numeric values, poles and zeros, and the operating point.
 4. **Symbolic MNA**. The determinant is computed division-free by memoized
    Laplace expansion over the sparse matrix. Monomials are parameter bitsets,
    because every minor is multilinear in the element parameters (and s is
-   implicit in C/L). The numerator comes from Cramer's rule.
+   implicit in C/L). The numerator comes from Cramer's rule. A determinant
+   is over budget once a row holds more than `maxTerms` terms, its minors
+   touch more than 2×`maxTerms` monomials before cancellation, or it takes
+   more than 5·10⁷ term products.
 5. **Display**: conductances become resistances, common factors cancel, and
    terms are sorted by magnitude. The simplified form drops the smallest terms
    within each power of s, up to the coarsest pruning whose error over
@@ -69,9 +75,34 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
 `symbolic`, `maxTerms`). The response is JSON, or
-`{"error": "..."}` on failure, including when an exact polynomial of
-gain, rin or rout (a determinant, or the sum or difference of two) would
-exceed `maxTerms` terms (default 2,000,000).
+`{"error": "..."}` on failure.
+
+- Over budget: when an exact polynomial of gain, rin or rout (a
+  determinant, or the sum or difference of two) would exceed `maxTerms`
+  terms (default 2,000,000) or i128 coefficients, that quantity is numeric:
+  `skipped: "too large for the exact closed form"`, `exact`, `display`,
+  `simplified` and `check` null, `verify` skipped. rin and rout are numeric
+  whenever the gain's determinant is (they expand the same circuit). In
+  symbolic mode (no numbers) it is an error.
+- A numeric quantity comes from the full model: `values` from the
+  cross-check's LU solve, except where a numerator vanishes identically
+  (0) and at 0 Hz where a numerator or denominator that vanishes there
+  (exactly, below) gives 0 or null; `infinite` when its denominator
+  vanishes identically. `poles` and `zeros` are the finite roots
+  of the MNA determinants det(G + sC) (the Cramer numerator as the bordered
+  matrix [[A, b], [wᵀ, 0]]), without expanding them: their lowest and
+  highest power of s, and whether one vanishes identically, are exact
+  (interpolation modulo 2⁶¹−1 at random parameter values, matched
+  parameters sharing one as they share a symbol); the roots are
+  eigenvalues of Ṽᵀ(G + σC)⁻¹ŨW, with C = ŨWṼᵀ reduced exactly to
+  independent stamp columns, at the trial shift σ whose eigenvalues spread
+  least, then polished by Newton's method on det. No common factor is
+  cancelled, as for an exact form too large for the GCD; `poleCount` and
+  `zeroCount` are their number. Roots no shift resolves (e.g. spread over
+  more than about 15 decades) are null, with a warning ("Gain poles not
+  found."), while their number stays exact. Noise `inputLowFreq` (unavailable:
+  "too large for the exact closed form") and the distortion closed forms
+  (`skipped`) are then not attempted: they expand the same circuit.
 
 - `gain`: V(out) − V(ref) per unit AC of the input (V/V, or V/A for an I source).
   With `inputNeg`, `mode` "differential" (the default) drives the two sources
@@ -126,11 +157,13 @@ exceed `maxTerms` terms (default 2,000,000).
   why DC fails), two-terminal elements with both ends on one node
   ("CSB has both ends at 0"; a 0 V source or an inductor there carries no
   defined current and is dropped before the DC solve, while a source with a
-  value there, the input source, or one an F or H senses is an error), a root of the circuit determinant (every
-  source zeroed, on the full model with each parameter's own value) with
-  re > 1e-6·|p| in numeric mode ("Unstable at this bias: …", not when a
-  coefficient's sign is below its rounding error; "Stability not checked"
-  when that determinant exceeds `maxTerms`), and so on.
+  value there, the input source, or one an F or H senses is an error), a
+  root of the circuit determinant (every source zeroed, on the full model
+  with each parameter's own value) with re > 1e-6·|p| in numeric mode
+  ("Unstable at this bias: …"). The roots are exact while that determinant
+  fits `maxTerms` (no verdict when a coefficient's sign is below its rounding
+  error), else from its MNA matrix as for a numeric quantity ("Stability not
+  checked. Its poles were not found." when that fails), and so on.
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
@@ -147,8 +180,8 @@ to 1e-6 (`oracle/`):
 | MOSFET | `thermal` (every region) | (2/3)·4kT·gm |
 | MOSFET | `flicker` | KF·gm²/(Cox·M·W·L·f^AF), Cox = 3.9ε₀/TOX (TOX default 1e-7) |
 | BJT | `shot_c` (c–e), `shot_b` (b–e) | 2q·\|Ic\|, 2q·\|Ib\| |
-| BJT | `flicker` (b–e) | KF·\|Ib\|^AF/f |
-| diode | `shot`, `flicker` | 2q·\|Id\|, KF·\|Id\|^AF/f |
+| BJT | `flicker` (b–e) | M·KF·(\|Ib\|/M)^AF/f |
+| diode | `shot`, `flicker` | 2q·\|Id\|, M·KF·(\|Id\|/M)^AF/f |
 
 Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
 ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
@@ -171,7 +204,7 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   fractions plus `omitted.fraction` sum to 1; when it is 0, every fraction
   is 0; when it is infinite, finite sources have fraction 0 and the
   infinite ones null.
-- `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
+- `sources`: `[{element, kind, psd (LaTeX, with M when the device's M ≠ 1), white, flicker: {coef, exp}}]`.
 - `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
   decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
   evaluations, converged}`. Adaptive Simpson in ln(f/fLow), so any valid band

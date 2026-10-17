@@ -31,6 +31,9 @@ export interface SmallSignalRequest {
   order?: 2 | 3;
   /** Input amplitude for HD2, HD3 (V, or A for a current input). */
   amplitude?: number;
+  /** Term budget of each exact polynomial (default 2,000,000); over it a
+   * quantity is numeric only. */
+  maxTerms?: number;
 }
 
 export interface ComplexPoint {
@@ -67,7 +70,14 @@ export interface SmallSignalExpression {
 export interface SmallSignalQuantity {
   unit?: string;
   infinite?: boolean;
-  exact: SmallSignalExpression;
+  /**
+   * null when the exact form is over the term budget (`skipped` says so):
+   * then display and simplified are null too, and values, poles and zeros
+   * come from the numeric model.
+   */
+  exact: SmallSignalExpression | null;
+  /** Why there is no exact form: "too large for the exact closed form". */
+  skipped?: string;
   /**
    * The exact form without gmin-level junction leakage (r_bs, r_bd, r_μ),
    * with its measured error against the full model; `same` when there was
@@ -78,15 +88,17 @@ export interface SmallSignalQuantity {
   leakageMatters?: boolean;
   simplified?: SmallSignalExpression | null;
   values?: ComplexPoint[];
-  /** In Hz; empty in symbolic mode (no values). */
-  poles?: Root[];
-  zeros?: Root[];
+  /** In Hz; empty in symbolic mode (no values). null when the numeric
+   * model's roots were not found (a warning says so). */
+  poles?: Root[] | null;
+  zeros?: Root[] | null;
   /** Number of poles and zeros: the degree in s of the denominator and
    * numerator (also in symbolic mode). */
   poleCount?: number;
   zeroCount?: number;
-  /** Symbolic against direct numeric solve (numeric mode). */
-  check?: { ok: boolean; maxRelDiff: number };
+  /** Symbolic against direct numeric solve (numeric mode); null when the
+   * exact form is over budget. */
+  check?: { ok: boolean; maxRelDiff: number } | null;
 }
 
 export interface MosOperatingPoint {

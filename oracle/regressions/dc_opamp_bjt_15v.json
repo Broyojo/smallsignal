@@ -1,0 +1,17 @@
+{
+ "input": "VINP",
+ "inputNeg": "VINN",
+ "mode": "differential",
+ "output": "OUT",
+ "freqs": [
+  1,
+  1000,
+  100000,
+  1000000
+ ],
+ "rin": true,
+ "rout": true,
+ "tooLarge": true,
+ "gmin": 1e-18,
+ "description": "DC failed with 'Q6's model overflows' (about 5% of input offsets at +-15 V): without ngspice's reverse step limit in pnjlim, Newton threw junctions hundreds of volts negative and the swing back overflowed, and gmin and source stepping failed too. gmin 1e-18: at 1e-15 the PNPs' base-substrate gmin, which the solver does not model, moves V(OUT) by 6e-6 V through the open-loop gain. No DC point: ngspice measures the open differential port through inductors, a short at DC. Every exact form is over the term budget, so every quantity is numeric."
+}

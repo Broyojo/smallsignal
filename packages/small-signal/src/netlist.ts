@@ -531,6 +531,9 @@ function translate(
           card.push(`${model}_l1`);
           const area = parameter(instance, scope, "area");
           if (area) card.push(area);
+          // Parallel devices, as the SPICE export writes them.
+          const m = parameter(instance, scope, "m", "mult");
+          if (m) card.push(`M=${m}`);
           break;
         }
       }
