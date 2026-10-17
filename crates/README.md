@@ -31,6 +31,7 @@ with numeric values, poles and zeros, and the operating point.
    put back largest first (matched twins together). The cross-check always
    solves the full system. Symbolic mode leaves them out, as hand analysis
    does. Response: `omittedJunctions`, `omissionError`.
+   Device capacitances follow (see [Device capacitances](#device-capacitances)).
 4. **Symbolic MNA**. The determinant is computed division-free by memoized
    Laplace expansion over the sparse matrix. Monomials are parameter bitsets,
    because every minor is multilinear in the element parameters (and s is
@@ -84,7 +85,9 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   `skipped: "too large for the exact closed form"`, `exact`, `display`,
   `simplified` and `check` null, `verify` skipped. rin and rout are numeric
   whenever the gain's determinant is (they expand the same circuit). In
-  symbolic mode (no numbers) it is an error.
+  symbolic mode (no numbers) it is an error. A circuit of more than 128
+  parameters (a monomial is a `u128` set) has no exact form at all: every
+  quantity is numeric as over budget, and in symbolic mode it is an error.
 - A numeric quantity comes from the full model: `values` from the
   cross-check's LU solve, except where a numerator vanishes identically
   (0) and at 0 Hz where a numerator or denominator that vanishes there
@@ -150,7 +153,9 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   `zeroCount` (their number, the degree in s of the denominator and
   numerator, in symbolic mode too), and `check`.
 - `op` (null in symbolic mode) holds node voltages, source branch currents, and
-  per-device region, currents, voltages and small-signal conductances.
+  per-device region, currents, voltages, small-signal conductances and
+  `caps` (F, zeros included): MOS `cgs`, `cgd`, `cgb`, `cbd`, `cbs`; BJT
+  `cpi`, `cmu`, `csub`, `cx`; diode `cj`.
 - `params` lists each symbol's name, LaTeX, value and unit; `warnings` collects
   devices out of their intended region, ignored model parameters,
   cross-coupled (latch) pairs that may have several DC solutions, junctions
@@ -168,11 +173,38 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
+Device capacitances: `cgs_M1` → C_{gs1}, `cgd_M1` → C_{gd1}, `cgb_M1` →
+C_{gb1}, `cbd_M1` → C_{db1}, `cbs_M1` → C_{sb1}; `cpi_Q1` → C_{π1}, `cmu_Q1`
+→ C_{μ1}, `ccs_Q1` → C_{cs1} (`cbsub_Q1` → C_{bs1} when lateral), `cx_Q1` →
+C_{x1}; `cj_D1` → C_{j1}; matched, C_{gs1,2}.
+
+## Device capacitances
+
+Each is its own Role::Capacitor parameter, ngspice-47's value at the
+operating point (its MODEINITSMSIG load; every temperature factor is 1 at
+TNOM), stamped only when nonzero and between two distinct nodes. Model
+defaults are ngspice's and add none (`caps.rs`):
+
+| device | parameter | value |
+|---|---|---|
+| MOS | C_gs, C_gd, C_gb | 2·DEVqmeyer(v_gs, v_gd, V_TH, V_DSAT, φ, Cox·W·L·M) + CGSO·M·W, CGDO·M·W, CGBO·M·L; Cox = 3.9ε₀/TOX (none without TOX), V_DSAT at least 25 mV, gs and gd swapped in reverse mode |
+| MOS | C_db, C_sb | czb·(1 − v/PB)^−MJ + czbsw·(1 − v/PB)^−MJSW below FC·PB, else f2 + f3·v (mos1temp); czb = CBD·M if given, else CJ·AD·M; czbsw = CJSW·PD·M (S side alike) |
+| BJT | C_π | TF·∂I_F/∂v_BE (with v_BE > 0: XTF·exp(v_BC/(1.44·VTF))·(I/(I + ITF·AREA))², over q_b) + CJE·AREA depletion (VJE, MJE ≤ 0.999, FC ≤ 0.9999) |
+| BJT | C_μ | TR·g_bc + CJC·AREA depletion, both XCJC parts (no RB: one node) |
+| BJT | C_cs | CJS·AREA·(1 − v/VJS)^−MJS for v < 0, else ·(1 + MJS·v/VJS); to the collector (SUBS = 1, NPN default) or base (−1, PNP); the substrate is ground unless named, and a named one that connects to nothing else has none |
+| BJT | C_x | −geqcb: the b–e diffusion charge's dependence on v_BC (TF with VAF or VTF), a transcapacitance C_x·s·v_bc from emitter to base |
+| diode | C_j | TT·g_d (g_d with gmin) + CJO·AREA·M depletion (VJ, M, FC) |
+
+All of a device's capacitances are × M. Symbolic mode (no operating point)
+stamps those the card gives a saturated device (a known-triode one keeps
+Meyer C_gd), forward-active BJT C_π and C_μ, and C_cs, C_j; no C_x.
+Assumption terms `cgs`, `cgd`, `cgb`, `cbs`, `cbd`, `cpi`, `cmu`, `ccs`,
+`cj` take one to 0.
 
 ## Assumptions (`assume`)
 
 Terms an engineer neglects (`ignore`: a device's r_o, g_mb, r_bs, r_bd,
-r_π, r_μ; a passive or diode `open` or `short`) and regions expected
+r_π, r_μ, or a device capacitance; a passive or diode `open` or `short`) and regions expected
 (`regions`), as rules and fields in
 [docs/specs/small-signal-assumptions.md](../docs/specs/small-signal-assumptions.md).
 Each is an exact limit taken before expansion (`assume.rs`): a neglected
@@ -314,6 +346,10 @@ transfer cofactors. Response `distortion`:
   unavailable (also beyond f64, warned) or infinite; `hd2Infinite: true` (`hd3Infinite: true`) is
   present only when it is infinite (H₁ = 0, H₂ (H₃) ≠ 0, each by the same
   1e-12 rule at that frequency: a notch at f leaves H₁ a roundoff residual).
+  Device capacitances are linear there; a listed device with a
+  bias-dependent charge (Meyer, junction or diffusion), which ngspice's
+  .disto expands, adds the warning "HD vs frequency takes the capacitances
+  of M1 as linear".
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
   `symbols`: the K symbols in the numerators of the a_n and HD_n shown in
   closed form (`[]` when none is);
