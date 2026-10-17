@@ -660,6 +660,11 @@ test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", as
   );
   expect(alts.some((alt) => /^a_\{3\} = 0$/u.test(alt))).toBe(true);
 
+  // An unreadable amplitude solves nothing rather than use the default.
+  await section.getByLabel("Distortion amplitude").fill("abc");
+  await expect(section).toContainText("Enter an amplitude above 0.");
+  await expect(section.locator('tr[data-quantity="hd2"]')).toHaveCount(0);
+
   // HD2 grows linearly with the amplitude.
   await section.getByLabel("Distortion amplitude").fill("20m");
   await expect

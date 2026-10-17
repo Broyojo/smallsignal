@@ -890,7 +890,7 @@ function DistortionDetails({
         </p>
       ) : null}
       <Formula
-        latex={`${v}_{out} = a_{1} ${v}_{in} + a_{2} ${v}_{in}^{2}${distortion.order >= 3 ? ` + a_{3} ${v}_{in}^{3}` : ""}`}
+        latex={`v_{out} = a_{1} ${v}_{in} + a_{2} ${v}_{in}^{2}${distortion.order >= 3 ? ` + a_{3} ${v}_{in}^{3}` : ""}`}
       />
       {distortion.coefficients.map((coefficient) => (
         <DistortionFormula
@@ -1560,15 +1560,25 @@ export function SmallSignalPanel({
     )?.kind === "current";
   const defaultAmplitude = currentInput ? 1e-6 : 0.01;
   const typedAmplitude = parseSpiceNumber(amplitudeText);
-  const amplitude =
-    typedAmplitude !== null && typedAmplitude > 0
+  // Blank means the default; anything else must be a positive number, or
+  // nothing is solved (never numbers for an amplitude other than the shown).
+  const amplitude = !amplitudeText.trim()
+    ? defaultAmplitude
+    : typedAmplitude !== null && typedAmplitude > 0
       ? typedAmplitude
-      : defaultAmplitude;
+      : null;
   const distortionKey =
-    distortionOpen && requestKey && !handAnalysis && nonlinear.length
+    distortionOpen &&
+    requestKey &&
+    !handAnalysis &&
+    nonlinear.length &&
+    amplitude !== null
       ? JSON.stringify([requestKey, nonlinear, amplitude])
       : null;
   useEffect(() => {
+    // A new job, or none: drop the old result and any solve in flight.
+    const current = ++distortionGeneration.current;
+    setDistortionResponse(null);
     if (!distortionKey) return;
     const [key, devices, size] = JSON.parse(distortionKey) as [
       string,
@@ -1576,7 +1586,6 @@ export function SmallSignalPanel({
       number,
     ];
     const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
-    const current = ++distortionGeneration.current;
     const timer = setTimeout(() => {
       extraClientRef.current ??= createSmallSignalClient();
       void extraClientRef.current
@@ -1916,12 +1925,7 @@ export function SmallSignalPanel({
                         Amplitude ({currentInput ? "A" : "V"})
                         <input
                           aria-label="Distortion amplitude"
-                          aria-invalid={
-                            amplitudeText.trim() !== "" &&
-                            !(typedAmplitude !== null && typedAmplitude > 0)
-                              ? true
-                              : undefined
-                          }
+                          aria-invalid={amplitude === null ? true : undefined}
                           placeholder={currentInput ? "1u" : "10m"}
                           value={amplitudeText}
                           autoCapitalize="off"
@@ -1936,6 +1940,10 @@ export function SmallSignalPanel({
                         <p className="small-signal-muted">
                           Pick a device to expand.
                         </p>
+                      ) : amplitude === null ? (
+                        <p className="small-signal-muted">
+                          Enter an amplitude above 0.
+                        </p>
                       ) : !distortionResponse ? (
                         <span className="small-signal-formula-pending" />
                       ) : isSmallSignalError(distortionResponse) ? (
@@ -1943,10 +1951,16 @@ export function SmallSignalPanel({
                           {distortionResponse.error}
                         </p>
                       ) : distortionResponse.distortion ? (
-                        <DistortionDetails
-                          distortion={distortionResponse.distortion}
-                          current={currentInput}
-                        />
+                        <>
+                          <ExtraWarnings
+                            warnings={distortionResponse.warnings}
+                            shown={result.warnings}
+                          />
+                          <DistortionDetails
+                            distortion={distortionResponse.distortion}
+                            current={currentInput}
+                          />
+                        </>
                       ) : null}
                     </>
                   )}
