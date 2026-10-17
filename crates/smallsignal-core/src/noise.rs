@@ -1080,6 +1080,9 @@ const AXIS_REL: f64 = 1e-9;
 /// exact numerator, to about 1e-15 on lossless notches).
 const ZERO_REL: f64 = 1e-12;
 
+/// LU accuracy bound (κ₁·eps) above which the noise results warn.
+const LU_WARN: f64 = 1e-6;
+
 /// Relative accuracy asked of the band integral.
 const INTEGRAL_RTOL: f64 = 1e-6;
 
@@ -1205,7 +1208,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             }
         }
     }
-    if lu_worst > 1e-6 {
+    if lu_worst > LU_WARN {
         warnings.push(format!(
             "noise: the circuit is ill-conditioned; spectra are accurate to about {lu_worst:.0e}"
         ));
@@ -1266,6 +1269,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             let r = integrate_log(&mut g, lo, hi, &breaks, INTEGRAL_RTOL);
             if r.as_ref().is_some_and(|r| !r.converged) {
                 warnings.push("noise: the band integral did not fully converge".to_string());
+            }
+            // The band's own solves, at the spectra's threshold: a band can
+            // cross an ill-conditioned stretch the spectrum points miss.
+            if band_lu > LU_WARN {
+                warnings.push(format!(
+                    "noise: the circuit is ill-conditioned in the band; the integrals are accurate to about {band_lu:.0e}"
+                ));
             }
             // The output integral alone, the input-referred one unavailable.
             let output_only = |r: &Integral, why: String| {
@@ -1523,6 +1533,9 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
     } else {
         0.0
     };
+    // The exact pair, kept when the display form drops leakage: the fallback
+    // when even the display form is outside the tolerance.
+    let exact_fallback = dropped_pair.as_ref().map(|_| exact.clone());
     let bp = dropped_pair.unwrap_or(exact);
 
     // Simplified: the r_o → ∞ leading order of the display form, then the
@@ -1557,9 +1570,12 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
             }
         }
         cands.retain(|(p, _)| rel(val(p)) <= tol);
-        // The display form always qualifies, even under a tolerance tighter
-        // than its own leakage error.
-        cands.push((bp, "display form"));
+        // The display form qualifies if within tol; under a tolerance tighter
+        // than its own leakage error, the exact form does.
+        match exact_fallback {
+            Some(ex) if rel(val(&bp)) > tol => cands.push((ex, "exact form")),
+            _ => cands.push((bp, "display form")),
+        }
     }
     let (sp, method) = cands.into_iter().min_by_key(|(p, _)| terms(p)).expect("one candidate");
     let (mut simplified, sv, _) = pair_json(&sp, syms);

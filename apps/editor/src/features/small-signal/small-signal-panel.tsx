@@ -642,24 +642,33 @@ function sentence(text: string): string {
 
 /**
  * The largest sources, then one row for the rest (including any the solver
- * already summed). Sources without a finite share are left out.
+ * already summed). A source with no finite share is an unbounded one (e.g.
+ * flicker at 0 Hz): it is listed first, with a null share, never dropped.
  */
 export function topContributions(
   sources: readonly NoiseContribution[],
   omittedFraction = 0,
   limit = 4,
-): { label: string; fraction: number }[] {
+): { label: string; fraction: number | null }[] {
+  const label = (source: NoiseContribution) =>
+    `${source.element} ${NOISE_KIND[source.kind] ?? source.kind}`;
+  const unbounded = sources
+    .filter((source) => !Number.isFinite(source.fraction))
+    .map((source) => ({ label: label(source), fraction: null }));
   const sorted = sources
     .filter((source): source is NoiseContribution & { fraction: number } =>
       Number.isFinite(source.fraction),
     )
     .sort((a, b) => b.fraction - a.fraction);
-  const rows = sorted.slice(0, limit).map((source) => ({
-    label: `${source.element} ${NOISE_KIND[source.kind] ?? source.kind}`,
-    fraction: source.fraction,
-  }));
+  const room = Math.max(0, limit - unbounded.length);
+  const rows = [
+    ...unbounded,
+    ...sorted
+      .slice(0, room)
+      .map((source) => ({ label: label(source), fraction: source.fraction })),
+  ];
   const rest =
-    sorted.slice(limit).reduce((sum, s) => sum + s.fraction, 0) +
+    sorted.slice(room).reduce((sum, s) => sum + s.fraction, 0) +
     omittedFraction;
   return rest > 0 ? [...rows, { label: "others", fraction: rest }] : rows;
 }
@@ -1155,7 +1164,9 @@ function NoiseDetails({
             ).map((row) => (
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>
-                <td>{formatPercent(row.fraction)}</td>
+                <td>
+                  {row.fraction === null ? "∞" : formatPercent(row.fraction)}
+                </td>
               </tr>
             ))}
           </tbody>

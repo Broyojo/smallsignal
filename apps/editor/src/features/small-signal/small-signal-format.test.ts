@@ -251,8 +251,15 @@ describe("noise values", () => {
         1,
       ),
     ).toEqual([
-      { label: "R1 thermal", fraction: 0.5 },
-      { label: "others", fraction: 0.5 },
+      { label: "M1 thermal", fraction: null },
+      { label: "others", fraction: 1.0 },
+    ]);
+    // Flicker at 0 Hz: the unbounded source leads, finite ones follow.
+    expect(
+      topContributions([source("R1", 0), source("M1", null)], 0, 4),
+    ).toEqual([
+      { label: "M1 thermal", fraction: null },
+      { label: "R1 thermal", fraction: 0 },
     ]);
   });
 });

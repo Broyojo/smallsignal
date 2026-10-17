@@ -120,6 +120,13 @@ def node_count(kind: str, tokens: list[str], models: dict[str, str]) -> int:
     raise ValueError(f"unsupported element kind {kind!r} ({tokens[0]})")
 
 
+def element_tokens(line: str) -> list[str]:
+    """An element line's tokens as the solver reads them (netlist.rs):
+    parentheses and commas separate, and `k = v` is one token `k=v`, so
+    `W=10u,L=1u` is two parameters."""
+    return re.sub(r"\s*=\s*", "=", re.sub(r"[(),]", " ", line)).split()
+
+
 def parse(text: str) -> Netlist:
     title, lines = logical_lines(text)
     net = Netlist(title=title)
@@ -138,7 +145,7 @@ def parse(text: str) -> Netlist:
         if low.startswith("."):
             net.other_lines.append(line)
             continue
-        pending.append(line.split())
+        pending.append(element_tokens(line))
     for tokens in pending:
         kind = tokens[0][0].lower()
         n = node_count(kind, tokens, net.models)

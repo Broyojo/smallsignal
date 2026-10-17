@@ -176,13 +176,27 @@ def lower_keys(d: dict) -> dict:
     return {str(k).lower(): v for k, v in (d or {}).items()}
 
 
-def by_freq(values: list[dict] | None, f: float) -> dict | None:
-    """The entry at frequency f (relative 1e-9, so f = 0 matches only 0).
-    Frequencies are matched, never logged: the solver may return f = 0."""
+def by_freq(values: list[dict] | None, f: float, used: set[int] | None = None) -> dict | None:
+    """The entry at frequency f: the closest within relative 1e-9 (so f = 0
+    matches only 0), or None if there is none or two are equally close.
+    Frequencies are matched, never logged: the solver may return f = 0.
+    With `used` (the ids of entries already paired, one set per list), the
+    pairing is one-to-one: an entry is returned at most once (and added)."""
+    best, best_d, tie = None, math.inf, False
     for v in values or []:
-        if math.isclose(float(v.get("f", math.nan)), f, rel_tol=1e-9):
-            return v
-    return None
+        g = float(v.get("f", math.nan))
+        if (used is not None and id(v) in used) or not math.isclose(g, f, rel_tol=1e-9):
+            continue
+        d = abs(g - f)
+        if d < best_d:
+            best, best_d, tie = v, d, False
+        elif d == best_d:
+            tie = True
+    if best is None or tie:
+        return None
+    if used is not None:
+        used.add(id(best))
+    return best
 
 
 # Noise: ngspice's PSDs equal an independent exact recomputation from its own
@@ -203,8 +217,9 @@ DIST_RTOL = 1e-6
 def compare_noise(got: dict, want: dict, rep: Report):
     gn = got.get("noise") or {}
     for q in ("output", "input"):
+        used: set[int] = set()
         for w in want["noise"][q]:
-            g = next((x for x in gn.get(q) or [] if math.isclose(x["f"], w["f"], rel_tol=1e-9)), None)
+            g = by_freq(gn.get(q), w["f"], used)
             what = f"noise.{q}@{w['f']:g}"
             if g is None or g.get("v2") is None:
                 rep.failures.append(f"{what}: missing")
@@ -230,20 +245,19 @@ def compare_noise(got: dict, want: dict, rep: Report):
         return el, kind_map.get((el[:1], src.get("kind")))
 
     solver_sources = {ng_key(s_) for s_ in gn.get("sources") or []}
-    # Per reference frequency (as by_freq matches them): {(element, source): v2}.
-    expect: list[tuple[float, dict[tuple[str, str], float]]] = []
+    # Per reference frequency, exactly as written (two distinct frequencies
+    # stay two rows): {(element, source): v2}.
+    expect: dict[float, dict[tuple[str, str], float]] = {}
     for c in want["noise"]["contributors"]:
         if c["source"] != "total":
             for w in c["values"]:
-                at = next((d for f, d in expect if math.isclose(f, w["f"], rel_tol=1e-9)), None)
-                if at is None:
-                    expect.append((w["f"], at := {}))
-                at[(c["element"], c["source"])] = w["v2"]
+                expect.setdefault(w["f"], {})[(c["element"], c["source"])] = w["v2"]
     if gn.get("contributors") is None:
         rep.failures.append("noise.contributors: missing")
-        expect = []
-    for f, ng in expect:
-        row = by_freq(gn.get("contributors"), f) or {}
+        expect = {}
+    used_rows: set[int] = set()
+    for f, ng in expect.items():
+        row = by_freq(gn.get("contributors"), f, used_rows) or {}
         listed = {k: s_.get("v2") for s_ in row.get("sources", []) if (k := ng_key(s_))[1]}
         smallest = min((v for v in listed.values() if v is not None), default=0.0)
         omitted = row.get("omitted")
@@ -289,6 +303,14 @@ def compare_noise(got: dict, want: dict, rep: Report):
             claimed = gi.get("relError")
             if claimed is not None and err > max(2 * claimed, 1e-9):
                 rep.failures.append(f"{what}: error {err:.1e} exceeds the solver's own relError {claimed:.1e}")
+        # The solver must claim convergence and a finite error estimate,
+        # unless the reference says it cannot converge (solverConverged).
+        expect_conv = want["noise"]["integrated"].get("solverConverged", True)
+        if gi.get("converged") is not expect_conv:
+            rep.failures.append(f"noise.integrated.converged: got {gi.get('converged')}, want {expect_conv}")
+        claimed = gi.get("relError")
+        if not (isinstance(claimed, (int, float)) and math.isfinite(claimed)):
+            rep.failures.append(f"noise.integrated.relError: got {claimed}, want a finite estimate")
 
 
 def compare_distortion(got: dict, want: dict, rep: Report):
@@ -366,8 +388,9 @@ def compare_distortion(got: dict, want: dict, rep: Report):
     # match an exact 50-digit harmonic perturbation to ~4e-12 (textbook_nd).
     # Only the reference's (positive) frequencies are compared; a solver point
     # at another frequency, such as f = 0 from the sidecar's freqs, is ignored.
+    used: set[int] = set()  # one-to-one, as the noise rows
     for w in ref.get("vsFreq", []):
-        g = by_freq(gd.get("vsFreq"), w["f"])
+        g = by_freq(gd.get("vsFreq"), w["f"], used)
         for h in ("hd2", "hd3"):
             what = f"distortion.vsFreq.{h}@{w['f']:g}"
             # H1 = 0: null, marked infinite unless H_n is 0 too (0/0).
@@ -413,8 +436,9 @@ def compare(got: dict, want: dict, rep: Report, side: dict | None = None):
         if q not in want:
             continue
         gq = got.get(q) or {}
+        used: set[int] = set()
         for w in want[q]["values"]:
-            rep.complex(f"{q}@{w['f']:g}", by_freq(gq.get("values"), w["f"]), w, kind)
+            rep.complex(f"{q}@{w['f']:g}", by_freq(gq.get("values"), w["f"], used), w, kind)
     if "noise" in want:
         compare_noise(got, want, rep)
     if "distortion" in want:

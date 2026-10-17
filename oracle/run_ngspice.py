@@ -496,6 +496,9 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
             band.update({"outputV2": exact["outputV2"], "inputV2": exact["inputV2"],
                          "outputRms": math.sqrt(exact["outputV2"]), "inputRms": math.sqrt(exact["inputV2"]),
                          "method": "adaptive quadrature of the 60-digit independent PSD"})
+            # A band the solver is known not to converge on says so.
+            if "solverConverged" in side["noise"]:
+                band["solverConverged"] = side["noise"]["solverConverged"]
             tr = band["ngspice_trapezoid"]
             band["agreement"] = max(rel_diff(tr["outputV2"], exact["outputV2"]),
                                     rel_diff(tr["inputV2"], exact["inputV2"]))

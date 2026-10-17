@@ -64,13 +64,19 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   Zero noise (noise_zero_output) is exact agreement with zero: a reference
   of 0 passes only a value within 1e-40 V²/Hz (times the band width for an
   integral).
-  `noise_indep.py` recomputes every source with ngspice's formulas on the
-  independent 60-digit rebuild. ngspice-47 level-1 MOS formulas: channel
-  4kT·(2/3)·gm; flicker KF·gm²/(Cox·W·Leff·f^AF) — not SPICE2's
-  KF·Id^AF/(f·Cox·L²); AF is the frequency exponent; Cox = 3.9·ε0/TOX,
-  TOX = 1e-7 m by default. compare.py checks noise at rtol 1e-6, as AC.
+  `noise_indep.py` recomputes every source on the independent 60-digit
+  rebuild, with the source models in
+  [crates/README.md, Noise](../crates/README.md#noise-noise-true-optional-noiseband-flow-fhigh).
+  compare.py checks noise at rtol 1e-6, as AC, pairing each reference
+  frequency one-to-one with the closest solver row within relative 1e-9. A
+  band integral must report `converged: true` and a finite `relError`, unless
+  the sidecar sets `noise.solverConverged: false` (copied into the
+  reference). Element lines are tokenized as the solver does (`W=10u,L=1u`
+  is two parameters).
 - Distortion (`"distortion": {"amplitudes": [...], "freq": f, "amplitude": A}`,
-  `distortion.py`): coefficients a1..a3 of v_out = a1·v + a2·v² + a3·v³ with
+  `distortion.py`; a sidecar block requests its analysis when it is `true`
+  or an object, `{}` meaning the defaults; absent, null or false do not,
+  and any other value is an error): coefficients a1..a3 of v_out = a1·v + a2·v² + a3·v³ with
   an uncertainty each, HD2/HD3 at A (|a2|A/(2|a1|), |a3|A²/(4|a1|)), and four
   ngspice methods that confirm one another: .disto (Volterra; the reference
   where valid), DC-sweep Taylor fit (the reference otherwise), quasi-static
@@ -101,9 +107,10 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
     |c1|): "not quasi-static". At an amplitude whose fundamental is 0
     (within 3× twice its resolution) there is no HD, and |c1..c3| are
     compared instead (`tran_c*`, `distortion.transient_magnitude_tolerance`).
-    A transient that times out or fails is recorded in `transient_error`
-    and `transient_failed_at`; only that amplitude and the later ones may
-    lack transient values.
+    A transient that times out or fails is recorded per amplitude in
+    `transient_failed` (messages in `transient_error`); every other
+    amplitude still runs, and only the listed amplitudes may lack transient
+    values.
 
   A reference a_n is 0 when within 3× (its uncertainty + harmonic
   balance's) (`distortion.zero_orders`). With a1 = 0 (e.g. a diff pair's
@@ -116,8 +123,8 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   HD3 and vsFreq states (finite, infinite as latex `\infty` with value
   null, or null for 0/0); its IIP3 inside the range sqrt(4|a1|/(3|a3|))
   takes over those a1, a3 intervals (infinite required when the reference
-  a3 is exactly 0 and allowed when a3 may be 0, null when a1 and a3 are
-  both 0); fails `distortion.check.ok: false` (null passes: no exact a_n);
+  a3 is exactly 0 and allowed when a3 may be 0, exactly 0 when a1 is 0 and
+  a3 is not, null when both are 0); fails `distortion.check.ok: false` (null passes: no exact a_n);
   and repeats the harmonic-balance and transient checks on the expected
   file. A sidecar that requests noise or distortion fails when the expected
   result has no such block. The CLI's `--nonlinear` lists every M, Q and D
@@ -128,6 +135,8 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   1e-9 (f = 0 only exactly) and checks the reference's frequencies only, so
   a solver vsFreq point at f = 0 (from a 0 in `freqs`) is ignored. With a capacitor, set `"freq"` far below the poles
   so the static coefficients stay quasi-static.
+- Netlist numbers use the SPICE suffixes t g meg k m u n p f a mil
+  (trailing letters ignored), parsed by `spice.value`.
 - `textbook_nd.py`: textbook noise (CS, degenerated CS, SF, diff pair, 5T
   OTA, BJT CE) and distortion (CS with R / ideal-current-source load, with and
   without λ; degenerated CS; SF; BJT CE; CS with CL above its pole) cases, hand-derived (KCL with noise
