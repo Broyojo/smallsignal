@@ -21,7 +21,7 @@ from pathlib import Path
 
 import distortion
 import spice
-from run_ngspice import OPTIONS, rel_diff
+from run_ngspice import OPTIONS, requested, rel_diff
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -77,10 +77,10 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         args += ["--mode", side["mode"]]
     if side.get("match"):
         args += ["--match", ";".join(",".join(g) for g in side["match"])]
-    if side.get("noise"):
+    if requested(side, "noise"):
         band = side["noise"].get("band") if isinstance(side["noise"], dict) else None
         args += ["--noise-band", ",".join(repr(float(f)) for f in band)] if band else ["--noise"]
-    if side.get("distortion"):
+    if requested(side, "distortion"):
         # ngspice is fully nonlinear, so every transistor and diode is selected.
         devices = [e.tokens[0] for e in spice.parse(cir.read_text()).elements if e.kind in "mqd"]
         args += ["--nonlinear", ",".join(devices), "--order", "3",
@@ -388,7 +388,7 @@ def compare(got: dict, want: dict, rep: Report, side: dict | None = None):
     """got against want; with the sidecar, a requested noise or distortion
     analysis whose expected block is missing fails."""
     for q in ("noise", "distortion"):
-        if side and side.get(q) and q not in want:
+        if side and requested(side, q) and q not in want:
             rep.failures.append(f"{q}: the sidecar requests it but the expected result has no {q} block")
     gnodes = lower_keys(got.get("op", {}).get("nodes"))
     for n, v in want["op"]["nodes"].items():
@@ -438,7 +438,7 @@ def main() -> int:
         rep = Report(args.rtol, side.get("reference_limits"))
         try:
             compare(run_cli(cmd, cir, side), want, rep, side)
-        except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
+        except (RuntimeError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
             print(f"{wpath.stem:28s} {'ERROR':6s} {'':>13s}  {str(exc)[:100]}")
             continue
         if rep.failures:

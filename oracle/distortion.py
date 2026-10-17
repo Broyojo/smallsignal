@@ -155,7 +155,7 @@ def _drive(net: spice.Netlist, side: dict) -> list[tuple[spice.Element, float, f
         e = net.element(name)
         if e.kind != "v":
             raise ValueError("distortion needs V-source inputs")
-        out.append((e, float(spice.source_dc(e) or 0), w))
+        out.append((e, spice.value(spice.source_dc(e) or "0"), w))
     return out
 
 

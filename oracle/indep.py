@@ -24,8 +24,6 @@ from run_ngspice import OPTIONS
 
 GMIN = float(re.search(r"gmin=([^ ]+)", OPTIONS).group(1))
 VT = mp.mpf("1.38064852e-23") * mp.mpf("300.15") / mp.mpf("1.6021766208e-19")
-SUFFIX = [("meg", 1e6), ("mil", 25.4e-6), ("t", 1e12), ("g", 1e9), ("k", 1e3), ("m", 1e-3), ("u", 1e-6),
-          ("n", 1e-9), ("p", 1e-12), ("f", 1e-15), ("a", 1e-18)]
 
 
 def P(x) -> mp.mpf:
@@ -34,14 +32,8 @@ def P(x) -> mp.mpf:
 
 
 def num(tok: str) -> mp.mpf:
-    m = re.match(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(.*)$", tok.strip())
-    if not m:
-        raise ValueError(f"bad number {tok!r}")
-    rest = m.group(2).lower()
-    for suf, mult in SUFFIX:
-        if rest.startswith(suf):
-            return mp.mpf(m.group(1)) * mp.mpf(repr(mult))
-    return mp.mpf(m.group(1))
+    """A netlist number (spice.decimal: exact, then at mp precision)."""
+    return mp.mpf(str(spice.decimal(tok)))
 
 
 def model_params(text: str) -> dict[str, dict[str, float]]:

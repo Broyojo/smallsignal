@@ -487,7 +487,7 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
         result["rin"] = {"values": zin}
     if side.get("rout"):
         result["rout"] = {"values": zout(net, side, keep, name)}
-    if side.get("noise"):
+    if requested(side, "noise"):
         result["noise"] = noise(net, side, keep, name)
         if "integrated" in result["noise"]:
             import noise_indep  # noqa: PLC0415 - noise_indep imports this module
@@ -504,12 +504,24 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
             if not band["agreement"] <= AGREEMENT_RTOL:
                 raise NgspiceError(f"{name}: band integral disagrees with ngspice's spectrum by "
                                    f"{band['agreement']:.1e} (limit {AGREEMENT_RTOL:g})")
-    if side.get("distortion"):
+    if requested(side, "distortion"):
         import distortion  # noqa: PLC0415 - distortion imports this module
         result["distortion"] = distortion.analyze(cir, net, side, keep)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
+
+
+def requested(side: dict, key: str) -> bool:
+    """Whether the sidecar asks for the `noise` or `distortion` analysis:
+    true or an object (an empty one means the defaults); absent, null or
+    false do not. Anything else is a ValueError."""
+    v = side.get(key)
+    if v is None or v is False:
+        return False
+    if v is True or isinstance(v, dict):
+        return True
+    raise ValueError(f"sidecar {key!r} must be true or an object, got {v!r}")
 
 
 def main() -> int:
