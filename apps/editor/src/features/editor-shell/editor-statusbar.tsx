@@ -4,6 +4,7 @@ import type { EditorTool } from "../../interaction/interaction-state";
 import {
   SITE_CHANGE_LOG_URL,
   SITE_PRIVACY_PATH,
+  SITE_HAS_PRIVACY_PAGE,
 } from "../../components/site-resource-links";
 import { ToolIcon } from "./tool-icon";
 
@@ -310,15 +311,17 @@ export function EditorStatusbar({
               Change Log
             </a>
             {/* A new tab, like Change Log: the drawing stays open here. */}
-            <a
-              className="statusbar-change-log statusbar-privacy"
-              data-testid="statusbar-privacy"
-              href={SITE_PRIVACY_PATH}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Privacy
-            </a>
+            {SITE_HAS_PRIVACY_PAGE ? (
+              <a
+                className="statusbar-change-log statusbar-privacy"
+                data-testid="statusbar-privacy"
+                href={SITE_PRIVACY_PATH}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Privacy
+              </a>
+            ) : null}
           </>
         ) : null}
         <button

@@ -13,6 +13,12 @@ export interface SmallSignalRequest {
   tolerance?: number;
   /** Symbolic only: no operating point or numbers. */
   symbolic?: boolean;
+  /** Second input for a differential drive: input +½, inputNeg −½. */
+  inputNeg?: string | null;
+  /** With inputNeg: differential (v+ − v−) or common-mode drive. */
+  mode?: "differential" | "common";
+  /** Devices that share one set of symbols, e.g. [["M1", "M2"]]. */
+  match?: string[][];
 }
 
 export interface ComplexPoint {
@@ -34,10 +40,14 @@ export interface SmallSignalExpression {
   den?: string | null;
   /** null when the exact form is too large to typeset. */
   latex: string | null;
+  /** Number of terms in numerator and denominator. */
+  terms?: { num: number; den: number };
   /** Simplified forms only: worst relative error against the exact form. */
   maxRelError?: number;
   /** Simplified forms only: nothing was dropped, so it is exact. */
   same?: boolean;
+  /** Hand analysis: the approximation the simplified form makes. */
+  assumption?: string;
   /** The plain sum-of-products form when `latex` uses ∥ notation. */
   latexExpanded?: string | null;
 }
@@ -85,6 +95,11 @@ export type DeviceOperatingPoint =
   | BjtOperatingPoint
   | ({ type: string } & Record<string, number | string>);
 
+export interface MatchCandidate {
+  elements: string[];
+  kind: "device" | "passive";
+}
+
 export interface SmallSignalResult {
   /** True when no operating point was computed (missing values or requested). */
   symbolic?: boolean;
@@ -93,6 +108,11 @@ export interface SmallSignalResult {
     devices: Record<string, DeviceOperatingPoint>;
   } | null;
   warnings?: string[];
+  /**
+   * Elements that may share symbols: transistors with the same model, size
+   * (and bias, in numeric mode), and passives with equal values.
+   */
+  matchCandidates?: MatchCandidate[];
   gain?: SmallSignalQuantity;
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;

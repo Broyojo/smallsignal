@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { SmallSignalSource } from "@icm/small-signal";
 import {
+  differentialPairs,
   formatPlain,
   preferredOutput,
   signalLabel,
@@ -43,5 +45,41 @@ describe("preferredOutput", () => {
     expect(
       preferredOutput(["0", "a", "vout", "vdd"], new Set(["vdd"]), []),
     ).toBe("vout");
+  });
+});
+
+describe("differentialPairs", () => {
+  const pin = (name: string): SmallSignalSource => ({
+    name: `VPIN_${name}`,
+    kind: "voltage",
+    nodes: [name, "0"],
+    dc: "?",
+    pin: name,
+  });
+  const labels = (sources: SmallSignalSource[]) =>
+    differentialPairs(sources).map(([a, b]) => `${a.pin}|${b.pin}`);
+
+  it("pairs Vin1/Vin2, Vin+/Vin−, Vinp/Vinn and INP/INN", () => {
+    expect(labels([pin("Vin1"), pin("Vin2"), pin("Vb")])).toEqual([
+      "Vin1|Vin2",
+    ]);
+    expect(labels([pin("Vin-"), pin("Vin+")])).toEqual(["Vin+|Vin-"]);
+    expect(labels([pin("Vinp"), pin("Vinn")])).toEqual(["Vinp|Vinn"]);
+    expect(labels([pin("INP"), pin("INN")])).toEqual(["INP|INN"]);
+  });
+
+  it("does not invent a pair", () => {
+    expect(labels([pin("Vin"), pin("Vb")])).toEqual([]);
+    expect(labels([pin("Vin1")])).toEqual([]);
+  });
+});
+
+describe("real values", () => {
+  it("prints a real gain with rounding residue as a signed number, not a phase", async () => {
+    const { pointTextForTest } = await import("./small-signal-panel");
+    expect(pointTextForTest({ f: 1000, re: -4.191, im: 5.13e-16 }, "")).toBe(
+      "-4.191",
+    );
+    expect(pointTextForTest({ f: 1000, re: -1, im: -0.5 }, "")).toContain("∠");
   });
 });

@@ -303,3 +303,34 @@
     animation: none;
   }
 }
+
+.small-signal-match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-match button {
+  padding: 2px 8px;
+  border: 1px solid var(--icm-border);
+  border-radius: 999px;
+  background: var(--icm-surface);
+  color: var(--icm-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.small-signal-match button[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--icm-accent-soft);
+  color: var(--icm-accent);
+}
+
+.small-signal-exact > summary {
+  cursor: pointer;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}

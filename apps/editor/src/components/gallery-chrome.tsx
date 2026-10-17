@@ -77,7 +77,7 @@ export function GalleryChrome({
           >
             <img
               className="tokenzhang-link-icon"
-              src="/tokenzhang-favicon.png"
+              src={`${import.meta.env.BASE_URL}tokenzhang-favicon.png`}
               alt=""
               width={16}
               height={16}

@@ -165,9 +165,13 @@ function formatValue(value: number, unit: string): string {
   return unit ? formatEngineering(value, unit) : formatPlain(value);
 }
 
+export { pointText as pointTextForTest };
+
 function pointText(point: ComplexPoint, unit: string): string {
   if (point.inf || point.re === null || point.im === null) return "∞";
-  if (point.im === 0) return formatValue(point.re, unit);
+  // Rounding residue in a real quantity is not a phase.
+  if (Math.abs(point.im) <= 1e-12 * Math.abs(point.re))
+    return formatValue(point.re, unit);
   const magnitude = Math.hypot(point.re, point.im);
   const phase = (Math.atan2(point.im, point.re) * 180) / Math.PI;
   return `${formatValue(magnitude, unit)} ∠ ${phase.toFixed(1)}°`;
@@ -220,6 +224,14 @@ function QuantityCard({
       ? quantity.simplified
       : null;
   const value = quantity.values?.[0];
+  const terms = quantity.exact.terms;
+  const exactIsLong =
+    quantity.exact.latex === null ||
+    (terms ? terms.num + terms.den > 6 : quantity.exact.latex.length > 160);
+  const simplerNote = simpler?.assumption
+    ? `assuming ${simpler.assumption}`
+    : `within ${formatPercent(simpler?.maxRelError ?? 0)} of the exact form`;
+  const poleCount = quantity.poles?.length ?? 0;
   const poles = (quantity.poles ?? []).map(rootText).filter(Boolean);
   return (
     <section className="small-signal-card" aria-label={title}>
@@ -236,15 +248,28 @@ function QuantityCard({
           </strong>
         ) : null}
       </header>
-      <ExactFormula symbol={symbol} quantity={quantity} />
-      {simpler ? (
-        <div className="small-signal-simpler">
-          <Formula latex={`\\approx ${simpler.latex}`} />
-          <small>
-            within {formatPercent(simpler.maxRelError ?? 0)} of the exact form
-          </small>
-        </div>
-      ) : null}
+      {simpler && exactIsLong ? (
+        <>
+          {/* A long exact form would bury the result: lead with the
+              readable one and keep the exact form a click away. */}
+          <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
+          <small className="small-signal-muted">{simplerNote}</small>
+          <details className="small-signal-exact">
+            <summary>Exact</summary>
+            <ExactFormula symbol={symbol} quantity={quantity} />
+          </details>
+        </>
+      ) : (
+        <>
+          <ExactFormula symbol={symbol} quantity={quantity} />
+          {simpler ? (
+            <div className="small-signal-simpler">
+              <Formula latex={`\\approx ${simpler.latex}`} />
+              <small>{simplerNote}</small>
+            </div>
+          ) : null}
+        </>
+      )}
       {quantity.values && quantity.values.length > 1 ? (
         <table className="small-signal-values">
           <tbody>
@@ -259,7 +284,7 @@ function QuantityCard({
       ) : null}
       {poles.length ? (
         <small className="small-signal-muted">
-          {poles.length === 1 ? "Pole" : "Poles"} {poles.join(", ")}
+          {poleCount === 1 ? "Pole" : "Poles"} {poles.join(", ")}
         </small>
       ) : null}
     </section>
@@ -348,6 +373,36 @@ function sourceLabel(source: SmallSignalSource): string {
   return source.pin ?? source.name;
 }
 
+/**
+ * Inputs drawn as a pair (Vin1/Vin2, Vin+/Vin−, Vinp/Vinn, INP/INN): offered
+ * first, as a differential drive.
+ */
+export function differentialPairs(
+  sources: SmallSignalSource[],
+): Array<[SmallSignalSource, SmallSignalSource]> {
+  const voltage = sources.filter((source) => source.kind === "voltage");
+  const pairs: Array<[SmallSignalSource, SmallSignalSource]> = [];
+  const split = (label: string) => {
+    const match = /^(.*?)(\+|-|−|p|n|P|N|1|2)$/u.exec(label);
+    if (!match) return null;
+    const sign = match[2] ?? "";
+    const positive = ["+", "p", "P", "1"].includes(sign);
+    return { stem: match[1] ?? "", positive };
+  };
+  for (const plus of voltage) {
+    const a = split(sourceLabel(plus));
+    if (!a?.positive || !a.stem) continue;
+    const minus = voltage.find((other) => {
+      const b = split(sourceLabel(other));
+      return other !== plus && b && !b.positive && b.stem === a.stem;
+    });
+    if (minus) pairs.push([plus, minus]);
+  }
+  return pairs;
+}
+
+const DIFF_PREFIX = "diff:";
+
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
 export function SmallSignalPanel({
   project,
@@ -383,6 +438,9 @@ export function SmallSignalPanel({
   const [frequencies, setFrequencies] = useState("1k");
   // Hand-analysis mode: no bias, every transistor taken as saturated.
   const [assumeSaturation, setAssumeSaturation] = useState(false);
+  // Matched pairs the user turned off (keys like "M1=M2").
+  const [unmatched, setUnmatched] = useState<ReadonlySet<string>>(new Set());
+  const [candidates, setCandidates] = useState<string[][]>([]);
   const [response, setResponse] = useState<SmallSignalResponse | null>(null);
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
@@ -410,12 +468,34 @@ export function SmallSignalPanel({
   const nets = (netlist?.nets ?? []).filter((net) => !/^nc\d+$/u.test(net));
   const sources = netlist?.sources ?? [];
   const sourceNodes = new Set(sources.flatMap((source) => source.nodes));
-  const chosenInput =
-    input && sources.some((source) => source.name === input)
-      ? input
+  const pairs = differentialPairs(sources);
+  const pairValue = ([plus, minus]: [SmallSignalSource, SmallSignalSource]) =>
+    `${DIFF_PREFIX}${plus.name}|${minus.name}`;
+  const validInput =
+    input &&
+    (sources.some((source) => source.name === input) ||
+      pairs.some((pair) => pairValue(pair) === input));
+  // A drawn input pair is the natural default for a differential stage.
+  const chosenInput = validInput
+    ? input
+    : pairs[0]
+      ? pairValue(pairs[0])
       : (sources.find((source) => /in/iu.test(sourceLabel(source)))?.name ??
         sources[0]?.name ??
         null);
+  const differential = chosenInput?.startsWith(DIFF_PREFIX)
+    ? (chosenInput.slice(DIFF_PREFIX.length).split("|") as [string, string])
+    : null;
+  // Pairs from an earlier solve, kept only while all their elements exist.
+  const elementNames = new Set(
+    (netlist?.text ?? "")
+      .split("\n")
+      .map((line) => line.split(" ")[0]?.toLowerCase() ?? ""),
+  );
+  const liveCandidates = candidates.filter((pair) =>
+    pair.every((name) => elementNames.has(name.toLowerCase())),
+  );
+  const match = liveCandidates.filter((pair) => !unmatched.has(pair.join("=")));
   const chosenOutput =
     output && nets.includes(output)
       ? output
@@ -438,7 +518,11 @@ export function SmallSignalPanel({
     !noDcPath.length &&
     !noOutput
       ? {
-          input: chosenInput,
+          input: differential ? differential[0] : chosenInput,
+          ...(differential
+            ? { inputNeg: differential[1], mode: "differential" as const }
+            : {}),
+          ...(match.length ? { match } : {}),
           output: chosenOutput,
           ref: chosenReference === "0" ? null : chosenReference,
           freqs: parseFrequencies(frequencies),
@@ -465,6 +549,14 @@ export function SmallSignalPanel({
       void client.analyze(text, job).then((next) => {
         if (current !== generation.current) return;
         setResponse(next);
+        if (!isSmallSignalError(next) && next.matchCandidates) {
+          const found = next.matchCandidates.map(
+            (candidate) => candidate.elements,
+          );
+          setCandidates((prev) =>
+            JSON.stringify(prev) === JSON.stringify(found) ? prev : found,
+          );
+        }
         setSolving(false);
       });
     }, SOLVE_DEBOUNCE_MS);
@@ -479,15 +571,22 @@ export function SmallSignalPanel({
     response && isSmallSignalError(response) && !blocked
       ? response.error
       : null;
-  const inputSource = sources.find((source) => source.name === chosenInput);
+  const inputSource = sources.find(
+    (source) => source.name === (differential ? differential[0] : chosenInput),
+  );
+  const minusSource = differential
+    ? sources.find((source) => source.name === differential[1])
+    : undefined;
   const outputLabel =
     chosenReference === "0"
       ? signalLabel("v", chosenOutput)
       : `${signalLabel("v", chosenOutput)} - ${signalLabel("v", chosenReference)}`;
-  const inputLabel = signalLabel(
-    inputSource?.kind === "current" ? "i" : "v",
-    inputSource ? sourceLabel(inputSource) : "",
-  );
+  const inputLabel = minusSource
+    ? `${signalLabel("v", inputSource ? sourceLabel(inputSource) : "")} - ${signalLabel("v", sourceLabel(minusSource))}`
+    : signalLabel(
+        inputSource?.kind === "current" ? "i" : "v",
+        inputSource ? sourceLabel(inputSource) : "",
+      );
   const devices = Object.entries(result?.op?.devices ?? {});
   const allGood =
     result &&
@@ -546,6 +645,11 @@ export function SmallSignalPanel({
                   {sources.length ? null : (
                     <option value="">Add a source or Pin</option>
                   )}
+                  {pairs.map((pair) => (
+                    <option key={pairValue(pair)} value={pairValue(pair)}>
+                      {sourceLabel(pair[0])} − {sourceLabel(pair[1])}
+                    </option>
+                  ))}
                   {sources.map((source) => (
                     <option key={source.name} value={source.name}>
                       {sourceLabel(source)}
@@ -628,6 +732,38 @@ export function SmallSignalPanel({
                     : "All transistors are"}{" "}
                   in saturation.
                 </p>
+              </div>
+            ) : null}
+
+            {liveCandidates.length && result ? (
+              <div className="small-signal-match" aria-label="Matched pairs">
+                <span>Matched</span>
+                {liveCandidates.map((pair) => {
+                  const key = pair.join("=");
+                  const on = !unmatched.has(key);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={on}
+                      title={
+                        on
+                          ? "Shares one set of symbols. Click to treat separately."
+                          : "Click to treat as a matched pair."
+                      }
+                      onClick={() =>
+                        setUnmatched((prev) => {
+                          const next = new Set(prev);
+                          if (on) next.add(key);
+                          else next.delete(key);
+                          return next;
+                        })
+                      }
+                    >
+                      {pair.join(" = ")}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
 
