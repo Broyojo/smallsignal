@@ -110,8 +110,8 @@ exceed `maxTerms` terms (default 2,000,000).
   outside saturation (MOS triode, BJT saturation) stays finite in every
   leading-order form, with the region warning. Symbolic mode, which has no
   operating point, knows one such case: two MOSFETs of one type and model
-  on a shared gate, one's drain on the other's source; that one is in
-  triode. Then `values`
+  on a shared gate, one's drain on the other's source, with both bulks on
+  one node or each on its own source; that one is in triode. Then `values`
   (`f, re, im, mag, phaseDeg`; `inf: true` with null parts when infinite),
   `poles` and `zeros` (in Hz; empty in symbolic mode), `poleCount` and
   `zeroCount` (their number, the degree in s of the denominator and

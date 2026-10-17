@@ -649,6 +649,26 @@ fn matching_keeps_regions_apart() {
     }
 }
 
+/// The inner device of a shared-gate stack is in triode only when its
+/// threshold is provably no higher than the outer one's: both bulks on one
+/// node, or each on its own source. With the inner bulk elsewhere, body
+/// effect can keep it saturated, so nothing is inferred (before: "M1 is in
+/// triode" and a finite r_{o1}).
+#[test]
+fn triode_inference_needs_the_bulk_bias() {
+    let r = run(
+        "stack\nVDD vdd 0\nVIN in 0\nVB vb 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 vb\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["warnings"], json!([]));
+    assert!(!r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o"));
+    let r = run(
+        "stack\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x x\nM1 x in 0 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["warnings"], json!(["M1 is in triode"]));
+}
+
 /// An element with both ends on one node contributes nothing: it is named,
 /// and the result is the circuit's without it.
 #[test]

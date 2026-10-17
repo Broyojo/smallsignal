@@ -908,20 +908,31 @@ fn degenerate_junctions(net: &Netlist) -> Vec<String> {
 /// mode has no operating point (the bias is unknown, even where the netlist
 /// holds placeholder values), so only the case the wiring decides: two
 /// MOSFETs of one type and model on a shared gate, one's drain on the
-/// other's source. Whenever the outer one conducts, the inner one has
-/// V_DS < V_GS − V_TH (its threshold is no higher), so it is in triode: the
-/// pair is one longer device.
+/// other's source, with both bulks on one node or each on its own source.
+/// Then the inner threshold is no higher: its reverse bulk-source bias is
+/// no larger (with one bulk node, the current flows from the outer source
+/// to the inner one, so the inner source is nearer the bulk's potential;
+/// with each bulk on its source, both are zero). Whenever the outer one
+/// conducts, the inner one has
+/// V_DS < V_GS − V_TH: it is in triode, and the pair is one longer device.
+/// With other bulk wiring, body effect can keep the inner one saturated.
 fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
     let (mut linear, mut warnings) = (Vec::new(), Vec::new());
     for (ei, inner) in net.elements.iter().enumerate() {
         let Kind::M { model: mi, .. } = &inner.kind else {
             continue;
         };
-        let (d, g, s) = (inner.nodes[0], inner.nodes[1], inner.nodes[2]);
+        let (d, g, s, b) = (inner.nodes[0], inner.nodes[1], inner.nodes[2], inner.nodes[3]);
         let stacked = d != s
             && net.elements.iter().enumerate().any(|(eo, outer)| match &outer.kind {
                 Kind::M { model: mo, .. } => {
-                    eo != ei && mo.ty == mi.ty && mo.name == mi.name && outer.nodes[1] == g && outer.nodes[2] == d
+                    let ob = outer.nodes[3];
+                    eo != ei
+                        && mo.ty == mi.ty
+                        && mo.name == mi.name
+                        && outer.nodes[1] == g
+                        && outer.nodes[2] == d
+                        && (ob == b || (b == s && ob == d))
                 }
                 _ => false,
             });
