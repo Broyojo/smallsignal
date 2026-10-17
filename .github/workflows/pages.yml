@@ -35,7 +35,7 @@ jobs:
         run: |
           if [ -d crates/smallsignal-wasm ]; then
             wasm-pack build crates/smallsignal-wasm --target web --release \
-              --out-dir ../../packages/small-signal/wasm
+              --out-dir ../../packages/small-signal/wasm -- --locked
           else
             echo "crates/smallsignal-wasm not present; the panel uses its stub"
           fi

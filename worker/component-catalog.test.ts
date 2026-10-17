@@ -50,7 +50,7 @@ describe("public component catalog queries", () => {
       let cursor: string | null = null;
       let requests = 0;
       do {
-        const page = await (
+        const page: { entries: unknown[]; nextCursor: string | null } = await (
           await route(
             "GET",
             `?view=summary&catalog=1&limit=${limit}` +
