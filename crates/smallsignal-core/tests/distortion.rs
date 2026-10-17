@@ -697,3 +697,140 @@ M2 o2 inn tail tail nm W={w2} L=1u\nITAIL tail 0 200u\nVIP inp 0 DC 1.2 AC 1\nVI
     assert_eq!(r["distortion"]["check"]["matchBound"], 0.0);
     assert_eq!(r["distortion"]["check"]["ok"], true);
 }
+
+#[test]
+fn blocked_dc_input_has_no_harmonic_distortion_ratio() {
+    // AC-coupled gate: at s → 0 the input never reaches M1, so a1 = a2 =
+    // a3 = 0 and HD2, HD3, IIP3 are 0/0 there (null, not 0). At 1 kHz the
+    // coupling capacitor passes the input and HD is defined.
+    let net = "ac\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0 AC 1\nCC in g 1u\nRG g bias 1meg\n\
+VB bias 0 0.9\nRD vdd out 5k\nM1 out g 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "freqs": [1e3], "amplitude": 0.02 })),
+    );
+    let d = &r["distortion"];
+    for n in 0..3 {
+        assert_eq!(coef(&r, n), 0.0);
+    }
+    for k in ["hd2", "hd3", "iip3"] {
+        assert!(d[k].is_null(), "{k}: {}", d[k]);
+    }
+    // Far above the coupling pole: the DC-coupled stage's HD2 = A/(4 Vov).
+    let hd = d["vsFreq"][0]["hd2"].as_f64().unwrap();
+    assert!(rel(hd, 0.02 / (4.0 * 0.4)) < 1e-6, "{hd}");
+}
+
+#[test]
+fn order_two_needs_no_third_harmonic_solve() {
+    // An ideal LC tank (1 H, 1 F) resonates at 1/(2π) Hz, exactly 3f for
+    // f = 1/(6π): the system at 3f is singular, but HD2 needs only f, 2f.
+    let net = SQUARE.replace(".model", "L1 x 0 1\nC1 x 0 1\n.model");
+    let f = 1.0 / (6.0 * std::f64::consts::PI);
+    let rq = |order: u8| {
+        run(
+            &net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "freqs": [f], "order": order })),
+        )
+    };
+    let r = rq(2);
+    let vs = &r["distortion"]["vsFreq"][0];
+    let hd = r["distortion"]["hd2"]["value"].as_f64().unwrap();
+    assert!(rel(vs["hd2"].as_f64().unwrap(), hd) < 1e-9, "{vs}");
+    assert!(vs["hd3"].is_null());
+    // Order 3 does need 3f: no HD3 there (and the HD2 of that solve is
+    // still given).
+    let r = rq(3);
+    let vs = &r["distortion"]["vsFreq"][0];
+    assert!(vs["hd3"].is_null(), "{vs}");
+}
+
+/// A matched NMOS pair driven at the bulks (back gates), with forward body
+/// bias v_BS = 0.2 V; the second model has φ = `phi_b`, with γ and VTO
+/// chosen so ngspice's g_mb (γ/(2·sarg)) and everything else match M1
+/// exactly, while the DC slope γ/(2√φ) does not.
+fn body_biased_pair(phi_b: f64) -> String {
+    let vbs: f64 = 0.2;
+    let sarg = |phi: f64| phi.sqrt() - vbs / (2.0 * phi.sqrt());
+    let (ga, pa, va) = (0.4, 0.7, 0.5);
+    let gb = ga * sarg(phi_b) / sarg(pa);
+    let vb = va + ga * (sarg(pa) - pa.sqrt()) - gb * (sarg(phi_b) - phi_b.sqrt());
+    format!(
+        "fbb\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nVG g 0 1.0\nM1 o1 g 0 bp na W=10u L=1u\n\
+M2 o2 g 0 bn nb W=10u L=1u\nVIP bp 0 DC 0.2 AC 1\nVINN bn 0 0.2\n\
+.model na nmos (level=1 kp=200u vto={va:.17e} lambda=0.05 gamma={ga:.17e} phi={pa:.17e})\n\
+.model nb nmos (level=1 kp=200u vto={vb:.17e} lambda=0.05 gamma={gb:.17e} phi={phi_b:.17e})\n"
+    )
+}
+
+#[test]
+fn matched_pair_with_different_body_slopes_is_split() {
+    let rq = req(
+        json!({ "input": "VIP", "inputNeg": "VINN", "output": "o1", "ref": "o2", "nonlinear": ["M1", "M2"],
+                 "match": [["M1", "M2"], ["RD1", "RD2"]] }),
+    );
+    let mismatch_warned = |r: &Value| {
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("closed form and numeric"))
+    };
+    // DC slopes 3.7% apart: the gmb symbols are split, and the closed form
+    // matches the numeric expansion.
+    let r = run(&body_biased_pair(0.9), &rq);
+    let d = &r["distortion"];
+    assert!(!mismatch_warned(&r), "{}", r["warnings"]);
+    assert_eq!(d["check"]["ok"], true, "{}", d["check"]);
+    for n in 0..3 {
+        let a = d["coefficients"][n]["numeric"].as_f64().unwrap();
+        assert!(
+            a != 0.0 && rel(coef(&r, n), a) < 1e-9,
+            "a{}: {} {a}",
+            n + 1,
+            coef(&r, n)
+        );
+    }
+    assert!(
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("gmb")),
+        "{}",
+        r["warnings"]
+    );
+    // 1.7e-13 apart: still one symbol, and that difference is part of the
+    // mismatch the check allows.
+    let r = run(&body_biased_pair(0.7 * (1.0 + 1e-12)), &rq);
+    let d = &r["distortion"];
+    assert!(!mismatch_warned(&r), "{}", r["warnings"]);
+    assert_eq!(d["check"]["ok"], true, "{}", d["check"]);
+    assert!(d["check"]["matchBound"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn a_cancelled_coefficient_is_checked_against_its_terms() {
+    // oracle/corpus/dist_diffpair_dm: an exactly matched pair, so the
+    // closed-form a2 is 0 and the numeric a2 is roundoff (~1e-16). The
+    // check compares it relative to the node responses it is the difference
+    // of, not to itself.
+    let net = "dm\n.options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000\n\
+VDD vdd 0 3\nVIP inp 0 DC 1.2\nVINN inn 0 DC 1.2\nM1 o1 inp tail 0 nch W=10u L=1u\n\
+M2 o2 inn tail 0 nch W=10u L=1u\nITAIL tail 0 DC 200u\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nCL1 o1 0 1p\n\
+CL2 o2 0 1p\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n";
+    let r = run(
+        net,
+        &req(
+            json!({ "input": "VIP", "inputNeg": "VINN", "mode": "differential", "output": "o2", "ref": "o1",
+                     "freqs": [1e6, 1e8], "match": [["M1", "M2"], ["RD1", "RD2"], ["CL1", "CL2"]],
+                     "nonlinear": ["M1", "M2"], "order": 3, "amplitude": 0.01 }),
+        ),
+    );
+    let d = &r["distortion"];
+    assert_eq!(d["coefficients"][1]["latex"], "0");
+    let ck = &d["check"];
+    assert_eq!(ck["ok"], true, "{ck}");
+    assert!(ck["maxRelDiff"].as_f64().unwrap() < 1e-10, "{ck}");
+    assert_eq!(ck["matchBound"], 0.0);
+}

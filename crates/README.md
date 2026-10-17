@@ -183,7 +183,9 @@ i = (small-signal model) + Σ K_α·u^α over 2 ≤ |α| ≤ order, where u are 
 small-signal control voltages. The linear part is the derivative of the DC
 current, so a₁ is the slope of the DC transfer curve: under forward body bias
 (v_BS > 0) g_mb is γ·g_m/(2√φ), not ngspice's AC γ·g_m/(2·sarg), and a warning
-says so (a₁ can then differ from the gain). A device biased where its
+says so (a₁ can then differ from the gain). Matched devices whose corrected
+g_mb differ by more than MATCH_REL get one g_mb symbol each (with a
+warning); otherwise their difference joins the match mismatch. A device biased where its
 equations switch branch (v_GS = V_TH, v_DS = V_DSAT, v_DS = 0 with λ or γ,
 v_BS = 0 with γ and the bulk not tied to the source, a junction at −3·V_T,
 each within 1e-9 V) gets a warning: its expansion is one-sided. Names: `K_{2g,M1}` (plain `K2g_M1`) =
@@ -208,9 +210,11 @@ transfer cofactors. Response `distortion`:
 - `hd2` = |a₂|A/(2|a₁|), `hd3` = |a₃|A²/(4|a₁|), `iip3` = √(4|a₁|/(3|a₃|)) (input
   amplitude; `\infty` when a₃ = 0), each `{latex, value, display, simplified}`,
   latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`; `hd3` and
-  `iip3` are null for `order` 2.
+  `iip3` are null for `order` 2, and any of the three is null where it is
+  0/0 at DC (a₁ = 0 with a₂ or a₃ = 0, e.g. an input blocked by a coupling
+  capacitor).
 - `vsFreq`: `[{f, hd2, hd3}]` at `freqs` from H₂(jω,jω) and H₃(jω,jω,jω)
-  (LU solves at ω, 2ω, 3ω on the full model).
+  (LU solves at ω, 2ω and, for `order` 3, 3ω on the full model).
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
   `symbols`: the K symbols used (`[]` when no closed form was built);
   `omissionError`; `check` `{ok, maxRelDiff, orders, matchBound}`: each
@@ -218,7 +222,11 @@ transfer cofactors. Response `distortion`:
   which; null when none did), allowing 4× `matchBound`, the relative effect
   of the accepted match mismatch (mismatch·Σ|p·∂a_n/∂p| over merged linear
   parameters and Taylor coefficients; a merged a_n that cancels to 0 keeps
-  that residual numerically).
+  that residual numerically). The difference is
+  relative to the largest of the two values and the size of the terms a_n
+  sums (each Taylor coefficient's part Σ|K·∂a_n/∂K|, and |v_out| + |v_ref|),
+  so an a_n that cancels exactly (a matched pair's a₂) is not compared with
+  its numeric roundoff alone.
 - Every field is always present. A quantity whose exact closed form would
   exceed 100k terms or `maxTerms` (its numerator, or the D^{2n−1} under it;
   e.g. a 5T OTA's a₃ with junction leakage kept), or every quantity when the

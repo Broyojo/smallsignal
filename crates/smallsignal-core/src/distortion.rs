@@ -487,8 +487,64 @@ impl Probe<'_> {
     }
 
     /// [a1, a2, a3] per input unit at frequency f (H1(jω), H2(jω,jω),
-    /// H3(jω,jω,jω)), with each coefficient's value from `vals`.
-    pub fn volterra(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64], f: f64) -> Option<[Complex64; 3]> {
+    /// H3(jω,jω,jω)), with each coefficient's value from `vals`; a3 only
+    /// when `third` (NaN otherwise: the system at 3f is not solved).
+    pub fn volterra(
+        &self,
+        devs: &[NlDev],
+        coefs: &[Coef],
+        vals: &[f64],
+        f: f64,
+        third: bool,
+    ) -> Option<[Complex64; 3]> {
+        let x = self.kernels(devs, coefs, vals, f, third)?;
+        let k = self.vid;
+        let out = |x: &[Complex64]| self.node(x, self.out) - self.node(x, self.rf);
+        Some([out(&x[0]) / k, out(&x[1]) / (k * k), out(&x[2]) / (k * k * k)])
+    }
+
+    /// At DC, the size of the terms each a_n is the sum of: the two node
+    /// responses it is the difference of (|v_out| + |v_ref|, per input
+    /// unit^n) and each Taylor coefficient's part, Σ|K·∂a_n/∂K| (a_n is a
+    /// polynomial of degree ≤ 2 in the K, so a central difference with any
+    /// step is exact).
+    fn dc_terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64]) -> Option<[f64; 3]> {
+        let x = self.kernels(devs, coefs, vals, 0.0, true)?;
+        let mut terms = [0.0; 3];
+        for n in 0..3 {
+            let k = self.vid.abs().powi(n as i32 + 1);
+            terms[n] = (self.node(&x[n], self.out).norm() + self.node(&x[n], self.rf).norm()) / k;
+        }
+        let mut parts = [0.0; 3];
+        for (i, &v) in vals.iter().enumerate() {
+            if v == 0.0 {
+                continue;
+            }
+            let at = |f: f64| {
+                let mut w = vals.to_vec();
+                w[i] = v * f;
+                self.volterra(devs, coefs, &w, 0.0, true)
+            };
+            let (up, down) = (at(1.5)?, at(0.5)?);
+            for n in 0..3 {
+                parts[n] += (up[n] - down[n]).norm();
+            }
+        }
+        for n in 0..3 {
+            terms[n] = terms[n].max(parts[n]);
+        }
+        Some(terms)
+    }
+
+    /// The order-1..3 solutions at f (x3 all NaN unless `third`).
+    fn kernels(
+        &self,
+        devs: &[NlDev],
+        coefs: &[Coef],
+        vals: &[f64],
+        f: f64,
+        third: bool,
+    ) -> Option<[Vec<Complex64>; 3]> {
         let n = self.sys.dim;
         let b: Vec<Complex64> = self.sys.b.iter().map(|&v| Complex64::new(v as f64, 0.0)).collect();
         let lu1 = self.lu(jw(f))?;
@@ -507,7 +563,6 @@ impl Probe<'_> {
                 .collect()
         };
         let u1 = ctl(&x1);
-        let out = |x: &[Complex64]| self.node(x, self.out) - self.node(x, self.rf);
         let mut rhs2 = vec![Complex64::default(); n];
         for (c, &v) in coefs.iter().zip(vals) {
             if c.order() == 2 && v != 0.0 {
@@ -517,6 +572,9 @@ impl Probe<'_> {
         }
         let lu2 = if f == 0.0 { None } else { Some(self.lu(jw(2.0 * f))?) };
         let x2 = lu2.as_ref().unwrap_or(&lu1).solve(&rhs2);
+        if !third {
+            return Some([x1, x2, vec![Complex64::new(f64::NAN, f64::NAN); n]]);
+        }
         let u2 = ctl(&x2);
         let mut rhs3 = vec![Complex64::default(); n];
         for (c, &v) in coefs.iter().zip(vals) {
@@ -533,8 +591,7 @@ impl Probe<'_> {
         }
         let lu3 = if f == 0.0 { None } else { Some(self.lu(jw(3.0 * f))?) };
         let x3 = lu3.as_ref().unwrap_or(&lu1).solve(&rhs3);
-        let k = self.vid;
-        Some([out(&x1) / k, out(&x2) / (k * k), out(&x3) / (k * k * k)])
+        Some([x1, x2, x3])
     }
 }
 
@@ -548,7 +605,7 @@ pub fn prove_omission(
     rel: f64,
 ) -> Option<(Vec<bool>, f64, [Complex64; 3])> {
     let all: Vec<f64> = coefs.iter().map(|c| c.value).collect();
-    let reference = probe.volterra(devs, coefs, &all, 0.0)?;
+    let reference = probe.volterra(devs, coefs, &all, 0.0, true)?;
     let mut keep: Vec<bool> = all.iter().map(|&v| v != 0.0).collect();
     // Size of each coefficient's current at the order-1 solution.
     let lu = probe.lu(Complex64::new(0.0, 0.0))?;
@@ -574,7 +631,7 @@ pub fn prove_omission(
             .zip(&keep)
             .map(|(c, &kp)| if kp { c.value } else { 0.0 })
             .collect();
-        let ok = probe.volterra(devs, coefs, &vals, 0.0).and_then(|got| {
+        let ok = probe.volterra(devs, coefs, &vals, 0.0, true).and_then(|got| {
             let mut w = 0.0f64;
             for n in 1..3 {
                 let (r, g) = (reference[n], got[n]);
@@ -1051,15 +1108,65 @@ fn with_values(m: &SsCircuit, values: &[(String, f64)]) -> SsCircuit {
     m
 }
 
-/// `s` (symbols of `m`) with the symbols of these parameters at their values.
-fn sym_values(m: &SsCircuit, s: &Symbols, values: &[(String, f64)]) -> Symbols {
+/// `s` (symbols of `m`, whose parameters already carry these values) with
+/// the symbols of these parameters at their values. Matched members whose
+/// new values differ by more than MATCH_REL no longer match: their class
+/// is split into one symbol per member. Otherwise their difference joins
+/// `mismatch`. Returns the symbols and the elements of each split class.
+fn sym_values(m: &SsCircuit, s: &Symbols, values: &[(String, f64)]) -> (Symbols, Vec<Vec<String>>) {
     let mut s = s.clone();
+    let mut touched: Vec<usize> = Vec::new();
     for (i, p) in m.params.iter().enumerate() {
-        if let Some((_, v)) = values.iter().find(|(n, _)| *n == p.name) {
-            s.syms[s.class[i]].value = *v;
+        if values.iter().any(|(n, _)| *n == p.name) && !touched.contains(&s.class[i]) {
+            touched.push(s.class[i]);
         }
     }
-    s
+    let mut split = Vec::new();
+    for k in touched {
+        let members: Vec<usize> = (0..m.params.len()).filter(|&i| s.class[i] == k).collect();
+        // The symbol carries its first member's value (and name).
+        let first = members
+            .iter()
+            .copied()
+            .find(|&i| m.params[i].name == s.syms[k].name)
+            .unwrap_or(members[0]);
+        let v0 = m.params[first].value;
+        let rel = members
+            .iter()
+            .map(|&i| {
+                let v = m.params[i].value;
+                if v == v0 {
+                    0.0
+                } else {
+                    (v - v0).abs() / v.abs().max(v0.abs())
+                }
+            })
+            .fold(0.0, f64::max);
+        s.syms[k].value = v0;
+        if rel <= MATCH_REL {
+            s.mismatch = s.mismatch.max(rel);
+            continue;
+        }
+        split.push(members.iter().map(|&i| m.params[i].element.clone()).collect());
+        let base = s.syms[k].clone();
+        for &i in &members {
+            let p = &m.params[i];
+            let own = Sym {
+                name: p.name.clone(),
+                latex: p.latex.clone(),
+                value: p.value,
+                elements: vec![p.element.clone()],
+                ..base.clone()
+            };
+            if i == first {
+                s.syms[k] = own;
+            } else {
+                s.class[i] = s.syms.len();
+                s.syms.push(own);
+            }
+        }
+    }
+    (s, split)
 }
 
 pub struct Ctx<'a> {
@@ -1193,6 +1300,12 @@ fn form(e: Option<&Expr>, syms: &[Sym], shape: &Shape) -> Value {
 /// of the display form, then the coarsest magnitude pruning, within `tol`
 /// of the reference value).
 fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &Shape, tol: f64) -> Value {
+    // 0/0 (a ratio over a1 when a1 = 0, e.g. an input blocked at s → 0):
+    // undefined, not the zero its numerator alone would give.
+    let undefined = |v: Option<View>| v.is_some_and(|v| v.num.is_zero() && v.den.is_zero());
+    if reference.is_nan() || undefined(exact) || (exact.is_none() && undefined(noleak)) {
+        return Value::Null;
+    }
     let rel = |a: f64| {
         if reference != 0.0 {
             (a - reference).abs() / reference.abs()
@@ -1348,7 +1461,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     } else {
         full_owned = with_values(c.full, &slopes);
         ss_owned = with_values(c.ss, &slopes);
-        symbols_owned = sym_values(&ss_owned, c.symbols, &slopes);
+        let split;
+        (symbols_owned, split) = sym_values(&ss_owned, c.symbols, &slopes);
+        for els in split {
+            warnings.push(format!(
+                "{} have different gmb slopes under forward body bias: their gmb is not matched.",
+                els.join(", ")
+            ));
+        }
         (&full_owned, &ss_owned, &symbols_owned)
     };
     let coefs = coefficients(&devs, c.order);
@@ -1451,7 +1571,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                     ss: &m,
                     ..probe
                 }
-                .volterra(&devs, &coefs, &all, 0.0)
+                .volterra(&devs, &coefs, &all, 0.0, true)
             };
             add(at(1.0 + h), at(1.0 - h));
         }
@@ -1459,7 +1579,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             let at = |f: f64| {
                 let mut v = all.clone();
                 v[i] *= f;
-                probe.volterra(&devs, &coefs, &v, 0.0)
+                probe.volterra(&devs, &coefs, &v, 0.0, true)
             };
             add(at(1.0 + h), at(1.0 - h));
         }
@@ -1468,6 +1588,12 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // The closed form's a_n against the numeric reference (full model,
     // every coefficient), for each a_n that materialized, allowing for the
     // accepted match mismatch.
+    // Roundoff floor of the comparison: a_n is a sum of terms (each Taylor
+    // coefficient's part, and the out and ref node responses), so it is
+    // compared relative to at least their size: a matched pair's a2 is 0
+    // in closed form and roundoff of that size numerically. (κ₁(A)·eps is
+    // no floor here: with gmin-sized conductances it reaches 1e-1.)
+    let terms = probe.dc_terms(&devs, &coefs, &all).unwrap_or([0.0; 3]);
     let check = |cl: &Closed, model: &SsCircuit, msyms: &Symbols| -> Option<Check> {
         let merge = merge_effect(cl, model, msyms);
         let mut ck = Check {
@@ -1487,7 +1613,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                     (z.re, b)
                 })
                 .unwrap_or((0.0, 0.0));
-            let scale = v.abs().max(r.abs());
+            // The rebuild test keeps the plain relative difference.
+            let own = v.abs().max(r.abs());
+            if own > 0.0 {
+                let raw = (v - r).abs() / own;
+                ck.unexplained = ck.unexplained.max(raw - 4.0 * merge[n] / own);
+            }
+            let scale = own.max(terms[n]);
             let (d, m) = if scale > 0.0 {
                 ((v - r).abs() / scale, merge[n] / scale)
             } else {
@@ -1495,7 +1627,6 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             };
             ck.worst = ck.worst.max(d);
             ck.match_bound = ck.match_bound.max(m);
-            ck.unexplained = ck.unexplained.max(d - 4.0 * m);
             if d > 1e-8 + 2.0 * omit_err + 8.0 * bound + 4.0 * m {
                 ck.ok = false;
             }
@@ -1517,7 +1648,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             fs = if slopes.is_empty() {
                 f
             } else {
-                sym_values(full, &f, &slopes)
+                sym_values(full, &f, &slopes).0
             };
             exact = build(full, &fs, false);
             (exact_model, exact_syms) = (full, &fs);
@@ -1590,7 +1721,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 c.tol,
             ),
         );
-        let iip3 = if a(2) == 0.0 {
+        let iip3 = if a(2) == 0.0 && a(0) != 0.0 {
             json!({ "latex": "\\infty", "value": null })
         } else {
             let wi = |l: &str| format!("\\sqrt{{\\frac{{4}}{{3}}\\left|{l}\\right|}}");
@@ -1647,7 +1778,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let vs: Vec<Value> = c
         .freqs
         .iter()
-        .map(|&f| match probe.volterra(&devs, &coefs, &all, f) {
+        .map(|&f| match probe.volterra(&devs, &coefs, &all, f, c.order >= 3) {
             Some(h) => {
                 let a1 = h[0].norm();
                 json!({
