@@ -864,3 +864,45 @@ M2 vdd 0 vdd 0 nm2 W=10u L=1u\nR2 in vdd 1099\n\
     let with_noise = at(true);
     assert_eq!(count(&with_noise), 1, "{}", with_noise["warnings"]);
 }
+
+/// Asked for a tolerance tighter than the display form's leakage error
+/// (r_μ dropped: ~6e-9 here), the simplified form is the exact one, so its
+/// relError never exceeds its tolerance.
+#[test]
+fn simplified_stays_within_a_tolerance_tighter_than_the_display_form() {
+    let net =
+        "ce\nVCC vcc 0 5\nVIN in 0 DC 0.65 AC 1\nRC vcc c 2k\nQ1 c in 0 qn\n.model qn npn (is=1e-16 bf=100 vaf=50)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "c", "noise": true, "tolerance": 1e-12 })),
+    );
+    let lf = &r["noise"]["inputLowFreq"];
+    assert!(lf["display"]["relError"].as_f64().unwrap() > 1e-12, "{}", lf["display"]);
+    let s = &lf["simplified"];
+    assert!(s["relError"].as_f64().unwrap() <= 1e-12, "{s}");
+    assert_eq!(s["method"], "exact form", "{s}");
+    assert_eq!(s["latex"], lf["exact"]["latex"]);
+    // At the default tolerance the display form (or smaller) is used.
+    let r = run(net, &req(json!({ "input": "VIN", "output": "c", "noise": true })));
+    assert_ne!(r["noise"]["inputLowFreq"]["simplified"]["method"], "exact form");
+}
+
+/// Ill-conditioned only inside the band (two rows that nearly coincide at
+/// high frequency), well-conditioned at the requested spectrum point: the
+/// band's own conditioning must warn, as the spectra's does.
+#[test]
+fn an_ill_conditioned_band_warns() {
+    let net = "rc\nVIN in 0 DC 0 AC 1\nR1 in a 1k\nC1 a out 100m\nR2 out 0 1k\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [1.0], "noiseBand": [1e8, 1e9] })),
+    );
+    assert!(r["noise"]["integrated"]["relError"].as_f64().unwrap() > 1e-5);
+    assert!(warns(&r, "ill-conditioned in the band"), "{}", r["warnings"]);
+    // A well-conditioned band does not.
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [1.0], "noiseBand": [1.0, 10.0] })),
+    );
+    assert!(!warns(&r, "ill-conditioned"), "{}", r["warnings"]);
+}
