@@ -6,18 +6,57 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum Kind {
-    R { value: f64 },
-    C { value: f64 },
-    L { value: f64 },
-    V { dc: f64, ac: f64 },
-    I { dc: f64, ac: f64 },
-    E { gain: f64 },
-    G { gain: f64 },
-    F { ctrl: usize, gain: f64 },
-    H { ctrl: usize, gain: f64 },
-    M { model: MosModel, w: f64, l: f64, mult: f64 },
-    Q { model: BjtModel, area: f64 },
-    D { model: DiodeModel, area: f64 },
+    R {
+        value: f64,
+    },
+    C {
+        value: f64,
+    },
+    L {
+        value: f64,
+    },
+    V {
+        dc: f64,
+        ac: f64,
+    },
+    I {
+        dc: f64,
+        ac: f64,
+    },
+    E {
+        gain: f64,
+    },
+    G {
+        gain: f64,
+    },
+    F {
+        ctrl: usize,
+        gain: f64,
+    },
+    H {
+        ctrl: usize,
+        gain: f64,
+    },
+    M {
+        model: MosModel,
+        w: f64,
+        l: f64,
+        mult: f64,
+    },
+    /// `mult` (M=): that many devices in parallel, as ngspice: every
+    /// current and conductance, gmin's included, times M.
+    Q {
+        model: BjtModel,
+        area: f64,
+        mult: f64,
+    },
+    /// `mult` (M=): as ngspice, the junction scales with area·M (gmin does
+    /// not), and the flicker noise is M devices' sharing the current.
+    D {
+        model: DiodeModel,
+        area: f64,
+        mult: f64,
+    },
 }
 
 /// Node order per kind: R/C/L/V/I/F/H `[p, n]`; E/G `[p, n, cp, cn]`;
@@ -408,7 +447,14 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     kf: 0.0,
                     af: 1.0,
                 };
-                (Kind::Q { model, area: 1.0 }, pos[..3].to_vec())
+                (
+                    Kind::Q {
+                        model,
+                        area: 1.0,
+                        mult: 1.0,
+                    },
+                    pos[..3].to_vec(),
+                )
             }
             'd' if pos.len() == 2 => {
                 missing.push(name.clone());
@@ -422,6 +468,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                             af: 1.0,
                         },
                         area: 1.0,
+                        mult: 1.0,
                     },
                     pos[..2].to_vec(),
                 )
@@ -507,7 +554,13 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     (None, Some(a)) => val(Some(&a.as_str()), "area")?,
                     _ => 1.0,
                 };
-                (Kind::Q { model, area }, pos[..3].to_vec())
+                let mult = match kv.get("m") {
+                    Some(v) => parse_value(v)
+                        .filter(|m| *m > 0.0)
+                        .ok_or_else(|| format!("line {no}: bad m '{v}' for {name}"))?,
+                    None => 1.0,
+                };
+                (Kind::Q { model, area, mult }, pos[..3].to_vec())
             }
             'd' => {
                 need(3)?;
@@ -527,7 +580,13 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     (None, Some(a)) => val(Some(&a.as_str()), "area")?,
                     _ => 1.0,
                 };
-                (Kind::D { model, area }, pos[..2].to_vec())
+                let mult = match kv.get("m") {
+                    Some(v) => parse_value(v)
+                        .filter(|m| *m > 0.0)
+                        .ok_or_else(|| format!("line {no}: bad m '{v}' for {name}"))?,
+                    None => 1.0,
+                };
+                (Kind::D { model, area, mult }, pos[..2].to_vec())
             }
             'x' => {
                 return Err(format!(

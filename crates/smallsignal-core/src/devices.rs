@@ -206,8 +206,9 @@ impl BjtEval {
 }
 
 /// Gummel–Poon with IS, BF, BR, VAF (no high injection, no leakage terms,
-/// no parasitic resistances).
-pub fn bjt_eval(m: &BjtModel, area: f64, vbe: f64, vbc: f64, gmin: f64) -> BjtEval {
+/// no parasitic resistances); `mult` devices in parallel (ngspice's M scales
+/// every current and conductance, gmin's included).
+pub fn bjt_eval(m: &BjtModel, area: f64, mult: f64, vbe: f64, vbc: f64, gmin: f64) -> BjtEval {
     let vt = vt();
     let csat = m.is * area;
     let (cbe, gbe) = pn(csat, vbe, vt);
@@ -226,12 +227,12 @@ pub fn bjt_eval(m: &BjtModel, area: f64, vbe: f64, vbc: f64, gmin: f64) -> BjtEv
     let go = (gbc + (cbe - cbc) * dqbdvc / qb) / qb;
     let gm = (gbe - (cbe - cbc) * dqbdve / qb) / qb - go;
     BjtEval {
-        cc,
-        cb,
-        gpi,
-        gmu,
-        gm,
-        go,
+        cc: mult * cc,
+        cb: mult * cb,
+        gpi: mult * gpi,
+        gmu: mult * gmu,
+        gm: mult * gm,
+        go: mult * go,
     }
 }
 

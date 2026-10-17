@@ -1,0 +1,8 @@
+BJT common emitter, Q1 three devices in parallel (M=3)
+VCC vcc 0 5
+VIN b 0 DC 0.62 AC 1
+RC vcc c 2k
+RB b x 1k
+Q1 c x 0 qn M=3
+.model qn npn is=1e-15 bf=100 vaf=50 kf=1e-12 af=1.5
+.end

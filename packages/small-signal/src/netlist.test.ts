@@ -100,7 +100,9 @@ describe("model parameters", () => {
   });
 
   it("writes BJT cards without a LEVEL", () => {
-    expect(modelCard("npn")).toBe(".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50 KF=0 AF=1)");
+    expect(modelCard("npn")).toBe(
+      ".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50 KF=0 AF=1)",
+    );
   });
 });
 
@@ -193,5 +195,22 @@ describe("ideal blocks", () => {
     const lines = netlist.text.split("\n");
     expect(lines).toContain("EX1 net0 0 Vin Vout 1e6");
     expect(lines).toContain("ECORE Vout 0 net0 0 1");
+  });
+});
+
+describe("BJT multiplicity", () => {
+  const raw = readFileSync(
+    new URL("../test-fixtures/bjt-op-amp.icproj.json", import.meta.url),
+    "utf8",
+  );
+  const lines = (text: string) =>
+    smallSignalNetlist(parseProject(text))!.text.split("\n");
+
+  it("writes each transistor's M, as the SPICE export does", () => {
+    const project = JSON.parse(raw);
+    project.defaults.instancesByType.npn.parameters.m = "3";
+    const text = lines(JSON.stringify(project));
+    expect(text).toContain("Q1 net8 INP net3 npn_l1 M=3");
+    expect(text).toContain("Q3 net7 net1 net3 pnp_l1 M=1");
   });
 });

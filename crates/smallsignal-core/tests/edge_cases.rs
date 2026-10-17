@@ -125,7 +125,10 @@ fn over_the_term_limit_the_numbers_stay_and_the_formula_goes() {
     for q in ["gain", "rin", "rout"] {
         let n = &numeric[q];
         assert_eq!(n["skipped"], "too large for the exact closed form", "{q}");
-        assert!(n["exact"].is_null() && n["display"].is_null() && n["simplified"].is_null(), "{q}");
+        assert!(
+            n["exact"].is_null() && n["display"].is_null() && n["simplified"].is_null(),
+            "{q}"
+        );
         for i in 0..2 {
             let (a, b) = (value(&exact, q, i), value(&numeric, q, i));
             // At DC nothing but VIN ties the network to ground: Zin is open
@@ -137,7 +140,12 @@ fn over_the_term_limit_the_numbers_stay_and_the_formula_goes() {
         // pole at DC exactly at 0.
         for roots in ["poles", "zeros"] {
             let list = |v: &Value| {
-                let mut r: Vec<f64> = v[q][roots].as_array().unwrap().iter().map(|z| z["re"].as_f64().unwrap()).collect();
+                let mut r: Vec<f64> = v[q][roots]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|z| z["re"].as_f64().unwrap())
+                    .collect();
                 r.sort_by(f64::total_cmp);
                 r
             };
@@ -178,6 +186,24 @@ M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 
     assert_eq!(r["gain"]["exact"]["latex"], "g_{m2} R_{D2} - g_{m1} R_{D1}");
     assert!(r["rout"]["exact"]["latex"].is_string());
     assert!(close(value(&tight, "gain", 0), value(&r, "gain", 0), 1e-12));
+}
+
+#[test]
+fn a_bjt_with_m_is_that_many_in_parallel() {
+    // As ngspice: every current and conductance times M, gmin's included,
+    // so even a large gmin gives the same circuit.
+    let base = "m\n.options gmin=1e-9\nVCC vcc 0 5\nVIN b 0 DC 0.62 AC 1\nRC vcc c 2k\n";
+    let card = ".model qn npn is=1e-15 bf=100 vaf=50\n";
+    let one = format!("{base}Q1 c b 0 qn M=3\n{card}");
+    let three = format!("{base}Q1 c b 0 qn\nQ2 c b 0 qn\nQ3 c b 0 qn\n{card}");
+    let r = req(json!({ "input": "VIN", "output": "c", "rout": true, "freqs": [1e3] }));
+    let (a, b) = (run(&one, &r), run(&three, &r));
+    assert!((a["op"]["nodes"]["c"].as_f64().unwrap() - b["op"]["nodes"]["c"].as_f64().unwrap()).abs() < 1e-12);
+    for q in ["gain", "rout"] {
+        assert!(close(value(&a, q, 0), value(&b, q, 0), 1e-12), "{q}");
+    }
+    let ic = |v: &Value| v["op"]["devices"]["Q1"]["ic"].as_f64().unwrap();
+    assert!((ic(&a) / ic(&b) - 3.0).abs() < 1e-9);
 }
 
 // ---- Controlled sources -----------------------------------------------------

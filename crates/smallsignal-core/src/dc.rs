@@ -175,12 +175,12 @@ fn initial_states(net: &Netlist) -> Vec<St> {
                 vbs: -1.0,
                 von: model.ty * model.vto,
             },
-            Kind::Q { model, area } => St::Bjt {
+            Kind::Q { model, area, .. } => St::Bjt {
                 vbe: vcrit(model.is * area, vt),
                 vbc: 0.0,
             },
-            Kind::D { model, area } => St::Dio {
-                vd: vcrit(model.is * area, model.n * vt),
+            Kind::D { model, area, mult } => St::Dio {
+                vd: vcrit(model.is * area * mult, model.n * vt),
             },
             _ => St::None,
         })
@@ -324,7 +324,7 @@ impl Ctx<'_> {
                         von: ev.von,
                     };
                 }
-                Kind::Q { model, area } => {
+                Kind::Q { model, area, mult } => {
                     let ty = model.ty;
                     let (c, bn, en) = (e.nodes[0], e.nodes[1], e.nodes[2]);
                     let (vc, vb, ve) = (volt(x, c), volt(x, bn), volt(x, en));
@@ -341,7 +341,7 @@ impl Ctx<'_> {
                             (vbe, vbc) = (lb, lc);
                         }
                     }
-                    let ev = bjt_eval(model, *area, vbe, vbc, gmin);
+                    let ev = bjt_eval(model, *area, *mult, vbe, vbc, gmin);
                     stamp_nl(
                         &mut asm,
                         lay,
@@ -360,7 +360,8 @@ impl Ctx<'_> {
                     );
                     st[ei] = St::Bjt { vbe, vbc };
                 }
-                Kind::D { model, area } => {
+                Kind::D { model, area, mult } => {
+                    let area = area * mult;
                     let (a, k) = (e.nodes[0], e.nodes[1]);
                     let mut vd = volt(x, a) - volt(x, k);
                     if let St::Dio { vd: od } = st[ei] {
@@ -375,7 +376,7 @@ impl Ctx<'_> {
                             vd = lv;
                         }
                     }
-                    let (id, gd) = diode_eval(model, *area, vd, gmin);
+                    let (id, gd) = diode_eval(model, area, vd, gmin);
                     stamp_nl(&mut asm, lay, a, k, id, &[(gd, a, k, vd)]);
                     st[ei] = St::Dio { vd };
                 }
@@ -671,10 +672,10 @@ fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterat
                         gbd,
                     }))
                 }
-                Kind::Q { model, area } => {
+                Kind::Q { model, area, mult } => {
                     let ty = model.ty;
                     let (vbe, vbc) = (nv(1) - nv(2), nv(1) - nv(0));
-                    let ev = bjt_eval(model, *area, ty * vbe, ty * vbc, gmin);
+                    let ev = bjt_eval(model, *area, *mult, ty * vbe, ty * vbc, gmin);
                     // Junction on above 0.4 V, as the oracle labels them.
                     let region = match (ty * vbe > 0.4, ty * vbc > 0.4) {
                         (true, false) => "forward-active",
@@ -695,9 +696,9 @@ fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterat
                         gmu: ev.gmu,
                     }))
                 }
-                Kind::D { model, area } => {
+                Kind::D { model, area, mult } => {
                     let vd = nv(0) - nv(1);
-                    let (id, gd) = diode_eval(model, *area, vd, gmin);
+                    let (id, gd) = diode_eval(model, area * mult, vd, gmin);
                     Some(DevOp::Diode(DiodeOp { id, vd, gd }))
                 }
                 _ => None,

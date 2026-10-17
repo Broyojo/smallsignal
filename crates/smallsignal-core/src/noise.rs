@@ -168,7 +168,7 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                     push("flicker", n[0], n[2], 0.0, Some((coef, model.af)), None);
                 }
             }
-            Kind::Q { model, .. } => {
+            Kind::Q { model, mult, .. } => {
                 let (ic, ib) = match dev {
                     Some(DevOp::Bjt(q)) => (q.ic.abs(), q.ib.abs()),
                     _ => (f64::NAN, f64::NAN),
@@ -192,19 +192,20 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                     );
                 }
                 // As bjtnoise.c: |I_B| floored at N_MINLOG, so AF = 0 gives
-                // KF/f even at zero bias. (NaN: no operating point.)
+                // KF/f even at zero bias. (NaN: no operating point.) M
+                // devices in parallel share the current.
                 if model.kf > 0.0 && !ib.is_nan() {
                     push(
                         "flicker",
                         n[1],
                         n[2],
                         0.0,
-                        Some((model.kf * ib.abs().max(N_MINLOG).powf(model.af), 1.0)),
+                        Some((flicker(model.kf, model.af, ib, *mult), 1.0)),
                         None,
                     );
                 }
             }
-            Kind::D { model, .. } => {
+            Kind::D { model, mult, .. } => {
                 let id = match dev {
                     Some(DevOp::Diode(d)) => d.id.abs(),
                     _ => f64::NAN,
@@ -224,14 +225,15 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                         }),
                     );
                 }
-                // As dionoise.c: |I_D| floored at N_MINLOG.
+                // As dionoise.c: |I_D| floored at N_MINLOG, M devices
+                // sharing the current.
                 if model.kf > 0.0 && !id.is_nan() {
                     push(
                         "flicker",
                         n[0],
                         n[1],
                         0.0,
-                        Some((model.kf * id.abs().max(N_MINLOG).powf(model.af), 1.0)),
+                        Some((flicker(model.kf, model.af, id, *mult), 1.0)),
                         None,
                     );
                 }
@@ -1121,13 +1123,21 @@ const LU_WARN: f64 = 1e-6;
 /// Relative accuracy asked of the band integral.
 const INTEGRAL_RTOL: f64 = 1e-6;
 
-/// The source's PSD formula; `mult` is a MOSFET's multiplicity M.
+/// M·KF·(|I|/M)^AF: M devices in parallel, each with 1/M of the current
+/// (ngspice floors each one's |I| at N_MINLOG).
+fn flicker(kf: f64, af: f64, i: f64, mult: f64) -> f64 {
+    mult * kf * (i.abs() / mult).max(N_MINLOG).powf(af)
+}
+
+/// The source's PSD formula; `mult` is the device's multiplicity M.
 fn kind_latex(s: &Source, mult: f64) -> String {
     match (s.kind, &s.sym) {
         ("flicker", _) => match s.element.chars().next().map(|c| c.to_ascii_uppercase()) {
             Some('M') if mult != 1.0 => "\\frac{K_F g_m^{2}}{C_{ox} M W L f^{A_F}}".to_string(),
             Some('M') => "\\frac{K_F g_m^{2}}{C_{ox} W L f^{A_F}}".to_string(),
+            Some('Q') if mult != 1.0 => "\\frac{M K_F (I_B/M)^{A_F}}{f}".to_string(),
             Some('Q') => "\\frac{K_F I_B^{A_F}}{f}".to_string(),
+            _ if mult != 1.0 => "\\frac{M K_F (I_D/M)^{A_F}}{f}".to_string(),
             _ => "\\frac{K_F I_D^{A_F}}{f}".to_string(),
         },
         ("thermal", _) if s.element.to_ascii_uppercase().starts_with('M') => "\\frac{2}{3} 4kT g_m".to_string(),
@@ -1152,7 +1162,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             .elements
             .iter()
             .find_map(|e| match &e.kind {
-                Kind::M { mult, .. } if e.name == name => Some(*mult),
+                Kind::M { mult, .. } | Kind::Q { mult, .. } | Kind::D { mult, .. } if e.name == name => Some(*mult),
                 _ => None,
             })
             .unwrap_or(1.0)

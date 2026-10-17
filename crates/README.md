@@ -19,6 +19,9 @@ with numeric values, poles and zeros, and the operating point.
    (pnjlim/fetlim/limvds), falling back to gmin and then source stepping. The
    device equations follow ngspice exactly: MOS level 1 with body effect and
    bulk junctions; Gummel–Poon with IS, BF, BR and VAF; diode IS and N.
+   Multiplicity `M=` as ngspice: on a BJT, M devices in parallel (every
+   current and conductance times M, gmin's too); on a diode, the junction
+   scales with AREA·M and gmin does not; on a MOSFET, β and the bulk IS.
 3. **Linearize**: MOSFETs get gm, ro and gmb (gmb only when body ≠ source);
    BJTs get gm, rπ, ro; diodes get rd. Junction conductances (MOS bulk
    gbs/gbd, BJT gμ) are all in the model; a set of them is left out of the
@@ -145,8 +148,8 @@ to 1e-6 (`oracle/`):
 | MOSFET | `thermal` (every region) | (2/3)·4kT·gm |
 | MOSFET | `flicker` | KF·gm²/(Cox·M·W·L·f^AF), Cox = 3.9ε₀/TOX (TOX default 1e-7) |
 | BJT | `shot_c` (c–e), `shot_b` (b–e) | 2q·\|Ic\|, 2q·\|Ib\| |
-| BJT | `flicker` (b–e) | KF·\|Ib\|^AF/f |
-| diode | `shot`, `flicker` | 2q·\|Id\|, KF·\|Id\|^AF/f |
+| BJT | `flicker` (b–e) | M·KF·(\|Ib\|/M)^AF/f |
+| diode | `shot`, `flicker` | 2q·\|Id\|, M·KF·(\|Id\|/M)^AF/f |
 
 Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
 ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
@@ -169,7 +172,7 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   fractions plus `omitted.fraction` sum to 1; when it is 0, every fraction
   is 0; when it is infinite, finite sources have fraction 0 and the
   infinite ones null.
-- `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
+- `sources`: `[{element, kind, psd (LaTeX, with M when the device's M ≠ 1), white, flicker: {coef, exp}}]`.
 - `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
   decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,
   evaluations, converged}`. Adaptive Simpson in ln(f/fLow), so any valid band
