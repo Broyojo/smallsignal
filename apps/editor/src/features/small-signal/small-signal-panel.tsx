@@ -842,6 +842,17 @@ export function texEscape(text: string): string {
   );
 }
 
+/** The solver writes an infinite quantity as `\\infty` with no value. */
+function isInfinite(quantity: DistortionQuantity | null | undefined): boolean {
+  return quantity?.value == null && quantity?.latex === "\\infty";
+}
+
+/** HD as shown: a percentage, ∞ when infinite, "—" when unavailable. */
+export function hdText(value: number | null, infinite?: boolean): string {
+  if (value != null) return formatDistortion(value)[0];
+  return infinite ? "∞" : "—";
+}
+
 /** A distortion ratio as a percentage and in dBc. */
 export function formatDistortion(ratio: number): [string, string] {
   const percent = ratio * 100;
@@ -883,11 +894,19 @@ function DistortionDetails({
   const varies = distortion.vsFreq.some(
     (point) =>
       differs(point.hd2, distortion.hd2?.value) ||
-      differs(point.hd3, distortion.hd3?.value),
+      differs(point.hd3, distortion.hd3?.value) ||
+      Boolean(point.hd2Infinite) !== isInfinite(distortion.hd2) ||
+      Boolean(point.hd3Infinite) !== isInfinite(distortion.hd3),
   );
   const a1 = distortion.coefficients.find(
     (coefficient) => coefficient.order === 1,
   )?.value;
+  // a₁ = 0 (the input's fundamental never reaches this output): HD is
+  // infinite whatever the amplitude.
+  const noFundamental =
+    isInfinite(distortion.hd2) ||
+    isInfinite(distortion.hd3) ||
+    distortion.vsFreq.some((point) => point.hd2Infinite || point.hd3Infinite);
   const large = [
     distortion.hd2?.value,
     distortion.hd3?.value,
@@ -909,12 +928,14 @@ function DistortionDetails({
             </tr>
           ) : null}
           {rows.map(([name, quantity]) =>
-            quantity?.value != null ? (
+            quantity ? (
               <tr key={name} data-quantity={name.toLowerCase()}>
                 <th scope="row">{name}</th>
-                <td>{formatDistortion(quantity.value)[0]}</td>
+                <td>{hdText(quantity.value, isInfinite(quantity))}</td>
                 <td className="small-signal-muted">
-                  {formatDistortion(quantity.value)[1]}
+                  {quantity.value != null
+                    ? formatDistortion(quantity.value)[1]
+                    : ""}
                 </td>
               </tr>
             ) : null,
@@ -938,7 +959,11 @@ function DistortionDetails({
           ) : null}
         </tbody>
       </table>
-      {large ? (
+      {noFundamental ? (
+        <p className="small-signal-muted" role="note">
+          The input's fundamental does not reach this output.
+        </p>
+      ) : large ? (
         <p className="small-signal-muted" role="note">
           The amplitude is too large for a 3rd-order expansion.
         </p>
@@ -981,12 +1006,8 @@ function DistortionDetails({
             {distortion.vsFreq.map((point) => (
               <tr key={point.f}>
                 <th scope="row">{formatEngineering(point.f, "Hz")}</th>
-                <td>
-                  {point.hd2 == null ? "" : formatDistortion(point.hd2)[0]}
-                </td>
-                <td>
-                  {point.hd3 == null ? "" : formatDistortion(point.hd3)[0]}
-                </td>
+                <td>{hdText(point.hd2, point.hd2Infinite)}</td>
+                <td>{hdText(point.hd3, point.hd3Infinite)}</td>
               </tr>
             ))}
           </tbody>

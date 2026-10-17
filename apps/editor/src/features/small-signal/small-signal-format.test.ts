@@ -4,6 +4,7 @@ import {
   differentialPairs,
   formatDensity,
   formatDistortion,
+  hdText,
   taylorLatex,
   texEscape,
   formatPlain,
@@ -261,6 +262,9 @@ describe("distortion numbers", () => {
     expect(formatDistortion(0.0115)).toEqual(["1.15%", "-38.8 dBc"]);
     expect(formatDistortion(2.35e-5)).toEqual(["2.35e-3%", "-92.6 dBc"]);
     expect(formatDistortion(0)).toEqual(["0%", ""]);
+    expect(hdText(0.0115)).toBe("1.15%");
+    expect(hdText(null, true)).toBe("∞");
+    expect(hdText(null)).toBe("—");
   });
 });
 
