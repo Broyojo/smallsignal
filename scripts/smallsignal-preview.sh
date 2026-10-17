@@ -15,11 +15,12 @@ need pnpm "Install it: corepack enable"
 rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown ||
   rustup target add wasm32-unknown-unknown
 if [ "$#" -gt 0 ]; then
+  need gh "Install the GitHub CLI: https://cli.github.com"
   repo="$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
   gh pr checkout "$1" --repo "$repo"
 fi
 wasm-pack build crates/smallsignal-wasm --target web --release \
-  --out-dir ../../packages/small-signal/wasm
+  --out-dir ../../packages/small-signal/wasm -- --locked
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
 pnpm --filter "@icm/editor^..." --if-present build
 ICM_BASE=/smallsignal/ ICM_STATIC_PAGES=1 pnpm --filter @icm/editor build

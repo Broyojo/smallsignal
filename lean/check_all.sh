@@ -6,7 +6,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(dirname "$here")"
-cargo build -q --release -p smallsignal-cli --manifest-path "$repo/Cargo.toml"
+cargo build -q --locked --release -p smallsignal-cli --manifest-path "$repo/Cargo.toml"
 if [ "$#" -gt 0 ]; then
   names=("$@")
 else

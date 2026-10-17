@@ -29,9 +29,9 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --release -- -D warnings
-      - run: cargo test --workspace --release
-      - run: cargo build --release -p smallsignal-cli
+      - run: cargo clippy --locked --workspace --release -- -D warnings
+      - run: cargo test --locked --workspace --release
+      - run: cargo build --locked --release -p smallsignal-cli
       - uses: astral-sh/setup-uv@v6
       - name: ngspice corpus, regressions and textbook identities
         working-directory: oracle
@@ -54,7 +54,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack
-      - run: wasm-pack build crates/smallsignal-wasm --target web --release --out-dir ../../packages/small-signal/wasm
+      - run: wasm-pack build crates/smallsignal-wasm --target web --release --out-dir ../../packages/small-signal/wasm -- --locked
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
