@@ -201,6 +201,7 @@
   color: var(--icm-text-muted);
   font-weight: 400;
   text-align: left;
+  white-space: nowrap;
 }
 
 /* Bias: a small table, one row per transistor. */

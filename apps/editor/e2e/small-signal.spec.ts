@@ -901,7 +901,7 @@ test("assumptions: All NMOS on the 5T OTA neglects every NMOS r_o and keeps the 
   await expect(card(panel, "Gain")).toContainText("% from full model");
   // The pole moves: the assumed one beside the full model's.
   await expect(
-    card(panel, "Gain").getByRole("table", { name: "Poles and zeros" }),
+    card(panel, "Gain").getByRole("table", { name: "Full model and assumed" }),
   ).toContainText("Pole");
   // A type's default holds in every circuit.
   expect(

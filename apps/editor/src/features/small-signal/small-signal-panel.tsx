@@ -517,7 +517,10 @@ function MainFormula({
     if (!lead?.latex)
       return <ExactFormula symbol={symbol} quantity={quantity} />;
     const error = lead.fullModelError ?? assumed.maxRelError;
-    const equals = error !== null && error < INVISIBLE_ERROR;
+    // Unbounded in both models has no metric (null), and is no difference.
+    const equals =
+      (error !== null && error < INVISIBLE_ERROR) ||
+      Boolean(assumed.infinite && quantity.infinite);
     return (
       <>
         <Formula
@@ -591,57 +594,30 @@ function fullModelText(error: number | null | undefined): string | null {
   return error == null ? null : `${formatPercent(error)} from full model`;
 }
 
+/**
+ * A leading simpler form's note under assumptions: what it assumes, if
+ * anything, and its distance from the full model. Its error against the
+ * assumed exact form would be a second, smaller percentage, so it goes.
+ */
+function leadNote(
+  simplerNote: string,
+  error: number | null | undefined,
+): string {
+  return [
+    simplerNote.startsWith("within ") ? null : simplerNote,
+    fullModelText(error),
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 function FullModelNote({ error }: { error: number | null | undefined }) {
   const text = fullModelText(error);
   return text ? <small className="small-signal-muted">{text}</small> : null;
 }
 
-/** Full model against assumed per frequency, when they differ anywhere. */
-function AssumedValues({
-  values,
-  assumed,
-  unit,
-}: {
-  values: readonly ComplexPoint[];
-  assumed: AssumedQuantity;
-  unit: string;
-}) {
-  if (assumed.relError.every((error) => error === 0)) return null;
-  return (
-    <table className="small-signal-values" aria-label="Full model and assumed">
-      <thead>
-        <tr>
-          <th />
-          <th scope="col">Full model</th>
-          <th scope="col">Assumed</th>
-          <th scope="col">Δ</th>
-        </tr>
-      </thead>
-      <tbody>
-        {values.map((point, index) => {
-          const value = assumed.values[index];
-          const error = assumed.relError[index];
-          return (
-            <tr key={point.f} data-frequency={point.f}>
-              <th scope="row">{formatEngineering(point.f, "Hz")}</th>
-              <td data-quantity="full">{pointText(point, unit)}</td>
-              <td data-quantity="assumed">
-                {value ? pointText(value, unit) : ""}
-              </td>
-              <td data-quantity="delta">
-                {error == null ? "—" : formatPercent(error)}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
 /**
- * The assumed model's poles and zeros beside the full model's, when any
- * moved: "removed" where an assumption took a root away. One row per
+ * The assumed model's poles and zeros beside the full model's, one row per
  * conjugate pair.
  */
 function rootPairRows(assumed: AssumedQuantity): [string, RootPair][] {
@@ -662,10 +638,38 @@ function rootsMoved(assumed: AssumedQuantity): boolean {
   );
 }
 
-function RootPairs({ assumed }: { assumed: AssumedQuantity }) {
-  const rows = rootPairRows(assumed);
+/**
+ * Full model against assumed: the values per frequency when they differ
+ * anywhere, then the poles and zeros when any moved ("removed" where an
+ * assumption took one away). Nothing when the two agree.
+ */
+function AssumedTable({
+  values,
+  assumed,
+  unit,
+}: {
+  values: readonly ComplexPoint[];
+  assumed: AssumedQuantity;
+  unit: string;
+}) {
+  const infinite = (point: ComplexPoint | undefined) =>
+    Boolean(point && (point.inf || point.re === null));
+  // Equal (0), or unbounded in both models (no metric, null).
+  const same = (index: number) => {
+    const error = assumed.relError[index];
+    return (
+      error === 0 ||
+      (error == null &&
+        infinite(values[index]) &&
+        infinite(assumed.values[index]))
+    );
+  };
+  const valuesDiffer = !values.every((_, index) => same(index));
+  const roots = rootPairRows(assumed);
+  const moved = rootsMoved(assumed);
+  if (!valuesDiffer && !moved) return null;
   return (
-    <table className="small-signal-values" aria-label="Poles and zeros">
+    <table className="small-signal-values" aria-label="Full model and assumed">
       <thead>
         <tr>
           <th />
@@ -675,20 +679,40 @@ function RootPairs({ assumed }: { assumed: AssumedQuantity }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map(([kind, pair], index) => (
-          <tr key={index} data-root={kind.toLowerCase()}>
-            <th scope="row">{kind}</th>
-            <td data-quantity="full">
-              {pair.full ? rootText(pair.full) : "—"}
-            </td>
-            <td data-quantity="assumed">
-              {pair.assumed ? rootText(pair.assumed) : "removed"}
-            </td>
-            <td data-quantity="delta">
-              {pair.relError == null ? "" : formatPercent(pair.relError)}
-            </td>
-          </tr>
-        ))}
+        {valuesDiffer
+          ? values.map((point, index) => {
+              const value = assumed.values[index];
+              const error = assumed.relError[index];
+              return (
+                <tr key={point.f} data-frequency={point.f}>
+                  <th scope="row">{formatEngineering(point.f, "Hz")}</th>
+                  <td data-quantity="full">{pointText(point, unit)}</td>
+                  <td data-quantity="assumed">
+                    {value ? pointText(value, unit) : ""}
+                  </td>
+                  <td data-quantity="delta">
+                    {error == null ? "—" : formatPercent(error)}
+                  </td>
+                </tr>
+              );
+            })
+          : null}
+        {moved
+          ? roots.map(([kind, pair], index) => (
+              <tr key={`${kind}${index}`} data-root={kind.toLowerCase()}>
+                <th scope="row">{kind}</th>
+                <td data-quantity="full">
+                  {pair.full ? rootText(pair.full) : "—"}
+                </td>
+                <td data-quantity="assumed">
+                  {pair.assumed ? rootText(pair.assumed) : "removed"}
+                </td>
+                <td data-quantity="delta">
+                  {pair.relError == null ? "" : formatPercent(pair.relError)}
+                </td>
+              </tr>
+            ))
+          : null}
       </tbody>
     </table>
   );
@@ -770,9 +794,7 @@ function QuantityCard({
           <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
           <small className="small-signal-muted">
             {assumed
-              ? [simplerNote, fullModelText(simpler.fullModelError)]
-                  .filter(Boolean)
-                  .join(", ")
+              ? leadNote(simplerNote, simpler.fullModelError)
               : simplerNote}
           </small>
           <details className="small-signal-exact">
@@ -792,7 +814,7 @@ function QuantityCard({
         </>
       )}
       {assumed && quantity.values?.length ? (
-        <AssumedValues values={quantity.values} assumed={assumed} unit={unit} />
+        <AssumedTable values={quantity.values} assumed={assumed} unit={unit} />
       ) : quantity.values && quantity.values.length > 1 ? (
         <table className="small-signal-values">
           <tbody>
@@ -805,9 +827,9 @@ function QuantityCard({
           </tbody>
         </table>
       ) : null}
-      {assumed && rootsMoved(assumed) ? (
-        <RootPairs assumed={assumed} />
-      ) : poles.length ? (
+      {assumed &&
+      quantity.values?.length &&
+      rootsMoved(assumed) ? null : poles.length ? (
         <small className="small-signal-muted">
           {poleCount === 1 ? "Pole" : "Poles"} {poles.join(", ")}
         </small>
@@ -996,9 +1018,7 @@ function LeadFormula({
         <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
         <small className="small-signal-muted">
           {assumed
-            ? [simplerNote, fullModelText(simpler.fullModelError)]
-                .filter(Boolean)
-                .join(", ")
+            ? leadNote(simplerNote, simpler.fullModelError)
             : simplerNote}
         </small>
         {exactDisclosure}
