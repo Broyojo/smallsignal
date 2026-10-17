@@ -148,6 +148,9 @@ const MODEL_RANGE: Record<
   BF: { min: 1e-3, max: 1e6 },
   VAF: { min: 0.01, max: 1e6, zero: true },
   N: { min: 0.01, max: 100 },
+  // Flicker noise: KF·I^AF/f (ngspice's level-1 MOS form uses gm²).
+  KF: { min: 0, max: 1 },
+  AF: { min: 0, max: 10 },
 };
 
 export function modelValue(name: string, text: string): number | null {
@@ -617,9 +620,11 @@ const MAX_BAND_DECADES = 40;
 
 /** "1, 10meg" → [1, 1e7]; null unless 0 < fLow < fHigh within 40 decades. */
 export function noiseBandRange(text: string): [number, number] | null {
-  const band = parseFrequencies(text);
-  if (band.length !== 2) return null;
-  const [low, high] = band as [number, number];
+  // Exactly two readable frequencies: never quietly drop a bad token.
+  const tokens = text.split(/[\s,;]+/u).filter(Boolean);
+  if (tokens.length !== 2) return null;
+  const [low, high] = tokens.map(parseSpiceNumber);
+  if (low == null || high == null) return null;
   return low > 0 && high > low && Math.log10(high / low) <= MAX_BAND_DECADES
     ? [low, high]
     : null;

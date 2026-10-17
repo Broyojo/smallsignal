@@ -576,3 +576,33 @@ test("noise: the input-referred PSD is 4kT(2/(3gm) + 1/(gm² R1)), and the band 
     Math.abs(engineering(await rms.innerText()) / expectedRms - 1),
   ).toBeLessThan(2e-3);
 });
+
+test("noise: flicker set in Models shows up in the densities and sources", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { KF: "1e-26" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  await panel.getByText("Noise", { exact: true }).click();
+  const noise = panel.locator("details.small-signal-noise");
+  await expect(noise).toContainText(
+    "Thermal and shot noise. Flicker is in the numbers below.",
+    { timeout: 15_000 },
+  );
+  await expect(
+    noise.getByRole("table", { name: "Noise sources" }),
+  ).toContainText("M1 flicker");
+  // Without KF the same circuit has no flicker at all.
+  await panel.getByText(/^Models/u).click();
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(
+    noise.getByRole("table", { name: "Noise sources" }),
+  ).not.toContainText("flicker");
+});

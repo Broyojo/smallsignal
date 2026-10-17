@@ -219,6 +219,10 @@ describe("noise band", () => {
     expect(noiseBandRange("1a, 1t")).toEqual([1e-18, 1e12]);
     expect(noiseBandRange("1a, 1e30")).toBeNull();
     expect(noiseBandRange("1, 2, 3")).toBeNull();
+    expect(noiseBandRange("x, 1, 10")).toBeNull();
+    expect(noiseBandRange("-1, 1, 10")).toBeNull();
+    expect(noiseBandRange("1, x")).toBeNull();
+    expect(noiseBandRange("1k 1meg")).toEqual([1e3, 1e6]);
   });
 });
 

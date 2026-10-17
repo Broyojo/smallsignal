@@ -135,8 +135,10 @@ solve per frequency on the full model (input source zeroed); input-referred
 S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 
 - `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite, e.g. flicker with AF > 0 at 0 Hz).
-- `contributors`: `[{f, sources: [{element, kind, v2, fraction}]}]`, per
-  frequency, sorted by output contribution; fractions sum to 1.
+- `contributors`: `[{f, sources: [{element, kind, v2, fraction}], omitted?}]`,
+  per frequency, sorted by output contribution. At most the 32 largest
+  sources are listed; the rest are summed in `omitted: {count, v2,
+  fraction}`. The listed fractions plus `omitted.fraction` sum to 1.
 - `sources`: `[{element, kind, psd (LaTeX, with M when a MOSFET's M ≠ 1), white, flicker: {coef, exp}}]`.
 - `integrated` (with `noiseBand`, finite, 0 < fLow < fHigh, at most 40
   decades): `{fLow, fHigh, outputRms, inputRms, outputV2, inputV2, relError,

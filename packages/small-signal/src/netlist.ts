@@ -12,11 +12,28 @@ import {
  * devices, not BSIM or PDK subcircuits. A drawing's own W and L are kept.
  */
 export const DEFAULT_MODEL_PARAMETERS = {
-  nmos: { KP: 200e-6, VTO: 0.5, LAMBDA: 0.05, GAMMA: 0, PHI: 0.6 },
-  pmos: { KP: 100e-6, VTO: -0.5, LAMBDA: 0.05, GAMMA: 0, PHI: 0.6 },
-  npn: { IS: 1e-15, BF: 100, VAF: 50 },
-  pnp: { IS: 1e-15, BF: 50, VAF: 50 },
-  diode: { IS: 1e-14, N: 1 },
+  // KF and AF: flicker noise, off (KF = 0) unless set.
+  nmos: {
+    KP: 200e-6,
+    VTO: 0.5,
+    LAMBDA: 0.05,
+    GAMMA: 0,
+    PHI: 0.6,
+    KF: 0,
+    AF: 1,
+  },
+  pmos: {
+    KP: 100e-6,
+    VTO: -0.5,
+    LAMBDA: 0.05,
+    GAMMA: 0,
+    PHI: 0.6,
+    KF: 0,
+    AF: 1,
+  },
+  npn: { IS: 1e-15, BF: 100, VAF: 50, KF: 0, AF: 1 },
+  pnp: { IS: 1e-15, BF: 50, VAF: 50, KF: 0, AF: 1 },
+  diode: { IS: 1e-14, N: 1, KF: 0, AF: 1 },
 } as const;
 export type ModelKind = keyof typeof DEFAULT_MODEL_PARAMETERS;
 /** The parameters a device kind's card lets a caller set. */
