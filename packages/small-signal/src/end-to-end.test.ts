@@ -733,9 +733,9 @@ describe.skipIf(!built)("suggestions match the TypeScript contract", () => {
     for (const item of s.items) {
       keys(item, SUGGESTION_KEYS);
       expect(item.alone).toBeLessThanOrEqual(0.5);
-      expect(
-        ASSUMPTION_TERMS[item.type as AssumableElement["type"]],
-      ).toContain(item.term);
+      expect(ASSUMPTION_TERMS[item.type as AssumableElement["type"]]).toContain(
+        item.term,
+      );
     }
     // r_o of the only transistor: a few percent of −g_m(r_o ∥ R_1).
     expect(
