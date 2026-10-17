@@ -53,6 +53,21 @@ export interface SmallSignalRequest {
   /** Assumptions: the forms describe the assumed model, values stay the
    * full model's. */
   assume?: SmallSignalAssumptions;
+  /** Further assumptions within `threshold` of the full model. */
+  suggest?: SmallSignalSuggestRequest;
+}
+
+export type SuggestQuantity = "gain" | "rin" | "rout";
+
+export interface SmallSignalSuggestRequest {
+  /** rin and rout need `rin` and `rout` in the request. */
+  quantity: SuggestQuantity;
+  /** Largest deviation from the full model (default 0.01). */
+  threshold?: number;
+  /** Seconds before evaluation stops (default 20). */
+  timeLimit?: number;
+  /** Candidates evaluated at most (default 400). */
+  maxCandidates?: number;
 }
 
 export interface ComplexPoint {
@@ -486,6 +501,38 @@ export interface SmallSignalResult {
   assumable?: AssumableElement[];
   /** Present when the request has `assume`. */
   assumptions?: SmallSignalAssumptionReport;
+  /** Present when the request has `suggest`. */
+  suggestions?: SmallSignalSuggestions;
+}
+
+/** One further assumption: a term of one part, a matched group or a type. */
+export interface SmallSignalSuggestion {
+  elements: string[];
+  term: AssumptionTerm;
+  type: AssumableElement["type"];
+  /** "type": the term of every part of that type. */
+  scope: "part" | "group" | "type";
+  /** Deviation from the full model with it added to the current assumptions. */
+  alone: number;
+  /** Deviation with it and every earlier kept item; null when not kept. */
+  cumulative: number | null;
+}
+
+export interface SmallSignalSuggestions {
+  quantity: SuggestQuantity;
+  threshold: number;
+  /** The current assumptions' deviation; null when unbounded throughout. */
+  base: number | null;
+  /** Candidates within the threshold, smallest deviation first. */
+  items: SmallSignalSuggestion[];
+  /** Deviation with every kept item together. */
+  combined: number | null;
+  candidates: number;
+  evaluated: number;
+  /** Candidates left out: the quantity would be unbounded. */
+  unbounded: number;
+  /** The cap that stopped the evaluation, if any. */
+  capped: "time" | "candidates" | null;
 }
 
 export type SmallSignalResponse = SmallSignalResult | { error: string };

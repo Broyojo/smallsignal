@@ -17,6 +17,8 @@ import type {
   SmallSignalDistortion,
   SmallSignalNoise,
   SmallSignalQuantity,
+  SmallSignalSuggestion,
+  SmallSignalSuggestions,
 } from "./types.js";
 
 // Runs the real solver when the WASM has been built (wasm-pack, see
@@ -664,5 +666,83 @@ describe.skipIf(!built)("assumptions match the TypeScript contract", () => {
     for (const t of ignored) expect(t.monomial).toContain("d");
     for (const c of result.distortion.coefficients)
       expect(c).toHaveProperty("fullModelError");
+  });
+});
+
+const SUGGESTIONS_KEYS = allKeys<SmallSignalSuggestions>()([
+  "quantity",
+  "threshold",
+  "base",
+  "items",
+  "combined",
+  "candidates",
+  "evaluated",
+  "unbounded",
+  "capped",
+] as const);
+const SUGGESTION_KEYS = allKeys<SmallSignalSuggestion>()([
+  "elements",
+  "term",
+  "type",
+  "scope",
+  "alone",
+  "cumulative",
+] as const);
+
+describe.skipIf(!built)("suggestions match the TypeScript contract", () => {
+  it("every suggestions field is present and declared", async () => {
+    const wasm = await import(
+      /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+    );
+    wasm.initSync({
+      module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+    });
+    const netlist = smallSignalNetlist(
+      parseProject(
+        readFileSync(
+          new URL(
+            "../test-fixtures/cs-vdd-pin-wired.icproj.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      ),
+    )!;
+    const result = JSON.parse(
+      wasm.analyze(
+        netlist.text,
+        JSON.stringify({
+          input: "V1",
+          output: "Vout",
+          rin: true,
+          rout: true,
+          suggest: { quantity: "gain", threshold: 0.5 },
+        }),
+      ),
+    );
+    expect(result.error).toBeUndefined();
+    const keys = (value: object, want: readonly string[]) =>
+      expect(Object.keys(value).sort()).toEqual([...want].sort());
+    const s = result.suggestions;
+    keys(s, SUGGESTIONS_KEYS);
+    expect(s.quantity).toBe("gain");
+    expect(s.threshold).toBe(0.5);
+    expect(s.base).toBe(0);
+    expect(s.capped).toBeNull();
+    expect(s.items.length).toBeGreaterThan(0);
+    for (const item of s.items) {
+      keys(item, SUGGESTION_KEYS);
+      expect(item.alone).toBeLessThanOrEqual(0.5);
+      expect(
+        ASSUMPTION_TERMS[item.type as AssumableElement["type"]],
+      ).toContain(item.term);
+    }
+    // r_o of the only transistor: a few percent of −g_m(r_o ∥ R_1).
+    expect(
+      s.items.some(
+        (item: SmallSignalSuggestion) =>
+          item.term === "ro" && item.elements.join() === "M1",
+      ),
+    ).toBe(true);
   });
 });
