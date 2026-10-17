@@ -423,10 +423,11 @@ impl Expr {
     /// The same function with the common factors of numerator and
     /// denominator cancelled: what is left after pruning can share one the
     /// full form did not, e.g. (1 + g_m R_E) once the r_o terms are gone.
+    /// Whenever a factor cancels, even if as many terms are left.
     pub fn cancelled(self, syms: &[Sym]) -> Expr {
         let (n, d) = self.to_mna(syms);
         let (cn, cd) = crate::analyze::cancel(&n, &d);
-        if cn.terms.len() + cd.terms.len() < n.terms.len() + d.terms.len() {
+        if cn != n || cd != d {
             Expr::from_mna(&cn, &cd, syms)
         } else {
             self
@@ -633,4 +634,46 @@ fn push_signed(out: &mut String, negative: bool, body: &str) {
         out.push_str(if negative { " - " } else { " + " });
     }
     out.push_str(body);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ss::Role;
+
+    fn sym(name: &str, value: f64) -> Sym {
+        Sym {
+            name: name.into(),
+            latex: name.into(),
+            value,
+            inverted: false,
+            reactive: false,
+            role: Role::Gm,
+            unit: "S",
+            elements: vec![name.into()],
+            output_r: false,
+            leakage: false,
+        }
+    }
+
+    /// A common factor whose cancellation leaves as many terms as before is
+    /// still cancelled: (1 − x³)/(y − x y) is (1 + x + x²)/y, three terms
+    /// and one against two and two. Before, the uncancelled form was kept.
+    #[test]
+    fn cancelled_even_when_the_term_count_stays() {
+        let syms = [sym("x", 2.0), sym("y", 3.0)];
+        let p = |ts: &[([u8; 2], i128)]| XPoly {
+            terms: ts.iter().map(|(e, c)| (e.to_vec(), *c)).collect(),
+        };
+        let e = Expr::from_mna(
+            &p(&[([0, 0], 1), ([3, 0], -1)]),
+            &p(&[([0, 1], 1), ([1, 1], -1)]),
+            &syms,
+        );
+        let c = e.clone().cancelled(&syms);
+        assert_eq!((c.num.len(), c.den.len()), (3, 1));
+        let s = Complex64::new(0.0, 1.0);
+        assert!((c.eval(s) - e.eval(s)).norm() <= 1e-12 * e.eval(s).norm());
+        assert!((c.eval(s) - Complex64::new(7.0 / 3.0, 0.0)).norm() <= 1e-12);
+    }
 }
