@@ -133,7 +133,10 @@ const MODEL_TITLE: Record<ModelKind, string> = {
  * either sign; VAF = 0 means no Early effect, LAMBDA = 0 no channel-length
  * modulation, GAMMA = 0 no body effect.
  */
-const MODEL_RANGE: Record<string, { min: number; max: number }> = {
+const MODEL_RANGE: Record<
+  string,
+  { min: number; max: number; zero?: boolean }
+> = {
   KP: { min: 1e-12, max: 10 },
   VTO: { min: -100, max: 100 },
   LAMBDA: { min: 0, max: 10 },
@@ -141,7 +144,7 @@ const MODEL_RANGE: Record<string, { min: number; max: number }> = {
   PHI: { min: 1e-3, max: 100 },
   IS: { min: 1e-30, max: 1 },
   BF: { min: 1e-3, max: 1e6 },
-  VAF: { min: 0, max: 1e6 },
+  VAF: { min: 0.01, max: 1e6, zero: true },
   N: { min: 0.01, max: 100 },
 };
 
@@ -149,6 +152,7 @@ export function modelValue(name: string, text: string): number | null {
   const value = parseSpiceNumber(text);
   const range = MODEL_RANGE[name];
   if (value === null || !range) return null;
+  if (value === 0 && range.zero) return 0;
   return value >= range.min && value <= range.max ? value : null;
 }
 
@@ -156,7 +160,7 @@ export function modelValue(name: string, text: string): number | null {
 function rangeText(name: string): string | undefined {
   const range = MODEL_RANGE[name];
   return range
-    ? `${formatSpiceNumber(range.min)} to ${formatSpiceNumber(range.max)}`
+    ? `${range.zero ? "0, or " : ""}${formatSpiceNumber(range.min)} to ${formatSpiceNumber(range.max)}`
     : undefined;
 }
 

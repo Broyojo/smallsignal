@@ -170,6 +170,10 @@ describe("model parameters", () => {
     expect(modelValue("IS", "1e-40")).toBeNull();
     expect(modelValue("VTO", "-101")).toBeNull();
     expect(modelValue("W", "1u")).toBeNull();
+    // VAF = 0 means no Early effect; a tiny positive VAF overflows 1/VAF.
+    expect(modelValue("VAF", "0")).toBe(0);
+    expect(modelValue("VAF", "5e-324")).toBeNull();
+    expect(modelValue("VAF", "50")).toBe(50);
   });
 
   it("reads stored model text defensively", () => {

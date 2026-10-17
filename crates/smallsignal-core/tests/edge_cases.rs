@@ -468,3 +468,48 @@ fn symbolic_leading_order_is_labelled() {
         "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)"
     );
 }
+
+// ---- Overflowing models -----------------------------------------------------
+
+/// A device equation that overflows names the device; it is never reported
+/// as a wiring fault, and never yields a non-finite result.
+#[test]
+fn overflowing_models_name_the_device() {
+    let cases = [
+        // IS = 1 A and N = 0.01 forced to 0.7 V by an ideal source.
+        ("d\nVIN in 0 DC 0.7 AC 1\nD1 in 0 dm\nR1 in out 1k\nR2 out 0 1k\n.model dm D (IS=1 N=0.01)\n", "D1"),
+        // A subnormal Early voltage: 1/VAF is infinite.
+        ("q\nVCC vcc 0 5\nVIN b 0 DC 0.7 AC 1\nRC vcc out 1k\nQ1 out b 0 qm\n.model qm NPN (IS=1e-15 BF=100 VAF=5e-324)\n", "Q1"),
+        // IS = 1 A at a forced 0.7 V base.
+        ("q\nVCC vcc 0 5\nVIN b 0 DC 0.7 AC 1\nRC vcc out 1k\nQ1 out b 0 qm\n.model qm NPN (IS=1 BF=100 VAF=50)\n", "Q1"),
+    ];
+    for (netlist, device) in cases {
+        let err = run_err(netlist, &request("VIN", "out"));
+        assert!(err.contains(&format!("{device}'s model overflows")), "{err}");
+    }
+}
+
+/// Extreme but representable models still solve, with finite results.
+#[test]
+fn extreme_models_that_stay_finite_still_solve() {
+    let cases = [
+        "d\nVIN in 0 DC 0.7 AC 1\nR1 in out 1k\nD1 out 0 dm\n.model dm D (IS=1 N=0.01)\n",
+        "d\nVIN in 0 DC 10 AC 1\nR1 in out 1\nD1 out 0 dm\n.model dm D (IS=1e-14 N=1)\n",
+        "m\nVDD vdd 0 5\nVIN g 0 DC 1 AC 1\nRD vdd out 1k\nM1 out g 0 0 nm W=1u L=1u\n.model nm NMOS (LEVEL=1 KP=10 VTO=-100 LAMBDA=10)\n",
+    ];
+    for netlist in cases {
+        let out = run(netlist, &request("VIN", "out"));
+        let (re, im) = value(&out, "gain", 0);
+        assert!(re.is_finite() && im.is_finite(), "{netlist}: {re} {im}");
+    }
+}
+
+/// Two ideal sources in parallel is still a wiring fault.
+#[test]
+fn a_source_loop_is_still_singular() {
+    let err = run_err(
+        "loop\nV1 a 0 1\nV2 a 0 2\nR1 a 0 1k\nVIN in 0 AC 1\nR2 in out 1k\nR3 out 0 1k\n",
+        &request("VIN", "out"),
+    );
+    assert!(err.contains("singular"), "{err}");
+}
