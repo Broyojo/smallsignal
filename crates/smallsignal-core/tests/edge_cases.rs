@@ -676,6 +676,20 @@ fn right_half_plane_poles_are_warned() {
     assert_eq!(r["warnings"], json!([]));
 }
 
+/// Two transconductances in series read as R_D/(1/g_{m1} + 1/g_{m2}), not
+/// g_{m1} g_{m2} R_D (1/g_{m1} ∥ 1/g_{m2}): a follower driving a common gate.
+#[test]
+fn series_transconductances_read_as_a_sum() {
+    let r = run(
+        "sf cg\nVDD vdd 0\nVIN in 0\nVB vb 0\nM1 vdd in x x\nM2 out vb x x\nIB x 0\nRD vdd out\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{R_{D}}{\\frac{1}{g_{m1}} + \\frac{1}{g_{m2}}}"
+    );
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported
