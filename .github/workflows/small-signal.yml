@@ -38,6 +38,14 @@ jobs:
         env:
           SMALLSIGNAL_BIN: ${{ github.workspace }}/target/release/smallsignal
         run: |
+          # compare.py walks the expected results, so first make sure every
+          # circuit has one (and that there are circuits at all).
+          for set in corpus:expected regressions:regressions/expected; do
+            circuits="${set%%:*}" results="${set#*:}"
+            diff <(cd "$circuits" && ls *.cir | sed 's/\.cir$//') \
+                 <(cd "$results" && ls *.json | sed 's/\.json$//')
+            test -n "$(ls "$circuits"/*.cir)"
+          done
           uv run --locked compare.py
           uv run --locked compare.py --corpus regressions --expected regressions/expected
           uv run --locked textbook.py

@@ -25,6 +25,9 @@ if [ -d crates/smallsignal-wasm ]; then
   fi
   wasm-pack build crates/smallsignal-wasm --target web --release \
     --out-dir ../../packages/small-signal/wasm -- --locked
+else
+  # A solver built for another revision must not stand in for the stub.
+  rm -rf packages/small-signal/wasm
 fi
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
 pnpm --filter "@icm/editor^..." --if-present build
