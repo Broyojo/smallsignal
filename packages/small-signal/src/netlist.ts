@@ -11,14 +11,36 @@ import {
  * the drawing names: the solver linearizes square-law and exponential
  * devices, not BSIM or PDK subcircuits. A drawing's own W and L are kept.
  */
-export const SMALL_SIGNAL_MODEL_CARDS = {
-  nmos: ".model nmos_l1 NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.05)",
-  pmos: ".model pmos_l1 PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.05)",
-  npn: ".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50)",
-  pnp: ".model pnp_l1 PNP (IS=1e-15 BF=50 VAF=50)",
-  diode: ".model diode_l1 D (IS=1e-14 N=1)",
+export const DEFAULT_MODEL_PARAMETERS = {
+  nmos: { KP: 200e-6, VTO: 0.5, LAMBDA: 0.05, GAMMA: 0, PHI: 0.6 },
+  pmos: { KP: 100e-6, VTO: -0.5, LAMBDA: 0.05, GAMMA: 0, PHI: 0.6 },
+  npn: { IS: 1e-15, BF: 100, VAF: 50 },
+  pnp: { IS: 1e-15, BF: 50, VAF: 50 },
+  diode: { IS: 1e-14, N: 1 },
 } as const;
-type ModelKind = keyof typeof SMALL_SIGNAL_MODEL_CARDS;
+export type ModelKind = keyof typeof DEFAULT_MODEL_PARAMETERS;
+/** Overrides of the default parameters, per device kind. */
+export type ModelOverrides = {
+  readonly [K in ModelKind]?: Readonly<Record<string, number>>;
+};
+
+const MODEL_CARD_HEAD: Record<ModelKind, string> = {
+  nmos: ".model nmos_l1 NMOS (LEVEL=1",
+  pmos: ".model pmos_l1 PMOS (LEVEL=1",
+  npn: ".model npn_l1 NPN (",
+  pnp: ".model pnp_l1 PNP (",
+  diode: ".model diode_l1 D (",
+};
+
+/** The model card a device kind gets, defaults overridden by `overrides`. */
+export function modelCard(kind: ModelKind, overrides: ModelOverrides = {}) {
+  const params = { ...DEFAULT_MODEL_PARAMETERS[kind], ...overrides[kind] };
+  const body = Object.entries(params)
+    .map(([name, value]) => `${name}=${value}`)
+    .join(" ");
+  const head = MODEL_CARD_HEAD[kind];
+  return `${head}${head.endsWith("(") ? "" : " "}${body})`;
+}
 
 /** DC value for supply symbols (VDD, VDD Rail) that no source drives. */
 export const DEFAULT_SUPPLY_VOLTAGE = 1.8;
@@ -73,6 +95,8 @@ export interface SmallSignalNetlist {
    * so the panel refuses to analyze until they are connected or driven.
    */
   noDcPath: string[];
+  /** Device kinds that use a level-1 model card (the editable ones). */
+  models: ModelKind[];
 }
 
 export interface SmallSignalNetlistOptions {
@@ -81,6 +105,8 @@ export interface SmallSignalNetlistOptions {
   supplyVoltage?: number;
   /** DC values for undriven Pins, by Pin name. */
   pinBias?: Readonly<Record<string, number>>;
+  /** Model parameters replacing the level-1 defaults, per device kind. */
+  models?: ModelOverrides;
 }
 
 /** Cell Pin symbols that may mark an input or a bias node. */
@@ -186,6 +212,7 @@ export function smallSignalNetlist(
     ir,
     options.supplyVoltage ?? DEFAULT_SUPPLY_VOLTAGE,
     options.pinBias ?? {},
+    options.models ?? {},
   );
 }
 
@@ -210,6 +237,7 @@ function translate(
   ir: DesignNetlistIR,
   supplyVoltage: number,
   pinBias: Readonly<Record<string, number>>,
+  modelOverrides: ModelOverrides,
 ): SmallSignalNetlist {
   // Net and element names are separate SPICE namespaces.
   const identifier = createIdentifier();
@@ -560,7 +588,7 @@ function translate(
   if (missing.length)
     notes.push(`No value drawn for ${missing.join(", ")}: kept symbolic`);
 
-  const models = [...usedModels].map((kind) => SMALL_SIGNAL_MODEL_CARDS[kind]);
+  const models = [...usedModels].map((kind) => modelCard(kind, modelOverrides));
   const text = [
     `* ${top?.name ?? "circuit"} (small-signal netlist from Analog Canvas)`,
     ...lines,
@@ -578,6 +606,7 @@ function translate(
     supplies,
     unconnected,
     unknownBias,
+    models: [...usedModels],
     noDcPath: [...nets].filter(
       (net) => net !== "0" && !dcPath.has(net) && !/^nc\d+$/u.test(net),
     ),

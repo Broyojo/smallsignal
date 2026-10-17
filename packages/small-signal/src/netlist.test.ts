@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
-import { createIdentifier, smallSignalNetlist } from "./netlist.js";
+import { createIdentifier, modelCard, smallSignalNetlist } from "./netlist.js";
 
 const example = (name: string) =>
   parseProject(
@@ -73,6 +73,23 @@ describe("textbook drawings with Pins instead of sources", () => {
   });
 });
 
+describe("model parameters", () => {
+  it("writes the defaults and replaces only what is overridden", () => {
+    const base = smallSignalNetlist(example("simulation-common-source"))!;
+    expect(base.models).toEqual(["nmos"]);
+    const custom = smallSignalNetlist(example("simulation-common-source"), {
+      models: { nmos: { KP: 300e-6, LAMBDA: 0.1 } },
+    })!;
+    expect(custom.text.split("\n")).toContain(
+      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0003 VTO=0.5 LAMBDA=0.1 GAMMA=0 PHI=0.6)",
+    );
+  });
+
+  it("writes BJT cards without a LEVEL", () => {
+    expect(modelCard("npn")).toBe(".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50)");
+  });
+});
+
 describe("net names", () => {
   it("keeps Vin+ and Vin− as two nets", () => {
     const netlist = smallSignalNetlist(
@@ -110,7 +127,7 @@ describe("smallSignalNetlist", () => {
         "VDD vdd 0 DC 1.8",
         "VIN in 0 DC 0.7 AC 1",
         "M1 out in 0 0 nmos_l1 W=10u L=1u",
-        ".model nmos_l1 NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.05)",
+        ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.5 LAMBDA=0.05 GAMMA=0 PHI=0.6)",
         ".end",
       ]),
     );

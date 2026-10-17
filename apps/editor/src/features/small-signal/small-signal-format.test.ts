@@ -3,6 +3,10 @@ import type { SmallSignalSource } from "@icm/small-signal";
 import {
   differentialPairs,
   formatPlain,
+  formatSpiceNumber,
+  modelOverrides,
+  modelValue,
+  parseSpiceNumber,
   preferredOutput,
   signalLabel,
 } from "./small-signal-panel";
@@ -81,5 +85,47 @@ describe("real values", () => {
       "-4.191",
     );
     expect(pointTextForTest({ f: 1000, re: -1, im: -0.5 }, "")).toContain("∠");
+  });
+});
+
+describe("model parameters", () => {
+  it("reads SPICE numbers, signed, with scale and unit letters", () => {
+    expect(parseSpiceNumber("200u")).toBeCloseTo(200e-6, 18);
+    expect(parseSpiceNumber("-0.45")).toBe(-0.45);
+    expect(parseSpiceNumber("1.2meg")).toBe(1.2e6);
+    expect(parseSpiceNumber("50V")).toBe(50);
+    expect(parseSpiceNumber(" 1e-15 ")).toBe(1e-15);
+    expect(parseSpiceNumber("")).toBeNull();
+    expect(parseSpiceNumber("abc")).toBeNull();
+    expect(parseSpiceNumber("1 2")).toBeNull();
+  });
+
+  it("writes defaults the way SPICE cards do", () => {
+    expect(formatSpiceNumber(200e-6)).toBe("200u");
+    expect(formatSpiceNumber(-0.5)).toBe("-0.5");
+    expect(formatSpiceNumber(0.05)).toBe("0.05");
+    expect(formatSpiceNumber(100)).toBe("100");
+    expect(formatSpiceNumber(1e-15)).toBe("1f");
+    expect(formatSpiceNumber(1e-14)).toBe("10f");
+    expect(formatSpiceNumber(0)).toBe("0");
+  });
+
+  it("rejects values outside a parameter's range", () => {
+    expect(modelValue("VTO", "-0.7")).toBe(-0.7);
+    expect(modelValue("KP", "0")).toBeNull();
+    expect(modelValue("KP", "-1u")).toBeNull();
+    expect(modelValue("LAMBDA", "0")).toBe(0);
+    expect(modelValue("LAMBDA", "-0.1")).toBeNull();
+    expect(modelValue("VAF", "0")).toBe(0);
+    expect(modelValue("IS", "0")).toBeNull();
+  });
+
+  it("keeps only valid, known parameters as overrides", () => {
+    expect(
+      modelOverrides({
+        nmos: { KP: "300u", VTO: "", LAMBDA: "bad", W: "2u" },
+        pmos: { VTO: "-0.4" },
+      }),
+    ).toEqual({ nmos: { KP: 300e-6 }, pmos: { VTO: -0.4 } });
   });
 });

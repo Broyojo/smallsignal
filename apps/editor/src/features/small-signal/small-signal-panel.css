@@ -346,3 +346,47 @@
   background: var(--icm-accent-soft);
   color: var(--icm-accent);
 }
+
+/* Models: one compact grid of parameters per device kind. */
+.small-signal-model {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.small-signal-model legend {
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--icm-text);
+  font-size: var(--icm-font-sm);
+  font-weight: 650;
+}
+
+.small-signal-panel .small-signal-model input {
+  min-height: var(--icm-control-h);
+  padding: 0.3rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-panel .small-signal-model input[aria-invalid="true"] {
+  border-color: var(--icm-error);
+}
+
+.small-signal-reset {
+  justify-self: start;
+  padding: 3px 10px;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-surface);
+  color: var(--icm-text);
+  font: inherit;
+  font-size: var(--icm-font-sm);
+  cursor: pointer;
+}
+
+.small-signal-reset:hover {
+  background: var(--icm-surface-hover);
+}

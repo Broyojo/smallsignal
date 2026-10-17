@@ -19,6 +19,7 @@ import {
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
   createSmallSignalClient,
+  DEFAULT_MODEL_PARAMETERS,
   DEFAULT_SUPPLY_VOLTAGE,
   isSmallSignalError,
   smallSignalNetlist,
@@ -28,6 +29,8 @@ import {
   type MosOperatingPoint,
   type SmallSignalClient,
   type DeviceOperatingPoint,
+  type ModelKind,
+  type ModelOverrides,
   type SmallSignalSource,
   type SmallSignalQuantity,
   type SmallSignalRequest,
@@ -65,6 +68,167 @@ export function parseFrequencies(text: string): number[] {
       return Number(match[1]) * (SI_SCALE[match[2]?.toLowerCase() ?? ""] ?? 1);
     })
     .filter((value) => Number.isFinite(value) && value >= 0);
+}
+
+/** One SPICE number: `-0.5`, `200u`, `1.2meg`, `50V`. Null if unreadable. */
+export function parseSpiceNumber(text: string): number | null {
+  const match =
+    /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(meg|[fpnumkgt])?[a-z]*\s*$/iu.exec(
+      text,
+    );
+  if (!match) return null;
+  const value =
+    Number(match[1]) * (SI_SCALE[match[2]?.toLowerCase() ?? ""] ?? 1);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** A SPICE number as an engineer writes it: 0.5, 50, 200u, 1f. */
+export function formatSpiceNumber(value: number): string {
+  const magnitude = Math.abs(value);
+  if (value === 0 || (magnitude >= 1e-3 && magnitude < 1e4))
+    return String(Number(value.toPrecision(4)));
+  const scales: [number, string][] = [
+    [1e6, "meg"],
+    [1e3, "k"],
+    [1e-3, "m"],
+    [1e-6, "u"],
+    [1e-9, "n"],
+    [1e-12, "p"],
+    [1e-15, "f"],
+  ];
+  const [scale, suffix] = scales.find(([scale]) => magnitude >= scale) ?? [
+    1e-15,
+    "f",
+  ];
+  return `${Number((value / scale).toPrecision(4))}${suffix}`;
+}
+
+const MODEL_TITLE: Record<ModelKind, string> = {
+  nmos: "NMOS",
+  pmos: "PMOS",
+  npn: "NPN",
+  pnp: "PNP",
+  diode: "Diode",
+};
+
+/** Allowed range per parameter (VTO is any sign; zero VAF means none). */
+const MODEL_RANGE: Record<string, "positive" | "nonnegative"> = {
+  KP: "positive",
+  LAMBDA: "nonnegative",
+  GAMMA: "nonnegative",
+  PHI: "positive",
+  IS: "positive",
+  BF: "positive",
+  VAF: "nonnegative",
+  N: "positive",
+};
+
+export function modelValue(name: string, text: string): number | null {
+  const value = parseSpiceNumber(text);
+  if (value === null) return null;
+  const range = MODEL_RANGE[name];
+  if (range === "positive" && !(value > 0)) return null;
+  if (range === "nonnegative" && !(value >= 0)) return null;
+  return value;
+}
+
+/** Typed model parameters, by kind then name, kept as the user wrote them. */
+type ModelText = Partial<Record<ModelKind, Record<string, string>>>;
+const MODEL_STORAGE_KEY = "smallsignal.models";
+
+function loadModelText(): ModelText {
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(MODEL_STORAGE_KEY) ?? "{}",
+    ) as unknown;
+    return stored && typeof stored === "object" ? (stored as ModelText) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveModelText(text: ModelText) {
+  try {
+    window.localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(text));
+  } catch {
+    // Private windows: the values still apply until the page closes.
+  }
+}
+
+export function modelOverrides(text: ModelText): ModelOverrides {
+  const overrides: Partial<Record<ModelKind, Record<string, number>>> = {};
+  for (const kind of Object.keys(DEFAULT_MODEL_PARAMETERS) as ModelKind[]) {
+    for (const [name, typed] of Object.entries(text[kind] ?? {})) {
+      if (!(name in DEFAULT_MODEL_PARAMETERS[kind])) continue;
+      const value = modelValue(name, typed);
+      if (value !== null) (overrides[kind] ??= {})[name] = value;
+    }
+  }
+  return overrides;
+}
+
+function ModelFields({
+  kinds,
+  text,
+  onChange,
+}: {
+  kinds: readonly ModelKind[];
+  text: ModelText;
+  onChange: (text: ModelText) => void;
+}) {
+  const edited = kinds.some((kind) =>
+    Object.values(text[kind] ?? {}).some((typed) => typed.trim()),
+  );
+  return (
+    <>
+      {kinds.map((kind) => (
+        <fieldset key={kind} className="small-signal-model">
+          <legend>{MODEL_TITLE[kind]}</legend>
+          {Object.entries(DEFAULT_MODEL_PARAMETERS[kind]).map(
+            ([name, fallback]) => {
+              const typed = text[kind]?.[name] ?? "";
+              const invalid =
+                typed.trim() !== "" && modelValue(name, typed) === null;
+              return (
+                <label key={name}>
+                  {name}
+                  <input
+                    aria-label={`${MODEL_TITLE[kind]} ${name}`}
+                    aria-invalid={invalid || undefined}
+                    inputMode="decimal"
+                    placeholder={formatSpiceNumber(fallback)}
+                    value={typed}
+                    onChange={(event) =>
+                      onChange({
+                        ...text,
+                        [kind]: {
+                          ...text[kind],
+                          [name]: event.currentTarget.value,
+                        },
+                      })
+                    }
+                  />
+                </label>
+              );
+            },
+          )}
+        </fieldset>
+      ))}
+      {edited ? (
+        <button
+          type="button"
+          className="small-signal-reset"
+          onClick={() => {
+            const next = { ...text };
+            for (const kind of kinds) delete next[kind];
+            onChange(next);
+          }}
+        >
+          Reset to defaults
+        </button>
+      ) : null}
+    </>
+  );
 }
 
 export function formatEngineering(value: number, unit = ""): string {
@@ -455,7 +619,7 @@ function BiasTable({
                 </span>
               </td>
             ) : null}
-            <td>{formatEngineering(row.current, "A")}</td>
+            <td data-quantity="id">{formatEngineering(row.current, "A")}</td>
             <td data-quantity="gm">{formatEngineering(row.gm, "S")}</td>
             <td data-quantity="ro">{ohms(row.ro)}</td>
             {hasBjt ? <td>{row.rpi === null ? "" : ohms(row.rpi)}</td> : null}
@@ -594,14 +758,22 @@ export function SmallSignalPanel({
     }
     return values;
   }, [pinBiasText]);
+  // Model parameters typed in the Models section, kept across sessions.
+  const [modelText, setModelText] = useState<ModelText>(loadModelText);
+  const updateModelText = useCallback((text: ModelText) => {
+    setModelText(text);
+    saveModelText(text);
+  }, []);
+  const models = useMemo(() => modelOverrides(modelText), [modelText]);
   const netlist = useMemo(
     () =>
       smallSignalNetlist(project, {
         ...(rootDocumentId ? { rootDocumentId } : {}),
         supplyVoltage,
         pinBias,
+        models,
       }),
-    [project, rootDocumentId, supplyVoltage, pinBias],
+    [project, rootDocumentId, supplyVoltage, pinBias, models],
   );
   const [input, setInput] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
@@ -1013,15 +1185,35 @@ export function SmallSignalPanel({
                   />
                   Hand analysis (assume saturation)
                 </label>
-                <small className="small-signal-muted">
-                  Transistors use level-1 square-law models (W/L as drawn).
-                </small>
                 <details>
                   <summary>Solver netlist</summary>
                   <pre>{netlist.text}</pre>
                 </details>
               </div>
             </details>
+            {netlist.models.length ? (
+              <details className="small-signal-options">
+                <summary>
+                  {Object.keys(models).some((kind) =>
+                    netlist.models.includes(kind as ModelKind),
+                  )
+                    ? "Models (edited)"
+                    : "Models"}
+                </summary>
+                <div>
+                  {netlist.models.some((kind) => kind.endsWith("mos")) ? (
+                    <small className="small-signal-muted">
+                      Level 1. W/L as drawn.
+                    </small>
+                  ) : null}
+                  <ModelFields
+                    kinds={netlist.models}
+                    text={modelText}
+                    onChange={updateModelText}
+                  />
+                </div>
+              </details>
+            ) : null}
           </>
         )}
       </section>

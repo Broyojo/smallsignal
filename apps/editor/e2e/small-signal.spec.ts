@@ -151,12 +151,24 @@ async function biasLine(panel: Locator, device: string) {
     };
     return Number(match[1]) * scale[match[2] ?? ""]!;
   };
+  const current = /([\d.]+)\s*([nµm]?)A/u.exec(
+    await row.locator('td[data-quantity="id"]').innerText(),
+  );
+  if (!current) throw new Error("no drain current");
+  const amps =
+    Number(current[1]) *
+    ({ n: 1e-9, µ: 1e-6, m: 1e-3, "": 1 } as Record<string, number>)[
+      current[2] ?? ""
+    ]!;
   // The region column only appears when some transistor is not saturated.
   const chip = row.locator(".small-signal-region");
   return {
     region: (await chip.count()) ? await chip.innerText() : "saturation",
+    id: amps,
     gm: await quantity("gm", "S"),
-    ro: await quantity("ro", "Ω"),
+    ro: (await row.locator('td[data-quantity="ro"]').innerText()).includes("∞")
+      ? Infinity
+      : await quantity("ro", "Ω"),
   };
 }
 
@@ -183,7 +195,7 @@ test("common-source drawn with a VDD Pin: −gm(ro ∥ R1), saturated, follows t
   );
 
   // A higher supply raises V_DS, so I_D and gm grow (level 1: β(1+λV_DS)).
-  await panel.locator("details.small-signal-options > summary").click();
+  await panel.getByText("Options", { exact: true }).click();
   await panel.getByLabel("Supply voltage").fill("3.3");
   await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.2);
   await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
@@ -394,4 +406,59 @@ test("editing R1 re-solves: −gm(ro ∥ 20k)", async ({ page }) => {
     2,
   );
   expect(await formula(panel, "Gain")).toContain("\\parallel R_{1}");
+});
+
+test("model parameters are editable: the bias follows the square law", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  const base = await biasLine(panel, "M1");
+  // Saturated level 1: gm / I_D = 2 / V_ov, whatever KP and λ are.
+  const overdrive = (line: { id: number; gm: number }) =>
+    (2 * line.id) / line.gm;
+
+  const models = panel.locator("details.small-signal-options", {
+    has: page.locator("summary", { hasText: /^Models/u }),
+  });
+  await models.locator("summary").click();
+  await expect(models.locator("summary")).toHaveText("Models");
+  const kp = panel.getByLabel("NMOS KP");
+  await expect(kp).toHaveAttribute("placeholder", "200u");
+
+  // Twice µCox: more current at the same overdrive.
+  await kp.fill("400u");
+  await expect(models.locator("summary")).toHaveText("Models (edited)");
+  await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.3);
+  const strong = await biasLine(panel, "M1");
+  expect(strong.id).toBeGreaterThan(base.id);
+  expect(overdrive(strong)).toBeCloseTo(overdrive(base), 2);
+
+  // 0.1 V lower threshold: exactly 0.1 V more overdrive.
+  await kp.fill("");
+  await panel.getByLabel("NMOS VTO").fill("0.4");
+  await expect
+    .poll(async () => overdrive(await biasLine(panel, "M1")))
+    .toBeCloseTo(overdrive(base) + 0.1, 2);
+
+  // λ = 0: no channel-length modulation, so r_o is infinite and A = −gm R1.
+  await panel.getByLabel("NMOS VTO").fill("");
+  await panel.getByLabel("NMOS LAMBDA").fill("0");
+  await expect
+    .poll(async () => (await biasLine(panel, "M1")).ro)
+    .toBe(Infinity);
+  const ideal = await biasLine(panel, "M1");
+  expect(await cardValue(panel, "Gain")).toBeCloseTo(-ideal.gm * 10e3, 2);
+
+  // An unreadable value is marked and ignored; Reset restores the defaults.
+  await panel.getByLabel("NMOS LAMBDA").fill("abc");
+  await expect(panel.getByLabel("NMOS LAMBDA")).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  await panel.getByLabel("NMOS LAMBDA").fill("0");
+  await panel.getByRole("button", { name: "Reset to defaults" }).click();
+  await expect(models.locator("summary")).toHaveText("Models");
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
 });
