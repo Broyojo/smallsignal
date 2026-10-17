@@ -965,6 +965,16 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
             out.push(format!("{} has an open end at {}", users[0], net.nodes[n]));
         }
     }
+    // A two-terminal element with both ends on one node does nothing.
+    for e in &net.elements {
+        let two = matches!(
+            e.kind,
+            Kind::R { .. } | Kind::C { .. } | Kind::L { .. } | Kind::D { .. } | Kind::V { .. } | Kind::I { .. }
+        );
+        if two && e.nodes[0] == e.nodes[1] {
+            out.push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
+        }
+    }
     if let Some(op) = op {
         for (ei, e) in net.elements.iter().enumerate() {
             let (on, current) = match &op.dev[ei] {

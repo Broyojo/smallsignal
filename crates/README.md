@@ -118,7 +118,8 @@ exceed `maxTerms` terms (default 2,000,000).
   devices out of their intended region, ignored model parameters,
   cross-coupled (latch) pairs that may have several DC solutions, junctions
   forward-biased by ideal sources (also named in the DC error when that is
-  why DC fails), and so on.
+  why DC fails), two-terminal elements with both ends on one node
+  ("CSB has both ends at 0"), and so on.
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.

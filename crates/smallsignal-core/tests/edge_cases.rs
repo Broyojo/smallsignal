@@ -611,6 +611,23 @@ fn symbolic_keeps_triode_ro() {
     );
 }
 
+/// An element with both ends on one node contributes nothing: it is named,
+/// and the result is the circuit's without it.
+#[test]
+fn element_on_one_node_is_named() {
+    let net = "deg\nCSB 0 0 1f\nR9 out out 1k\nI9 out out 1m\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n";
+    let r = run(net, &request("VIN", "out"));
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "CSB has both ends at 0",
+            "R9 has both ends at out",
+            "I9 has both ends at out"
+        ])
+    );
+    assert_eq!(r["gain"]["exact"]["latex"], "\\frac{R_{2}}{R_{1} + R_{2}}");
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported
