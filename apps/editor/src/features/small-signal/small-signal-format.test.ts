@@ -1,10 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { SmallSignalSource } from "@icm/small-signal";
+import type {
+  AssumptionTerm,
+  SmallSignalElement,
+  SmallSignalSource,
+  SmallSignalSuggestion,
+} from "@icm/small-signal";
 import {
   assumptionColumns,
   assumptionRows,
+  formatDeviation,
   formatPercent,
+  suggestionText,
+  suggestionThreshold,
+  withSuggestions,
   countText,
   differentialPairs,
   formatDensity,
@@ -441,5 +450,76 @@ describe("assumption table", () => {
       "leakage",
       "cgs",
     ]);
+  });
+});
+
+describe("suggestions", () => {
+  const item = (
+    elements: string[],
+    term: AssumptionTerm,
+    type: SmallSignalSuggestion["type"],
+    scope: SmallSignalSuggestion["scope"],
+  ): SmallSignalSuggestion => ({
+    elements,
+    term,
+    type,
+    scope,
+    alone: 0.001,
+    cumulative: null,
+  });
+
+  it("writes small deviations with a digit, never an exponent", () => {
+    expect(formatDeviation(0)).toBe("0%");
+    expect(formatDeviation(4e-17)).toBe("<0.001%");
+    expect(formatDeviation(4.2e-5)).toBe("0.004%");
+    expect(formatDeviation(0.0123)).toBe("1.2%");
+  });
+
+  it("names a part, a matched group or a whole type", () => {
+    expect(suggestionText(item(["M5"], "ro", "nmos", "part"))).toBe("ro M5");
+    expect(suggestionText(item(["M3", "M4"], "ro", "pmos", "group"))).toBe(
+      "ro M3 = M4",
+    );
+    expect(suggestionText(item(["M3", "M4", "M6"], "ro", "pmos", "type"))).toBe(
+      "ro all PMOS",
+    );
+    expect(suggestionText(item(["R5"], "open", "resistor", "part"))).toBe(
+      "R5 open",
+    );
+  });
+
+  it("reads the threshold in percent, blank as 1%", () => {
+    expect(suggestionThreshold("")).toBe(0.01);
+    expect(suggestionThreshold("5")).toBe(0.05);
+    expect(suggestionThreshold("0")).toBeNull();
+    expect(suggestionThreshold("x")).toBeNull();
+  });
+
+  it("applies each member's term where the Assumptions table stores it", () => {
+    const elements = [
+      { name: "M3", kind: "pmos", instancePath: ["a"] },
+      { name: "M4", kind: "pmos", instancePath: ["b"] },
+      { name: "C1", kind: "capacitor", instancePath: ["c"] },
+    ] as SmallSignalElement[];
+    const parts = withSuggestions(
+      { c: { ignore: { open: true } } },
+      [
+        item(["M3", "M4"], "ro", "pmos", "group"),
+        item(["C1"], "short", "capacitor", "part"),
+      ],
+      elements,
+      {},
+    );
+    expect(parts).toEqual({
+      a: { ignore: { ro: true } },
+      b: { ignore: { ro: true } },
+      c: { ignore: { short: true } },
+    });
+    // A default already neglecting it stores nothing.
+    expect(
+      withSuggestions({}, [item(["M3"], "ro", "pmos", "part")], elements, {
+        pmos: ["ro"],
+      }),
+    ).toEqual({ a: { ignore: {} } });
   });
 });

@@ -977,3 +977,80 @@ test("assumptions: a term the gain cannot do without is kept, and said once", as
   await expect(panel.getByText(kept, { exact: true })).toHaveCount(1);
   expect(await formula(panel, "Gain")).toMatch(/-g_\{m1\} r_\{o1\}$/u);
 });
+
+/** The Suggestions section, open. */
+async function suggestions(panel: Locator): Promise<Locator> {
+  const section = panel.locator("details.small-signal-suggestions");
+  const summary = section.locator("summary");
+  await expect(summary).toBeVisible();
+  if ((await section.getAttribute("open")) === null) await summary.click();
+  return section;
+}
+
+test("suggestions: the 5T OTA's r_o terms with their cost, applied in one click", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.ota);
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "All transistors are in saturation.",
+  );
+  const section = await suggestions(panel);
+  const rows = section.locator("tbody tr");
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+  // r_o rows, each with its own cost and the running total.
+  const ro = rows.filter({ has: page.locator("th", { hasText: /^ro / }) });
+  await expect(ro.first()).toBeVisible();
+  await expect(ro.first().locator("td").nth(0)).toHaveText(/^[<\d.]+%$/u);
+  const apply = ro.first().getByRole("button", { name: /^Apply ro / });
+  const target = ((await apply.getAttribute("aria-label")) ?? "").replace(
+    /^Apply ro /u,
+    "",
+  );
+  await apply.click();
+
+  // Written where the Assumptions table keeps it.
+  const table = await assumptions(panel);
+  await expect(table.locator("summary")).toHaveText("Assumptions (on)");
+  const row = target.startsWith("all ")
+    ? `All ${target.slice(4)} ro`
+    : `${target} ro`;
+  await expect(neglect(table, row)).toBeChecked();
+  await expect(card(panel, "Gain")).toContainText("% from full model");
+  // Re-suggested from the new assumptions: that row is gone.
+  await expect(
+    section.getByRole("button", { name: `Apply ro ${target}`, exact: true }),
+  ).toHaveCount(0, { timeout: 15_000 });
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+
+  // Apply all: every kept row at once, within the threshold together.
+  const before = await table.locator("input:checked").count();
+  await section.getByRole("button", { name: "Apply all", exact: true }).click();
+  await expect
+    .poll(() => table.locator("input:checked").count())
+    .toBeGreaterThan(before);
+  await expect(card(panel, "Gain")).toContainText("% from full model");
+
+  // Hand analysis has no bias point to measure against.
+  await panel.getByText("Options", { exact: true }).click();
+  await panel.getByText("Hand analysis (assume saturation)").click();
+  await expect(section).toContainText("Suggestions need a bias point.");
+});
+
+test("suggestions: the 25-BJT op-amp, numeric over the term budget", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.bjtOpAmp);
+  await expect
+    .poll(() => cardValue(panel, "Gain"), { timeout: 30_000 })
+    .toBeCloseTo(730, -1);
+  const started = Date.now();
+  const section = await suggestions(panel);
+  await expect(section.locator("tbody tr").first()).toBeVisible({
+    timeout: 60_000,
+  });
+  expect((Date.now() - started) / 1000).toBeLessThan(30);
+  await expect(
+    section.getByRole("button", { name: "Apply all", exact: true }),
+  ).toBeVisible();
+  await expect(section).not.toContainText("Checked");
+});
