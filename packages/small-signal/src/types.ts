@@ -143,6 +143,43 @@ export interface AssumableElement {
   terms: AssumptionTerm[];
 }
 
+const MOS_TERMS: readonly AssumptionTerm[] = ["ro", "gmb", "rbs", "rbd"];
+const BJT_TERMS: readonly AssumptionTerm[] = ["ro", "rpi", "rmu"];
+const PASSIVE_TERMS: readonly AssumptionTerm[] = ["open", "short"];
+
+/**
+ * Every term each element type accepts (the solver's `assume::terms_for`);
+ * `assumable` lists the ones a given element's model has.
+ */
+export const ASSUMPTION_TERMS: Readonly<
+  Record<AssumableElement["type"], readonly AssumptionTerm[]>
+> = {
+  nmos: MOS_TERMS,
+  pmos: MOS_TERMS,
+  npn: BJT_TERMS,
+  pnp: BJT_TERMS,
+  diode: PASSIVE_TERMS,
+  resistor: PASSIVE_TERMS,
+  capacitor: PASSIVE_TERMS,
+  inductor: PASSIVE_TERMS,
+};
+
+const MOS_REGIONS = ["saturation", "triode", "cutoff"] as const;
+const BJT_REGIONS = [
+  "forward-active",
+  "saturation",
+  "reverse-active",
+  "cutoff",
+] as const;
+
+/** The regions an assumption can expect, per transistor type. */
+export const ASSUMPTION_REGIONS = {
+  nmos: MOS_REGIONS,
+  pmos: MOS_REGIONS,
+  npn: BJT_REGIONS,
+  pnp: BJT_REGIONS,
+} as const;
+
 export interface SmallSignalQuantity {
   unit?: string;
   infinite?: boolean;

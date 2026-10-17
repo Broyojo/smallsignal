@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
 import { smallSignalNetlist } from "./netlist.js";
+import { ASSUMPTION_TERMS } from "./types.js";
 import type {
   AssumableElement,
   AssumedQuantity,
@@ -623,7 +624,13 @@ describe.skipIf(!built)("assumptions match the TypeScript contract", () => {
     expect(result.assumptions.regions).toEqual([
       { element: "M1", assumed: "saturation", actual: "saturation" },
     ]);
-    for (const element of result.assumable) keys(element, ASSUMABLE_KEYS);
+    for (const element of result.assumable) {
+      keys(element, ASSUMABLE_KEYS);
+      // The panel only sends terms its type accepts.
+      expect(
+        ASSUMPTION_TERMS[element.type as AssumableElement["type"]],
+      ).toEqual(expect.arrayContaining(element.terms));
+    }
     for (const name of ["gain", "rin", "rout"]) {
       const q = result[name];
       declared(q, GAIN_KEYS);
