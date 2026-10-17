@@ -36,7 +36,7 @@ export interface PartAssumptions {
   region?: string;
 }
 
-/** A circuit's parts, by instance path ("XDUT/M1"). */
+/** A circuit's parts, by `partKey` of their instance path. */
 export type CircuitAssumptions = Readonly<Record<string, PartAssumptions>>;
 
 export interface StoredCircuit {
@@ -55,8 +55,29 @@ export function circuitStorageKey(
   return `${projectId}/${rootDocumentId}`;
 }
 
+/** An instance path as JSON: ids may hold any character, "/" included. */
 export function partKey(instancePath: readonly string[]): string {
-  return instancePath.join("/");
+  return JSON.stringify(instancePath);
+}
+
+/**
+ * A stored part key as `partKey` writes it. A bare id (no "/") from before
+ * paths were JSON is read as a one-id path; ids joined with "/" could be
+ * either of two paths, so they are dropped.
+ */
+function readPartKey(key: string): string | null {
+  if (!key.startsWith("["))
+    return key && !key.includes("/") ? partKey([key]) : null;
+  try {
+    const path: unknown = JSON.parse(key);
+    return Array.isArray(path) &&
+      path.length > 0 &&
+      path.every((id) => typeof id === "string" && id)
+      ? partKey(path as string[])
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isTransistor(type: string): type is TransistorType {
@@ -141,7 +162,8 @@ export function readCircuits(stored: string | null): StoredAssumptions {
     )
       continue;
     const parts: Record<string, PartAssumptions> = {};
-    for (const [path, part] of Object.entries(value.parts)) {
+    for (const [stored, part] of Object.entries(value.parts)) {
+      const path = readPartKey(stored);
       const read = readPart(part);
       if (path && read) parts[path] = read;
     }
@@ -209,6 +231,30 @@ export function isIgnored(
   defaults: AssumptionDefaults,
 ): boolean {
   return part?.ignore?.[term] ?? byDefault(type, term, defaults);
+}
+
+/**
+ * Whether parts of one type make the same choices, every term and the
+ * region: the solver matches only parts that do.
+ */
+export function sameChoices(
+  type: AssumableType,
+  paths: readonly string[],
+  defaults: AssumptionDefaults,
+  parts: CircuitAssumptions,
+): boolean {
+  const choices = (path: string) =>
+    JSON.stringify([
+      ASSUMPTION_TERMS[type].map((term) =>
+        isIgnored(type, term, parts[path], defaults),
+      ),
+      parts[path]?.region ?? null,
+    ]);
+  const first = paths[0];
+  return (
+    first === undefined ||
+    paths.every((path) => choices(path) === choices(first))
+  );
 }
 
 /**
