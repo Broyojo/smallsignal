@@ -6,6 +6,7 @@
 //! numeric error is measured against the exact result.
 
 pub mod analyze;
+pub mod assume;
 pub mod caps;
 pub mod certificate;
 pub mod dc;

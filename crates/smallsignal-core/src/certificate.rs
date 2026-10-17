@@ -73,7 +73,15 @@ pub fn certificate(text: &str, req: &Request) -> Result<Value, String> {
     }
     let symbolic = req.symbolic || !net.missing.is_empty();
     let op = if symbolic { None } else { Some(operating_point(&net)?) };
-    let ssc = ss::build(&net, op.as_ref())?;
+    let full = ss::build(&net, op.as_ref())?;
+    // Under assumptions, the element list the gain's forms are built on.
+    let ssc = match &req.assume {
+        Some(r) => {
+            let a = crate::assume::resolve(&net, &full, op.as_ref(), r)?;
+            crate::analyze::gain_model(&net, &full, &a, &Excite::Source(input), &req.matched)
+        }
+        None => full,
+    };
     let sys = ss::system(&net, &ssc, &Excite::Source(input));
     let max_terms = req.max_terms.unwrap_or(2_000_000);
     let d = crate::det::det(&sys.a, max_terms)?;
@@ -135,6 +143,8 @@ pub fn certificate(text: &str, req: &Request) -> Result<Value, String> {
             Stamp::Ind { e, a, b, p } => {
                 branches[bidx(e)] = json!({ "kind": "ind", "a": col(a), "b": col(b), "z": value(&ssc, p) })
             }
+            // An assumed short has no element: its nodes share one column.
+            Stamp::Short { .. } => {}
         }
     }
     let params: Vec<Value> = (0..ssc.params.len())

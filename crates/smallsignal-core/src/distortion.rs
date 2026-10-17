@@ -29,6 +29,7 @@
 //! slope, not ngspice's AC value (`devices::mos_gmbs_dc`).
 
 use crate::analyze::{cancel, jw, matrix_at};
+use crate::assume::Term as ATerm;
 use crate::dc::{DevOp, Op};
 use crate::devices::{mos_gmbs_dc, pn, vt, BjtModel, MosModel};
 use crate::linalg::LuComplex;
@@ -1410,10 +1411,16 @@ fn sym_values(m: &SsCircuit, s: &Symbols, values: &[(String, f64)]) -> (Symbols,
 pub struct Ctx<'a> {
     pub net: &'a Netlist,
     pub op: Option<&'a Op>,
+    /// Every junction kept, no assumption: numeric a_n and vsFreq.
     pub full: &'a SsCircuit,
+    /// The model the closed forms describe, every junction kept: `full`
+    /// under the assumptions in effect (`full` itself without any).
+    pub model: &'a SsCircuit,
+    /// `model` with proven omissions, and its symbols.
     pub ss: &'a SsCircuit,
     pub symbols: &'a Symbols,
-    pub full_symbols: &'a dyn Fn() -> Symbols,
+    /// Symbols of `model` (fallback for the closed forms).
+    pub model_symbols: &'a dyn Fn() -> Symbols,
     /// Symbols of a model (the leakage-free one).
     pub noleak_symbols: &'a dyn Fn(&SsCircuit) -> Symbols,
     pub excite: &'a crate::ss::Excite,
@@ -1430,6 +1437,42 @@ pub struct Ctx<'a> {
     /// The gain's determinant is already over the term budget: no closed
     /// form (each a_n is built on it) is attempted.
     pub over_budget: bool,
+    /// Under assumptions, those in effect: the Taylor terms of each
+    /// dependence they linearize away leave the closed forms, and each form
+    /// carries its `fullModelError`.
+    pub assumed: Option<&'a [(String, ATerm)]>,
+}
+
+/// A coefficient under the assumptions: a neglected conductance drops the
+/// Taylor terms of the dependence it linearizes. MOS r_o: I_D's v_DS terms,
+/// g_mb: its v_BS terms, r_bs / r_bd: the bulk junction currents. BJT r_o:
+/// I_C's v_CE terms (of the part without junction leakage), r_π (β → ∞):
+/// I_B without leakage, r_μ: the collector–base branch i_μ in I_C and I_B.
+/// A diode taken open or shorted: all of its terms.
+fn assumed_coef(cf: &Coef, devs: &[NlDev], assumed: &[(String, ATerm)]) -> Coef {
+    let d = &devs[cf.dev];
+    let has = |t: ATerm| assumed.iter().any(|(e, x)| *e == d.element && *x == t);
+    let (free_kept, leak_kept) = match (d.vars.len(), d.outs[cf.out].label) {
+        (3, "") => (
+            !(has(ATerm::Ro) && cf.mono[1] > 0) && !(has(ATerm::Gmb) && cf.mono[2] > 0),
+            true,
+        ),
+        (_, "BS") => (true, !has(ATerm::Rbs)),
+        (_, "BD") => (true, !has(ATerm::Rbd)),
+        (_, "C") => (!(has(ATerm::Ro) && cf.mono[1] > 0), !has(ATerm::Rmu)),
+        (_, "B") => (!has(ATerm::Rpi), !has(ATerm::Rmu)),
+        _ => (!has(ATerm::Open) && !has(ATerm::Short), true),
+    };
+    if free_kept && leak_kept {
+        return cf.clone();
+    }
+    let leak = cf.value - cf.free;
+    let free = if free_kept { cf.free } else { 0.0 };
+    Coef {
+        value: free + if leak_kept { leak } else { 0.0 },
+        free,
+        ..cf.clone()
+    }
 }
 
 /// The closed form against the numeric reference: `ok`, the worst relative
@@ -1749,11 +1792,15 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             "{el} has forward body bias. Distortion uses the DC slope for its gmb, not ngspice's AC value."
         ));
     }
-    let (full_owned, ss_owned, symbols_owned);
-    let (full, ss, symbols) = if slopes.is_empty() {
-        (c.full, c.ss, c.symbols)
+    // `phys` is the full model (the numeric references and vsFreq); `full`
+    // here is the model the closed forms describe, every junction kept:
+    // the full one under the assumptions in effect.
+    let (phys_owned, full_owned, ss_owned, symbols_owned);
+    let (phys, full, ss, symbols) = if slopes.is_empty() {
+        (c.full, c.model, c.ss, c.symbols)
     } else {
-        full_owned = with_values(c.full, &slopes);
+        phys_owned = with_values(c.full, &slopes);
+        full_owned = with_values(c.model, &slopes);
         ss_owned = with_values(c.ss, &slopes);
         let split;
         (symbols_owned, split) = sym_values(&ss_owned, c.symbols, &slopes);
@@ -1763,9 +1810,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 els.join(", ")
             ));
         }
-        (&full_owned, &ss_owned, &symbols_owned)
+        (&phys_owned, &full_owned, &ss_owned, &symbols_owned)
     };
-    let coefs = coefficients(&devs, c.order);
+    let phys_coefs = coefficients(&devs, c.order);
+    // The coefficients under the assumptions (the full ones without).
+    let coefs: Vec<Coef> = match c.assumed {
+        Some(a) => phys_coefs.iter().map(|cf| assumed_coef(cf, &devs, a)).collect(),
+        None => phys_coefs.clone(),
+    };
     let fsys = crate::ss::system(c.net, full, c.excite);
     let probe = Probe {
         sys: &fsys,
@@ -1774,23 +1826,51 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         rf: c.rf,
         vid: c.vid as f64,
     };
+    let psys;
+    let phys_probe = if std::ptr::eq(phys, full) {
+        Probe { ..probe }
+    } else {
+        psys = crate::ss::system(c.net, phys, c.excite);
+        Probe {
+            sys: &psys,
+            ss: phys,
+            ..probe
+        }
+    };
     let (keep, omit_err, reference) =
         prove_omission(&probe, &devs, &coefs, OMIT_REL, c.order).ok_or("distortion: the circuit is singular at DC")?;
     let a_num: Vec<f64> = reference.iter().map(|z| z.re).collect();
+    let phys_all: Vec<f64> = phys_coefs.iter().map(|cf| cf.value).collect();
+    // The full model's a_n: the reported numeric values.
+    let a_full: Vec<f64> = match c.assumed {
+        None => a_num.clone(),
+        Some(_) => phys_probe
+            .volterra(&devs, &phys_coefs, &phys_all, 0.0, c.order >= 3)
+            .ok_or("distortion: the circuit is singular at DC")?
+            .iter()
+            .map(|z| z.re)
+            .collect(),
+    };
 
-    // Device Taylor coefficients (exact zeros left out).
-    let taylor: Vec<Value> = coefs
+    // Device Taylor coefficients (exact zeros left out), with the full
+    // model's values.
+    let taylor: Vec<Value> = phys_coefs
         .iter()
+        .zip(&coefs)
         .zip(&keep)
-        .filter(|(cf, _)| cf.value != 0.0)
-        .map(|(cf, &k)| {
+        .filter(|((cf, _), _)| cf.value != 0.0)
+        .map(|((cf, ca), &k)| {
             let d = &devs[cf.dev];
             let o = &d.outs[cf.out];
             let (sub, _) = mono_sub(&cf.mono, d.vars);
-            json!({
+            let mut v = json!({
                 "element": d.element, "current": if o.label.is_empty() { "D" } else { o.label },
                 "monomial": sub, "order": cf.order(), "value": cf.value, "kept": k,
-            })
+            });
+            if ca.value == 0.0 {
+                v["ignored"] = json!(true);
+            }
+            v
         })
         .collect();
 
@@ -1941,7 +2021,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         // a3 by more (it is cubic in the transfers): use the full model then,
         // and no exact form if that one is too large.
         if check(cl, ss, symbols).is_some_and(|ck| ck.unexplained > 1e-11) && ss.params.len() != full.params.len() {
-            let f = (c.full_symbols)();
+            let f = (c.model_symbols)();
             fs = if slopes.is_empty() {
                 f
             } else {
@@ -1982,12 +2062,33 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let both = |f: Getter, inverted: bool| (pick(&exact, f, inverted), pick(&noleak, f, inverted));
     let id = |s: &str| s.to_string();
     let ident = |x: f64| x;
+    // Under assumptions each form's distance from the full model's value.
+    let full_error = |q: &mut Value, reference: f64| {
+        if c.assumed.is_none() || q.is_null() {
+            return;
+        }
+        let err = |v: &Value| match v["value"].as_f64() {
+            Some(x) if reference.is_finite() && reference != 0.0 => {
+                num_or_null((x - reference).abs() / reference.abs())
+            }
+            Some(x) if reference == 0.0 => num_or_null(x.abs()),
+            _ => Value::Null,
+        };
+        q["fullModelError"] = err(q);
+        for key in ["display", "simplified"] {
+            if q[key].is_object() {
+                q[key]["fullModelError"] = err(&q[key]);
+            }
+        }
+    };
+    let af = |n: usize| a_full.get(n).copied().unwrap_or(0.0);
     let mut coefs_json = Vec::new();
     for n in 0..c.order as usize {
         let (e, nl) = both(&|cl| cl.a(n), false);
         let mut q = quantity(e, nl, a(n), &Shape { wrap: &id, map: &ident }, c.tol);
         q["order"] = json!(n + 1);
-        q["numeric"] = json!(a(n));
+        q["numeric"] = json!(af(n));
+        full_error(&mut q, af(n));
         coefs_json.push(q);
     }
     resp.insert("coefficients".into(), json!(coefs_json));
@@ -2018,6 +2119,8 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             Value::Null
         }
     };
+    let mut hd2 = hd2;
+    full_error(&mut hd2, af(1).abs() * amp / (2.0 * af(0).abs()));
     resp.insert("hd2".into(), hd2);
     if c.order >= 3 {
         let w3 = |l: &str| format!("\\frac{{A^{{2}}}}{{4}}\\left|{l}\\right|");
@@ -2030,6 +2133,8 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 Value::Null
             }
         };
+        let mut hd3 = hd3;
+        full_error(&mut hd3, af(2).abs() * amp * amp / (4.0 * af(0).abs()));
         resp.insert("hd3".into(), hd3);
         let iip3 = if zero(2) && !zero(0) {
             infinite()
@@ -2049,6 +2154,8 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 c.tol,
             )
         };
+        let mut iip3 = iip3;
+        full_error(&mut iip3, (4.0 * af(0).abs() / (3.0 * af(2).abs())).sqrt());
         resp.insert("iip3".into(), iip3);
     } else {
         resp.insert("hd3".into(), Value::Null);
@@ -2112,48 +2219,52 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let vs: Vec<Value> = c
         .freqs
         .iter()
-        .map(|&f| match probe.volterra_terms(&devs, &coefs, &all, f, c.order >= 3) {
-            Some((h, nt)) => {
-                // H1 is 0 to roundoff of what its node responses sum (a
-                // notch at f): then HD_n is infinite or unavailable below.
-                let h1_zero = h[0].norm() <= ZERO_REL * nt[0];
-                let a1 = if h1_zero { 0.0 } else { h[0].norm() };
-                // A value beyond f64 (a huge amplitude) is unavailable.
-                let hd = |n: usize| -> Value {
-                    let direct = match n {
-                        1 => h[1].norm() * amp / (2.0 * a1),
-                        _ => h[2].norm() * amp * amp / (4.0 * a1),
+        .map(
+            |&f| match phys_probe.volterra_terms(&devs, &phys_coefs, &phys_all, f, c.order >= 3) {
+                Some((h, nt)) => {
+                    // H1 is 0 to roundoff of what its node responses sum (a
+                    // notch at f): then HD_n is infinite or unavailable below.
+                    let h1_zero = h[0].norm() <= ZERO_REL * nt[0];
+                    let a1 = if h1_zero { 0.0 } else { h[0].norm() };
+                    // A value beyond f64 (a huge amplitude) is unavailable.
+                    let hd = |n: usize| -> Value {
+                        let direct = match n {
+                            1 => h[1].norm() * amp / (2.0 * a1),
+                            _ => h[2].norm() * amp * amp / (4.0 * a1),
+                        };
+                        if a1 == 0.0 {
+                            return num_or_null(direct);
+                        }
+                        match representable(direct, || h[n].norm().ln() - a1.ln(), amp, n) {
+                            Some(v) => num_or_null(v),
+                            None => {
+                                vs_overflow.set(true);
+                                Value::Null
+                            }
+                        }
                     };
-                    if a1 == 0.0 {
-                        return num_or_null(direct);
-                    }
-                    match representable(direct, || h[n].norm().ln() - a1.ln(), amp, n) {
-                        Some(v) => num_or_null(v),
-                        None => {
-                            vs_overflow.set(true);
-                            Value::Null
+                    let mut p = json!({
+                        "f": f,
+                        "hd2": hd(1),
+                        "hd3": if c.order >= 3 { hd(2) } else { Value::Null },
+                    });
+                    // H1 = 0: HD_n is infinite unless H_n is 0 too (to roundoff
+                    // of its terms), then unavailable.
+                    if h1_zero {
+                        let t = phys_probe
+                            .terms(&devs, &phys_coefs, &phys_all, f, c.order >= 3)
+                            .unwrap_or([0.0; 3]);
+                        for (n, key) in [(1, "hd2Infinite"), (2, "hd3Infinite")] {
+                            if (n == 1 || c.order >= 3) && h[n].norm() > ZERO_REL * t[n] {
+                                p[key] = json!(true);
+                            }
                         }
                     }
-                };
-                let mut p = json!({
-                    "f": f,
-                    "hd2": hd(1),
-                    "hd3": if c.order >= 3 { hd(2) } else { Value::Null },
-                });
-                // H1 = 0: HD_n is infinite unless H_n is 0 too (to roundoff
-                // of its terms), then unavailable.
-                if h1_zero {
-                    let t = probe.terms(&devs, &coefs, &all, f, c.order >= 3).unwrap_or([0.0; 3]);
-                    for (n, key) in [(1, "hd2Infinite"), (2, "hd3Infinite")] {
-                        if (n == 1 || c.order >= 3) && h[n].norm() > ZERO_REL * t[n] {
-                            p[key] = json!(true);
-                        }
-                    }
+                    p
                 }
-                p
-            }
-            None => json!({ "f": f, "hd2": null, "hd3": null }),
-        })
+                None => json!({ "f": f, "hd2": null, "hd3": null }),
+            },
+        )
         .collect();
     resp.insert("vsFreq".into(), json!(vs));
     if vs_overflow.get() {

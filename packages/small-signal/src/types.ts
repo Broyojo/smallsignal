@@ -1,5 +1,21 @@
 // The solver's JSON contract (crates/smallsignal-wasm `analyze`).
 
+/**
+ * A term taken to its limit: a device's r_o, g_mb, r_bs, r_bd, r_π or r_μ
+ * neglected (r → ∞, g_mb → 0), or a passive or diode taken open or shorted.
+ * Reserved for device capacitances: cgs, cgd, cgb, cbs, cbd, cpi, cmu.
+ */
+export type AssumptionTerm =
+  "ro" | "gmb" | "rbs" | "rbd" | "rpi" | "rmu" | "open" | "short";
+
+/** Per-device assumptions: terms neglected and regions expected. */
+export interface SmallSignalAssumptions {
+  ignore?: { element: string; term: AssumptionTerm }[];
+  /** MOS saturation, triode, cutoff; BJT forward-active, saturation,
+   * reverse-active, cutoff. Checked against the operating point only. */
+  regions?: { element: string; region: string }[];
+}
+
 export interface SmallSignalRequest {
   /** Name of the independent V or I source that drives the input. */
   input: string;
@@ -34,6 +50,9 @@ export interface SmallSignalRequest {
   /** Term budget of each exact polynomial (default 2,000,000); over it a
    * quantity is numeric only. */
   maxTerms?: number;
+  /** Assumptions: the forms describe the assumed model, values stay the
+   * full model's. */
+  assume?: SmallSignalAssumptions;
 }
 
 export interface ComplexPoint {
@@ -65,6 +84,63 @@ export interface SmallSignalExpression {
   assumption?: string;
   /** The plain sum-of-products form when `latex` uses ∥ notation. */
   latexExpanded?: string | null;
+  /** Under assumptions: the worst relative distance of this form from the
+   * full model over the check grid; null without numbers or unbounded. */
+  fullModelError?: number | null;
+}
+
+/** An assumed model's root and the full model's it pairs with (in Hz). */
+export interface RootPair {
+  assumed: Root | null;
+  full: Root | null;
+  relError: number | null;
+}
+
+/** An assumption the solver put back for one quantity. */
+export interface RestoredAssumption {
+  element: string;
+  term: AssumptionTerm;
+  /** The symbol kept, e.g. r_{o1}; null for a short of an absent element. */
+  latex: string | null;
+}
+
+/** A quantity of the assumed model, against the full one. */
+export interface AssumedQuantity {
+  values: ComplexPoint[];
+  /** Per requested frequency: |assumed − full| / max(|full|, 1e-3·peak). */
+  relError: (number | null)[];
+  /** The worst over the check grid; null when unbounded or symbolic. */
+  maxRelError: number | null;
+  infinite?: boolean;
+  /** The comparison's own accuracy (rounding of both sides). */
+  resolution: number | null;
+  /** Assumptions without which the quantity is unbounded at DC. */
+  restored: RestoredAssumption[];
+  poles: RootPair[];
+  zeros: RootPair[];
+}
+
+export interface SmallSignalAssumptionReport {
+  applied: { element: string; term: AssumptionTerm; latex: string }[];
+  /** Asked for, but the full model has no such term (e.g. g_mb with the
+   * body on the source). */
+  absent: { element: string; term: AssumptionTerm }[];
+  regions: { element: string; assumed: string; actual: string | null }[];
+}
+
+/** An element that can take assumptions, with the terms its model has. */
+export interface AssumableElement {
+  element: string;
+  type:
+    | "nmos"
+    | "pmos"
+    | "npn"
+    | "pnp"
+    | "diode"
+    | "resistor"
+    | "capacitor"
+    | "inductor";
+  terms: AssumptionTerm[];
 }
 
 export interface SmallSignalQuantity {
@@ -88,9 +164,10 @@ export interface SmallSignalQuantity {
   leakageMatters?: boolean;
   simplified?: SmallSignalExpression | null;
   values?: ComplexPoint[];
-  /** In Hz; empty in symbolic mode (no values). */
-  poles?: Root[];
-  zeros?: Root[];
+  /** In Hz; empty in symbolic mode (no values). null when the numeric
+   * model's roots were not found (a warning says so). */
+  poles?: Root[] | null;
+  zeros?: Root[] | null;
   /** Number of poles and zeros: the degree in s of the denominator and
    * numerator (also in symbolic mode). */
   poleCount?: number;
@@ -98,6 +175,9 @@ export interface SmallSignalQuantity {
   /** Symbolic against direct numeric solve (numeric mode); null when the
    * exact form is over budget. */
   check?: { ok: boolean; maxRelDiff: number } | null;
+  /** Under assumptions: values, poles and zeros above stay the full
+   * model's; exact, display and simplified are the assumed model's. */
+  assumed?: AssumedQuantity;
 }
 
 export interface MosOperatingPoint {
@@ -189,6 +269,8 @@ export interface NoiseExpression {
   method?: string;
   assumption?: string;
   tolerance?: number;
+  /** Under assumptions: relative distance from the full model's value. */
+  fullModelError?: number | null;
 }
 
 /** A noise source: its PSD formula and the numbers behind it. */
@@ -201,6 +283,8 @@ export interface NoiseSource {
   white: number | null;
   /** Flicker: coef/f^exp in A²/Hz. */
   flicker: { coef: number; exp: number } | null;
+  /** An assumption takes its PSD to 0: left out of `inputLowFreq`. */
+  ignored?: true;
 }
 
 /** A bias-current symbol in the shot-noise terms, e.g. I_{C1}. */
@@ -266,6 +350,8 @@ export interface DistortionForm {
   /** Simplified forms: how they were made, e.g. "leading order (ro ≫ R, 1/gm)". */
   method?: string;
   tolerance?: number;
+  /** Under assumptions: relative distance from the full model's value. */
+  fullModelError?: number | null;
 }
 
 export interface DistortionQuantity extends DistortionForm {
@@ -324,6 +410,8 @@ export interface SmallSignalDistortion {
     order: number;
     value: number;
     kept: boolean;
+    /** An assumption drops it from the closed forms. */
+    ignored?: true;
   }[];
   /** The exact aₙ that materialized, against the numeric expansion. */
   check: {
@@ -357,6 +445,10 @@ export interface SmallSignalResult {
   rout?: SmallSignalQuantity;
   noise?: SmallSignalNoise;
   distortion?: SmallSignalDistortion;
+  /** Elements that can take assumptions (always present). */
+  assumable?: AssumableElement[];
+  /** Present when the request has `assume`. */
+  assumptions?: SmallSignalAssumptionReport;
 }
 
 export type SmallSignalResponse = SmallSignalResult | { error: string };

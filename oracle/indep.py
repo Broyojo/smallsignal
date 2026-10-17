@@ -59,14 +59,22 @@ def model_params(text: str) -> dict[str, dict[str, float]]:
 
 def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt"),
-                    want_system: bool = False):
+                    want_system: bool = False, drop: set[tuple[str, str]] | None = None):
     """variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
     "solverlike" (only the junction / g_mu terms in `kept`, the solver's own
     parameter names such as rbd_m1, rmu_q2, each as ngspice has it) or
     "solverlike_phys" (solverlike plus the physical part, without gmin, of
-    every term the solver dropped)."""
+    every term the solver dropped).
+
+    drop: assumptions as (element, term) pairs, the solver's `assume`
+    vocabulary, each taken to its limit at the same operating point: a
+    device's ro (gds, go), gmb, rpi (gpi), rmu (gmu), rbs, rbd conductance
+    left out (gmin included); an element "open" left out (an inductor's
+    branch carries no current) or "short" replaced by a 0 V branch."""
     mp.mp.dps = dps
     kept = {k.lower() for k in (kept or set())}
+    drop = {(e.lower(), t) for e, t in (drop or set())}
+    dropped = lambda e, t: (e.name.lower(), t) in drop
     gmin_full = mp.mpf(repr(GMIN))
 
     def term(name: str, g_phys, g_gmin):
@@ -83,13 +91,15 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
         return g_phys if variant == "solverlike_phys" and kind in phys_kinds else mp.mpf(0)
     text = cir.read_text()
     side = json.loads(cir.with_suffix(".json").read_text())
+    # ngspice ran at the sidecar's gmin when it sets one.
+    gmin_full = mp.mpf(repr(float(side.get("gmin", GMIN))))
     net = spice.parse(text)
     models = model_params(text)
     gmin = mp.mpf(0) if variant == "phys" else gmin_full  # in always-modelled gpi / gd
     nodes = sorted({n for e in net.elements for n in e.nodes if n not in spice.GROUND})
     nidx = {n: i for i, n in enumerate(nodes)}
-    ni = lambda n: None if n in spice.GROUND else nidx[n]
-    branch_elems = [e for e in net.elements if e.kind in ("v", "e", "h", "l")]
+    ni = lambda n: None if n in spice.GROUND else nidx[n] if n in nidx else nidx[n.lower()]
+    branch_elems = [e for e in net.elements if e.kind in ("v", "e", "h", "l") or dropped(e, "short")]
     bidx = {e.name.lower(): len(nodes) + k for k, e in enumerate(branch_elems)}
     dim = len(nodes) + len(branch_elems)
     volt = {k.lower(): mp.mpf(repr(v)) for k, v in want["op"]["nodes"].items()}
@@ -124,6 +134,16 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
 
         for e in net.elements:
             k, t = e.kind, e.tokens
+            if dropped(e, "short"):
+                # A 0 V branch: v(a) = v(b), any current.
+                r = bidx[e.name.lower()]
+                p, n = ni(e.nodes[0]), ni(e.nodes[1])
+                add(p, r, 1); add(n, r, -1); add(r, p, 1); add(r, n, -1)
+                continue
+            if dropped(e, "open"):
+                if k == "l":
+                    add(bidx[e.name.lower()], bidx[e.name.lower()], 1)
+                continue
             if k == "r":
                 adm(e.nodes[0], e.nodes[1], 1 / num(t[3]))
             elif k == "c":
@@ -159,13 +179,17 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 dn, gn, sn, bn = e.nodes
                 ed, es = (sn, dn) if d["reverse"] else (dn, sn)
                 vccs(ed, es, gn, es, P(d["gm"]))
-                adm(ed, es, P(d["gds"]))
-                vccs(ed, es, bn, es, P(d["gmb"]))
+                if not dropped(e, "ro"):
+                    adm(ed, es, P(d["gds"]))
+                if not dropped(e, "gmb"):
+                    vccs(ed, es, bn, es, P(d["gmb"]))
                 mname = t[5].lower()
                 tt = -1 if net.models.get(mname) == "pmos" else 1
                 mult = next((float(x.split("=")[1]) for x in t[6:] if x.lower().startswith("m=")), 1.0)
                 isat = mp.mpf(models.get(mname, {}).get("is", 1e-14)) * mult
                 for other, which in ((sn, "bs"), (dn, "bd")):
+                    if dropped(e, f"r{which}"):
+                        continue
                     vj = tt * (v(bn) - v(other))
                     phys = isat / VT * mp.exp(vj / VT) if vj > -3 * VT else mp.mpf(0)
                     adm(bn, other, term(f"r{which}_{e.name}", phys, gmin_full))
@@ -173,16 +197,19 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 d = devs[e.name.lower()]
                 c, bb, em = e.nodes[:3]
                 gm = P(d["gm"])
-                gpi = P(d["gpi"]) - mp.mpf(repr(GMIN)) + gmin
+                gpi = P(d["gpi"]) - gmin_full + gmin
                 gmu = term(f"rmu_{e.name}", P(d["gmu"]) - gmin_full, gmin_full)
                 go = P(d["go"])
                 vccs(c, em, bb, em, gm)
-                adm(c, em, go)
-                adm(bb, em, gpi)
-                adm(bb, c, gmu)
+                if not dropped(e, "ro"):
+                    adm(c, em, go)
+                if not dropped(e, "rpi"):
+                    adm(bb, em, gpi)
+                if not dropped(e, "rmu"):
+                    adm(bb, c, gmu)
             elif k == "d":
                 d = devs[e.name.lower()]
-                adm(e.nodes[0], e.nodes[1], P(d["gd"]) - mp.mpf(repr(GMIN)) + gmin)
+                adm(e.nodes[0], e.nodes[1], P(d["gd"]) - gmin_full + gmin)
             else:
                 raise ValueError(f"unsupported element {e.name}")
         if mode == "rout":
@@ -193,6 +220,8 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 b[r_] -= 1
         return A, b
 
+    if want_system == "poles":
+        return poles(system, dim)
     if want_system:
         # system(s, mode): mode "gain" excites the input source, "rout" injects
         # 1 A at the output, anything else leaves every source at zero.
@@ -231,6 +260,23 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
         out[f"rout@{f:g}"] = at(xo, side["output"]) - at(xo, ref)
         out[("bound", f"rout@{f:g}")] = bound(A, xo, out[f"rout@{f:g}"])
     return out
+
+
+def poles(system, dim: int) -> list[mp.mpc]:
+    """Finite roots (Hz) of det(G + sC) of the circuit with every source
+    zeroed: with A = G + σC regular, each eigenvalue λ ≠ 0 of A⁻¹C gives
+    s = σ − 1/λ (λ = 0 is a root at infinity)."""
+    G, _ = system(mp.mpf(0), "zero")
+    C = (system(mp.mpf(1), "zero")[0] - G)
+    sigma = mp.mpf("1e3") * 2 * mp.pi
+    A = G + sigma * C
+    if dim == 0:
+        return []
+    M = mp.inverse(A) * C
+    lam = mp.eig(M, left=False, right=False)
+    big = max((abs(x) for x in lam), default=mp.mpf(0))
+    return sorted(((sigma - 1 / x) / (2 * mp.pi) for x in lam if abs(x) > mp.mpf(10) ** (-40) * big),
+                  key=lambda z: (abs(z), mp.im(z)))
 
 
 DEVICE_KEYS = ("gm", "gds", "gmb", "gpi", "go", "gmu", "gd")

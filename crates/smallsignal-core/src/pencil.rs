@@ -516,15 +516,47 @@ fn det_mod(sys: &System, border: Option<&[(usize, i128)]>, vals: &[u128]) -> u12
     det % P
 }
 
+/// Whether det of `sys`'s matrix (bordered as in `Pencil::new`) is the zero
+/// polynomial in the parameters of `ss` (s riding on the reactive ones),
+/// or with `dc` its value at s = 0 is: exactly zero at two random points
+/// modulo 2⁶¹−1 (a nonzero polynomial passes both with probability below
+/// 10⁻³⁰).
+pub fn vanishes(sys: &System, ss: &SsCircuit, border: Option<&[(usize, i128)]>, dc: bool) -> bool {
+    let mut seed: u64 = 0xD1B5_4A32_D192_ED03;
+    let mut rnd = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed as u128) % (P - 2) + 2
+    };
+    (0..2).all(|_| {
+        let vals: Vec<u128> = ss
+            .params
+            .iter()
+            .map(|p| if dc && p.reactive { 0 } else { rnd() })
+            .collect();
+        det_mod(sys, border, &vals) == 0
+    })
+}
+
 /// The lowest and highest power of s in det of `sys`'s matrix (bordered as
 /// in `Pencil::new`), exactly as in the symbolic polynomial (s rides on the
 /// reactive parameters): with every reactive value scaled by t, det is a
 /// polynomial in t whose coefficients are recovered by interpolation modulo
 /// 2⁶¹−1 at random parameter values, twice (a nonzero coefficient reads as
-/// zero with probability below 10⁻¹⁵). None when det is the zero polynomial.
-pub fn s_orders(sys: &System, ss: &SsCircuit, border: Option<&[(usize, i128)]>) -> Option<(usize, usize)> {
+/// zero with probability below 10⁻¹⁵). With `class` (parameter → symbol, as
+/// matching merges them), parameters of one class share their value. None
+/// when det is the zero polynomial.
+pub fn s_orders(
+    sys: &System,
+    ss: &SsCircuit,
+    border: Option<&[(usize, i128)]>,
+    class: Option<&[usize]>,
+) -> Option<(usize, usize)> {
     let reactive: Vec<bool> = ss.params.iter().map(|p| p.reactive).collect();
     let m = reactive.iter().filter(|&&r| r).count();
+    let of = |i: usize| class.map_or(i, |c| c[i]);
+    let classes = (0..reactive.len()).map(|i| of(i) + 1).max().unwrap_or(0);
     let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut rnd = || {
         seed ^= seed << 13;
@@ -534,7 +566,8 @@ pub fn s_orders(sys: &System, ss: &SsCircuit, border: Option<&[(usize, i128)]>) 
     };
     let mut orders: Option<(usize, usize)> = None;
     for _ in 0..2 {
-        let base: Vec<u128> = reactive.iter().map(|_| rnd()).collect();
+        let drawn: Vec<u128> = (0..classes).map(|_| rnd()).collect();
+        let base: Vec<u128> = (0..reactive.len()).map(|i| drawn[of(i)]).collect();
         // det at t = 1..=m+1, then the coefficients of the degree-m interpolant.
         let ts: Vec<u128> = (1..=m as u128 + 1).collect();
         let ys: Vec<u128> = ts

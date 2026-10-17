@@ -103,6 +103,12 @@ pub enum Stamp {
         b: usize,
         p: usize,
     },
+    /// An assumed short (an element taken to zero impedance): its nodes are
+    /// merged, as for a zeroed voltage source.
+    Short {
+        a: usize,
+        b: usize,
+    },
 }
 
 /// Monomials are `u128` parameter sets, so an exact (symbolic) system holds
@@ -905,7 +911,7 @@ impl SsCircuit {
         match *st {
             Stamp::Adm { p, .. } | Stamp::Vccs { p, .. } | Stamp::Cccs { p, .. } | Stamp::Ind { p, .. } => Some(p),
             Stamp::Vcvs { p, .. } | Stamp::Ccvs { p, .. } => p,
-            Stamp::VSrc { .. } | Stamp::ISrc { .. } => None,
+            Stamp::VSrc { .. } | Stamp::ISrc { .. } | Stamp::Short { .. } => None,
         }
     }
 
@@ -936,7 +942,7 @@ impl SsCircuit {
                             *q = remap(*q)
                         }
                     }
-                    Stamp::VSrc { .. } | Stamp::ISrc { .. } => {}
+                    Stamp::VSrc { .. } | Stamp::ISrc { .. } | Stamp::Short { .. } => {}
                 }
                 st
             })
@@ -1034,7 +1040,8 @@ fn find(uf: &mut [usize], x: usize) -> usize {
 
 /// Builds the small-signal MNA system. Independent V sources other than an
 /// excited one are shorted (their nodes merged) unless they control an F/H
-/// source; independent I sources other than an excited one are open.
+/// source; independent I sources other than an excited one are open. An
+/// assumed short merges its nodes too.
 pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
     let nnodes = net.nodes.len();
     let mut controllers: Vec<usize> = Vec::new();
@@ -1056,13 +1063,16 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
 
     let mut uf: Vec<usize> = (0..nnodes).collect();
     for s in &ss.stamps {
-        if let Stamp::VSrc { e, a, b } = s {
-            if !kept_v(*e) && !opened.contains(e) {
-                let (ra, rb) = (find(&mut uf, *a), find(&mut uf, *b));
-                // Keep ground (0) as the representative.
-                let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
-                uf[hi] = lo;
-            }
+        let merged = match s {
+            Stamp::VSrc { e, a, b } if !kept_v(*e) && !opened.contains(e) => Some((*a, *b)),
+            Stamp::Short { a, b } => Some((*a, *b)),
+            _ => None,
+        };
+        if let Some((a, b)) = merged {
+            let (ra, rb) = (find(&mut uf, a), find(&mut uf, b));
+            // Keep ground (0) as the representative.
+            let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+            uf[hi] = lo;
         }
     }
     let mut col_of_rep: HashMap<usize, usize> = HashMap::new();
@@ -1144,7 +1154,7 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
                     put(Some(k), cy, None, -1);
                 }
             }
-            Stamp::ISrc { .. } => {}
+            Stamp::ISrc { .. } | Stamp::Short { .. } => {}
             Stamp::Vcvs {
                 e,
                 a: x,

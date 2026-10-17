@@ -32,7 +32,7 @@ from pathlib import Path
 
 import sympy as sp
 
-from textbook_cases import CASES, Case, Quantity, s
+from textbook_cases import CASES, Case, Quantity, assume_limit, s
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -108,9 +108,38 @@ def typical(sym: sp.Symbol) -> float:
     return TYPICAL.get(n[0], 1e4)
 
 
+def check_assume(case: Case, notes: list[str]) -> list[str]:
+    """Each quantity's exact form under the case's assumptions against the
+    limit (sp.limit) of its hand KCL result, leaving out what the solver
+    must restore."""
+    fails: list[str] = []
+    ignore = ",".join(f"{e}:{t}" for e, t in case.assume)
+    data = run(case.netlist, case, ["--symbolic", "--ignore", ignore])
+    for qname in ("gain", "rin", "rout"):
+        q: Quantity | None = getattr(case, qname)
+        if q is None:
+            continue
+        restored = [f"{r['element']}:{r['term']}" for r in data[qname]["assumed"]["restored"]]
+        want = case.restored.get(qname, [])
+        if sorted(restored) != sorted(want):
+            fails.append(f"{qname}: restored {restored}, want {want}")
+        hand = assume_limit(sp.sympify(q.hand()), [a for a in case.assume if f"{a[0]}:{a[1]}" not in want])
+        got = ours(data[qname])
+        if not identical(got, hand):
+            fails.append(f"{qname}: solver {sp.simplify(got)}  !=  limit of hand KCL {hand}")
+        notes.append(f"{qname}: {data[qname]['exact']['latex']}")
+    return fails
+
+
 def check_case(case: Case, verbose: bool) -> list[str]:
     fails: list[str] = []
     notes: list[str] = []
+    if case.assume:
+        fails = check_assume(case, notes)
+        if verbose:
+            for n in notes:
+                print(f"    {n}")
+        return fails
     data = run(case.netlist, case, ["--symbolic"])
     for qname in ("gain", "rin", "rout"):
         q: Quantity | None = getattr(case, qname)

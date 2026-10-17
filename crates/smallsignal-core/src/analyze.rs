@@ -69,6 +69,9 @@ pub struct Request {
     /// 2 or 3 (default 3).
     #[serde(default)]
     pub order: Option<u8>,
+    /// Terms neglected and regions expected (see `assume`).
+    #[serde(default)]
+    pub assume: Option<crate::assume::AssumeRequest>,
     /// Input amplitude for HD2/HD3 (default 10 mV, or 1 µA for a current input).
     #[serde(default)]
     pub amplitude: Option<f64>,
@@ -125,7 +128,12 @@ pub fn analyze_json(netlist: &str, request: &str) -> String {
 }
 
 pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
-    let net = parse(text)?;
+    let mut net = parse(text)?;
+    let inputs: Vec<&str> = std::iter::once(req.input.as_str())
+        .chain(req.input_neg.as_deref())
+        .collect();
+    drop_shorted_branches(&mut net, &inputs)?;
+    let net = net;
     let find_source = |name: &str| -> Result<(usize, bool), String> {
         let i = net
             .element(name)
@@ -204,11 +212,29 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         )
     };
     // Symbolic mode assumes saturation except where the region is known.
-    let (linear, region_warnings) = if symbolic {
+    let (mut linear, mut region_warnings) = if symbolic {
         symbolic_regions(&net)
     } else {
         (Vec::new(), Vec::new())
     };
+    // Without an operating point a declared region decides which r_o the
+    // hand-analysis form keeps finite (MOS triode, BJT saturation).
+    if symbolic {
+        for r in req.assume.iter().flat_map(|a| &a.regions) {
+            let Some(ei) = net.element(&r.element) else { continue };
+            let e = &net.elements[ei];
+            let small = match (&e.kind, r.region.trim()) {
+                (Kind::M { .. }, "triode") | (Kind::Q { .. }, "saturation") => true,
+                (Kind::M { .. }, "saturation") | (Kind::Q { .. }, "forward-active") => false,
+                _ => continue,
+            };
+            linear.retain(|&x| x != ei);
+            region_warnings.retain(|w| *w != format!("{} is in triode", e.name));
+            if small {
+                linear.push(ei);
+            }
+        }
+    }
     let full = ss::build_with(&net, op.as_ref(), &linear)?;
     // Past the monomial width only the numeric system exists, which needs
     // numbers.
@@ -219,6 +245,11 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             ss::MONO_BITS
         ));
     }
+    let assumptions = req
+        .assume
+        .as_ref()
+        .map(|a| crate::assume::resolve(&net, &full, op.as_ref(), a))
+        .transpose()?;
     let excite = match (mode, neg) {
         (Mode::Single, _) | (_, None) => Excite::Source(input),
         (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
@@ -288,6 +319,28 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         .chain(&region_warnings)
         .cloned()
         .collect();
+    // A region that matches its assumption needs no warning; one that does
+    // not says both.
+    for r in assumptions.iter().flat_map(|a| &a.regions) {
+        let Some(actual) = &r.actual else { continue };
+        let generic = |region: &str| match region {
+            "cutoff" => format!("{} is off", r.element),
+            other => format!("{} is in {other}", r.element),
+        };
+        let now = generic(actual);
+        let at = warnings.iter().position(|w| *w == now);
+        if *actual == r.assumed {
+            if let Some(i) = at {
+                warnings.remove(i);
+            }
+            continue;
+        }
+        let text = format!("{now}, assumed {}", r.assumed);
+        match at {
+            Some(i) => warnings[i] = text,
+            None => warnings.push(text),
+        }
+    }
     // Missing values mean hand analysis: the response's `symbolic` says so,
     // and a warning would only repeat it.
     warnings.extend(wiring_warnings(&net, op.as_ref()));
@@ -311,6 +364,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         tol,
         symbolic,
         omit_err,
+        assume: false,
     };
 
     let mut resp = Map::new();
@@ -340,6 +394,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             Mode::Common => "common",
         }),
     );
+    resp.insert("assumable".into(), crate::assume::assumable(&net, &full));
 
     // The cross-check always solves the FULL model (every junction), so an
     // omission can never hide.
@@ -350,41 +405,29 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     // doubled, exactly.
     // An exact form over the term budget (or beyond i128 coefficients) leaves
     // its quantity numeric, from the full model; without numbers it fails.
+    // Matched parameters share one value in its orders in s, as they share
+    // one symbol in an exact form (so a matched pair's cancelling numerator
+    // vanishes there too).
+    let full_class = if omitted.is_empty() {
+        symbols.class.clone()
+    } else {
+        sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new()).class
+    };
     let numeric = Numeric {
         full: &full,
+        class: &full_class,
         freqs: &freqs,
     };
-    let gsys = ss::system(&net, &ss, &excite);
-    let d = crate::det::det(&gsys.a, max_terms)
-        .map(Some)
-        .or_else(|e| numeric_if_over_budget(symbolic, e))?;
-    let singular = || "small-signal circuit is singular (floating node or source loop)".to_string();
-    if d.as_ref().is_some_and(Poly::is_zero) {
-        return Err(singular());
-    }
+    let differential = mode == Mode::Differential;
+    let forms = exact_forms(&probe, &ss, &x, differential, max_terms, symbolic)?;
+    let d = &forms.d;
     let unit = if input_is_v { "V/V" } else { "V/A" };
-    let gain_exact = d
-        .as_ref()
-        .map(|d| -> Result<(XPoly, XPoly), String> {
-            let n_out = fit(
-                sub(&node_num(&gsys, out, max_terms)?, &node_num(&gsys, rf, max_terms)?),
-                max_terms,
-            )?;
-            let den = if mode == Mode::Differential {
-                x(d)?.scaled(2)?
-            } else {
-                x(d)?
-            };
-            Ok((x(&n_out)?, den))
-        })
-        .transpose()
-        .or_else(|e| numeric_if_over_budget(symbolic, e))?;
     let gain_w = numeric.diff(&fsys.gain, out, rf);
-    let no_signal = match &gain_exact {
+    let no_signal = match &forms.gain {
         Some((n, _)) => n.is_zero(),
         None => {
             if numeric.vanishes(&fsys.gain, None) {
-                return Err(singular());
+                return Err(SINGULAR.to_string());
             }
             numeric.vanishes(&fsys.gain, Some(&gain_w))
         }
@@ -396,51 +439,192 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         };
         warnings.push(format!("No signal reaches {at}"));
     }
-    resp.insert(
-        "gain".into(),
-        match &gain_exact {
-            Some((n, den)) => q.json(n, den, unit, |s| probe.gain_at(&fsys, &full, s), &mut warnings, "gain"),
-            None => numeric.quantity(unit, &fsys.gain, Form::Ratio(gain_w), |s| {
-                probe.gain_at(&fsys, &full, s)
-            }),
-        },
-    );
+    // Each quantity's full-model response on the check grid: the reference
+    // the assumed model is measured against.
+    let mut full_grids: Vec<(&str, Grid)> = Vec::new();
+    let gain_at = |s| probe.gain_at(&fsys, &full, s);
+    let (gain_json, gain_grid) = match &forms.gain {
+        Some((n, den)) => q.json(n, den, unit, gain_at, &mut warnings, "gain", None),
+        None => numeric.quantity(
+            unit,
+            "Gain",
+            &fsys.gain,
+            Form::Ratio(gain_w),
+            gain_at,
+            &mut warnings,
+            &grid,
+        ),
+    };
+    resp.insert("gain".into(), gain_json);
+    full_grids.push(("gain", gain_grid));
 
-    // The circuit's natural frequencies (the roots of its determinant, every
-    // source zeroed), from the full model's MNA matrix when D is over budget.
-    let numeric_modes = || -> Vec<Complex64> {
-        Pencil::new(&fsys.gain, &full, None)
-            .zip(crate::pencil::s_orders(&fsys.gain, &full, None))
-            .and_then(|(p, o)| p.roots(o))
-            .unwrap_or_default()
-    };
-    let modes = match &d {
-        _ if symbolic => None,
-        Some(d) => Some(Err(Expr::from_mna(
-            &XPoly::constant(1, symbols.syms.len()),
-            &x(d)?,
-            &symbols.syms,
-        ))),
-        None => Some(Ok(numeric_modes())),
-    };
-
-    // Stability at this bias.
-    let unstable = match &modes {
-        None => 0,
-        Some(Err(e)) => rhp_poles(e),
-        Some(Ok(roots)) => roots.iter().filter(|p| p.re > 1e-6 * p.norm()).count(),
-    };
-    match unstable {
-        0 => {}
-        1 => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
-        _ => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+    // Stability at this bias: the circuit's natural frequencies (the roots of
+    // its determinant, every source zeroed), on the full model with every
+    // parameter's own value. A junction conductance left out because no
+    // reported value moves can still move a marginal pole across the jω
+    // axis, and matched symbols carry one member's value. Exact while the
+    // full model's determinant fits the budget, else the roots of its MNA
+    // matrix (`pencil`).
+    let mut full_roots: Option<Vec<Complex64>> = None;
+    if !symbolic {
+        let d_full = match &d {
+            // The full determinant holds every monomial of D: over budget too.
+            None => None,
+            Some(d) if omitted.is_empty() => Some(d.clone()),
+            Some(_) => crate::det::det(&fsys.gain.a, max_terms)
+                .map(Some)
+                .or_else(|e| numeric_if_over_budget(symbolic, e))?,
+        };
+        let own = sym::unmerged(&full);
+        let exact = match d_full {
+            Some(df) => XPoly::from_poly(&df, &own.class, own.syms.len())
+                .map(Some)
+                .or_else(|e| numeric_if_over_budget(symbolic, e))?,
+            None => None,
+        };
+        let unstable = match exact {
+            Some(df) => Some(rhp_poles(&Expr::from_mna(
+                &XPoly::constant(1, own.syms.len()),
+                &df,
+                &own.syms,
+            ))),
+            None => {
+                full_roots = circuit_roots(&fsys.gain, &full);
+                full_roots
+                    .as_ref()
+                    .map(|r| r.iter().filter(|p| p.re > 1e-6 * p.norm()).count())
+            }
+        };
+        match unstable {
+            Some(0) => {}
+            Some(1) => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
+            Some(_) => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+            None => warnings.push("Stability not checked. Its poles were not found.".to_string()),
+        }
     }
 
+    // Assumptions: each quantity's model is the full one under them, less
+    // what that quantity cannot do without (`assume::restore`).
+    let mut setup: Option<AssumeSetup> = None;
+    if let Some(a) = &assumptions {
+        let (amatched, mismatched) = consistent_groups(&net, &matched, a);
+        warnings.extend(mismatched);
+        let agroup = element_groups(&net, &amatched);
+        let units = crate::assume::units(a, &agroup);
+        let mut wanted: Vec<(Which, &str)> = vec![(Which::Gain, "gain")];
+        if probe.rin.is_some() {
+            wanted.push((Which::Rin, "rin"));
+        }
+        if req.rout {
+            wanted.push((Which::Rout, "rout"));
+        }
+        let mut models: Vec<AModel> = Vec::new();
+        let mut of_quantity: Vec<(&str, usize)> = Vec::new();
+        for (which, name) in wanted {
+            // Unbounded: the denominator vanishes at s = 0 (identically, or
+            // a pole at DC). Without junction leakage, which hand analysis
+            // neglects too: a node held only by a junction's gmin-level
+            // conductance once its r_o is gone is as unbounded as a
+            // floating one.
+            let vanishes = |m: &SsCircuit| {
+                let m = m.omit(&m.optional);
+                let (sys, border) = probe.den_system(which, &m);
+                crate::pencil::vanishes(&sys, &m, border.as_deref(), true)
+            };
+            let restored = if vanishes(&full) {
+                Vec::new()
+            } else {
+                crate::assume::restore(&units, |r| vanishes(&crate::assume::apply(&full, a, r)))
+            };
+            for unit in units.iter().filter(|u| u.iter().any(|i| restored.contains(i))) {
+                let x0 = &a.applied[unit[0]];
+                let els: Vec<&str> = unit.iter().map(|&i| a.applied[i].element.as_str()).collect();
+                let what = match x0.term {
+                    crate::assume::Term::Open | crate::assume::Term::Short => join_names(&els),
+                    t => format!("{} of {}", t.as_str(), join_names(&els)),
+                };
+                let label = match which {
+                    Which::Gain => "gain",
+                    Which::Rin => "Zin",
+                    Which::Rout => "Zout",
+                };
+                warnings.push(format!("{what} kept, {label} is unbounded without it"));
+            }
+            let k = match models.iter().position(|m| m.restored == restored) {
+                Some(k) => k,
+                None => {
+                    let model = crate::assume::apply(&full, a, &restored);
+                    let (ass, aomitted, aerr) = if symbolic {
+                        (model.clone(), Vec::new(), 0.0)
+                    } else {
+                        prove_omission(&probe, &model, &grid, |p| {
+                            let kind = p.name.split('_').next().unwrap_or("");
+                            format!("{kind}:{}", agroup(&p.element))
+                        })
+                    };
+                    let asym = sym::symbols(&net, &ass, &amatched, symbolic, &mut warnings);
+                    let ax = |p: &Poly| XPoly::from_poly(p, &asym.class, asym.syms.len());
+                    let aforms = exact_forms(&probe, &ass, &ax, differential, max_terms, symbolic)?;
+                    models.push(AModel {
+                        restored: restored.clone(),
+                        model,
+                        ss: ass,
+                        omitted: aomitted,
+                        omit_err: aerr,
+                        symbols: asym,
+                        forms: aforms,
+                    });
+                    models.len() - 1
+                }
+            };
+            of_quantity.push((name, k));
+        }
+        setup = Some(AssumeSetup {
+            assume: a,
+            units,
+            matched: amatched,
+            models,
+            of_quantity,
+        });
+    }
+    // The model the gain's closed forms (and so the noise and distortion
+    // closed forms) are built on.
+    let gain_model = setup.as_ref().map(|st| st.model("gain"));
+    // Assumptions in effect for the gain: their noise sources and Taylor
+    // terms are left out of the closed forms.
+    let in_effect: Vec<(String, crate::assume::Term)> = match (&setup, gain_model) {
+        (Some(st), Some(m)) => st
+            .assume
+            .applied
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !m.restored.contains(i))
+            .map(|(_, x)| (x.element.clone(), x.term))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let (an_model, an_ss, an_symbols, an_matched, an_over) = match gain_model {
+        Some(m) => (
+            &m.model,
+            &m.ss,
+            &m.symbols,
+            &setup.as_ref().expect("setup").matched,
+            m.forms.d.is_none(),
+        ),
+        None => (&full, &ss, &symbols, &matched, d.is_none()),
+    };
+
     if req.noise || req.noise_band.is_some() {
-        let poles_hz: Vec<f64> = match &modes {
-            None => Vec::new(),
-            Some(Err(e)) => roots(&e.s_coeffs().1).iter().map(|p| p.norm() / (2.0 * PI)).collect(),
-            Some(Ok(roots)) => roots.iter().map(|p| p.norm() / (2.0 * PI)).collect(),
+        // Breakpoints for the band integral: the analysis model's natural
+        // frequencies, or the full model's when D is over budget (none when
+        // its roots were not found, as the integral refines regardless).
+        let poles_hz: Vec<f64> = match &d {
+            _ if symbolic => Vec::new(),
+            Some(d) => {
+                let e = Expr::from_mna(&XPoly::constant(1, symbols.syms.len()), &x(d)?, &symbols.syms);
+                roots(&e.s_coeffs().1).iter().map(|p| p.norm() / (2.0 * PI)).collect()
+            }
+            None => full_roots.iter().flatten().map(|p| p.norm() / (2.0 * PI)).collect(),
         };
         // The gain's zeros as reported (Hz), after common factors cancel.
         let zeros_hz: Vec<(f64, f64)> = resp["gain"]["zeros"]
@@ -451,21 +635,22 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let full_symbols = || {
+        let model_symbols = || {
             let mut w = Vec::new();
-            (sym::symbols(&net, &full, &matched, symbolic, &mut w), w)
+            (sym::symbols(&net, an_model, an_matched, symbolic, &mut w), w)
         };
         let ctx = crate::noise::Ctx {
             net: &net,
             op: op.as_ref(),
             full: &full,
-            ss: &ss,
-            symbols: &symbols,
-            full_symbols: &full_symbols,
+            model: an_model,
+            ss: an_ss,
+            symbols: an_symbols,
+            model_symbols: &model_symbols,
             excite: &excite,
             out,
             rf,
-            vid: if mode == Mode::Differential { 2 } else { 1 },
+            vid: if differential { 2 } else { 1 },
             input_is_v,
             freqs: &freqs,
             band: req.noise_band,
@@ -473,7 +658,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             max_terms,
             poles_hz,
             zeros_hz,
-            over_budget: d.is_none() && !symbolic,
+            over_budget: an_over && !symbolic,
+            assumed: setup.as_ref().map(|_| in_effect.as_slice()),
         };
         resp.insert("noise".into(), crate::noise::report(&ctx, &mut warnings)?);
     }
@@ -482,21 +668,22 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         // Symbols of the models distortion may rebuild on: their matching
         // warnings (a match those junctions break) reach the response.
         let rebuild_warnings = std::cell::RefCell::new(Vec::new());
-        let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut rebuild_warnings.borrow_mut());
+        let model_symbols = || sym::symbols(&net, an_model, an_matched, symbolic, &mut rebuild_warnings.borrow_mut());
         let noleak_symbols =
-            |m: &SsCircuit| sym::symbols(&net, m, &matched, symbolic, &mut rebuild_warnings.borrow_mut());
+            |m: &SsCircuit| sym::symbols(&net, m, an_matched, symbolic, &mut rebuild_warnings.borrow_mut());
         let ctx = crate::distortion::Ctx {
             net: &net,
             op: op.as_ref(),
             full: &full,
-            ss: &ss,
-            symbols: &symbols,
-            full_symbols: &full_symbols,
+            model: an_model,
+            ss: an_ss,
+            symbols: an_symbols,
+            model_symbols: &model_symbols,
             noleak_symbols: &noleak_symbols,
             excite: &excite,
             out,
             rf,
-            vid: if mode == Mode::Differential { 2 } else { 1 },
+            vid: if differential { 2 } else { 1 },
             input_is_v,
             freqs: &freqs,
             names: &req.nonlinear,
@@ -505,7 +692,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             amplitude: req.amplitude.unwrap_or(if input_is_v { 0.01 } else { 1e-6 }),
             tol,
             max_terms,
-            over_budget: d.is_none() && !symbolic,
+            over_budget: an_over && !symbolic,
+            assumed: setup.as_ref().map(|_| in_effect.as_slice()),
         };
         resp.insert("distortion".into(), crate::distortion::report(&ctx, &mut warnings)?);
         for w in rebuild_warnings.into_inner() {
@@ -516,122 +704,170 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
 
     if req.rin {
-        // Exact when its polynomials fit, else numeric as for the gain; each
-        // form expands the gain's circuit, so it is numeric with the gain's D.
-        let g = &fsys.gain;
-        let rin_at = |s| probe.rin_at(&fsys, &full, s);
-        let exact = match &probe.rin {
-            Some(RinKind::Ports { into, outof, open }) => {
-                // The port between the two inputs' + nodes, both sources removed.
-                let isys = ss::system(
-                    &net,
-                    &ss,
-                    &Excite::InjectOpen {
-                        into: *into,
-                        outof: *outof,
-                        open: open.clone(),
-                    },
-                );
-                let r = fsys.rin.as_ref().expect("port system");
-                // Its determinant expands the same circuit as D, the inputs
-                // removed: numeric with the gain's.
-                let form = d.as_ref().ok_or_else(|| too_large(max_terms)).and_then(|_| {
-                    let id = crate::det::det(&isys.a, max_terms)?;
-                    let inum = fit(
-                        sub(
-                            &node_num(&isys, *into, max_terms)?,
-                            &node_num(&isys, *outof, max_terms)?,
-                        ),
-                        max_terms,
-                    )?;
-                    Ok((x(&inum)?, x(&id)?))
-                });
-                Some((form, r, Form::Ratio(numeric.diff(r, *into, *outof))))
-            }
-            Some(RinKind::Common { neg: ng }) => {
-                // Both inputs at the same 1 V: Z = 1 / (total current in).
-                let form = d.as_ref().ok_or_else(|| too_large(max_terms)).and_then(|d| {
-                    let (k1, k2) = (gsys.branch_col[&input], gsys.branch_col[ng]);
-                    let total = fit(
-                        poly_add(&gsys.cramer(k1, max_terms)?, &gsys.cramer(k2, max_terms)?),
-                        max_terms,
-                    )?;
-                    Ok((x(d)?, x(&total.neg())?))
-                });
-                let cols = vec![(g.branch_col[&input], 1), (g.branch_col[ng], 1)];
-                Some((form, g, Form::Reciprocal(cols)))
-            }
-            None => {
-                warnings.push("Common-mode Zin needs voltage-source inputs".to_string());
-                None
-            }
-            Some(RinKind::Single { p, n }) => {
-                let form = d.as_ref().ok_or_else(|| too_large(max_terms)).and_then(|d| {
-                    let (num, den) = if input_is_v {
-                        // Zin = V / I_into_circuit = 1 / (−I_branch).
-                        let k = gsys.branch_col[&input];
-                        (d.clone(), gsys.cramer(k, max_terms)?.neg())
-                    } else {
-                        (
-                            fit(
-                                sub(&node_num(&gsys, *n, max_terms)?, &node_num(&gsys, *p, max_terms)?),
-                                max_terms,
-                            )?,
-                            d.clone(),
-                        )
-                    };
-                    Ok((x(&num)?, x(&den)?))
-                });
-                Some(if input_is_v {
-                    (form, g, Form::Reciprocal(vec![(g.branch_col[&input], 1)]))
-                } else {
-                    (form, g, Form::Ratio(numeric.diff(g, *n, *p)))
-                })
-            }
-        };
-        if let Some((form, sys, numeric_form)) = exact {
-            let value = match form.map(Some).or_else(|e| numeric_if_over_budget(symbolic, e))? {
-                Some((n, dd)) => q.json(&n, &dd, "Ω", rin_at, &mut warnings, "rin"),
-                None => numeric.quantity("Ω", sys, numeric_form, rin_at),
+        if probe.rin.is_none() {
+            warnings.push("Common-mode Zin needs voltage-source inputs".to_string());
+        }
+        if let Some(form) = &forms.rin {
+            // Exact when its polynomials fit, else numeric (as for the gain).
+            let rin_at = |s| probe.rin_at(&fsys, &full, s);
+            let (sys, numeric_form) = probe.rin_numeric(&fsys, &numeric);
+            let (value, g) = match form {
+                Some((n, dd)) => q.json(n, dd, "Ω", rin_at, &mut warnings, "rin", None),
+                None => numeric.quantity("Ω", "Zin", sys, numeric_form, rin_at, &mut warnings, &grid),
             };
             resp.insert("rin".into(), value);
+            full_grids.push(("rin", g));
         }
     }
 
     if req.rout {
-        // Its determinant is the gain's, up to sign.
-        let osys = ss::system(&net, &ss, &Excite::Inject { into: out, outof: rf });
-        let form = d
-            .as_ref()
-            .ok_or_else(|| too_large(max_terms))
-            .and_then(|_| {
-                let od = crate::det::det(&osys.a, max_terms)?;
-                let on = fit(
-                    sub(&node_num(&osys, out, max_terms)?, &node_num(&osys, rf, max_terms)?),
-                    max_terms,
-                )?;
-                Ok((x(&on)?, x(&od)?))
-            })
-            .map(Some)
-            .or_else(|e| numeric_if_over_budget(symbolic, e))?;
         let rout_at = |s| probe.rout_at(&fsys, &full, s);
-        let value = match form {
-            Some((n, dd)) => q.json(&n, &dd, "Ω", rout_at, &mut warnings, "rout"),
-            None => {
+        let (value, g) = match &forms.rout {
+            Some(Some((n, dd))) => q.json(n, dd, "Ω", rout_at, &mut warnings, "rout", None),
+            _ => {
                 let r = fsys.rout.as_ref().expect("rout system");
-                numeric.quantity("Ω", r, Form::Ratio(numeric.diff(r, out, rf)), rout_at)
+                numeric.quantity(
+                    "Ω",
+                    "Zout",
+                    r,
+                    Form::Ratio(numeric.diff(r, out, rf)),
+                    rout_at,
+                    &mut warnings,
+                    &grid,
+                )
             }
         };
         resp.insert("rout".into(), value);
+        full_grids.push(("rout", g));
+    }
+
+    // Under assumptions every quantity keeps the full model's values, poles
+    // and zeros, and shows the assumed model's forms, measured against them.
+    if let Some(st) = &setup {
+        let mut params: Vec<Value> = Vec::new();
+        let mut listed: Vec<(String, String)> = Vec::new();
+        for (name, full_grid) in &full_grids {
+            let m = st.model(name);
+            let asys = probe.systems(&m.model);
+            let aq = Quantities {
+                ss: &m.ss,
+                sym: &m.symbols,
+                omit_err: m.omit_err,
+                assume: true,
+                ..q
+            };
+            let unit = if *name == "gain" { unit } else { "Ω" };
+            let at = |s: Complex64| match *name {
+                "gain" => probe.gain_at(&asys, &m.model, s),
+                "rin" => probe.rin_at(&asys, &m.model, s),
+                _ => probe.rout_at(&asys, &m.model, s),
+            };
+            // The assumed model's matched classes (of every junction's
+            // parameters), as the full model's numeric path uses its own.
+            let aclass = if m.omitted.is_empty() {
+                m.symbols.class.clone()
+            } else {
+                sym::symbols(&net, &m.model, &st.matched, symbolic, &mut Vec::new()).class
+            };
+            let anum = Numeric {
+                full: &m.model,
+                class: &aclass,
+                freqs: &freqs,
+            };
+            let form = match *name {
+                "gain" => m.forms.gain.as_ref(),
+                "rin" => m.forms.rin.as_ref().and_then(|f| f.as_ref()),
+                _ => m.forms.rout.as_ref().and_then(|f| f.as_ref()),
+            };
+            let (value, agrid) = match form {
+                Some((n, dd)) => aq.json(n, dd, unit, at, &mut warnings, name, Some(full_grid)),
+                None => {
+                    let (sys, nform) = match *name {
+                        "gain" => (&asys.gain, Form::Ratio(anum.diff(&asys.gain, out, rf))),
+                        "rin" => probe.rin_numeric(&asys, &anum),
+                        _ => {
+                            let r = asys.rout.as_ref().expect("rout system");
+                            (r, Form::Ratio(anum.diff(r, out, rf)))
+                        }
+                    };
+                    let title = match *name {
+                        "gain" => "Assumed gain",
+                        "rin" => "Assumed Zin",
+                        _ => "Assumed Zout",
+                    };
+                    anum.quantity(unit, title, sys, nform, at, &mut warnings, &grid)
+                }
+            };
+            let restored: Vec<Value> = st
+                .units
+                .iter()
+                .filter(|u| u.iter().any(|i| m.restored.contains(i)))
+                .flat_map(|u| {
+                    let latex = st.symbol_latex(&full, u);
+                    u.iter().map(move |&i| {
+                        let x = &st.assume.applied[i];
+                        json!({ "element": x.element, "term": x.term.as_str(), "latex": latex })
+                    })
+                })
+                .collect();
+            let merged = merge_assumed(&resp[*name], value, &agrid, full_grid, restored, symbolic);
+            resp.insert(name.to_string(), merged);
+            for s in &m.symbols.syms {
+                let key = (s.name.clone(), s.latex.clone());
+                if !listed.contains(&key) {
+                    listed.push(key);
+                    params.push(params_json(std::slice::from_ref(s))[0].clone());
+                }
+            }
+        }
+        resp.insert("params".into(), Value::Array(params));
+        let gm = st.model("gain");
+        resp.insert("omittedJunctions".into(), json!(gm.omitted));
+        resp.insert("omissionError".into(), json!(gm.omit_err));
+        let a = st.assume;
+        let netr = &net;
+        // In the request's order, each with its unit's symbol.
+        let applied: Vec<Value> = a
+            .applied
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let unit = st
+                    .units
+                    .iter()
+                    .find(|u| u.contains(&i))
+                    .expect("every assumption has a unit");
+                let latex = st.symbol_latex(&full, unit);
+                json!({
+                    "element": x.element, "term": x.term.as_str(),
+                    "latex": crate::assume::latex_of(netr, x, latex.as_deref()),
+                })
+            })
+            .collect();
+        resp.insert(
+            "assumptions".into(),
+            json!({
+                "applied": applied,
+                "absent": a.absent.iter().map(|(e, t)| json!({ "element": e, "term": t.as_str() })).collect::<Vec<_>>(),
+                "regions": a.regions.iter().map(|r| json!({
+                    "element": r.element, "assumed": r.assumed, "actual": r.actual,
+                })).collect::<Vec<_>>(),
+            }),
+        );
     }
 
     if req.verify {
         // One determinant per unknown: skip (and say so) when that would take
         // far longer than the analysis itself, or when there is no exact
-        // form. Never report a skipped check as passed.
-        match &d {
-            Some(d) if d.len().saturating_mul(gsys.dim) <= VERIFY_WORK_LIMIT => {
-                let r = crate::verify::kcl(&gsys, ss.params.len(), ss.reactive_mask, max_terms)?;
+        // form. Never report a skipped check as passed. Under assumptions
+        // it checks the gain's assumed model, whose forms are shown.
+        let (vforms, vss) = match gain_model {
+            Some(m) => (&m.forms, &m.ss),
+            None => (&forms, &ss),
+        };
+        match &vforms.d {
+            Some(d) if d.len().saturating_mul(vforms.gsys.dim) <= VERIFY_WORK_LIMIT => {
+                let r = crate::verify::kcl(&vforms.gsys, vss.params.len(), vss.reactive_mask, max_terms)?;
                 if !r.ok {
                     warnings.push("Internal check failed (KCL)".to_string());
                 }
@@ -645,8 +881,384 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             }
         }
     }
+    // Assumed models repeat some of the full model's warnings.
+    if setup.is_some() {
+        let mut unique: Vec<String> = Vec::new();
+        for w in std::mem::take(&mut warnings) {
+            if !unique.contains(&w) {
+                unique.push(w);
+            }
+        }
+        warnings = unique;
+    }
     resp.insert("warnings".into(), json!(warnings));
     Ok(Value::Object(resp))
+}
+
+const SINGULAR: &str = "small-signal circuit is singular (floating node or source loop)";
+
+/// A reported quantity, for what its denominator is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Which {
+    Gain,
+    Rin,
+    Rout,
+}
+
+/// The exact forms of the requested quantities on one analysis model
+/// (None where over the term budget).
+struct ExactForms {
+    /// The gain system's determinant.
+    d: Option<Poly>,
+    gsys: System,
+    gain: Option<(XPoly, XPoly)>,
+    /// None when Zin is not asked for (or has no definition here).
+    rin: Option<Option<(XPoly, XPoly)>>,
+    rout: Option<Option<(XPoly, XPoly)>>,
+}
+
+/// Gain, rin and rout as exact num/den on `ss` (symbols by `x`). rin and
+/// rout expand the gain's circuit, so they are over budget with its D.
+fn exact_forms(
+    probe: &Probe,
+    ss: &SsCircuit,
+    x: &dyn Fn(&Poly) -> Result<XPoly, String>,
+    differential: bool,
+    max_terms: usize,
+    symbolic: bool,
+) -> Result<ExactForms, String> {
+    let net = probe.net;
+    let gsys = ss::system(net, ss, &probe.excite);
+    let d = crate::det::det(&gsys.a, max_terms)
+        .map(Some)
+        .or_else(|e| numeric_if_over_budget(symbolic, e))?;
+    if d.as_ref().is_some_and(Poly::is_zero) {
+        return Err(SINGULAR.to_string());
+    }
+    let gain = d
+        .as_ref()
+        .map(|d| -> Result<(XPoly, XPoly), String> {
+            let n_out = fit(
+                sub(
+                    &node_num(&gsys, probe.out, max_terms)?,
+                    &node_num(&gsys, probe.rf, max_terms)?,
+                ),
+                max_terms,
+            )?;
+            let den = if differential { x(d)?.scaled(2)? } else { x(d)? };
+            Ok((x(&n_out)?, den))
+        })
+        .transpose()
+        .or_else(|e| numeric_if_over_budget(symbolic, e))?;
+    let rin = match &probe.rin {
+        None => None,
+        Some(kind) => {
+            let form = d.as_ref().ok_or_else(|| too_large(max_terms)).and_then(|d| match kind {
+                RinKind::Ports { into, outof, open } => {
+                    // The port between the two inputs' + nodes, both sources
+                    // removed: its determinant expands the same circuit as D.
+                    let isys = ss::system(
+                        net,
+                        ss,
+                        &Excite::InjectOpen {
+                            into: *into,
+                            outof: *outof,
+                            open: open.clone(),
+                        },
+                    );
+                    let id = crate::det::det(&isys.a, max_terms)?;
+                    let inum = fit(
+                        sub(
+                            &node_num(&isys, *into, max_terms)?,
+                            &node_num(&isys, *outof, max_terms)?,
+                        ),
+                        max_terms,
+                    )?;
+                    Ok((x(&inum)?, x(&id)?))
+                }
+                RinKind::Common { neg } => {
+                    // Both inputs at the same 1 V: Z = 1 / (total current in).
+                    let (k1, k2) = (gsys.branch_col[&probe.input], gsys.branch_col[neg]);
+                    let total = fit(
+                        poly_add(&gsys.cramer(k1, max_terms)?, &gsys.cramer(k2, max_terms)?),
+                        max_terms,
+                    )?;
+                    Ok((x(d)?, x(&total.neg())?))
+                }
+                RinKind::Single { p, n } => {
+                    let (num, den) = if probe.input_is_v {
+                        // Zin = V / I_into_circuit = 1 / (−I_branch).
+                        let k = gsys.branch_col[&probe.input];
+                        (d.clone(), gsys.cramer(k, max_terms)?.neg())
+                    } else {
+                        (
+                            fit(
+                                sub(&node_num(&gsys, *n, max_terms)?, &node_num(&gsys, *p, max_terms)?),
+                                max_terms,
+                            )?,
+                            d.clone(),
+                        )
+                    };
+                    Ok((x(&num)?, x(&den)?))
+                }
+            });
+            Some(form.map(Some).or_else(|e| numeric_if_over_budget(symbolic, e))?)
+        }
+    };
+    let rout = if probe.rout {
+        // Its determinant is the gain's, up to sign.
+        let osys = ss::system(
+            net,
+            ss,
+            &Excite::Inject {
+                into: probe.out,
+                outof: probe.rf,
+            },
+        );
+        let form = d.as_ref().ok_or_else(|| too_large(max_terms)).and_then(|_| {
+            let od = crate::det::det(&osys.a, max_terms)?;
+            let on = fit(
+                sub(
+                    &node_num(&osys, probe.out, max_terms)?,
+                    &node_num(&osys, probe.rf, max_terms)?,
+                ),
+                max_terms,
+            )?;
+            Ok((x(&on)?, x(&od)?))
+        });
+        Some(form.map(Some).or_else(|e| numeric_if_over_budget(symbolic, e))?)
+    } else {
+        None
+    };
+    Ok(ExactForms {
+        d,
+        gsys,
+        gain,
+        rin,
+        rout,
+    })
+}
+
+/// One assumed model: the full model under the assumptions not put back.
+struct AModel {
+    /// Indices of the assumptions put back for the quantities on it.
+    restored: Vec<usize>,
+    /// Every junction kept: the cross-check and the numeric fallback.
+    model: SsCircuit,
+    /// With the junctions proven negligible on it left out.
+    ss: SsCircuit,
+    omitted: Vec<String>,
+    omit_err: f64,
+    symbols: Symbols,
+    forms: ExactForms,
+}
+
+struct AssumeSetup<'a> {
+    assume: &'a crate::assume::Assume,
+    /// The assumptions put back together (per term and matched group).
+    units: Vec<Vec<usize>>,
+    /// The matched groups whose members share their assumptions.
+    matched: Vec<Vec<String>>,
+    models: Vec<AModel>,
+    /// Each quantity's model.
+    of_quantity: Vec<(&'a str, usize)>,
+}
+
+impl AssumeSetup<'_> {
+    fn model(&self, quantity: &str) -> &AModel {
+        let k = self
+            .of_quantity
+            .iter()
+            .find(|(q, _)| *q == quantity)
+            .map(|(_, k)| *k)
+            .expect("quantity has a model");
+        &self.models[k]
+    }
+
+    /// LaTeX of the symbol a unit of assumptions stands for: the parameter's
+    /// own, or the merged one of a matched group (r_{o1,2}); None for a
+    /// short of an element the model has no parameter for.
+    fn symbol_latex(&self, full: &SsCircuit, unit: &[usize]) -> Option<String> {
+        let first = &self.assume.applied[unit[0]];
+        let p = &full.params[first.param?];
+        if unit.len() == 1 {
+            return Some(p.latex.clone());
+        }
+        let kind = p
+            .name
+            .strip_suffix(&p.element)
+            .and_then(|k| k.strip_suffix('_'))
+            .unwrap_or("");
+        let els: Vec<String> = unit.iter().map(|&i| self.assume.applied[i].element.clone()).collect();
+        Some(sym::merged_latex(kind, &els))
+    }
+}
+
+/// The gain system's model under assumptions, with what the gain cannot do
+/// without put back (as `analyze` builds it): the certificate's model.
+pub(crate) fn gain_model(
+    net: &Netlist,
+    full: &SsCircuit,
+    a: &crate::assume::Assume,
+    excite: &Excite,
+    matched: &[Vec<String>],
+) -> SsCircuit {
+    let (amatched, _) = consistent_groups(net, matched, a);
+    let units = crate::assume::units(a, element_groups(net, &amatched));
+    let vanishes = |m: &SsCircuit| {
+        let m = m.omit(&m.optional);
+        crate::pencil::vanishes(&ss::system(net, &m, excite), &m, None, true)
+    };
+    let restored = if vanishes(full) {
+        Vec::new()
+    } else {
+        crate::assume::restore(&units, |r| vanishes(&crate::assume::apply(full, a, r)))
+    };
+    crate::assume::apply(full, a, &restored)
+}
+
+/// "M1", "M1 and M2", "M1, M2 and M3".
+fn join_names(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The matched groups whose members carry the same assumptions; each other
+/// group is reported and left unmatched.
+fn consistent_groups(
+    net: &Netlist,
+    matched: &[Vec<String>],
+    a: &crate::assume::Assume,
+) -> (Vec<Vec<String>>, Vec<String>) {
+    // A member's terms and declared region (in symbolic mode the region
+    // decides whether its r_o stays finite in the hand form).
+    let terms_of = |name: &str| {
+        let mut t: Vec<crate::assume::Term> = a
+            .applied
+            .iter()
+            .filter(|x| x.element.eq_ignore_ascii_case(name))
+            .map(|x| x.term)
+            .collect();
+        t.sort();
+        let region = a
+            .regions
+            .iter()
+            .find(|r| r.element.eq_ignore_ascii_case(name))
+            .map(|r| r.assumed.clone());
+        (t, region)
+    };
+    let (mut keep, mut warn) = (Vec::new(), Vec::new());
+    for g in matched {
+        let names: Vec<&str> = g
+            .iter()
+            .filter_map(|n| net.element(n))
+            .map(|i| net.elements[i].name.as_str())
+            .collect();
+        if names.windows(2).all(|w| terms_of(w[0]) == terms_of(w[1])) {
+            keep.push(g.clone());
+        } else {
+            warn.push(format!(
+                "{} have different assumptions, not matched",
+                join_names(&names)
+            ));
+        }
+    }
+    (keep, warn)
+}
+
+/// A quantity's value on the check grid (None where infinite or undefined)
+/// with the relative accuracy of each value.
+#[derive(Clone, Default)]
+struct Grid {
+    vals: Vec<Option<Complex64>>,
+    bounds: Vec<f64>,
+}
+
+/// Worst `assume::distance` of `vals` from `full` over the grid points where
+/// either is finite; NaN (null) when there are none, e.g. both unbounded.
+fn deviation(vals: &[Option<Complex64>], full: &Grid) -> f64 {
+    let floor = crate::assume::floor_of(&full.vals);
+    vals.iter()
+        .zip(&full.vals)
+        .map(|(&h, &f)| crate::assume::distance(h, f, floor))
+        .filter(|d| !d.is_nan())
+        .fold(f64::NAN, f64::max)
+}
+
+/// `full` (the full model's quantity JSON) with the assumed model's forms
+/// and check, and an `assumed` block: the assumed model's values against
+/// the full ones, its poles and zeros paired with theirs, and what was put
+/// back.
+fn merge_assumed(
+    full: &Value,
+    assumed: Value,
+    agrid: &Grid,
+    fgrid: &Grid,
+    restored: Vec<Value>,
+    symbolic: bool,
+) -> Value {
+    let mut out = full.clone();
+    let o = out.as_object_mut().expect("quantity object");
+    for key in ["exact", "display", "simplified", "check", "skipped"] {
+        o.remove(key);
+        if let Some(v) = assumed.get(key) {
+            o.insert(key.to_string(), v.clone());
+        }
+    }
+    let roots = |v: &Value, key: &str| -> Vec<Complex64> {
+        v[key]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .filter_map(|r| Some(Complex64::new(r["re"].as_f64()?, r["im"].as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let pairs = |key: &str| -> Vec<Value> {
+        crate::assume::pair_roots(&roots(&assumed, key), &roots(full, key))
+            .into_iter()
+            .map(|(a, f, rel)| {
+                let r = |z: Option<Complex64>| z.map(|z| json!({ "re": z.re, "im": z.im }));
+                json!({ "assumed": r(a), "full": r(f), "relError": rel.and_then(|x| x.is_finite().then_some(x)) })
+            })
+            .collect()
+    };
+    let n = full["values"].as_array().map(Vec::len).unwrap_or(0);
+    let (rel, max, resolution) = if symbolic || fgrid.vals.is_empty() {
+        (Vec::new(), Value::Null, Value::Null)
+    } else {
+        // The requested frequencies end the check grid.
+        let floor = crate::assume::floor_of(&fgrid.vals);
+        let tail = fgrid.vals.len() - n;
+        let rel: Vec<Value> = (tail..fgrid.vals.len())
+            .map(|i| num_or_null(crate::assume::distance(agrid.vals[i], fgrid.vals[i], floor)))
+            .collect();
+        let res = agrid
+            .bounds
+            .iter()
+            .zip(&fgrid.bounds)
+            .map(|(a, f)| a + f)
+            .fold(0.0, f64::max);
+        (rel, num_or_null(deviation(&agrid.vals, fgrid)), num_or_null(res))
+    };
+    let mut block = json!({
+        "values": assumed["values"].clone(),
+        "relError": rel,
+        "maxRelError": max,
+        "resolution": resolution,
+        "restored": restored,
+        "poles": pairs("poles"),
+        "zeros": pairs("zeros"),
+    });
+    if assumed.get("infinite") == Some(&json!(true)) {
+        block["infinite"] = json!(true);
+    }
+    o.insert("assumed".into(), block);
+    out
 }
 
 /// Largest relative error the `display` form may have from dropping junction
@@ -763,6 +1375,66 @@ impl Probe<'_> {
         let (xs, err) = solve_at(r, ss, s)?;
         let v = xnode(r, &xs, self.out) - xnode(r, &xs, self.rf);
         Some((v, 2.0 * err / v.norm()))
+    }
+
+    /// The system whose determinant (bordered by the returned `w`, as in
+    /// `Pencil::new`) is `which`'s denominator up to sign.
+    fn den_system(&self, which: Which, ss: &SsCircuit) -> (System, Option<Vec<(usize, i128)>>) {
+        let gain = || ss::system(self.net, ss, &self.excite);
+        match (which, &self.rin) {
+            (Which::Gain, _) | (Which::Rin, None) => (gain(), None),
+            (Which::Rin, Some(RinKind::Ports { into, outof, open })) => (
+                ss::system(
+                    self.net,
+                    ss,
+                    &Excite::InjectOpen {
+                        into: *into,
+                        outof: *outof,
+                        open: open.clone(),
+                    },
+                ),
+                None,
+            ),
+            (Which::Rin, Some(RinKind::Common { neg })) => {
+                let g = gain();
+                let w = vec![(g.branch_col[&self.input], 1), (g.branch_col[neg], 1)];
+                (g, Some(w))
+            }
+            (Which::Rin, Some(RinKind::Single { .. })) if self.input_is_v => {
+                let g = gain();
+                let w = vec![(g.branch_col[&self.input], 1)];
+                (g, Some(w))
+            }
+            (Which::Rin, Some(RinKind::Single { .. })) => (gain(), None),
+            (Which::Rout, _) => (
+                ss::system(
+                    self.net,
+                    ss,
+                    &Excite::Inject {
+                        into: self.out,
+                        outof: self.rf,
+                    },
+                ),
+                None,
+            ),
+        }
+    }
+
+    /// rin as wᵀx on one of `sy`'s systems, for its numeric poles and zeros.
+    fn rin_numeric<'s>(&self, sy: &'s Systems, numeric: &Numeric) -> (&'s System, Form) {
+        let g = &sy.gain;
+        match self.rin.as_ref().expect("rin requested") {
+            RinKind::Ports { into, outof, .. } => {
+                let r = sy.rin.as_ref().expect("port system");
+                (r, Form::Ratio(numeric.diff(r, *into, *outof)))
+            }
+            RinKind::Common { neg } => (
+                g,
+                Form::Reciprocal(vec![(g.branch_col[&self.input], 1), (g.branch_col[neg], 1)]),
+            ),
+            RinKind::Single { .. } if self.input_is_v => (g, Form::Reciprocal(vec![(g.branch_col[&self.input], 1)])),
+            RinKind::Single { p, n } => (g, Form::Ratio(numeric.diff(g, *n, *p))),
+        }
     }
 
     /// Every reported value on the grid, with its absolute floor.
@@ -913,6 +1585,8 @@ fn numeric_if_over_budget<T>(symbolic: bool, e: String) -> Result<Option<T>, Str
 /// finite roots of the MNA determinants (see `pencil`).
 struct Numeric<'a> {
     full: &'a SsCircuit,
+    /// `full`'s parameter → symbol, as matching merges them.
+    class: &'a [usize],
     freqs: &'a [f64],
 }
 
@@ -938,7 +1612,7 @@ impl Numeric<'_> {
     /// Cramer numerator of wᵀx; None when it is the zero polynomial (all
     /// exactly, as the symbolic form would have them).
     fn orders(&self, sys: &System, border: Option<&[(usize, i128)]>) -> Option<(usize, usize)> {
-        crate::pencil::s_orders(sys, self.full, border)
+        crate::pencil::s_orders(sys, self.full, border, Some(self.class))
     }
 
     fn vanishes(&self, sys: &System, border: Option<&[(usize, i128)]>) -> bool {
@@ -946,13 +1620,19 @@ impl Numeric<'_> {
     }
 
     /// `value` gives the quantity at s (the cross-check's LU solve).
+    /// `title` names it in a warning when its poles or zeros are not found.
+    /// Also returns its values on `grid`.
+    #[allow(clippy::too_many_arguments)]
     fn quantity(
         &self,
         unit: &str,
+        title: &str,
         sys: &System,
         form: Form,
         value: impl Fn(Complex64) -> Option<(Complex64, f64)>,
-    ) -> Value {
+        warnings: &mut Vec<String>,
+        grid: &[f64],
+    ) -> (Value, Grid) {
         let (num_border, den_border) = match &form {
             Form::Ratio(w) => (Some(w.as_slice()), None),
             Form::Reciprocal(w) => (None, Some(w.as_slice())),
@@ -966,25 +1646,45 @@ impl Numeric<'_> {
                 .iter()
                 .map(|&f| json!({ "f": f, "re": null, "im": null, "inf": true }))
                 .collect();
-            return json!({
-                "unit": unit, "infinite": true,
-                "exact": null, "display": null, "simplified": null, "skipped": skipped,
-                "values": values, "poles": [], "zeros": [], "check": null,
-            });
+            let g = Grid {
+                vals: vec![None; grid.len()],
+                bounds: vec![0.0; grid.len()],
+            };
+            return (
+                json!({
+                    "unit": unit, "infinite": true,
+                    "exact": null, "display": null, "simplified": null, "skipped": skipped,
+                    "values": values, "poles": [], "zeros": [], "check": null,
+                }),
+                g,
+            );
         };
         // At DC a vanishing numerator or denominator is known exactly, where
         // LU would leave rounding (an open circuit at DC is ∞, not 1e18 Ω).
+        // So is a numerator that vanishes identically: 0 wherever the solve
+        // is regular.
         let dc_den_zero = den_orders.0 > 0;
         let dc_num_zero = num_orders.is_none_or(|o| o.0 > 0);
+        let zero = Complex64::new(0.0, 0.0);
+        let at = |f: f64| match f == 0.0 {
+            true if dc_den_zero => None,
+            true if dc_num_zero => Some((zero, 0.0)),
+            _ if num_orders.is_none() => value(jw(f)).map(|_| (zero, 0.0)),
+            _ => value(jw(f)),
+        };
+        let mut g = Grid::default();
+        for &f in grid {
+            let h = at(f);
+            let finite = h.filter(|(z, _)| z.re.is_finite() && z.im.is_finite());
+            g.vals.push(finite.map(|(z, _)| z));
+            g.bounds
+                .push(finite.map(|(_, e)| e).filter(|e| e.is_finite()).unwrap_or(0.0));
+        }
         let values: Vec<Value> = self
             .freqs
             .iter()
             .map(|&f| {
-                let h = match f == 0.0 {
-                    true if dc_den_zero => None,
-                    true if dc_num_zero => Some(Complex64::new(0.0, 0.0)),
-                    _ => value(jw(f)).map(|(h, _)| h),
-                };
+                let h = at(f).map(|(h, _)| h);
                 match h {
                     Some(h) => json!({
                         "f": f, "re": num_or_null(h.re), "im": num_or_null(h.im),
@@ -994,25 +1694,51 @@ impl Numeric<'_> {
                 }
             })
             .collect();
-        let roots = |border: Option<&[(usize, i128)]>, orders: Option<(usize, usize)>| {
-            orders
-                .and_then(|o| Pencil::new(sys, self.full, border)?.roots(o))
-                .unwrap_or_default()
-        };
         // No common factor is cancelled, as for an exact form too large for
-        // the GCD.
-        let (zeros, poles) = (roots(num_border, num_orders), roots(den_border, Some(den_orders)));
-        json!({
+        // the GCD. Their number is exact even when the roots are not found.
+        let zeros = pencil_roots(sys, self.full, num_border, num_orders);
+        let poles = pencil_roots(sys, self.full, den_border, Some(den_orders));
+        match (poles.is_some(), zeros.is_some()) {
+            (true, true) => {}
+            (false, true) => warnings.push(format!("{title} poles not found.")),
+            (true, false) => warnings.push(format!("{title} zeros not found.")),
+            (false, false) => warnings.push(format!("{title} poles and zeros not found.")),
+        }
+        let listed = |r: Option<Vec<Complex64>>| r.map(|r| r.iter().map(hz).collect::<Vec<_>>());
+        let v = json!({
             "unit": unit,
             "exact": null, "display": null, "simplified": null, "skipped": skipped,
             "values": values,
-            "poleCount": poles.len(),
-            "zeroCount": zeros.len(),
-            "poles": poles.iter().map(hz).collect::<Vec<_>>(),
-            "zeros": zeros.iter().map(hz).collect::<Vec<_>>(),
+            "poleCount": den_orders.1,
+            "zeroCount": num_orders.map_or(0, |o| o.1),
+            "poles": listed(poles),
+            "zeros": listed(zeros),
             "check": null,
-        })
+        });
+        (v, g)
     }
+}
+
+/// Finite roots (rad/s) of det A of `sys` with `ss`'s values, or with
+/// `border` of the Cramer numerator, given its lowest and highest power of s
+/// (`orders`, None when it vanishes identically: no roots). None when the
+/// pencil cannot find them.
+fn pencil_roots(
+    sys: &System,
+    ss: &SsCircuit,
+    border: Option<&[(usize, i128)]>,
+    orders: Option<(usize, usize)>,
+) -> Option<Vec<Complex64>> {
+    match orders {
+        None => Some(Vec::new()),
+        Some(o) => Pencil::new(sys, ss, border)?.roots(o),
+    }
+}
+
+/// The circuit's natural frequencies (rad/s), the roots of det A, every
+/// source zeroed. None when the pencil cannot find them.
+fn circuit_roots(sys: &System, ss: &SsCircuit) -> Option<Vec<Complex64>> {
+    pencil_roots(sys, ss, None, crate::pencil::s_orders(sys, ss, None, None))
 }
 
 fn poly_add(a: &Poly, b: &Poly) -> Poly {
@@ -1092,20 +1818,31 @@ fn degenerate_junctions(net: &Netlist) -> Vec<String> {
 /// mode has no operating point (the bias is unknown, even where the netlist
 /// holds placeholder values), so only the case the wiring decides: two
 /// MOSFETs of one type and model on a shared gate, one's drain on the
-/// other's source. Whenever the outer one conducts, the inner one has
-/// V_DS < V_GS − V_TH (its threshold is no higher), so it is in triode: the
-/// pair is one longer device.
+/// other's source, with both bulks on one node or each on its own source.
+/// Then the inner threshold is no higher: its reverse bulk-source bias is
+/// no larger (with one bulk node, the current flows from the outer source
+/// to the inner one, so the inner source is nearer the bulk's potential;
+/// with each bulk on its source, both are zero). Whenever the outer one
+/// conducts, the inner one has
+/// V_DS < V_GS − V_TH: it is in triode, and the pair is one longer device.
+/// With other bulk wiring, body effect can keep the inner one saturated.
 fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
     let (mut linear, mut warnings) = (Vec::new(), Vec::new());
     for (ei, inner) in net.elements.iter().enumerate() {
         let Kind::M { model: mi, .. } = &inner.kind else {
             continue;
         };
-        let (d, g, s) = (inner.nodes[0], inner.nodes[1], inner.nodes[2]);
+        let (d, g, s, b) = (inner.nodes[0], inner.nodes[1], inner.nodes[2], inner.nodes[3]);
         let stacked = d != s
             && net.elements.iter().enumerate().any(|(eo, outer)| match &outer.kind {
                 Kind::M { model: mo, .. } => {
-                    eo != ei && mo.ty == mi.ty && mo.name == mi.name && outer.nodes[1] == g && outer.nodes[2] == d
+                    let ob = outer.nodes[3];
+                    eo != ei
+                        && mo.ty == mi.ty
+                        && mo.name == mi.name
+                        && outer.nodes[1] == g
+                        && outer.nodes[2] == d
+                        && (ob == b || (b == s && ob == d))
                 }
                 _ => false,
             });
@@ -1115,6 +1852,74 @@ fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
         }
     }
     (linear, warnings)
+}
+
+/// V sources and inductors with both ends on one node. Nothing fixes their
+/// branch current, so the MNA system (at DC for an inductor) is singular.
+/// A 0 V source or an inductor there does nothing else: it is dropped and
+/// named as any element on one node is. A source with a value there
+/// contradicts itself, the input must drive something, and an F or H
+/// cannot sense an undefined current: those are errors naming it.
+fn drop_shorted_branches(net: &mut Netlist, inputs: &[&str]) -> Result<(), String> {
+    let mut index = vec![usize::MAX; net.elements.len()];
+    let mut kept = 0;
+    let mut dropped = Vec::new();
+    for (i, e) in net.elements.iter().enumerate() {
+        let zero = match e.kind {
+            Kind::V { dc, ac } => dc == 0.0 && ac == 0.0,
+            Kind::L { .. } => true,
+            _ => {
+                index[i] = kept;
+                kept += 1;
+                continue;
+            }
+        };
+        if e.nodes[0] != e.nodes[1] {
+            index[i] = kept;
+            kept += 1;
+            continue;
+        }
+        let at = &net.nodes[e.nodes[0]];
+        if inputs.iter().any(|n| n.trim().eq_ignore_ascii_case(&e.name)) {
+            return Err(format!("Input {} has both ends at {at}", e.name));
+        }
+        if !zero {
+            return Err(format!("{} has both ends at {at}. Remove it or make it 0 V.", e.name));
+        }
+        dropped.push(i);
+    }
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    for e in &net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = e.kind {
+            if index[ctrl] == usize::MAX {
+                let v = &net.elements[ctrl];
+                return Err(format!(
+                    "{} senses {}, which has both ends at {}",
+                    e.name, v.name, net.nodes[v.nodes[0]]
+                ));
+            }
+        }
+    }
+    for &i in &dropped {
+        let e = &net.elements[i];
+        net.warnings
+            .push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
+    }
+    let names: Vec<String> = dropped.iter().map(|&i| net.elements[i].name.clone()).collect();
+    net.missing.retain(|m| !names.iter().any(|n| n.eq_ignore_ascii_case(m)));
+    let mut k = 0;
+    net.elements.retain(|_| {
+        k += 1;
+        index[k - 1] != usize::MAX
+    });
+    for e in &mut net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = &mut e.kind {
+            *ctrl = index[*ctrl];
+        }
+    }
+    Ok(())
 }
 
 /// Cross-coupled transistor pairs (each one's gate/base on the other's
@@ -1160,11 +1965,12 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
             out.push(format!("{} has an open end at {}", users[0], net.nodes[n]));
         }
     }
-    // A two-terminal element with both ends on one node does nothing.
+    // A two-terminal element with both ends on one node does nothing (V
+    // and L there were dropped before the DC solve).
     for e in &net.elements {
         let two = matches!(
             e.kind,
-            Kind::R { .. } | Kind::C { .. } | Kind::L { .. } | Kind::D { .. } | Kind::V { .. } | Kind::I { .. }
+            Kind::R { .. } | Kind::C { .. } | Kind::D { .. } | Kind::I { .. }
         );
         if two && e.nodes[0] == e.nodes[1] {
             out.push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
@@ -1343,6 +2149,8 @@ struct Quantities<'a> {
     symbolic: bool,
     /// Largest relative change from proven-negligible junction omissions.
     omit_err: f64,
+    /// An assumed model: each form also carries its `fullModelError`.
+    assume: bool,
 }
 
 pub(crate) fn jw(f: f64) -> Complex64 {
@@ -1362,6 +2170,7 @@ fn hz(r: &Complex64) -> Value {
 }
 
 impl Quantities<'_> {
+    #[allow(clippy::too_many_arguments)]
     fn json(
         &self,
         num: &XPoly,
@@ -1370,7 +2179,8 @@ impl Quantities<'_> {
         numeric: impl Fn(Complex64) -> Option<(Complex64, f64)>,
         warnings: &mut Vec<String>,
         what: &str,
-    ) -> Value {
+        full: Option<&Grid>,
+    ) -> (Value, Grid) {
         let syms = &self.sym.syms;
         let (num, den) = &cancel(num, den);
         if den.is_zero() {
@@ -1379,7 +2189,15 @@ impl Quantities<'_> {
                 .iter()
                 .map(|&f| json!({ "f": f, "re": null, "im": null, "inf": true }))
                 .collect();
-            return json!({ "unit": unit, "infinite": true, "values": values, "exact": { "latex": "\\infty", "num": "1", "den": "0" } });
+            let g = Grid {
+                vals: vec![None; if self.symbolic { 0 } else { self.grid.len() }],
+                bounds: vec![0.0; if self.symbolic { 0 } else { self.grid.len() }],
+            };
+            let mut v = json!({ "unit": unit, "infinite": true, "values": values, "exact": { "latex": "\\infty", "num": "1", "den": "0" } });
+            if self.assume {
+                v["exact"]["fullModelError"] = full.map(|f| num_or_null(deviation(&g.vals, f))).unwrap_or(Value::Null);
+            }
+            return (v, g);
         }
         let exact = Expr::from_mna(num, den, syms);
         if self.symbolic {
@@ -1412,11 +2230,17 @@ impl Quantities<'_> {
             display["leakageMatters"] = json!(false);
             // No values, so no roots, but their number: the degree in s.
             let degree = |ts: &[crate::render::Term]| ts.iter().map(|t| t.spow).max().unwrap_or(0);
-            return json!({
+            if self.assume {
+                for f in [&mut ex, &mut display, &mut simp] {
+                    f["fullModelError"] = Value::Null;
+                }
+            }
+            let v = json!({
                 "unit": unit, "exact": ex, "display": display, "simplified": simp,
                 "values": [], "poles": [], "zeros": [],
                 "poleCount": degree(&exact.den), "zeroCount": degree(&exact.num),
             });
+            return (v, Grid::default());
         }
         let values: Vec<Value> = self
             .freqs
@@ -1485,6 +2309,19 @@ impl Quantities<'_> {
         // against the full model: measured against this, plus omit_err.
         let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
         let refs: Vec<Complex64> = grid.iter().map(|&f| exact.eval(jw(f))).collect();
+        let exact_grid = Grid {
+            vals: refs.iter().map(|z| finite(z).then_some(*z)).collect(),
+            bounds: grid
+                .iter()
+                .map(|&f| exact.eval_with_bound(jw(f)).1)
+                .map(|b| if b.is_finite() { b } else { 0.0 })
+                .collect(),
+        };
+        // Distance of a form from the full model, when measured against one.
+        let full_error = |e: &Expr| -> Value {
+            let vals: Vec<Option<Complex64>> = grid.iter().map(|&f| Some(e.eval(jw(f))).filter(finite)).collect();
+            full.map(|f| num_or_null(deviation(&vals, f))).unwrap_or(Value::Null)
+        };
         let peak = refs.iter().filter(|h| finite(h)).map(|h| h.norm()).fold(0.0, f64::max);
         let floor = 1e-3 * peak;
         // Worst relative error against the reference, with a floor at 1e-3 of
@@ -1534,7 +2371,7 @@ impl Quantities<'_> {
 
         // Simplified form: the coarsest pruning of the display form whose
         // error (against the full model) stays in budget, with no single
-        // coefficient moved by more than the tolerance.
+        // coefficient moved by more than twice the tolerance.
         let mut simplified = display.clone();
         let mut simp_err = display_err;
         for eps in Expr::prune_levels(self.tol) {
@@ -1586,7 +2423,7 @@ impl Quantities<'_> {
             }
             v
         };
-        json!({
+        let mut v = json!({
             "unit": unit,
             "exact": with(exact_json, json!({ "terms": { "num": exact.num.len(), "den": exact.den.len() } })),
             "display": with(display_json, json!({
@@ -1610,7 +2447,14 @@ impl Quantities<'_> {
             "poles": poles,
             "zeros": zeros,
             "check": { "ok": check_ok, "maxRelDiff": max_diff },
-        })
+        });
+        if self.assume {
+            let exact_err = full_error(&exact);
+            v["exact"]["fullModelError"] = exact_err.clone();
+            v["display"]["fullModelError"] = if display_same { exact_err } else { full_error(&display) };
+            v["simplified"]["fullModelError"] = full_error(&simplified);
+        }
+        (v, exact_grid)
     }
 }
 

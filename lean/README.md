@@ -35,6 +35,9 @@ lean/check_all.sh            # regenerate + check every oracle/corpus circuit
 lean/check_all.sh nmos_cs    # selected circuits
 ```
 
+A sidecar's `assume` (or `NAME@M1:ro`) certifies the assumed element list;
+circuits marked `tooLarge` have no exact form and no certificate.
+
 ## What this does and does not establish
 
 Certified: the solver's symbolic solution is an *exact* solution of the

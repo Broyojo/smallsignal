@@ -1,0 +1,36 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  0,
+  1000,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "noise": {
+  "freqs": [
+   1000,
+   1000000.0,
+   100000000.0
+  ]
+ },
+ "assume": {
+  "ignore": [
+   {
+    "element": "M1",
+    "term": "ro"
+   }
+  ]
+ },
+ "restored": {
+  "gain": [],
+  "rin": [],
+  "rout": []
+ },
+ "description": "gain -gm RD/(1 + s RD CL) once ro -> infinity. Values and noise spectra stay the full model's."
+}

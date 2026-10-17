@@ -34,6 +34,18 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
 - Sidecar `"gmin": 1e-18`: both simulators run at that gmin, where a
   gmin-level gap the solver does not model vanishes (a PNP's base-substrate
   gmin, amplified by an op-amp's open-loop gain).
+- Sidecar `"assume"` (the request's shape): the CLI gets `--ignore` and
+  `--region`. Values still compare with ngspice; each quantity's `assumed`
+  values must equal `indep.py`'s rebuild with the assumptions in effect
+  (`build_and_solve(..., drop=)`, less what the solver restored, which
+  `"restored": {"gain": ["M1:ro"]}` pins), relError and maxRelError must
+  agree with the full values, and assumed gain poles must be roots of the
+  assumed determinant (`indep.poles`). `"ngspiceEquivalent": "<name>"`
+  names a corpus netlist that is the assumed circuit at the same
+  operating point (C removed, L as a 0 V source); its ngspice values must
+  equal the assumed ones. Assumption limits in symbolic form:
+  `textbook_cases.py` cases with `assume`, checked against `sp.limit` of
+  the hand KCL.
 - Evidence tools (all take the solver binary first):
   - `triage.py`: a verdict for every fuzz failure, each from a check that can
     fail. It calls:
