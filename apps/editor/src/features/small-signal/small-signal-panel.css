@@ -201,6 +201,7 @@
   color: var(--icm-text-muted);
   font-weight: 400;
   text-align: left;
+  white-space: nowrap;
 }
 
 /* Bias: a small table, one row per transistor. */
@@ -406,4 +407,64 @@
 .small-signal-values thead th {
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
+}
+
+/* Assumptions: a row per transistor type, matched group and part. */
+.small-signal-assumptions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--icm-font-sm);
+}
+
+.small-signal-assumptions th,
+.small-signal-assumptions td {
+  padding: 2px 8px 2px 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.small-signal-assumptions thead > tr > * {
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 400;
+}
+
+.small-signal-assumptions tbody th {
+  font-weight: 650;
+}
+
+.small-signal-assumptions tr.is-type > th {
+  color: var(--icm-text-muted);
+  font-weight: 400;
+}
+
+.small-signal-assumptions tr.is-type:not(:first-child) > * {
+  border-top: 1px solid var(--icm-border);
+}
+
+.small-signal-assumptions tr.is-selected > * {
+  background: var(--icm-accent-soft);
+}
+
+.small-signal-assumptions th button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.small-signal-assumptions th button:hover {
+  text-decoration: underline;
+}
+
+.small-signal-assumptions input[type="checkbox"] {
+  margin: 0;
+}
+
+.small-signal-panel .small-signal-assumptions select {
+  width: auto;
+  min-height: var(--icm-control-h);
+  padding: 0.1rem 0.3rem;
 }

@@ -24,6 +24,8 @@ const fixture = (path: string) =>
 const FIXTURES = {
   csWired: "packages/small-signal/test-fixtures/cs-vdd-pin-wired.icproj.json",
   csOpen: "packages/small-signal/test-fixtures/cs-vdd-pin-open.icproj.json",
+  csCurrentLoad:
+    "packages/small-signal/test-fixtures/cs-current-source-load.icproj.json",
   csSource: "apps/editor/src/examples/simulation-common-source.icproj.json",
   diffPair:
     "apps/editor/src/examples/current-mirror-loaded-differential-pair.icproj.json",
@@ -788,4 +790,190 @@ test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async 
       .map((request) => request.maxTerms ?? null),
   );
   expect(noiseSolves).toEqual([1]);
+});
+
+/** The Assumptions section, open. */
+async function assumptions(panel: Locator): Promise<Locator> {
+  const section = panel.locator("details.small-signal-assumptions-section");
+  const summary = section.locator("summary");
+  await expect(summary).toBeVisible();
+  if ((await section.getAttribute("open")) === null) await summary.click();
+  return section;
+}
+
+const neglect = (section: Locator, name: string) =>
+  section.getByRole("checkbox", { name, exact: true });
+
+test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the full model, kept across a reload", async ({
+  page,
+}) => {
+  let panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  const m1 = await biasLine(panel, "M1");
+  let section = await assumptions(panel);
+  // NMOS as a type, M1 itself, and R1 to take open or shorted.
+  await expect(section.locator("tr[data-row]")).toHaveCount(3);
+  await neglect(section, "M1 ro").check();
+  await expect(section.locator("summary")).toHaveText("Assumptions (on)");
+  await expect
+    .poll(() => formula(panel, "Gain"))
+    .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
+  const gain = card(panel, "Gain");
+  // gm R1 against gm (ro ∥ R1): R1 / ro = 10k / 500k.
+  await expect(gain.getByText(/from full model$/u)).toHaveText(
+    "2.0% from full model",
+  );
+  await expect(gain.locator("details.small-signal-exact > summary")).toHaveText(
+    "Exact for these assumptions",
+  );
+  // The header stays the full model; the table has both, from one solve.
+  expect(await cardValue(panel, "Gain")).toBeCloseTo(
+    -m1.gm * parallel(m1.ro, 10e3),
+    2,
+  );
+  const values = await gain
+    .getByRole("table", { name: "Full model and assumed" })
+    .locator("tbody tr")
+    .evaluate((tr) =>
+      ["full", "assumed", "delta"].map(
+        (name) =>
+          tr.querySelector(`td[data-quantity="${name}"]`)?.textContent ?? "",
+      ),
+    );
+  expect(Number(values[0])).toBeCloseTo(-m1.gm * parallel(m1.ro, 10e3), 2);
+  expect(Number(values[1])).toBeCloseTo(-m1.gm * 10e3, 2);
+  expect(values[2]).toBe("2.0%");
+
+  // Distortion's forms are the assumed model's too: r_o's v_DS terms go.
+  await panel.getByText("Distortion", { exact: true }).click();
+  const distortion = panel.locator("details.small-signal-distortion");
+  await expect(distortion.locator('tr[data-quantity="hd2"]')).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(distortion).toContainText("from full model");
+  // Inside the closed Device coefficients disclosure.
+  await expect(
+    distortion.locator('table[aria-label="Device coefficients"]'),
+  ).toContainText("neglected");
+
+  // Kept for this circuit across a reload.
+  await page.reload();
+  await awaitEditorReady(page);
+  panel = await openPanel(page);
+  await expect
+    .poll(() => formula(panel, "Gain"))
+    .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
+  section = await assumptions(panel);
+  await expect(neglect(section, "M1 ro")).toBeChecked();
+
+  // Reset gives the full model's form back.
+  await section.getByRole("button", { name: "Reset", exact: true }).click();
+  await expect.poll(() => formula(panel, "Gain")).toContain("\\parallel R_{1}");
+  await expect(section.locator("summary")).toHaveText("Assumptions");
+  expect(
+    await page.evaluate(() => localStorage.getItem("smallsignal.assumptions")),
+  ).toBe("{}");
+});
+
+test("assumptions: All NMOS on the 5T OTA neglects every NMOS r_o and keeps the pair matched", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.ota);
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "All transistors are in saturation.",
+  );
+  const section = await assumptions(panel);
+  // A matched pair is one row: its members share every setting.
+  await expect(section.locator('tr[data-row="M1=M2"]')).toHaveCount(1);
+  await expect(section.locator('tr[data-row="M1"]')).toHaveCount(0);
+  await neglect(section, "All NMOS ro").check();
+  for (const row of ["M1 = M2 ro", "M5 ro", "M6 ro"])
+    await expect(neglect(section, row)).toBeChecked();
+  await expect(neglect(section, "All PMOS ro")).not.toBeChecked();
+  await expect.poll(() => formula(panel, "Gain")).not.toContain("r_{o1,2}");
+  const gain = await formula(panel, "Gain");
+  expect(gain).toContain("g_{m1,2}");
+  expect(gain).toContain("r_{o3,4}");
+  await expect(
+    panel.getByLabel("Matched pairs").getByRole("button", { name: "M1 = M2" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.locator(".small-signal-alert.is-warning")).toHaveCount(0);
+  await expect(card(panel, "Gain")).toContainText("% from full model");
+  // The pole moves: the assumed one beside the full model's.
+  await expect(
+    card(panel, "Gain").getByRole("table", { name: "Full model and assumed" }),
+  ).toContainText("Pole");
+  // A type's default holds in every circuit.
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("smallsignal.assumptionDefaults"),
+    ),
+  ).toBe(JSON.stringify({ nmos: ["ro"] }));
+
+  // One NMOS kept: the type row is mixed.
+  await neglect(section, "M5 ro").uncheck();
+  await expect
+    .poll(() =>
+      neglect(section, "All NMOS ro").evaluate(
+        (input: HTMLInputElement) => input.indeterminate,
+      ),
+    )
+    .toBe(true);
+});
+
+test("assumptions: a region is checked against the bias, never imposed", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "M1 is in saturation.",
+  );
+  const section = await assumptions(panel);
+  const region = section.getByLabel("M1 region", { exact: true });
+  await region.selectOption("triode");
+  await expect(panel.locator(".small-signal-alert.is-warning")).toHaveText(
+    "M1 is in saturation, assumed triode",
+  );
+  // The numbers are the bias point's, whatever region was expected.
+  expect(await cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  await region.selectOption("saturation");
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "M1 is in saturation.",
+  );
+});
+
+test("assumptions: a part selected on the canvas is its row, and the row selects it", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await formula(panel, "Gain");
+  const section = await assumptions(panel);
+  const m1 = section.locator('tr[data-row="M1"]');
+  const r1 = section.locator('tr[data-row="R1"]');
+  await expect(m1).not.toHaveClass(/\bis-selected\b/u);
+  await page.getByTestId("hit-m1").click();
+  await expect(m1).toHaveClass(/\bis-selected\b/u);
+  await section.getByRole("button", { name: "R1", exact: true }).click();
+  await expect(page.getByTestId("hit-r1")).toHaveClass(/\bselected\b/u);
+  await expect(r1).toHaveClass(/\bis-selected\b/u);
+  await expect(m1).not.toHaveClass(/\bis-selected\b/u);
+});
+
+test("assumptions: a term the gain cannot do without is kept, and said once", async ({
+  page,
+}) => {
+  // An ideal current-source load: without r_o nothing sets the gain.
+  const panel = await analyze(page, FIXTURES.csCurrentLoad);
+  await panel.getByLabel("Input", { exact: true }).selectOption("V1");
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "M1 is in saturation.",
+  );
+  const section = await assumptions(panel);
+  await neglect(section, "M1 ro").check();
+  const kept = "ro of M1 kept, gain is unbounded without it";
+  await expect(panel.locator(".small-signal-alert.is-warning")).toContainText(
+    kept,
+  );
+  await expect(panel.getByText(kept, { exact: true })).toHaveCount(1);
+  expect(await formula(panel, "Gain")).toMatch(/-g_\{m1\} r_\{o1\}$/u);
 });

@@ -5513,6 +5513,8 @@ function WorkspaceEditor({
                     key={projectSessionId}
                     project={project}
                     rootDocumentId={document.id}
+                    selectedInstanceIds={selectedIds}
+                    onSelectInstances={(ids) => selectOnly("instance", ids)}
                   />
                 ) : projectPanel === "instances" ? (
                   <InstanceCodePanel

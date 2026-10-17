@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { SmallSignalSource } from "@icm/small-signal";
 import {
+  assumptionColumns,
+  assumptionRows,
+  formatPercent,
   countText,
   differentialPairs,
   formatDensity,
@@ -360,5 +363,83 @@ describe("Taylor coefficient names", () => {
   it("escapes TeX specials as the solver does", () => {
     expect(texEscape("a_b{c}$&#%")).toBe("a\\_b\\{c\\}\\$\\&\\#\\%");
     expect(texEscape("a\\b^c~d")).toBe("a\\backslash b\\hat{}c\\sim d");
+  });
+});
+
+describe("formatPercent", () => {
+  it("writes two digits, never an exponent", () => {
+    expect(formatPercent(0)).toBe("0%");
+    expect(formatPercent(4e-4)).toBe("<0.1%");
+    expect(formatPercent(0.02)).toBe("2.0%");
+    expect(formatPercent(0.984)).toBe("98%");
+    expect(formatPercent(1)).toBe("100%");
+    expect(formatPercent(15.2)).toBe("1520%");
+  });
+});
+
+describe("assumption table", () => {
+  const assumable = [
+    { element: "R1", type: "resistor" as const, terms: ["open", "short"] },
+    { element: "M2", type: "nmos" as const, terms: ["ro", "rbs", "rbd"] },
+    { element: "M10", type: "nmos" as const, terms: ["ro", "gmb", "rbd"] },
+    { element: "M1", type: "nmos" as const, terms: ["ro", "rbs", "rbd"] },
+    { element: "M3", type: "pmos" as const, terms: ["ro", "rbd"] },
+    { element: "Q1", type: "npn" as const, terms: ["ro", "rpi", "rmu"] },
+  ] as Parameters<typeof assumptionRows>[0];
+  const elements = [
+    { name: "R1", instancePath: ["r1"], kind: "resistor" as const },
+    { name: "M1", instancePath: ["x1", "m1"], kind: "nmos" as const },
+    { name: "M2", instancePath: ["x1", "m2"], kind: "nmos" as const },
+    { name: "M10", instancePath: ["m10"], kind: "nmos" as const },
+    { name: "M3", instancePath: ["m3"], kind: "pmos" as const },
+    { name: "Q1", instancePath: ["q1"], kind: "npn" as const },
+  ];
+
+  it("a type row, then matched groups and parts by name, then passives", () => {
+    const rows = assumptionRows(assumable, elements, [["M2", "M1"]]);
+    expect(rows.map((row) => [row.scope, row.label])).toEqual([
+      ["type", "All NMOS"],
+      ["group", "M1 = M2"],
+      ["part", "M10"],
+      ["type", "All PMOS"],
+      ["part", "M3"],
+      ["type", "All NPN"],
+      ["part", "Q1"],
+      ["part", "R1"],
+    ]);
+    // Only a part of the open Cell can be selected there.
+    expect(rows[1]?.members.map((member) => member.instanceId)).toEqual([
+      null,
+      null,
+    ]);
+    expect(rows[2]?.members[0]).toMatchObject({
+      path: "m10",
+      instanceId: "m10",
+    });
+    // A group of different types, or with a part not drawn, is no row.
+    expect(
+      assumptionRows(assumable, elements, [
+        ["M1", "M3"],
+        ["M1", "M9"],
+      ]).filter((row) => row.scope === "group"),
+    ).toEqual([]);
+  });
+
+  it("one column per term the circuit has, leakage combined, others after", () => {
+    const rows = assumptionRows(
+      [
+        ...assumable,
+        { element: "M4", type: "pmos", terms: ["ro", "cgs"] },
+      ] as Parameters<typeof assumptionRows>[0],
+      [...elements, { name: "M4", instancePath: ["m4"], kind: "pmos" }],
+      [],
+    );
+    expect(assumptionColumns(rows)).toEqual([
+      "ro",
+      "gmb",
+      "rpi",
+      "leakage",
+      "cgs",
+    ]);
   });
 });
