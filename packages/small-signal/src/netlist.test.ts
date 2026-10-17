@@ -214,3 +214,51 @@ describe("BJT multiplicity", () => {
     expect(text).toContain("Q3 net7 net1 net3 pnp_l1 M=1");
   });
 });
+
+describe("element instance paths", () => {
+  const raw = readFileSync(
+    new URL(
+      "../../../apps/editor/src/examples/five-transistor-ota-sky130.icproj.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const elements = (project: unknown) =>
+    smallSignalNetlist(parseProject(JSON.stringify(project)))!.elements;
+
+  it("names each part by its instance ids, whatever its reference", () => {
+    const project = JSON.parse(raw);
+    expect(elements(project).find((e) => e.name === "M1")).toEqual({
+      name: "M1",
+      instancePath: ["XDUT", "M1"],
+      kind: "nmos",
+    });
+    const child = project.documents.find(
+      (d: { id: string }) => d.id === "document-ota-5t",
+    );
+    child.instances.find((i: { id: string }) => i.id === "M1").reference =
+      "XM9";
+    const renamed = elements(project).find(
+      (e) => e.instancePath.join("/") === "XDUT/M1",
+    );
+    expect(renamed?.name).toBe("M9");
+    expect(elements(project).map((e) => e.kind)).toContain("capacitor");
+  });
+
+  it("tells two placements of one child Cell apart", () => {
+    const project = JSON.parse(raw);
+    const top = project.documents.find(
+      (d: { id: string }) => d.id === project.topDocumentId,
+    );
+    const dut = top.instances.find((i: { id: string }) => i.id === "XDUT");
+    top.instances.push({ ...dut, id: "XDUT2", reference: "XDUT2" });
+    const paths = elements(project)
+      .filter((e) => e.instancePath.at(-1) === "M1")
+      .map((e) => e.instancePath.join("/"));
+    expect(paths).toEqual(["XDUT/M1", "XDUT2/M1"]);
+    const names = elements(project)
+      .filter((e) => e.instancePath.at(-1) === "M1")
+      .map((e) => e.name);
+    expect(new Set(names).size).toBe(2);
+  });
+});

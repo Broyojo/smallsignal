@@ -1,0 +1,23 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  1000,
+  100000.0,
+  1000000.0,
+  100000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "assume": {
+  "ignore": [
+   {
+    "element": "C2",
+    "term": "open"
+   }
+  ]
+ },
+ "ngspiceEquivalent": "assume_rc_open_eq",
+ "description": "C2 = 0: the assumed values equal ngspice's on the netlist without C2."
+}

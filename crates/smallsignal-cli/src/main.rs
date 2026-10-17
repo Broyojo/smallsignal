@@ -1,12 +1,14 @@
 //! `smallsignal analyze <netlist> --input VIN --output out[:ref] [--freq 1,1k]
-//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--tol 0.05] [--verify] [--pretty]`
+//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--tol 0.05]
+//! [--verify] [--pretty]`
 
 use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
-[--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] \
+[--ignore M1:ro,C1:short] [--region M3:triode] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -95,6 +97,26 @@ fn run() -> Result<(), String> {
             "--amplitude" => {
                 let v = value(&mut it, a)?;
                 req.amplitude = Some(smallsignal_core::units::parse_value(&v).ok_or(format!("bad amplitude '{v}'"))?);
+            }
+            // ELEMENT:TERM pairs: terms neglected, and regions expected.
+            "--ignore" | "--region" => {
+                let assume = req.assume.get_or_insert_with(Default::default);
+                for item in value(&mut it, a)?.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+                    let (element, what) = item.split_once(':').ok_or(format!(
+                        "{a} needs ELEMENT:{}",
+                        if a == "--ignore" { "TERM" } else { "REGION" }
+                    ))?;
+                    let (element, what) = (element.to_string(), what.to_string());
+                    if a == "--ignore" {
+                        assume
+                            .ignore
+                            .push(smallsignal_core::assume::IgnoreRequest { element, term: what });
+                    } else {
+                        assume
+                            .regions
+                            .push(smallsignal_core::assume::RegionRequest { element, region: what });
+                    }
+                }
             }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,

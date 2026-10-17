@@ -70,11 +70,12 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 `smallsignal analyze <netlist> --input <V|I source> --output <node>[:<ref>]
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
-[--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--tol 0.05] [--verify] [--symbolic]`, or
+[--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--ignore M1:ro,C1:short]
+[--region M3:triode] [--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
-`symbolic`, `maxTerms`). The response is JSON, or
+`symbolic`, `maxTerms`, `assume`). The response is JSON, or
 `{"error": "..."}` on failure.
 
 - Over budget: when an exact polynomial of gain, rin or rout (a
@@ -167,6 +168,24 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
+
+## Assumptions (`assume`)
+
+Terms an engineer neglects (`ignore`: a device's r_o, g_mb, r_bs, r_bd,
+r_π, r_μ; a passive or diode `open` or `short`) and regions expected
+(`regions`), as rules and fields in
+[docs/specs/small-signal-assumptions.md](../docs/specs/small-signal-assumptions.md).
+Each is an exact limit taken before expansion (`assume.rs`): a neglected
+conductance's stamps are left out (`SsCircuit::omit`, exact because every
+minor is multilinear), a short merges its nodes (`Stamp::Short`). The
+values, poles and zeros are computed from the full model exactly as
+without assumptions; the forms are the assumed model's, with
+`fullModelError`. Where an assumption makes a quantity unbounded at DC,
+the smallest set of assumptions that avoids it is put back for that
+quantity (`assume::restore`, singularity decided exactly by
+`pencil::vanishes` modulo 2⁶¹−1).
+`cargo run --release -p smallsignal-core --example bench_assume` times the
+µA741 (`oracle/corpus/ua741.cir`) under them.
 
 ## Noise (`noise: true`, optional `noiseBand: [fLow, fHigh]`)
 

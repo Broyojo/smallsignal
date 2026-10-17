@@ -1,0 +1,14 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  1000,
+  1000000.0,
+  1600000.0,
+  100000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "description": "assume_rl_short with L1 a 0 V source."
+}

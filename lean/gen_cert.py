@@ -1,10 +1,12 @@
 """Generate Lean certificates that the solver's symbolic solutions are exact.
 
-usage: python3 lean/gen_cert.py [--numeric] NAME|PATH.cir ...
+usage: python3 lean/gen_cert.py [--numeric] NAME|PATH.cir[@E1:term,E2:term] ...
 
 For each netlist (a name means oracle/corpus/NAME.cir with its sidecar JSON
 for the input source), runs `smallsignal analyze --certificate` and writes
-lean/Certs/NAME.lean. That file states the circuit as an element list in
+lean/Certs/NAME.lean. Assumptions (the sidecar's `assume`, plus any after
+`@`, as --ignore) apply: the certificate is for the assumed element list,
+and a variant `NAME@M1:ro` is written as NAME_M1_ro. That file states the circuit as an element list in
 Smallsignal.Mna's vocabulary, and proves, for symbolic parameters over any
 field with the determinant nonzero, that the solver's claimed solution
 satisfies KCL at every node and every branch equation, hence `A · x = b` for
@@ -147,12 +149,17 @@ def main() -> int:
     names = [a for a in argv if not a.startswith("--")]
     (LEAN / "Certs").mkdir(exist_ok=True)
     for arg in names:
-        path = Path(arg) if arg.endswith(".cir") else CORPUS / f"{arg}.cir"
-        name = path.stem
+        base, _, extra = arg.partition("@")
+        path = Path(base) if base.endswith(".cir") else CORPUS / f"{base}.cir"
+        name = path.stem + ("_" + re.sub(r"\W", "_", extra) if extra else "")
         side = json.loads(path.with_suffix(".json").read_text())
         cmd = [BIN, "analyze", str(path), "--input", side["input"], "--output", side["output"], "--certificate"]
         if not numeric:
             cmd.append("--symbolic")
+        ignore = [f"{x['element']}:{x['term']}" for x in (side.get("assume") or {}).get("ignore", [])]
+        ignore += [x for x in extra.split(",") if x]
+        if ignore:
+            cmd += ["--ignore", ",".join(ignore)]
         out = subprocess.run(cmd, capture_output=True, text=True)
         cert = json.loads(out.stdout)
         if "error" in cert:

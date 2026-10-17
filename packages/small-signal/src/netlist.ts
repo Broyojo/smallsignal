@@ -92,9 +92,48 @@ export interface SmallSignalSource {
   pin?: string;
 }
 
+/** A drawn part as the solver names it. */
+export interface SmallSignalElement {
+  /** The netlist name, e.g. M1 (assumptions and results use it). */
+  name: string;
+  /**
+   * Instance ids from the top Cell down to the part: stable when parts are
+   * renamed, distinct for each placement of one child Cell.
+   */
+  instancePath: string[];
+  kind: SmallSignalElementKind;
+}
+
+export type SmallSignalElementKind =
+  | ModelKind
+  | "resistor"
+  | "capacitor"
+  | "inductor"
+  | "voltage-source"
+  | "current-source"
+  | "vcvs"
+  | "vccs"
+  | "cccs"
+  | "ccvs";
+
+const KIND_OF_LETTER: Record<string, SmallSignalElementKind> = {
+  R: "resistor",
+  C: "capacitor",
+  L: "inductor",
+  V: "voltage-source",
+  I: "current-source",
+  E: "vcvs",
+  G: "vccs",
+  F: "cccs",
+  H: "ccvs",
+};
+
 export interface SmallSignalNetlist {
   /** The flat solver netlist (contract dialect, ground `0`). */
   text: string;
+  /** Every drawn part in the netlist (not the sources added for supplies
+   * and Pins). */
+  elements: SmallSignalElement[];
   /** Every node the netlist names, ground first. */
   nets: string[];
   /** Independent sources the analysis can use as its input. */
@@ -287,6 +326,7 @@ function translate(
   const supplyNets = new Set<string>();
   const dcPath = new Set<string>();
   const unknownBias: string[] = [];
+  const elements: SmallSignalElement[] = [];
   let floating = 0;
   const unconnected: string[] = [];
 
@@ -320,6 +360,7 @@ function translate(
     portNets: Map<string, string>,
     scope: ReadonlyMap<string, string>,
     depth: number,
+    path: readonly string[],
   ) {
     const globals = new Set([
       ...ir.globals,
@@ -381,7 +422,10 @@ function translate(
           const value = parameter(instance, scope, actual.name);
           if (value) childScope.set(actual.name.toLowerCase(), value);
         }
-        emitCell(child, childSuffix, childPorts, childScope, depth + 1);
+        emitCell(child, childSuffix, childPorts, childScope, depth + 1, [
+          ...path,
+          instance.id,
+        ]);
         continue;
       }
 
@@ -408,6 +452,11 @@ function translate(
         }
         const name = uniqueName("E", instance.reference, suffix);
         renamed.set(instance.reference, name);
+        elements.push({
+          name,
+          instancePath: [...path, instance.id],
+          kind: "vcvs",
+        });
         const gain = parameter(instance, scope, "gain");
         if (!gain)
           notes.push(
@@ -445,6 +494,11 @@ function translate(
       }
       const name = uniqueName(letter, instance.reference, suffix);
       renamed.set(instance.reference, name);
+      elements.push({
+        name,
+        instancePath: [...path, instance.id],
+        kind: kind ?? KIND_OF_LETTER[letter] ?? "resistor",
+      });
       const card = [name, ...nodes];
       const conducting = DC_PATH_PINS[letter];
       nodes.forEach((node, index) => {
@@ -542,7 +596,7 @@ function translate(
     deferred.forEach((emit) => emit());
   }
 
-  if (top) emitCell(top, "", new Map(), new Map(), 0);
+  if (top) emitCell(top, "", new Map(), new Map(), 0, []);
 
   // The editor's power Nets (a supply label or rail) and undriven nets
   // named like a supply are rails too.
@@ -630,6 +684,7 @@ function translate(
   const sortedNets = [...nets].filter((n) => n !== "0").sort();
   return {
     text,
+    elements,
     nets: ["0", ...sortedNets],
     sources,
     missing,

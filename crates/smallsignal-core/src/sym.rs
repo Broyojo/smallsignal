@@ -133,7 +133,7 @@ pub fn merged_dev_latex(base: &str, sub: &str, elements: &[String]) -> String {
     dev_latex_sub(base, sub, &name)
 }
 
-fn merged_latex(kind: &str, elements: &[String]) -> String {
+pub(crate) fn merged_latex(kind: &str, elements: &[String]) -> String {
     let letter = &elements[0][..1];
     let name = format!("{letter}{}", merged_rest(elements));
     match device_sub(kind) {

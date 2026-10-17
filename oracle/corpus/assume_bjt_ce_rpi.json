@@ -1,0 +1,33 @@
+{
+ "input": "VIN",
+ "output": "c",
+ "ref": null,
+ "freqs": [
+  1000,
+  1000000.0,
+  100000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "noise": true,
+ "assume": {
+  "ignore": [
+   {
+    "element": "Q1",
+    "term": "rpi"
+   },
+   {
+    "element": "Q1",
+    "term": "ro"
+   }
+  ]
+ },
+ "restored": {
+  "gain": [],
+  "rin": [
+   "Q1:rpi"
+  ],
+  "rout": []
+ },
+ "description": "beta -> infinity and ro -> infinity: gain -gm RC/(1 + gm RE) with CL, base shot noise left out of the closed form. Zin keeps r_pi: without it no current enters the base at DC."
+}

@@ -20,6 +20,7 @@
 //! their own, as in ngspice.
 
 use crate::analyze::{cancel, jw, matrix_at};
+use crate::assume::Term as ATerm;
 use crate::dc::{DevOp, Op};
 use crate::devices::{BOLTZ, CHARGE, TEMP};
 use crate::linalg::LuComplex;
@@ -1084,14 +1085,18 @@ pub fn spectrum(points: &[(f64, Option<f64>)]) -> Value {
 pub struct Ctx<'a> {
     pub net: &'a Netlist,
     pub op: Option<&'a Op>,
-    /// Every junction kept: the numeric spectra always use it.
+    /// Every junction kept, no assumption: the numeric spectra always use it.
     pub full: &'a SsCircuit,
-    /// The analysis model (proven omissions applied) and its symbols.
+    /// The model the closed form describes, every junction kept: `full`
+    /// under the assumptions (`full` itself without any). Its numeric DC
+    /// solve checks the closed form.
+    pub model: &'a SsCircuit,
+    /// The analysis model (`model` with proven omissions) and its symbols.
     pub ss: &'a SsCircuit,
     pub symbols: &'a Symbols,
-    /// Symbols of `full` and their warnings, built on demand (fallback for
+    /// Symbols of `model` and their warnings, built on demand (fallback for
     /// the closed form).
-    pub full_symbols: &'a dyn Fn() -> (Symbols, Vec<String>),
+    pub model_symbols: &'a dyn Fn() -> (Symbols, Vec<String>),
     pub excite: &'a crate::ss::Excite,
     pub out: usize,
     pub rf: usize,
@@ -1109,6 +1114,24 @@ pub struct Ctx<'a> {
     /// The gain's determinant is already over the term budget: the closed
     /// form (which expands the same circuit) is not attempted.
     pub over_budget: bool,
+    /// Under assumptions, those in effect: sources whose PSD they take to 0
+    /// leave the closed form, and each form carries its `fullModelError`.
+    pub assumed: Option<&'a [(String, ATerm)]>,
+}
+
+/// Whether an assumption takes the source's PSD to 0 (r_π → ∞ is β → ∞, so
+/// I_B → 0: base shot and flicker; an open R or diode carries no current)
+/// or shorts it (an R or diode shorted: its noise current circulates in
+/// the short).
+fn ignored(assumed: &[(String, ATerm)], s: &Source) -> bool {
+    assumed.iter().any(|(el, t)| {
+        *el == s.element
+            && match t {
+                ATerm::Rpi => matches!(s.kind, "shot_b" | "flicker"),
+                ATerm::Open | ATerm::Short => true,
+                _ => false,
+            }
+    })
 }
 
 /// A zero with |re| ≤ AXIS_REL·|im| is taken to lie on the jω axis: root
@@ -1171,16 +1194,23 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             .unwrap_or(1.0)
     };
     let in_unit = if c.input_is_v { "V^2/Hz" } else { "A^2/Hz" };
+    let is_ignored = |s: &Source| c.assumed.is_some_and(|a| ignored(a, s));
     let src_json: Vec<Value> = srcs
         .iter()
         .map(|s| {
-            json!({
+            let mut v = json!({
                 "element": s.element, "kind": s.kind, "psd": kind_latex(s, mult_of(&s.element)),
                 "white": if s.flicker.is_some() { Value::Null } else { json!(s.white).as_f64().map(Value::from).unwrap_or(Value::Null) },
                 "flicker": s.flicker.map(|(k, x)| json!({ "coef": k, "exp": x })),
-            })
+            });
+            if is_ignored(s) {
+                v["ignored"] = json!(true);
+            }
+            v
         })
         .collect();
+    // The closed form's sources: those the assumptions keep.
+    let kept: Vec<Source> = srcs.iter().filter(|s| !is_ignored(s)).cloned().collect();
     let symbolic = c.op.is_none();
 
     // Closed form at s → 0.
@@ -1189,7 +1219,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             return Ok(Err("too large for the exact closed form".to_string()));
         }
         let sys = crate::ss::system(c.net, ss, c.excite);
-        low_freq(ss, symbols, &sys, &srcs, c.out, c.rf, c.vid, c.max_terms)
+        low_freq(ss, symbols, &sys, &kept, c.out, c.rf, c.vid, c.max_terms)
     };
     // Over the term budget (or any other failure of the exact form), the
     // closed form is unavailable with the reason; the spectra still follow.
@@ -1197,7 +1227,15 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 
     if symbolic {
         let input_low = match lf {
-            Ok(lf) => low_freq_json(&lf, None, c.tol),
+            Ok(lf) => {
+                let mut v = low_freq_json(&lf, None, c.tol);
+                if c.assumed.is_some() {
+                    for key in ["exact", "display", "simplified"] {
+                        v[key]["fullModelError"] = Value::Null;
+                    }
+                }
+                v
+            }
             Err(why) => json!({ "unavailable": why }),
         };
         return Ok(json!({
@@ -1375,29 +1413,48 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         }
     };
 
-    // Numeric white input-referred PSD at DC on the full model: the check.
-    let white: Vec<Source> = srcs.iter().filter(|s| s.flicker.is_none()).cloned().collect();
-    let dc_ref = num
+    // Numeric white input-referred PSD at DC on the closed form's model
+    // (the full one without assumptions), with its sources: the check.
+    let white: Vec<Source> = kept.iter().filter(|s| s.flicker.is_none()).cloned().collect();
+    let msys;
+    let mnum = if std::ptr::eq(c.model, c.full) {
+        &num
+    } else {
+        msys = crate::ss::system(c.net, c.model, c.excite);
+        &Numeric {
+            ss: c.model,
+            sys: &msys,
+            ..num
+        }
+    };
+    let dc_ref = mnum
         .at_with_cond(0.0, &white, true)
         .map(|(p, err)| (input_psd(&p, &white, 0.0), err));
+    // Under assumptions, the full model's (every source): what each form
+    // is measured against.
+    let full_white: Vec<Source> = srcs.iter().filter(|s| s.flicker.is_none()).cloned().collect();
+    let full_dc = c
+        .assumed
+        .and_then(|_| num.at(0.0, &full_white))
+        .map(|p| input_psd(&p, &full_white, 0.0));
     let input_low = match lf {
         Err(why) => json!({ "unavailable": why }),
         Ok(lf) => {
             let mut v = low_freq_json(&lf, dc_ref, c.tol);
-            if v["check"]["ok"] == json!(false) && c.ss.params.len() != c.full.params.len() {
+            if v["check"]["ok"] == json!(false) && c.ss.params.len() != c.model.params.len() {
                 // A proven-negligible junction for the gain need not be one
                 // for the noise: redo the closed form on the full model. If
                 // that fails, the reduced form is known wrong: give the reason
                 // instead.
                 // Its symbols' warnings (e.g. a match the full model rejects)
                 // describe the form now given.
-                let (fs, fw) = (c.full_symbols)();
+                let (fs, fw) = (c.model_symbols)();
                 for w in fw {
                     if !warnings.contains(&w) {
                         warnings.push(w);
                     }
                 }
-                v = match closed(c.full, &fs).and_then(|r| r) {
+                v = match closed(c.model, &fs).and_then(|r| r) {
                     Ok(lf) => low_freq_json(&lf, dc_ref, c.tol),
                     Err(why) => json!({
                         "unavailable": format!(
@@ -1411,6 +1468,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                     "noise: closed form and numeric solution differ ({:.2e})",
                     v["check"]["maxRelDiff"].as_f64().unwrap_or(f64::NAN)
                 ));
+            }
+            if c.assumed.is_some() && v.get("exact").is_some() {
+                for key in ["exact", "display", "simplified"] {
+                    let err = match (v[key]["value"].as_f64(), full_dc) {
+                        (Some(x), Some(f)) if f != 0.0 => num_or_null((x - f).abs() / f.abs()),
+                        (Some(x), Some(_)) => num_or_null(x.abs()),
+                        _ => Value::Null,
+                    };
+                    v[key]["fullModelError"] = err;
+                }
             }
             v
         }

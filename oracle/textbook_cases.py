@@ -126,6 +126,13 @@ class Case:
     """Same circuit with values, for the numeric-mode checks."""
     noise: Noise | None = None
     dist: Dist | None = None
+    assume: list[tuple[str, str]] = field(default_factory=list)
+    """Assumptions (element, term) passed as --ignore: each quantity's exact
+    form must equal the limit of its hand KCL result (ro, rpi, an open R or L
+    → ∞; gmb, an open C, a shorted R or L → 0; a shorted C → ∞), and
+    `restored` lists the assumptions the solver must put back (per quantity,
+    "M1:ro"), which the limit then leaves out."""
+    restored: dict[str, list[str]] = field(default_factory=dict)
 
 
 # --- hand derivations -------------------------------------------------------
@@ -522,6 +529,42 @@ g, ro, gmb = sym("gm_M1"), sym("ro_M1"), sym("gmb_M1")
 RD, RS, RL = sym("RD"), sym("RS"), sym("RL")
 g2, ro1, ro2, gmb2 = sym("gm_M2"), sym("ro_M1"), sym("ro_M2"), sym("gmb_M2")
 
+def rlc_load(node: str) -> sp.Expr:
+    """Series R1-L1 into C1 ∥ RL: v(node) for node "a" or "out"."""
+    va, vo = sp.symbols("va vo")
+    il = (va - vo) / (s * sym("L1"))
+    eqs = [(va - 1) / sym("R1") + il, -il + vo * s * sym("C1") + vo / sym("RL")]
+    sol = sp.solve(eqs, [va, vo], dict=True)[0]
+    return sp.simplify({"a": va, "out": vo}[node].subs(sol))
+
+
+def rlc_gain():
+    return rlc_load("out")
+
+
+def rlc_gain_a():
+    return rlc_load("a")
+
+
+def assume_limit(e: sp.Expr, assume: list[tuple[str, str]]) -> sp.Expr:
+    """The exact limit each assumption takes, one parameter at a time (each
+    minor is multilinear in the parameters, so the order does not matter)."""
+    for el, term in assume:
+        kind = el[0].upper()
+        if term in ("ro", "rpi", "rmu", "rbs", "rbd"):
+            x, to = sym(f"{term}_{el}"), sp.oo
+        elif term == "gmb":
+            x, to = sym(f"gmb_{el}"), 0
+        elif kind == "D":
+            x, to = sym(f"rd_{el}"), (sp.oo if term == "open" else 0)
+        else:
+            x = sym(el)
+            to = sp.oo if (term == "open") != (kind == "C") else 0
+        if e != sp.oo:
+            e = sp.limit(e, x, to)
+    return sp.simplify(e)
+
+
 CASES: list[Case] = [
     Case(
         "cs_rd",
@@ -760,5 +803,62 @@ CASES: list[Case] = [
                       matched={"gm_Q2": "gm_Q1", "ro_Q2": "ro_Q1", "rpi_Q2": "rpi_Q1", "RC2": "RC", "RC1": "RC"}),
         rin=Quantity(diffpair_bjt_rin_dm, closed=lambda: 2 * sym("rpi_Q1"), lead=lambda: 2 * sym("rpi_Q1"),
                      matched={"gm_Q2": "gm_Q1", "ro_Q2": "ro_Q1", "rpi_Q2": "rpi_Q1", "RC2": "RC", "RC1": "RC"}),
+    ),
+    Case(
+        "assume_cs_ro",
+        "cs\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in 0 0\n",
+        "VIN", "out",
+        gain=Quantity(cs_rd_gain), rout=Quantity(cs_rd_rout),
+        assume=[("M1", "ro")],
+    ),
+    Case(
+        "assume_degen_gmb",
+        "cs degen\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in sn 0\nRS sn 0\n",
+        "VIN", "out",
+        gain=Quantity(degen_gain), rout=Quantity(degen_rout),
+        assume=[("M1", "gmb")],
+    ),
+    Case(
+        "assume_cascode_ro",
+        "cascode\nVIN in 0\nVB vb 0\nVDD vdd 0\nRD vdd out\nM1 x in 0 0\nM2 out vb x 0\n",
+        "VIN", "out",
+        gain=Quantity(lambda: cascode(1, 0)), rout=Quantity(lambda: cascode(0, 1)),
+        assume=[("M1", "ro"), ("M2", "ro"), ("M2", "gmb")],
+    ),
+    Case(
+        "assume_cascode_isrc_ro",
+        "cascode ideal load\nVIN in 0\nVB vb 0\nVDD vdd 0\nIB vdd out\nM1 x in 0 0\nM2 out vb x 0\n",
+        "VIN", "out",
+        # Without both r_o the output node has no conductance: both are kept,
+        # g_mb2 → 0 is applied.
+        gain=Quantity(lambda: cascode(1, 0, load_r=False)), rout=Quantity(lambda: cascode(0, 1, load_r=False)),
+        assume=[("M1", "ro"), ("M2", "ro"), ("M2", "gmb")],
+        restored={"gain": ["M1:ro", "M2:ro"], "rout": ["M1:ro", "M2:ro"]},
+    ),
+    Case(
+        "assume_ce_degen_rpi",
+        "ce degen\nVCC vcc 0\nVIN in 0\nRC vcc c\nQ1 c in e\nRE e 0\n",
+        "VIN", "c",
+        gain=Quantity(ce_degen_gain),
+        assume=[("Q1", "rpi"), ("Q1", "ro")],
+    ),
+    Case(
+        "assume_ef_ro",
+        "emitter follower\nVCC vcc 0\nVIN in 0\nQ1 vcc in e\nRE e 0\n",
+        "VIN", "e",
+        gain=Quantity(lambda: ef_all()[0]), rin=Quantity(lambda: ef_all()[1]), rout=Quantity(lambda: ef_all()[2]),
+        assume=[("Q1", "ro")],
+    ),
+    Case(
+        "assume_rlc_short_open",
+        "rlc\nVIN in 0\nR1 in a\nL1 a out\nC1 out 0\nRL out 0\n",
+        "VIN", "out",
+        gain=Quantity(rlc_gain), assume=[("L1", "short"), ("RL", "open")],
+    ),
+    Case(
+        "assume_rlc_c_short",
+        "rlc\nVIN in 0\nR1 in a\nL1 a out\nC1 out 0\nRL out 0\n",
+        "VIN", "a",
+        gain=Quantity(rlc_gain_a), assume=[("C1", "short")],
     ),
 ]
