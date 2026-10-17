@@ -484,6 +484,327 @@ fn symbolic_leading_order_is_labelled() {
     );
 }
 
+/// A numeric simplified form may not drop terms from the numerator and the
+/// denominator whose errors cancel: each coefficient stays within twice the
+/// tolerance on its own. Before, a transconductor with R1/R2 feedback
+/// (gm·RD = 2.3) showed R1/R2 (1, with R1 = 40k and R2 = 60k), which is no
+/// limit of the gain (exact 1.045), and a matched CMOS inverter showed
+/// −g_{m1} r_{o2}, half of each part.
+#[test]
+fn simplified_parts_are_each_within_tolerance() {
+    let feedback = "fb\nVIN in 0 AC 1\nRD 0 out 5k\nR1 out f 50k\nR2 f 0 50k\nG1 out in f in 0.46m\n";
+    let r = run(feedback, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{G_{1} R_{D} \\left(R_{1} + R_{2}\\right)}{G_{1} R_{D} R_{2} + R_{1} + R_{2}}"
+    );
+    assert_eq!(
+        r["rout"]["simplified"]["latex"],
+        "\\frac{R_{D} \\left(R_{1} + R_{2}\\right)}{G_{1} R_{D} R_{2} + R_{1} + R_{2}}"
+    );
+    let r = run(
+        &feedback.replace("50k\nR2 f 0 50k", "40k\nR2 f 0 60k"),
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{G_{1} R_{D} \\left(R_{2} + R_{1}\\right)}{G_{1} R_{D} R_{2} + R_{2} + R_{1}}"
+    );
+    let inverter = "inv\nVDD vdd 0 1.8\nVIN in 0 DC 0.9 AC 1\nM1 out in 0 0 nch W=10u L=1u\n\
+                    M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n\
+                    .model pch PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.1)\n";
+    let r = run(inverter, &request("VIN", "out"));
+    assert_eq!(r["gain"]["simplified"]["same"], false);
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "-\\frac{r_{o1} r_{o2} \\left(g_{m1} + g_{m2}\\right)}{r_{o1} + r_{o2}}"
+    );
+}
+
+/// Terms of equal size are dropped together or not at all: a matched pair
+/// keeps a symmetric simplified form (before, r_{o2} but not r_{o1}). At a
+/// 3% tolerance the two twin terms (4.7% together) cannot both go, so
+/// neither does; at 5% both go, leaving the textbook g_m R_C.
+#[test]
+fn simplified_drops_equal_terms_together() {
+    let pair = "bjt pair\nVCC vcc 0 5\nVEE vee 0 -5\nVCM cm 0 0\nVIN inp cm DC 0 AC 1\nQ1 c1 inp tail qn\n\
+                Q2 c2 cm tail qn\nITAIL tail vee DC 1m\nRC1 vcc c1 5k\nRC2 vcc c2 5k\n.model qn NPN (IS=1e-15 BF=100 VAF=50)\n";
+    let r = run(
+        pair,
+        &req(json!({ "input": "VIN", "output": "c2", "ref": "c1", "tolerance": 0.03 })),
+    );
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{g_{m1} g_{m2} r_{o1} r_{o2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} r_{o1} r_{o2} + g_{m2} r_{o1} r_{o2} + g_{m1} r_{o1} R_{C2} + g_{m2} r_{o2} R_{C1}}"
+    );
+    let r = run(pair, &req(json!({ "input": "VIN", "output": "c2", "ref": "c1" })));
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{g_{m1} g_{m2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} + g_{m2}}"
+    );
+}
+
+/// A common factor left once terms are dropped is cancelled: r_o → ∞ in a
+/// degenerated stage leaves R_D, not R_D(1 + g_m R_S)/(1 + g_m R_S).
+#[test]
+fn simplified_cancels_common_factors() {
+    let net = "deg\nVDD vdd 0 1.8\nVIN in 0 DC 1.0 AC 1\nRD vdd out 5k\nM1 out in s 0 nm W=10u L=1u\nRS s 0 1k\n\
+               .model nm NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.5 PHI=0.7)\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    assert_eq!(r["rout"]["simplified"]["latex"], "R_{D}");
+}
+
+/// Symbolic hand analysis neglects body effect with channel-length
+/// modulation (g_mb ≪ g_m) and says so, except where that would leave a pure
+/// number: a follower into an ideal current source keeps g_m/(g_m + g_mb),
+/// which body effect alone sets, rather than 1.
+#[test]
+fn symbolic_hand_form_neglects_body_effect() {
+    let degen = run(
+        "deg\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in s 0\nRS s 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        degen["gain"]["simplified"]["latex"],
+        "-\\frac{g_{m1} R_{D}}{g_{m1} R_{S} + 1}"
+    );
+    assert_eq!(degen["gain"]["simplified"]["assumption"], "ro ≫ R, 1/gm and gmb ≪ gm");
+    assert!(degen["gain"]["exact"]["latex"].as_str().unwrap().contains("g_{mb1}"));
+    let sf = run(
+        "sf\nVDD vdd 0\nVIN in 0\nVB vb 0\nM1 vdd in out 0\nM2 out vb 0 0\n",
+        &req(json!({ "input": "VIN", "output": "out", "rout": true })),
+    );
+    assert_eq!(
+        sf["gain"]["simplified"]["latex"],
+        "g_{m1} \\left(\\frac{1}{g_{m1}} \\parallel \\frac{1}{g_{mb1}}\\right)"
+    );
+    assert_eq!(sf["gain"]["simplified"]["assumption"], "ro ≫ R, 1/gm");
+    assert_eq!(sf["rout"]["simplified"]["latex"], "\\frac{1}{g_{m1}}");
+    assert_eq!(sf["rout"]["simplified"]["assumption"], "ro ≫ R, 1/gm and gmb ≪ gm");
+    // A gain through the body alone keeps its leading order in g_mb.
+    let bulk = run(
+        "bulk\nVDD vdd 0\nVIN in 0\nVG g 0\nRD vdd out\nM1 out g 0 in\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(bulk["gain"]["simplified"]["latex"], "-g_{mb1} R_{D}");
+}
+
+/// Symbolic mode keeps r_o finite for a device it knows is in triode, and
+/// says so. Two NMOS on one gate, the inner one's drain on the outer one's
+/// source: the inner one is in triode whenever the outer one conducts (one
+/// longer device), so its r_o stays. Before: −g_{m1} R_D, a cascode reading.
+#[test]
+fn symbolic_keeps_triode_ro() {
+    let r = run(
+        "stack\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["warnings"], json!(["M1 is in triode"]));
+    assert!(
+        r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o1}"),
+        "{}",
+        r["gain"]["simplified"]
+    );
+    assert!(!r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o2}"));
+    // The same rule with values given (symbolic mode ignores the bias): the
+    // bottom NMOS of this two-NMOS stage is in triode (r_o2 ≈ 1 kΩ at this
+    // bias, as numeric mode reports).
+    let net = "nn\nVDD vdd 0 1.8\nVIN in 0 DC 1.2 AC 1\nM1 vdd in out 0 nch W=10u L=1u\nM2 out in 0 0 nch W=10u L=1u\n\
+               .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4 PHI=0.8)\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "symbolic": true })));
+    assert_eq!(r["symbolic"], true);
+    assert_eq!(r["warnings"], json!(["M2 is in triode"]));
+    let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
+    assert!(
+        simplified.contains("r_{o2}") && !simplified.contains("r_{o1}"),
+        "{simplified}"
+    );
+}
+
+/// Matching never merges devices in different regions. A shared-gate stack
+/// of one model and geometry (outer saturated, inner in triode) is offered
+/// no match, and an explicit match is refused, so the inner device keeps its
+/// finite r_o in either element order. Before: matchAuto merged them into
+/// r_{o1,2}, which the outer one's region took to infinity, or kept finite
+/// when the inner one came first.
+#[test]
+fn matching_keeps_regions_apart() {
+    let stack = |a: &str, b: &str| {
+        format!(
+            "nn\nVDD vdd 0 1.8\nVIN in 0 DC 1.2 AC 1\n{a}\n{b}\n\
+             .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4 PHI=0.8)\n"
+        )
+    };
+    let (outer, inner) = ("M1 vdd in out 0 nch W=10u L=1u", "M2 out in 0 0 nch W=10u L=1u");
+    for net in [stack(outer, inner), stack(inner, outer)] {
+        let base = json!({ "input": "VIN", "output": "out", "symbolic": true });
+        let mut auto = base.clone();
+        auto["matchAuto"] = json!(true);
+        let r = run(&net, &req(auto));
+        assert_eq!(r["matchCandidates"], json!([]));
+        assert_eq!(r["warnings"], json!(["M2 is in triode"]));
+        let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
+        assert!(
+            simplified.contains("r_{o2}") && !simplified.contains("r_{o1"),
+            "{simplified}"
+        );
+        let mut explicit = base.clone();
+        explicit["match"] = json!([["M1", "M2"]]);
+        let r = run(&net, &req(explicit));
+        assert_eq!(
+            r["warnings"],
+            json!(["M2 is in triode", "M1 and M2 are in different regions, not matched"])
+        );
+        assert_eq!(r["gain"]["simplified"]["latex"], simplified);
+    }
+}
+
+/// The inner device of a shared-gate stack is in triode only when its
+/// threshold is provably no higher than the outer one's: both bulks on one
+/// node, or each on its own source. With the inner bulk elsewhere, body
+/// effect can keep it saturated, so nothing is inferred (before: "M1 is in
+/// triode" and a finite r_{o1}).
+#[test]
+fn triode_inference_needs_the_bulk_bias() {
+    let r = run(
+        "stack\nVDD vdd 0\nVIN in 0\nVB vb 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 vb\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["warnings"], json!([]));
+    assert!(!r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o"));
+    let r = run(
+        "stack\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x x\nM1 x in 0 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["warnings"], json!(["M1 is in triode"]));
+}
+
+/// Stability is judged on the full model, not the one with junction
+/// conductances left out. A block the output does not see (so leaving its
+/// bulk junction out moves no reported value) has a net conductance of
+/// −0.5 pS without the junction (gmin, 1 pS, as M9 is off) and +0.5 pS
+/// with it: stable. Before: "Unstable at this bias", from the model
+/// without the junction.
+#[test]
+fn stability_uses_the_full_model() {
+    let net = "blk\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\nRX x 0 1meg\nGX 0 x x 0 1.0000005u\nCX x 0 1p\n\
+               M9 x 0 0 0 nm\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let r = run(net, &request("VIN", "out"));
+    assert_eq!(r["omittedJunctions"], json!(["rbd_M9"]));
+    assert_eq!(r["warnings"], json!(["M9 is off"]));
+    // The reduced determinant fits maxTerms but the full one does not: no
+    // verdict rather than the reduced model's.
+    let r = run(net, &req(json!({ "input": "VIN", "output": "out", "maxTerms": 6 })));
+    assert_eq!(
+        r["warnings"],
+        json!(["M9 is off", "Stability not checked. The full model is too large."])
+    );
+}
+
+/// A 0 V source or an inductor with both ends on one node carries no
+/// defined current and does nothing: it is dropped and named, and the
+/// circuit solves (before: no DC solution). A nonzero source there, or one
+/// that is the input or controls an F or H, is an error that names it.
+#[test]
+fn branch_on_one_node_is_dropped() {
+    let net = "deg\nV9 out out 0\nL9 out out 1u\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n";
+    for r in [
+        run(net, &request("VIN", "out")),
+        run(net, &req(json!({ "input": "VIN", "output": "out", "symbolic": true }))),
+    ] {
+        assert_eq!(
+            r["warnings"],
+            json!(["V9 has both ends at out", "L9 has both ends at out"])
+        );
+        assert_eq!(r["gain"]["exact"]["latex"], "\\frac{R_{2}}{R_{1} + R_{2}}");
+    }
+    let err = run_err(&net.replace("V9 out out 0", "V9 out out 1"), &request("VIN", "out"));
+    assert_eq!(err, "V9 has both ends at out. Remove it or make it 0 V.");
+    let err = run_err("deg\nVIN in in AC 1\nR1 in 0 1k\n", &request("VIN", "in"));
+    assert_eq!(err, "Input VIN has both ends at in");
+    let err = run_err(&format!("{net}F1 0 out V9 2\n"), &request("VIN", "out"));
+    assert_eq!(err, "F1 senses V9, which has both ends at out");
+}
+
+/// An element with both ends on one node contributes nothing: it is named,
+/// and the result is the circuit's without it.
+#[test]
+fn element_on_one_node_is_named() {
+    let net = "deg\nCSB 0 0 1f\nR9 out out 1k\nI9 out out 1m\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n";
+    let r = run(net, &request("VIN", "out"));
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "CSB has both ends at 0",
+            "R9 has both ends at out",
+            "I9 has both ends at out"
+        ])
+    );
+    assert_eq!(r["gain"]["exact"]["latex"], "\\frac{R_{2}}{R_{1} + R_{2}}");
+}
+
+/// Symbolic mode has no root values but counts them: a CS stage with C_GD
+/// and C_L has two poles and one zero (g_m/C_GD), as numeric mode finds.
+#[test]
+fn symbolic_counts_poles_and_zeros() {
+    let r = run(
+        "m\nVIN in 0\nRS in g\nVDD vdd 0\nRD vdd out\nM1 out g 0 0\nCGD g out\nCL out 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["gain"]["poles"], json!([]));
+    assert_eq!(
+        (r["gain"]["poleCount"].as_u64(), r["gain"]["zeroCount"].as_u64()),
+        (Some(2), Some(1))
+    );
+    let r = run(
+        "m\nVIN in 0 DC 0.7 AC 1\nRS in g 1k\nVDD vdd 0 1.8\nRD vdd out 10k\nM1 out g 0 0 nm W=10u L=1u\nCGD g out 1p\n\
+         CL out 0 1p\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        r["gain"]["poleCount"].as_u64(),
+        Some(r["gain"]["poles"].as_array().unwrap().len() as u64)
+    );
+}
+
+/// An operating point with a right-half-plane natural frequency is named:
+/// positive feedback through a VCVS of gain k puts the pole at
+/// (k − 2)/(2π R C), unstable above k = 2. A lossless LC (poles on the jω
+/// axis) is not.
+#[test]
+fn right_half_plane_poles_are_warned() {
+    let net = |k: &str| format!("pf\nVIN in 0 AC 1\nR1 in a 1k\nR2 out a 1k\nC1 a 0 1n\nE1 out 0 a 0 {k}\n");
+    let r = run(&net("3"), &request("VIN", "out"));
+    assert_eq!(
+        r["warnings"],
+        json!(["Unstable at this bias: a right-half-plane pole."])
+    );
+    let pole = r["gain"]["poles"][0]["re"].as_f64().unwrap();
+    assert!(
+        (pole / (1.0 / (2.0 * std::f64::consts::PI * 1e-6)) - 1.0).abs() < 1e-9,
+        "{pole}"
+    );
+    let r = run(&net("1.5"), &request("VIN", "out"));
+    assert_eq!(r["warnings"], json!([]));
+    let lc = "lc\nIIN 0 a AC 1\nL1 a 0 1u\nC1 a 0 1n\nL2 a b 1u\nC2 b 0 1n\n";
+    let r = run(lc, &request("IIN", "b"));
+    assert_eq!(r["warnings"], json!([]));
+}
+
+/// Two transconductances in series read as R_D/(1/g_{m1} + 1/g_{m2}), not
+/// g_{m1} g_{m2} R_D (1/g_{m1} ∥ 1/g_{m2}): a follower driving a common gate.
+#[test]
+fn series_transconductances_read_as_a_sum() {
+    let r = run(
+        "sf cg\nVDD vdd 0\nVIN in 0\nVB vb 0\nM1 vdd in x x\nM2 out vb x x\nIB x 0\nRD vdd out\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "\\frac{R_{D}}{\\frac{1}{g_{m1}} + \\frac{1}{g_{m2}}}"
+    );
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported

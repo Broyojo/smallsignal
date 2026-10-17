@@ -30,7 +30,8 @@ pub struct Sym {
     pub unit: &'static str,
     pub elements: Vec<String>,
     /// A device output resistance (r_o, r_μ, bulk junction): the quantities
-    /// hand analysis takes to infinity.
+    /// hand analysis takes to infinity. Not the r_o of a device outside
+    /// saturation (MOS triode, BJT saturation), which is small.
     pub output_r: bool,
     /// Junction leakage (r_bs, r_bd, r_μ): present only through gmin-level
     /// junction conductance; the `display` form drops it.
@@ -62,6 +63,28 @@ fn kind_of(name: &str, element: &str) -> String {
     match name.strip_suffix(element).and_then(|k| k.strip_suffix('_')) {
         Some(k) => k.to_string(),
         None => String::new(),
+    }
+}
+
+/// The parameter kinds of `element` that belong to a device outside its
+/// intended region (the r_o of a MOSFET in triode or a BJT in saturation),
+/// sorted. Devices whose lists differ are in different regions.
+fn linear_kinds(ss: &SsCircuit, element: &str) -> Vec<String> {
+    let mut kinds: Vec<String> = ss
+        .params
+        .iter()
+        .filter(|p| p.element == element && p.linear)
+        .map(|p| kind_of(&p.name, element))
+        .collect();
+    kinds.sort();
+    kinds
+}
+
+/// "A and B", "A, B and C".
+fn name_list(names: &[String]) -> String {
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
     }
 }
 
@@ -179,6 +202,14 @@ pub fn symbols(
             ));
             continue;
         }
+        // One symbol per kind must stand for one region: a saturated
+        // device's r_o is taken to infinity in hand analysis, a triode
+        // one's is not.
+        let regions: Vec<Vec<String>> = names.iter().map(|n| linear_kinds(ss, n)).collect();
+        if regions.iter().any(|r| *r != regions[0]) {
+            warnings.push(format!("{} are in different regions, not matched", name_list(&names)));
+            continue;
+        }
         if symbolic {
             // No values to compare: merge each kind across the members that
             // have it (g_mb exists only where the body is not tied to the
@@ -270,7 +301,7 @@ pub fn symbols(
                 role: p.role,
                 unit: p.unit,
                 elements,
-                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
                 leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd"),
             });
         }
@@ -294,7 +325,7 @@ pub fn unmerged(ss: &SsCircuit) -> Symbols {
             role: p.role,
             unit: p.unit,
             elements: vec![p.element.clone()],
-            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
             leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd"),
         })
         .collect();
@@ -325,8 +356,8 @@ fn disambiguate(syms: &mut [Sym]) {
 }
 
 /// Pairs worth offering as matched: same element type and model and the
-/// same geometry (W, L, M or area); passives with equal values; and in
-/// numeric mode the same small-signal values (to MATCH_REL).
+/// same geometry (W, L, M or area) and region; passives with equal values;
+/// and in numeric mode the same small-signal values (to MATCH_REL).
 pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(String, String, &'static str)> {
     let same = |a: f64, b: f64| a == b || (a - b).abs() <= MATCH_REL * a.abs().max(b.abs());
     let key = |i: usize| -> Option<(String, Vec<f64>, &'static str)> {
@@ -395,6 +426,10 @@ pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(
             return None;
         }
         let strength = topology(i, j)?;
+        // In symbolic mode too, where the region is known from the wiring.
+        if kind == "device" && linear_kinds(ss, &net.elements[i].name) != linear_kinds(ss, &net.elements[j].name) {
+            return None;
+        }
         if op.is_some() && kind == "device" {
             let (vi, vj) = (values(i), values(j));
             if vi.len() != vj.len() || !vi.iter().zip(&vj).all(|(a, b)| a.0 == b.0 && same(a.1, b.1)) {
@@ -922,12 +957,24 @@ pub fn spow(e: &[u8], syms: &[Sym]) -> u32 {
 /// as r_o/ε (its conductance as ε·g_o), keep, for each power of s, only the
 /// terms of lowest order in ε.
 pub fn leading_order(p: &XPoly, syms: &[Sym]) -> XPoly {
+    lowest_order(p, syms, |s| s.output_r)
+}
+
+/// Hand-analysis limit g_mb ≪ g_m: the same with every g_mb scaled as ε·g_mb
+/// (taken after r_o → ∞, as 1/r_o ≪ g_mb).
+pub fn body_order(p: &XPoly, syms: &[Sym]) -> XPoly {
+    lowest_order(p, syms, |s| s.role == Role::Gmb)
+}
+
+/// For each power of s, the terms of lowest total degree in the symbols with
+/// `small`.
+fn lowest_order(p: &XPoly, syms: &[Sym], small: fn(&Sym) -> bool) -> XPoly {
     // Σ e[k] over the symbols with `flag`, as e.iter().zip(syms).filter(..).
     let sum_of = |flag: fn(&Sym) -> bool| {
         let idx: Vec<usize> = (0..syms.len()).filter(|&k| flag(&syms[k])).collect();
         move |e: &[u8]| -> u32 { idx.iter().filter_map(|&k| e.get(k)).map(|&x| x as u32).sum() }
     };
-    let (spow, order) = (sum_of(|s| s.reactive), sum_of(|s| s.output_r));
+    let (spow, order) = (sum_of(|s| s.reactive), sum_of(small));
     let keys: Vec<(u32, u32)> = p.terms.iter().map(|(e, _)| (spow(e), order(e))).collect();
     // Lowest order per power of s (few powers: a short list).
     let mut best: Vec<(u32, u32)> = Vec::new();

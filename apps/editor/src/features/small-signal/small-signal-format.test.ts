@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { SmallSignalSource } from "@icm/small-signal";
 import {
+  countText,
   differentialPairs,
   formatDensity,
   formatDistortion,
@@ -29,6 +30,16 @@ describe("formatPlain", () => {
     expect(formatPlain(-8.481e-31)).toBe("-8.481e-31");
     expect(formatPlain(2.5e7)).toBe("2.500e+7");
     expect(formatPlain(0)).toBe("0");
+  });
+});
+
+describe("countText", () => {
+  it("counts symbolic poles and zeros, or says nothing", () => {
+    expect(countText(2, 1)).toBe("2 poles, 1 zero");
+    expect(countText(1, 0)).toBe("1 pole");
+    expect(countText(0, 2)).toBe("2 zeros");
+    expect(countText(0, 0)).toBe("");
+    expect(countText()).toBe("");
   });
 });
 

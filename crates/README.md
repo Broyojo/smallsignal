@@ -35,7 +35,11 @@ with numeric values, poles and zeros, and the operating point.
 5. **Display**: conductances become resistances, common factors cancel, and
    terms are sorted by magnitude. The simplified form drops the smallest terms
    within each power of s, up to the coarsest pruning whose error over
-   1 Hz–100 GHz stays within `tolerance`.
+   1 Hz–100 GHz stays within `tolerance`. Magnitude pruning (here, in noise
+   and in distortion) moves no coefficient of a numerator or denominator by
+   more than 2·`tolerance` of itself (at most all of it), with the overall
+   error still within `tolerance`, drops terms of equal size together, and
+   cancels the common factors left.
 
 ## Correctness checks
 
@@ -80,8 +84,10 @@ exceed `maxTerms` terms (default 2,000,000).
   r_{o1,2}, R_{D1,2}). Exact: merging happens after the multilinear solve, by
   mapping parameters onto symbols with exponents. In numeric mode a group
   merges only if its values agree to 1e-9 (else a warning says what differs);
-  symbolic mode assumes equality. `matchCandidates` lists pairs with the same
-  type, model and geometry (and, in numeric mode, small-signal values), plus
+  symbolic mode assumes equality. Devices in different regions (a triode r_o
+  against a saturated one) never merge ("M1 and M2 are in different regions,
+  not matched"). `matchCandidates` lists pairs with the same type, model,
+  geometry and region (and, in numeric mode, small-signal values), plus
   passives with equal values (`kind: "passive"`).
 - Common factors of numerator and denominator cancel (exact multivariate GCD),
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
@@ -98,16 +104,33 @@ exceed `maxTerms` terms (default 2,000,000).
   `simplified` drops numerically small terms within `maxRelError`; in symbolic
   mode it is the hand-analysis limit r_o → ∞ (every device output resistance
   r_o, r_μ, bulk junction scaled as r/ε, the lowest order in ε kept for each
-  power of s), labelled `assumption: "ro ≫ R, 1/gm"`. Then `values`
+  power of s), labelled `assumption: "ro ≫ R, 1/gm"`, then the same limit
+  g_mb → 0 (labelled `"ro ≫ R, 1/gm and gmb ≪ gm"` when that drops a term),
+  except where it leaves a pure number (a follower into an ideal current
+  source keeps g_m/(g_m + g_mb)). The r_o of a device
+  outside saturation (MOS triode, BJT saturation) stays finite in every
+  leading-order form, with the region warning. Symbolic mode, which has no
+  operating point, knows one such case: two MOSFETs of one type and model
+  on a shared gate, one's drain on the other's source, with both bulks on
+  one node or each on its own source; that one is in triode. Then `values`
   (`f, re, im, mag, phaseDeg`; `inf: true` with null parts when infinite),
-  `poles` and `zeros` (in Hz), and `check`.
+  `poles` and `zeros` (in Hz; empty in symbolic mode), `poleCount` and
+  `zeroCount` (their number, the degree in s of the denominator and
+  numerator, in symbolic mode too), and `check`.
 - `op` (null in symbolic mode) holds node voltages, source branch currents, and
   per-device region, currents, voltages and small-signal conductances.
 - `params` lists each symbol's name, LaTeX, value and unit; `warnings` collects
   devices out of their intended region, ignored model parameters,
   cross-coupled (latch) pairs that may have several DC solutions, junctions
   forward-biased by ideal sources (also named in the DC error when that is
-  why DC fails), and so on.
+  why DC fails), two-terminal elements with both ends on one node
+  ("CSB has both ends at 0"; a 0 V source or an inductor there carries no
+  defined current and is dropped before the DC solve, while a source with a
+  value there, the input source, or one an F or H senses is an error), a root of the circuit determinant (every
+  source zeroed, on the full model with each parameter's own value) with
+  re > 1e-6·|p| in numeric mode ("Unstable at this bias: …", not when a
+  coefficient's sign is below its rounding error; "Stability not checked"
+  when that determinant exceeds `maxTerms`), and so on.
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
@@ -166,7 +189,8 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 - `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
   `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
   for a CS stage. `exact`, `display` (junction leakage dropped when that moves
-  it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form, then
+  it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form,
+  in symbolic mode then g_mb → 0 with the same labels as above, then
   magnitude pruning; the smallest form within `tolerance`; when even the
   display form misses `tolerance`, the exact form, `method: "exact form"`),
   each `{latex,

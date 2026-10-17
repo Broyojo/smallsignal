@@ -78,8 +78,15 @@ export interface SmallSignalQuantity {
   leakageMatters?: boolean;
   simplified?: SmallSignalExpression | null;
   values?: ComplexPoint[];
+  /** In Hz; empty in symbolic mode (no values). */
   poles?: Root[];
   zeros?: Root[];
+  /** Number of poles and zeros: the degree in s of the denominator and
+   * numerator (also in symbolic mode). */
+  poleCount?: number;
+  zeroCount?: number;
+  /** Symbolic against direct numeric solve (numeric mode). */
+  check?: { ok: boolean; maxRelDiff: number };
 }
 
 export interface MosOperatingPoint {

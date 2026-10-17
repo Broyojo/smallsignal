@@ -124,7 +124,12 @@ pub fn analyze_json(netlist: &str, request: &str) -> String {
 }
 
 pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
-    let net = parse(text)?;
+    let mut net = parse(text)?;
+    let inputs: Vec<&str> = std::iter::once(req.input.as_str())
+        .chain(req.input_neg.as_deref())
+        .collect();
+    drop_shorted_branches(&mut net, &inputs)?;
+    let net = net;
     let find_source = |name: &str| -> Result<(usize, bool), String> {
         let i = net
             .element(name)
@@ -202,7 +207,13 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             })?,
         )
     };
-    let full = ss::build(&net, op.as_ref())?;
+    // Symbolic mode assumes saturation except where the region is known.
+    let (linear, region_warnings) = if symbolic {
+        symbolic_regions(&net)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let full = ss::build_with(&net, op.as_ref(), &linear)?;
     let excite = match (mode, neg) {
         (Mode::Single, _) | (_, None) => Excite::Source(input),
         (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
@@ -265,7 +276,13 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             format!("{kind}:{}", group_of(&p.element))
         })
     };
-    let mut warnings: Vec<String> = net.warnings.iter().chain(&ss.warnings).cloned().collect();
+    let mut warnings: Vec<String> = net
+        .warnings
+        .iter()
+        .chain(&ss.warnings)
+        .chain(&region_warnings)
+        .cloned()
+        .collect();
     // Missing values mean hand analysis: the response's `symbolic` says so,
     // and a warning would only repeat it.
     warnings.extend(wiring_warnings(&net, op.as_ref()));
@@ -359,6 +376,32 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             "gain",
         ),
     );
+
+    // Stability at this bias: the circuit's natural frequencies (the roots of
+    // its determinant, every source zeroed), on the full model with every
+    // parameter's own value. A junction conductance left out because no
+    // reported value moves can still move a marginal pole across the jω
+    // axis, and matched symbols carry one member's value.
+    if !symbolic {
+        let d_full = if omitted.is_empty() {
+            Ok(d.clone())
+        } else {
+            crate::det::det(&fsys.gain.a, max_terms)
+        };
+        match d_full {
+            Ok(df) => {
+                let own = sym::unmerged(&full);
+                let df = XPoly::from_poly(&df, &own.class, own.syms.len())?;
+                let modes = Expr::from_mna(&XPoly::constant(1, own.syms.len()), &df, &own.syms);
+                match rhp_poles(&modes) {
+                    0 => {}
+                    1 => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
+                    _ => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+                }
+            }
+            Err(_) => warnings.push("Stability not checked. The full model is too large.".to_string()),
+        }
+    }
 
     if req.noise || req.noise_band.is_some() {
         let poles_hz: Vec<f64> = if symbolic {
@@ -880,6 +923,115 @@ fn degenerate_junctions(net: &Netlist) -> Vec<String> {
     out
 }
 
+/// Devices symbolic mode must not take as saturated (their r_o stays finite
+/// in the hand-analysis form), each with numeric mode's warning. Symbolic
+/// mode has no operating point (the bias is unknown, even where the netlist
+/// holds placeholder values), so only the case the wiring decides: two
+/// MOSFETs of one type and model on a shared gate, one's drain on the
+/// other's source, with both bulks on one node or each on its own source.
+/// Then the inner threshold is no higher: its reverse bulk-source bias is
+/// no larger (with one bulk node, the current flows from the outer source
+/// to the inner one, so the inner source is nearer the bulk's potential;
+/// with each bulk on its source, both are zero). Whenever the outer one
+/// conducts, the inner one has
+/// V_DS < V_GS − V_TH: it is in triode, and the pair is one longer device.
+/// With other bulk wiring, body effect can keep the inner one saturated.
+fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
+    let (mut linear, mut warnings) = (Vec::new(), Vec::new());
+    for (ei, inner) in net.elements.iter().enumerate() {
+        let Kind::M { model: mi, .. } = &inner.kind else {
+            continue;
+        };
+        let (d, g, s, b) = (inner.nodes[0], inner.nodes[1], inner.nodes[2], inner.nodes[3]);
+        let stacked = d != s
+            && net.elements.iter().enumerate().any(|(eo, outer)| match &outer.kind {
+                Kind::M { model: mo, .. } => {
+                    let ob = outer.nodes[3];
+                    eo != ei
+                        && mo.ty == mi.ty
+                        && mo.name == mi.name
+                        && outer.nodes[1] == g
+                        && outer.nodes[2] == d
+                        && (ob == b || (b == s && ob == d))
+                }
+                _ => false,
+            });
+        if stacked {
+            linear.push(ei);
+            warnings.push(format!("{} is in triode", inner.name));
+        }
+    }
+    (linear, warnings)
+}
+
+/// V sources and inductors with both ends on one node. Nothing fixes their
+/// branch current, so the MNA system (at DC for an inductor) is singular.
+/// A 0 V source or an inductor there does nothing else: it is dropped and
+/// named as any element on one node is. A source with a value there
+/// contradicts itself, the input must drive something, and an F or H
+/// cannot sense an undefined current: those are errors naming it.
+fn drop_shorted_branches(net: &mut Netlist, inputs: &[&str]) -> Result<(), String> {
+    let mut index = vec![usize::MAX; net.elements.len()];
+    let mut kept = 0;
+    let mut dropped = Vec::new();
+    for (i, e) in net.elements.iter().enumerate() {
+        let zero = match e.kind {
+            Kind::V { dc, ac } => dc == 0.0 && ac == 0.0,
+            Kind::L { .. } => true,
+            _ => {
+                index[i] = kept;
+                kept += 1;
+                continue;
+            }
+        };
+        if e.nodes[0] != e.nodes[1] {
+            index[i] = kept;
+            kept += 1;
+            continue;
+        }
+        let at = &net.nodes[e.nodes[0]];
+        if inputs.iter().any(|n| n.trim().eq_ignore_ascii_case(&e.name)) {
+            return Err(format!("Input {} has both ends at {at}", e.name));
+        }
+        if !zero {
+            return Err(format!("{} has both ends at {at}. Remove it or make it 0 V.", e.name));
+        }
+        dropped.push(i);
+    }
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    for e in &net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = e.kind {
+            if index[ctrl] == usize::MAX {
+                let v = &net.elements[ctrl];
+                return Err(format!(
+                    "{} senses {}, which has both ends at {}",
+                    e.name, v.name, net.nodes[v.nodes[0]]
+                ));
+            }
+        }
+    }
+    for &i in &dropped {
+        let e = &net.elements[i];
+        net.warnings
+            .push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
+    }
+    let names: Vec<String> = dropped.iter().map(|&i| net.elements[i].name.clone()).collect();
+    net.missing.retain(|m| !names.iter().any(|n| n.eq_ignore_ascii_case(m)));
+    let mut k = 0;
+    net.elements.retain(|_| {
+        k += 1;
+        index[k - 1] != usize::MAX
+    });
+    for e in &mut net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = &mut e.kind {
+            *ctrl = index[*ctrl];
+        }
+    }
+    Ok(())
+}
+
 /// Cross-coupled transistor pairs (each one's gate/base on the other's
 /// drain/collector): positive feedback, so the circuit may have several DC
 /// solutions (a latch). A structural check only: it cannot prove uniqueness.
@@ -921,6 +1073,17 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
     for (n, users) in touched.iter().enumerate().skip(1) {
         if users.len() == 1 {
             out.push(format!("{} has an open end at {}", users[0], net.nodes[n]));
+        }
+    }
+    // A two-terminal element with both ends on one node does nothing (V
+    // and L there were dropped before the DC solve).
+    for e in &net.elements {
+        let two = matches!(
+            e.kind,
+            Kind::R { .. } | Kind::C { .. } | Kind::D { .. } | Kind::I { .. }
+        );
+        if two && e.nodes[0] == e.nodes[1] {
+            out.push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
         }
     }
     if let Some(op) = op {
@@ -966,6 +1129,49 @@ pub(crate) fn cancel(num: &XPoly, den: &XPoly) -> (XPoly, XPoly) {
     match (crate::gcd::div_exact(&n, &g), crate::gcd::div_exact(&d, &g)) {
         (Some(qn), Some(qd)) => (to_x(qn), to_x(qd)),
         _ => (num.clone(), den.clone()),
+    }
+}
+
+/// Roots of `e`'s denominator in the right half-plane (re > 1e-6·|p|, so
+/// roundoff on the jω axis does not count), or 0 when the sign of some
+/// coefficient is uncertain (its terms cancel below their rounding error).
+fn rhp_poles(e: &Expr) -> usize {
+    let deg = e.den.iter().map(|t| t.spow).max().unwrap_or(0) as usize;
+    if deg == 0 {
+        return 0;
+    }
+    let shift = e.den.iter().map(|t| t.lmag).fold(f64::NEG_INFINITY, f64::max);
+    let (mut sum, mut abs) = (vec![0.0; deg + 1], vec![0.0; deg + 1]);
+    for t in &e.den {
+        let m = (t.lmag - shift).exp();
+        sum[t.spow as usize] += t.sign * m;
+        abs[t.spow as usize] += m;
+    }
+    let rounding = (e.den.len() as f64 + 4.0) * f64::EPSILON;
+    if sum.iter().zip(&abs).any(|(c, a)| *a > 0.0 && c.abs() <= rounding * a) {
+        return 0;
+    }
+    roots(&sum).iter().filter(|p| p.re > 1e-6 * p.norm()).count()
+}
+
+/// Assumption labels of the symbolic hand-analysis forms.
+pub(crate) const HAND: &str = "ro ≫ R, 1/gm";
+pub(crate) const HAND_BODY: &str = "ro ≫ R, 1/gm and gmb ≪ gm";
+
+/// Symbolic hand analysis of num/den: the leading order as r_o → ∞, then as
+/// g_mb → 0 (textbook analysis neglects channel-length modulation and body
+/// effect together), cancelled. The body effect stays where neglecting it
+/// leaves a pure number: a follower into an ideal current source would read
+/// 1 instead of g_m/(g_m + g_mb), which body effect alone sets. Also says
+/// whether g_mb was dropped.
+pub(crate) fn hand_form(num: &XPoly, den: &XPoly, syms: &[Sym]) -> (XPoly, XPoly, bool) {
+    let (ln, ld) = cancel(&sym::leading_order(num, syms), &sym::leading_order(den, syms));
+    let (bn, bd) = cancel(&sym::body_order(&ln, syms), &sym::body_order(&ld, syms));
+    let number = |p: &XPoly| p.terms.len() == 1 && p.terms[0].0.iter().all(|&x| x == 0);
+    if (bn == ln && bd == ld) || (number(&bn) && number(&bd)) {
+        (ln, ld, false)
+    } else {
+        (bn, bd, true)
     }
 }
 
@@ -1126,22 +1332,25 @@ impl Quantities<'_> {
             let mut ex = text(&exact, num, den);
             ex["terms"] = terms;
             // Hand-analysis form: the leading order as every device output
-            // resistance goes to infinity.
-            let (ln, ld) = cancel(&sym::leading_order(num, syms), &sym::leading_order(den, syms));
+            // resistance goes to infinity, then as g_mb → 0.
+            let (ln, ld, body) = hand_form(num, den, syms);
             let lead = Expr::from_mna(&ln, &ld, syms);
             let same = &ln == num && &ld == den;
             let mut simp = if same { ex.clone() } else { text(&lead, &ln, &ld) };
             simp["same"] = json!(same);
-            simp["assumption"] = json!("ro ≫ R, 1/gm");
+            simp["assumption"] = json!(if body { HAND_BODY } else { HAND });
             simp["terms"] = json!({ "num": lead.num.len(), "den": lead.den.len() });
             // No junction leakage in symbolic mode: the display form is exact.
             let mut display = ex.clone();
             display["same"] = json!(true);
             display["maxRelError"] = Value::Null;
             display["leakageMatters"] = json!(false);
+            // No values, so no roots, but their number: the degree in s.
+            let degree = |ts: &[crate::render::Term]| ts.iter().map(|t| t.spow).max().unwrap_or(0);
             return json!({
                 "unit": unit, "exact": ex, "display": display, "simplified": simp,
                 "values": [], "poles": [], "zeros": [],
+                "poleCount": degree(&exact.den), "zeroCount": degree(&exact.num),
             });
         }
         let values: Vec<Value> = self
@@ -1259,17 +1468,18 @@ impl Quantities<'_> {
         let display_err = err_of(&display);
 
         // Simplified form: the coarsest pruning of the display form whose
-        // error (against the full model) stays in budget.
+        // error (against the full model) stays in budget, with no single
+        // coefficient moved by more than twice the tolerance.
         let mut simplified = display.clone();
         let mut simp_err = display_err;
-        for eps in [1.0, 0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4] {
+        for eps in Expr::prune_levels(self.tol) {
             let cand = display.prune(eps, syms);
             if cand.term_count() >= display.term_count() {
                 break;
             }
             let err = err_of(&cand);
             if err <= self.tol {
-                simplified = cand;
+                simplified = cand.cancelled(syms);
                 simp_err = err;
                 break;
             }
@@ -1330,6 +1540,8 @@ impl Quantities<'_> {
                 "terms": { "num": simplified.num.len(), "den": simplified.den.len() },
             })),
             "values": values,
+            "poleCount": poles.len(),
+            "zeroCount": zeros.len(),
             "poles": poles,
             "zeros": zeros,
             "check": { "ok": check_ok, "maxRelDiff": max_diff },
