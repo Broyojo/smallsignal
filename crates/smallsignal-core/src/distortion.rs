@@ -22,12 +22,15 @@
 //! A·x₂ = −i₂(u₁), A·x₃ = −i₃(u₁, u₂), so the output is
 //! v_out = a₁·v_in + a₂·v_in² + a₃·v_in³ (memoryless, at s → 0, in closed form),
 //! and at a frequency H₂(jω, jω), H₃(jω, jω, jω) numerically.
-//! Bulk junction diodes stay linear (their gmin-level leakage is the only
-//! part the small-signal model has of them).
+//! MOS bulk junction currents are expanded too (I_BS, I_BD, bulk → source /
+//! drain); reverse biased beyond 3·V_T they are linear, so they add nothing.
+//! The linear part is the derivative of the DC current, so a₁ is the slope of
+//! the DC transfer curve: under forward body bias (v_BS > 0) g_mb is the DC
+//! slope, not ngspice's AC value (`devices::mos_gmbs_dc`).
 
 use crate::analyze::{cancel, jw, matrix_at};
 use crate::dc::{DevOp, Op};
-use crate::devices::{pn, vt, BjtModel, MosModel};
+use crate::devices::{mos_gmbs_dc, pn, vt, BjtModel, MosModel};
 use crate::linalg::LuComplex;
 use crate::netlist::{Kind, Netlist};
 use crate::poly::Poly;
@@ -186,25 +189,55 @@ fn pn_jet(csat: f64, v: Jet, vte: f64) -> Jet {
     }
 }
 
-/// (cc, cb) as `devices::bjt_eval`, normalized frame.
-fn bjt_jet(m: &BjtModel, area: f64, vbe: Jet, vbc: Jet, gmin: f64) -> (Jet, Jet) {
+/// `devices::bulk_junction` on a jet.
+fn bulk_jet(is: f64, v: Jet, gmin: f64) -> Jet {
+    let vt = vt();
+    let v0 = v.v();
+    if v0 <= -3.0 * vt {
+        return v.scale(gmin).sub(&Jet::cst(is));
+    }
+    let e = (v0 / vt).min(709.0).exp();
+    let k = is * e;
+    v.compose([is * (e - 1.0), k / vt, k / (2.0 * vt * vt), k / (6.0 * vt * vt * vt)])
+        .add(&v.scale(gmin))
+}
+
+/// (cc, cb) as `devices::bjt_eval`, normalized frame, and the same without
+/// the collector–base junction branch i_μ = cbc/BR + gmin·vbc (the part the
+/// leakage-free model drops with r_μ).
+fn bjt_jet(m: &BjtModel, area: f64, vbe: Jet, vbc: Jet, gmin: f64) -> ((Jet, Jet), (Jet, Jet)) {
     let vt = vt();
     let csat = m.is * area;
     let cbe = pn_jet(csat, vbe, vt);
     let cbc = pn_jet(csat, vbc, vt);
     let inv_vaf = if m.vaf > 0.0 { 1.0 / m.vaf } else { 0.0 };
     let inv_qb = Jet::cst(1.0).sub(&vbc.scale(inv_vaf));
-    let cc = cbe
-        .sub(&cbc)
-        .mul(&inv_qb)
-        .sub(&cbc.scale(1.0 / m.br))
-        .sub(&vbc.scale(gmin));
-    let cb = cbe
-        .scale(1.0 / m.bf)
-        .add(&vbe.scale(gmin))
-        .add(&cbc.scale(1.0 / m.br))
-        .add(&vbc.scale(gmin));
-    (cc, cb)
+    let cc_free = cbe.sub(&cbc).mul(&inv_qb);
+    let cb_free = cbe.scale(1.0 / m.bf).add(&vbe.scale(gmin));
+    let imu = cbc.scale(1.0 / m.br).add(&vbc.scale(gmin));
+    ((cc_free.sub(&imu), cb_free.add(&imu)), (cc_free, cb_free))
+}
+
+/// Within DC-solution accuracy of v = at.
+fn near(v: f64, at: f64, scale: f64) -> bool {
+    (v - at).abs() <= 1e-9 * (1.0 + scale)
+}
+
+/// The level-1 equations switch branch exactly here, so a Taylor series
+/// about the point is one-sided: v_GS = V_TH, v_DS = V_DSAT, v_DS = 0 (when
+/// λ or γ makes the two orientations differ), v_BS = 0 (γ > 0, bulk not
+/// tied to the source) or where sarg clamps, a bulk junction at −3·V_T.
+/// Effective-frame voltages.
+fn mos_boundary(m: &MosModel, vgs: f64, vds: f64, vbs: f64, body_moves: bool, junctions: &[f64]) -> bool {
+    let scale = vgs.abs() + vds.abs() + vbs.abs();
+    let ev = crate::devices::mos_eval(m, 1.0, vgs, vds, vbs);
+    let vgst = vgs - ev.von;
+    let channel = vgst > -1e-9 * (1.0 + scale)
+        && (near(vgst, 0.0, scale)
+            || near(vds, vgst, scale)
+            || (near(vds, 0.0, scale) && (m.lambda != 0.0 || m.gamma != 0.0))
+            || (m.gamma != 0.0 && body_moves && (near(vbs, 0.0, scale) || near(vbs, 2.0 * m.phi, scale))));
+    channel || junctions.iter().any(|&v| near(v, -3.0 * vt(), v.abs()))
 }
 
 // --- devices ----------------------------------------------------------------
@@ -213,9 +246,13 @@ pub struct NlOut {
     /// The current flows from `a` through the device to `b`.
     pub a: usize,
     pub b: usize,
-    /// "" (MOSFET drain current, diode current), "C" or "B" (BJT).
+    /// "" (MOSFET drain current, diode current), "BS" or "BD" (MOS bulk
+    /// junctions), "C" or "B" (BJT).
     pub label: &'static str,
     pub jet: Jet,
+    /// The current without junction leakage (r_bs, r_bd, r_μ): what the
+    /// leakage-free model keeps.
+    pub free: Jet,
 }
 
 pub struct NlDev {
@@ -224,6 +261,8 @@ pub struct NlDev {
     pub controls: Vec<(usize, usize)>,
     pub vars: &'static [&'static str],
     pub outs: Vec<NlOut>,
+    /// Biased on a branch point of its equations (see `mos_boundary`).
+    pub boundary: bool,
 }
 
 /// Expands each named device at the operating point.
@@ -248,30 +287,49 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                     (ty * m.vgs, ty * m.vds, ty * m.vbs)
                 };
                 let beta = model.kp * w / l * mult;
-                let f = mos_jet(
-                    model,
-                    beta,
-                    Jet::var(vgs, 0, ty),
-                    Jet::var(vds, 1, ty),
-                    Jet::var(vbs, 2, ty),
-                );
+                let (jg, jd, jb) = (Jet::var(vgs, 0, ty), Jet::var(vds, 1, ty), Jet::var(vbs, 2, ty));
+                let f = mos_jet(model, beta, jg, jd, jb).scale(ty);
+                let mut outs = vec![NlOut {
+                    a: ed,
+                    b: es,
+                    label: "",
+                    jet: f,
+                    free: f,
+                }];
+                // Bulk junctions (current bulk → source / drain), unless shorted.
+                let (bs, bd) = if m.reversed {
+                    (jb.sub(&jd), jb)
+                } else {
+                    (jb, jb.sub(&jd))
+                };
+                let mut junctions = Vec::new();
+                for (v, other, label) in [(bs, n[2], "BS"), (bd, n[0], "BD")] {
+                    if other != n[3] {
+                        junctions.push(v.v());
+                        let jet = bulk_jet(model.is * mult, v, net.gmin).scale(ty);
+                        outs.push(NlOut {
+                            a: n[3],
+                            b: other,
+                            label,
+                            jet,
+                            free: Jet::cst(0.0),
+                        });
+                    }
+                }
                 NlDev {
                     element: e.name.clone(),
                     controls: vec![(n[1], es), (ed, es), (n[3], es)],
                     vars: &["g", "d", "b"],
-                    outs: vec![NlOut {
-                        a: ed,
-                        b: es,
-                        label: "",
-                        jet: f.scale(ty),
-                    }],
+                    outs,
+                    boundary: mos_boundary(model, vgs, vds, vbs, n[3] != es, &junctions),
                 }
             }
             (Kind::Q { model, area }, Some(DevOp::Bjt(q))) => {
                 let ty = model.ty;
                 let vbe = Jet::var(ty * q.vbe, 0, ty);
                 let vce = Jet::var(ty * q.vce, 1, ty);
-                let (cc, cb) = bjt_jet(model, *area, vbe, vbe.sub(&vce), net.gmin);
+                let ((cc, cb), (cc_free, cb_free)) = bjt_jet(model, *area, vbe, vbe.sub(&vce), net.gmin);
+                let vbc = ty * (q.vbe - q.vce);
                 NlDev {
                     element: e.name.clone(),
                     controls: vec![(n[1], n[2]), (n[0], n[2])],
@@ -282,14 +340,17 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                             b: n[2],
                             label: "C",
                             jet: cc.scale(ty),
+                            free: cc_free.scale(ty),
                         },
                         NlOut {
                             a: n[1],
                             b: n[2],
                             label: "B",
                             jet: cb.scale(ty),
+                            free: cb_free.scale(ty),
                         },
                     ],
+                    boundary: [ty * q.vbe, vbc].iter().any(|&v| near(v, -3.0 * vt(), v.abs())),
                 }
             }
             (Kind::D { model, area }, Some(DevOp::Diode(d))) => {
@@ -304,7 +365,9 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                         b: n[1],
                         label: "",
                         jet: id,
+                        free: id,
                     }],
+                    boundary: near(d.vd, -3.0 * model.n * vt(), d.vd.abs()),
                 }
             }
             _ => {
@@ -326,6 +389,8 @@ pub struct Coef {
     pub out: usize,
     pub mono: [u8; 3],
     pub value: f64,
+    /// The value without junction leakage (`NlOut::free`).
+    pub free: f64,
 }
 
 impl Coef {
@@ -347,6 +412,7 @@ pub fn coefficients(devs: &[NlDev], order: u8) -> Vec<Coef> {
                         out: oi,
                         mono: *m,
                         value: o.jet.0[k],
+                        free: o.free.0[k],
                     });
                 }
             }
@@ -586,26 +652,33 @@ fn at_dc(a: &[Vec<Poly>], reactive: u128) -> Vec<Vec<Poly>> {
         .collect()
 }
 
-/// Symbols for the kept coefficients; matched devices' equal coefficients
-/// share one. Returns the symbol index of each coefficient.
+/// Symbols for the kept coefficients (their `free` values on the
+/// leakage-free model); matched devices' equal coefficients share one.
+/// Returns the symbol index of each coefficient.
 fn coef_symbols(
     devs: &[NlDev],
     coefs: &[Coef],
     keep: &[bool],
+    free: bool,
     ss: &SsCircuit,
     symbols: &Symbols,
     syms: &mut Vec<Sym>,
 ) -> Vec<Option<usize>> {
-    let gm_class = |el: &str| {
-        ss.params
-            .iter()
-            .position(|p| p.name == format!("gm_{el}") || p.name == format!("rd_{el}"))
-            .map(|p| symbols.class[p])
+    // A device's match class: its gm (diode rd) symbol, else its ro (a MOS
+    // at v_DS = 0 has gm = 0).
+    let class = |el: &str| {
+        ["gm", "rd", "ro"].iter().find_map(|k| {
+            ss.params
+                .iter()
+                .position(|p| p.name == format!("{k}_{el}"))
+                .map(|p| symbols.class[p])
+        })
     };
     let nbase = syms.len();
     let mut idx = Vec::new();
     for (c, &k) in coefs.iter().zip(keep) {
-        if !k {
+        let value = if free { c.free } else { c.value };
+        if !k || value == 0.0 {
             idx.push(None);
             continue;
         }
@@ -616,9 +689,9 @@ fn coef_symbols(
         let twin = (nbase..syms.len()).find(|&t| {
             let s = &syms[t];
             s.name.split('_').next() == name.split('_').next()
-                && gm_class(&s.elements[0]).is_some()
-                && gm_class(&s.elements[0]) == gm_class(&d.element)
-                && (s.value - c.value).abs() <= MATCH_REL * s.value.abs().max(c.value.abs())
+                && class(&s.elements[0]).is_some()
+                && class(&s.elements[0]) == class(&d.element)
+                && (s.value - value).abs() <= MATCH_REL * s.value.abs().max(value.abs())
         });
         let latex_of = |els: &[String]| {
             let head = if o.label.is_empty() {
@@ -640,12 +713,15 @@ fn coef_symbols(
                 idx.push(Some(t));
             }
             None => {
+                // Leakage: the junction-leakage current alone (a bulk
+                // junction, or I_B's v_CE dependence through i_μ).
+                let leakage = c.free == 0.0;
                 // Output-conductance-like: any v_DS / v_CE derivative.
-                let output = c.mono[1] > 0 && d.vars.len() > 1;
+                let output = (c.mono[1] > 0 && d.vars.len() > 1) || leakage;
                 syms.push(Sym {
                     name,
                     latex: latex_of(std::slice::from_ref(&d.element)),
-                    value: c.value,
+                    value,
                     inverted: false,
                     reactive: false,
                     role: Role::Coeff,
@@ -655,7 +731,7 @@ fn coef_symbols(
                     },
                     elements: vec![d.element.clone()],
                     output_r: output,
-                    leakage: output && o.label == "B",
+                    leakage,
                 });
                 idx.push(Some(syms.len() - 1));
             }
@@ -664,8 +740,8 @@ fn coef_symbols(
     idx
 }
 
-/// Builds a1..a_order in closed form. Err(reason) inside Ok when there is no
-/// DC limit.
+/// Builds a1..a_order in closed form (with the leakage-free coefficients
+/// when `free`). Err(reason) inside Ok when there is no DC limit.
 #[allow(clippy::too_many_arguments)]
 pub fn closed(
     ss: &SsCircuit,
@@ -674,6 +750,7 @@ pub fn closed(
     devs: &[NlDev],
     coefs: &[Coef],
     keep: &[bool],
+    free: bool,
     out: usize,
     rf: usize,
     vid: i128,
@@ -689,7 +766,7 @@ pub fn closed(
         ));
     }
     let mut syms = symbols.syms.clone();
-    let cidx = coef_symbols(devs, coefs, keep, ss, symbols, &mut syms);
+    let cidx = coef_symbols(devs, coefs, keep, free, ss, symbols, &mut syms);
     let nsym = syms.len();
     let nbase = symbols.syms.len();
     let x = |p: &Poly| -> Result<XPoly, String> { Ok(XPoly::from_poly(p, &symbols.class, nbase)?.padded(nsym)) };
@@ -821,6 +898,44 @@ pub fn closed(
 }
 
 // --- report -------------------------------------------------------------------
+
+/// g_mb of every forward-body-biased MOSFET as the slope of its DC current,
+/// where that differs from ngspice's (parameter name, value).
+fn body_slopes(net: &Netlist, op: &Op) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    for (ei, e) in net.elements.iter().enumerate() {
+        if let (Kind::M { model, .. }, Some(DevOp::Mos(m))) = (&e.kind, &op.dev[ei]) {
+            let vbs = m.ty * if m.reversed { m.vbs - m.vds } else { m.vbs };
+            match mos_gmbs_dc(model, m.gm, vbs) {
+                Some(g) if g != m.gmb => out.push((format!("gmb_{}", e.name), g)),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// A copy of `m` with these parameter values.
+fn with_values(m: &SsCircuit, values: &[(String, f64)]) -> SsCircuit {
+    let mut m = m.clone();
+    for p in &mut m.params {
+        if let Some((_, v)) = values.iter().find(|(n, _)| *n == p.name) {
+            p.value = *v;
+        }
+    }
+    m
+}
+
+/// `s` (symbols of `m`) with the symbols of these parameters at their values.
+fn sym_values(m: &SsCircuit, s: &Symbols, values: &[(String, f64)]) -> Symbols {
+    let mut s = s.clone();
+    for (i, p) in m.params.iter().enumerate() {
+        if let Some((_, v)) = values.iter().find(|(n, _)| *n == p.name) {
+            s.syms[s.class[i]].value = *v;
+        }
+    }
+    s
+}
 
 pub struct Ctx<'a> {
     pub net: &'a Netlist,
@@ -965,12 +1080,19 @@ fn quantity(
         (None, Some((p, syms))) => Some((p.clone(), syms, false)),
         (None, None) => None,
     };
-    let display = display.filter(|(p, _, _)| p.0.is_zero() || !p.1.is_zero());
+    // Without leakage the denominator can vanish (a node held only by a
+    // junction): there is no leakage-free form then, and leakage matters.
+    let display = display.filter(|(p, _, _)| exact.is_some() || p.0.is_zero() || !p.1.is_zero());
     let mut base: Option<(Expr, &[Sym], (XPoly, XPoly))> = None;
     match display {
         Some((p, syms, same)) => {
-            let e = expr(&p.0, &p.1, syms);
-            let err = rel((shape.map)(value(e.as_ref())));
+            let vanishes = p.1.is_zero() && !p.0.is_zero();
+            let e = if vanishes { None } else { expr(&p.0, &p.1, syms) };
+            let err = if vanishes {
+                f64::INFINITY
+            } else {
+                rel((shape.map)(value(e.as_ref())))
+            };
             if same || err <= crate::analyze::LEAKAGE_REL {
                 let mut d = form(e.as_ref(), syms, shape);
                 d["same"] = json!(same);
@@ -983,8 +1105,10 @@ fn quantity(
                 q["display"] = q.clone();
                 q["display"]["same"] = json!(true);
                 q["display"]["leakageMatters"] = json!(true);
-                if let (Some((p, syms)), Some(e)) = (exact, expr(&p.0, &p.1, exact.unwrap().1)) {
-                    base = Some((e, syms, p.clone()));
+                if let Some((p, syms)) = exact {
+                    if let Some(e) = expr(&p.0, &p.1, syms) {
+                        base = Some((e, syms, p.clone()));
+                    }
                 }
             }
         }
@@ -1038,11 +1162,38 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     if devs.is_empty() {
         return Err("nonlinear: name at least one device".to_string());
     }
+    for d in devs.iter().filter(|d| d.boundary) {
+        warnings.push(format!(
+            "{} sits on a region boundary. Its distortion is not a Taylor series.",
+            d.element
+        ));
+    }
+    // The linear part must be the derivative of the expanded DC currents:
+    // forward-body-biased MOSFETs get their DC-slope g_mb.
+    let slopes = body_slopes(c.net, op);
+    for (p, _) in slopes
+        .iter()
+        .filter(|(p, _)| c.full.params.iter().any(|q| q.name == *p))
+    {
+        let el = p.trim_start_matches("gmb_");
+        warnings.push(format!(
+            "{el} has forward body bias. Distortion uses the DC slope for its gmb, not ngspice's AC value."
+        ));
+    }
+    let (full_owned, ss_owned, symbols_owned);
+    let (full, ss, symbols) = if slopes.is_empty() {
+        (c.full, c.ss, c.symbols)
+    } else {
+        full_owned = with_values(c.full, &slopes);
+        ss_owned = with_values(c.ss, &slopes);
+        symbols_owned = sym_values(&ss_owned, c.symbols, &slopes);
+        (&full_owned, &ss_owned, &symbols_owned)
+    };
     let coefs = coefficients(&devs, c.order);
-    let fsys = crate::ss::system(c.net, c.full, c.excite);
+    let fsys = crate::ss::system(c.net, full, c.excite);
     let probe = Probe {
         sys: &fsys,
-        ss: c.full,
+        ss: full,
         out: c.out,
         rf: c.rf,
         vid: c.vid as f64,
@@ -1068,9 +1219,11 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .collect();
 
     let mt = c.max_terms.min(DIST_TERM_LIMIT);
-    let build = |ss: &SsCircuit, symbols: &Symbols| -> Option<Closed> {
+    let build = |ss: &SsCircuit, symbols: &Symbols, free: bool| -> Option<Closed> {
         let sys = crate::ss::system(c.net, ss, c.excite);
-        match closed(ss, symbols, &sys, &devs, &coefs, &keep, c.out, c.rf, c.vid, c.order, mt) {
+        match closed(
+            ss, symbols, &sys, &devs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,
+        ) {
             Ok(Ok(cl)) => Some(cl),
             _ => None,
         }
@@ -1102,22 +1255,25 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // Exact closed form on the analysis model (redone on the full model if
     // a junction it left out matters here); the leakage-free one when the
     // exact form is too large.
-    let mut exact = build(c.ss, c.symbols);
+    let mut exact = build(ss, symbols, false);
     if let Some(cl) = &exact {
         // Junctions omitted as negligible for the gain (≤ 1e-9) can move
-        // a3 by more (it is cubic in the transfers): use the full model then.
-        if check(cl).is_some_and(|(_, diff)| diff > 1e-11) && c.ss.params.len() != c.full.params.len() {
-            if let Some(f) = build(c.full, &(c.full_symbols)()) {
-                exact = Some(f);
+        // a3 by more (it is cubic in the transfers): use the full model then,
+        // and no exact form if that one is too large.
+        if check(cl).is_some_and(|(_, diff)| diff > 1e-11) && ss.params.len() != full.params.len() {
+            let mut fs = (c.full_symbols)();
+            if !slopes.is_empty() {
+                fs = sym_values(full, &fs, &slopes);
             }
+            exact = build(full, &fs, false);
         }
     }
     let noleak_ss;
     let noleak_syms;
-    let noleak = if exact.is_none() && !c.ss.optional.is_empty() {
-        noleak_ss = c.ss.omit(&c.ss.optional);
+    let noleak = if exact.is_none() && !full.optional.is_empty() {
+        noleak_ss = full.omit(&full.optional);
         noleak_syms = (c.noleak_symbols)(&noleak_ss);
-        build(&noleak_ss, &noleak_syms)
+        build(&noleak_ss, &noleak_syms, true)
     } else {
         None
     };
@@ -1265,7 +1421,7 @@ mod tests {
     /// higher orders match finite differences of `mos_eval`.
     #[test]
     fn mos_jet_matches_mos_eval() {
-        for (vgs, vds, vbs) in [(1.2, 2.0, -0.5), (1.5, 0.3, -1.0), (0.9, 1.0, 0.0)] {
+        for (vgs, vds, vbs) in [(1.2, 2.0, -0.5), (1.5, 0.3, -1.0), (0.9, 1.0, 0.0), (1.0, 1.5, 0.3)] {
             let m = mos(0.4, 0.1, 1.0);
             let ev = mos_eval(&m, 2e-3, vgs, vds, vbs);
             let j = mos_jet(
@@ -1281,6 +1437,13 @@ mod tests {
             assert!(rel(j.0[2], ev.gds) < 1e-13);
             if vbs < 0.0 {
                 assert!(rel(j.0[3], ev.gmbs) < 1e-13);
+            }
+            // v_BS > 0: the DC slope, not ngspice's gmbs.
+            if vbs > 0.0 {
+                let g = mos_gmbs_dc(&m, ev.gm, vbs).unwrap();
+                assert!(rel(j.0[3], g) < 1e-13 && rel(g, ev.gmbs) > 0.1);
+                let f = |db: f64| mos_eval(&m, 2e-3, vgs, vds, vbs + db).cdrain;
+                assert!(rel((f(1e-6) - f(-1e-6)) / 2e-6, g) < 1e-7);
             }
             // ½∂²I/∂vgs² and ⅙∂³I/∂vbs³ by central differences.
             let f = |dg: f64, db: f64| mos_eval(&m, 2e-3, vgs + dg, vds, vbs + db).cdrain;
@@ -1311,7 +1474,7 @@ mod tests {
             let ev = bjt_eval(&m, 1.0, vbe, vbc, 1e-12);
             let be = Jet::var(vbe, 0, 1.0);
             let ce = Jet::var(vbe - vbc, 1, 1.0);
-            let (cc, cb) = bjt_jet(&m, 1.0, be, be.sub(&ce), 1e-12);
+            let ((cc, cb), _) = bjt_jet(&m, 1.0, be, be.sub(&ce), 1e-12);
             let rel = |a: f64, b: f64| (a - b).abs() / a.abs().max(b.abs()).max(1e-300);
             assert!(rel(cc.0[0], ev.cc) < 1e-14 && rel(cb.0[0], ev.cb) < 1e-14);
             // ∂Ic/∂vbe at fixed vce = gm − gμ... in bjt_eval terms

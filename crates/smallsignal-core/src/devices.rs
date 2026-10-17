@@ -146,6 +146,22 @@ pub fn mos_eval(m: &MosModel, beta: f64, vgs: f64, vds: f64, vbs: f64) -> MosEva
     }
 }
 
+/// ∂I_D/∂v_BS of the DC current (effective frame) where it differs from
+/// `gmbs`: for vbs > 0 the threshold is linear in vbs (slope γ/(2√φ), 0
+/// once sarg clamps at 0), but ngspice's gmbs uses γ/(2·sarg). None for
+/// vbs ≤ 0, where gmbs is the derivative.
+pub fn mos_gmbs_dc(m: &MosModel, gm: f64, vbs: f64) -> Option<f64> {
+    if vbs <= 0.0 {
+        return None;
+    }
+    let sqphi = m.phi.sqrt();
+    Some(if sqphi - vbs / (2.0 * sqphi) <= 0.0 {
+        0.0
+    } else {
+        gm * (m.gamma / (2.0 * sqphi))
+    })
+}
+
 /// MOS bulk junction diode (mos1load): current and conductance.
 pub fn bulk_junction(is: f64, v: f64, gmin: f64) -> (f64, f64) {
     let vt = vt();

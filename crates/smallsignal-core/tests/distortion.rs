@@ -302,3 +302,230 @@ M4 out x vdd vdd pm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0
         "4kT\\left(\\frac{4}{3 g_{m1,2}} + \\frac{4 g_{m3,4}}{3 {g_{m1,2}}^{2}}\\right)"
     );
 }
+
+#[test]
+fn forward_body_bias_coefficients_are_the_dc_transfer_curve() {
+    // v_BS > 0: ngspice's AC gmbs uses γ/(2·sarg), but its threshold is
+    // linear in v_BS there (slope γ/(2√φ)). a1..a3 must be the Taylor
+    // series of the DC transfer curve, so the linear part uses the DC slope;
+    // the forward-biased source junction's own curvature is in the series.
+    let models = ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.5 phi=0.7)\n\
+.model pm pmos (level=1 kp=200u vto=-0.5 lambda=0.05 gamma=0.5 phi=0.7)\n";
+    for (pol, body, vin, vb) in [
+        (1.0, "RD vdd out 5k\nM1 out in s b nm W=10u L=1u\nRS s 0 1k\n", 1.2, 0.5),
+        (1.0, "RD vdd out 5k\nM1 out in s b nm W=10u L=1u\nRS s 0 1k\n", 1.2, 0.7),
+        (1.0, "M1 vdd in out b nm W=20u L=1u\nRL out 0 5k\n", 1.8, 1.2),
+        (
+            -1.0,
+            "RD vdd out 5k\nM1 out in s b pm W=10u L=1u\nRS s 0 1k\n",
+            1.2,
+            0.6,
+        ),
+    ] {
+        let vin_line = format!("VIN in 0 DC {:.17e} AC 1", pol * vin);
+        let net = format!(
+            "fbb\n.options gmin=1e-18\nVDD vdd 0 {}\n{vin_line}\nVB b 0 {}\n{body}{models}",
+            pol * 5.0,
+            pol * vb
+        );
+        let r = run(
+            &net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"] })),
+        );
+        let m = &r["op"]["devices"]["M1"];
+        assert!(pol * m["vbs"].as_f64().unwrap() > 0.1, "{net}");
+        assert_eq!(m["region"], "saturation");
+        assert_eq!(r["distortion"]["check"]["ok"], true, "{net}");
+        let fd = dc_taylor(&net, &vin_line, pol * vin, "out", 2e-3);
+        let a = [coef(&r, 0), coef(&r, 1), coef(&r, 2)];
+        for (n, tol) in [(0, 1e-7), (1, 1e-5), (2, 3e-3)] {
+            let scale = a[n].abs().max(1e-6 * a[0].abs());
+            assert!(
+                (a[n] - fd[n]).abs() <= tol * scale,
+                "a{}: {} vs DC {} ({:.1e})\n{net}",
+                n + 1,
+                a[n],
+                fd[n],
+                (a[n] - fd[n]).abs() / scale
+            );
+        }
+        assert!(r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("forward body bias")));
+    }
+}
+
+#[test]
+fn region_boundaries_are_flagged() {
+    let boundary = |net: &str| {
+        let r = run(
+            net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"] })),
+        );
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "M1 sits on a region boundary. Its distortion is not a Taylor series.")
+    };
+    assert!(!boundary(SQUARE));
+    // V_GS = V_TH: I_D ∝ max(V_ov, 0)², no second-order Taylor series.
+    assert!(boundary(
+        &SQUARE
+            .replace("DC 0.9", "DC 0.5")
+            .replace("vdd 0 5", "vdd 0 5\nRB out 0 1meg")
+    ));
+    // V_DS = V_DSAT: I_D = 0.16 mA, so RD = 4.6 V / 0.16 mA puts the drain at 0.4 V.
+    assert!(boundary(&SQUARE.replace("5k", "28750")));
+    assert!(!boundary(&SQUARE.replace("5k", "28000")));
+    // A junction at −3·V_T, where ngspice switches to its cubic reverse tail.
+    let diode = |v: f64| {
+        let net = format!("d\nVIN in 0 DC {v:.17e} AC 1\nD1 in out dm\nR1 out 0 1k\n.model dm d (is=1e-14)\n");
+        let r = run(
+            &net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["D1"] })),
+        );
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "D1 sits on a region boundary. Its distortion is not a Taylor series.")
+    };
+    assert!(diode(-3.0 * 1.38064852e-23 * 300.15 / 1.6021766208e-19));
+    assert!(!diode(-0.1));
+}
+
+#[test]
+fn matched_mosfets_at_zero_vds_share_symbols() {
+    // Two MOS resistors at V_DS = 0 (gm = 0, so no g_m symbol): their
+    // Taylor symbols still merge (through r_o), so a2 cancels exactly.
+    let net = "mosr\nVIP inp 0 DC 1 AC 1\nVINN inn 0 DC 1\nVG g 0 3\nVR vr 0 1\nM1 inp g o1 o1 nm W=10u L=1u\n\
+R1 o1 vr 10k\nM2 inn g o2 o2 nm W=10u L=1u\nR2 o2 vr 10k\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let r = run(
+        net,
+        &req(
+            json!({ "input": "VIP", "inputNeg": "VINN", "output": "o1", "ref": "o2", "nonlinear": ["M1", "M2"],
+                     "match": [["M1", "M2"], ["R1", "R2"]] }),
+        ),
+    );
+    assert_eq!(r["op"]["devices"]["M1"]["gm"], 0.0);
+    let d = &r["distortion"];
+    assert_eq!(d["coefficients"][1]["latex"], "0");
+    assert_eq!(coef(&r, 1), 0.0);
+    assert!(coef(&r, 2) != 0.0);
+    let names: Vec<&str> = d["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["latex"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"K_{2d,M1,2}") && names.contains(&"K_{g\\,d,M1,2}"),
+        "{names:?}"
+    );
+    assert_eq!(d["check"]["ok"], true);
+}
+
+#[test]
+fn a_rejected_reduced_form_is_not_kept() {
+    // RD = 100 Ω: r_bd moves the gain by < 1e-9, so it is omitted, but the
+    // reduced a_n are off by ~1e-10. The full model's forms exceed
+    // maxTerms here, so there is no exact form (not the reduced one).
+    let net = "cs\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD vdd out 100\nM1 out in 0 0 nm W=10u L=1u\n\
+.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+    let rq = |mt: usize| {
+        run(
+            net,
+            &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "maxTerms": mt })),
+        )
+    };
+    let r = rq(2_000_000);
+    assert_eq!(r["omittedJunctions"], json!(["rbd_M1"]));
+    assert!(r["distortion"]["coefficients"][0]["latex"]
+        .as_str()
+        .unwrap()
+        .contains("r_{bd1}"));
+    let r = rq(20);
+    let d = &r["distortion"];
+    assert!(d["check"].is_null());
+    for q in d["coefficients"].as_array().unwrap() {
+        assert!(q["skipped"].is_string(), "{q}");
+        assert!(q["latex"].is_null());
+        assert!(q["display"]["relError"].as_f64().unwrap() <= 1e-3);
+    }
+}
+
+#[test]
+fn indispensable_leakage_keeps_the_exact_display() {
+    // The gate is driven through RG; M2's bulk junctions (bulk at the gate,
+    // drain and source at the output) are the only feedback, so a3 exists
+    // only through leakage and the leakage-free IIP3 has a zero
+    // denominator: the display is the exact form, leakage matters.
+    let net = "leak\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRG in g 1e6\nM1 out g 0 0 nm W=10u L=1u\nRD vdd out 5k\n\
+M2 out 0 out g nm W=1u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"] })),
+    );
+    let d = &r["distortion"];
+    for q in [&d["coefficients"][2], &d["hd3"], &d["iip3"]] {
+        let disp = &q["display"];
+        assert_eq!(disp["leakageMatters"], true, "{q}");
+        assert_eq!(disp["value"], q["value"]);
+        assert!(q["simplified"].is_object());
+    }
+    assert!(d["iip3"]["value"].as_f64().unwrap().is_finite());
+}
+
+#[test]
+fn leakage_free_fallback_drops_the_whole_collector_base_junction() {
+    // Near saturation (v_BC = −0.29 V) the collector-base junction's
+    // curvature is kept. maxTerms forces the leakage-free fallback, whose
+    // linear model has no r_μ: its Taylor coefficients must leave out that
+    // junction's branch i_μ too (no I_B v_CE terms, I_C without i_μ).
+    let net = "ce\nVCC vcc 0 10\nVIN in 0 DC 0.7 AC 1\nRC vcc c 190k\nQ1 c in e qn\nRE e 0 100\n\
+.model qn npn (is=1e-16 bf=80 br=2 vaf=40)\n";
+    let rq = |mt: usize| {
+        run(
+            net,
+            &req(json!({ "input": "VIN", "output": "c", "nonlinear": ["Q1"], "maxTerms": mt })),
+        )
+    };
+    let names = |r: &Value| -> Vec<String> {
+        r["distortion"]["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let full = rq(2_000_000);
+    assert!(full["distortion"]["coefficients"][2]["skipped"].is_null());
+    assert!(names(&full).contains(&"KB3ce_Q1".to_string()));
+    let r = rq(1000);
+    let d = &r["distortion"];
+    assert!(d["coefficients"][2]["skipped"].is_string());
+    let fallback = names(&r);
+    assert!(fallback.contains(&"KC3ce_Q1".to_string()));
+    assert!(
+        !fallback.iter().any(|n| n.starts_with("KB") && n.contains("ce")),
+        "{fallback:?}"
+    );
+    // I_C's v_CE³ coefficient without i_μ differs from the full one.
+    let value = |r: &Value, name: &str| {
+        r["distortion"]["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == name)
+            .unwrap()["value"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(rel(value(&r, "KC3ce_Q1"), value(&full, "KC3ce_Q1")) > 1e-6);
+    for q in d["coefficients"].as_array().unwrap() {
+        assert!(q["display"]["relError"].as_f64().unwrap() <= 1e-3, "{q}");
+    }
+}

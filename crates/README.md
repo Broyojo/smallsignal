@@ -177,17 +177,26 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 Each listed device's DC current is expanded to `order` about the operating
 point in all of its controlling voltages, exactly (truncated Taylor
 arithmetic on the device equations). MOSFET I_D(v_GS, v_DS, v_BS) (in the
-effective frame when v_DS < 0), BJT I_C and I_B in (v_BE, v_CE), diode I_D(v_D):
+effective frame when v_DS < 0) and its bulk junction currents I_BS, I_BD,
+BJT I_C and I_B in (v_BE, v_CE), diode I_D(v_D):
 i = (small-signal model) + Σ K_α·u^α over 2 ≤ |α| ≤ order, where u are the
-small-signal control voltages. Names: `K_{2g,M1}` (plain `K2g_M1`) =
+small-signal control voltages. The linear part is the derivative of the DC
+current, so a₁ is the slope of the DC transfer curve: under forward body bias
+(v_BS > 0) g_mb is γ·g_m/(2√φ), not ngspice's AC γ·g_m/(2·sarg), and a warning
+says so (a₁ can then differ from the gain). A device biased where its
+equations switch branch (v_GS = V_TH, v_DS = V_DSAT, v_DS = 0 with λ or γ,
+v_BS = 0 with γ and the bulk not tied to the source, a junction at −3·V_T,
+each within 1e-9 V) gets a warning: its expansion is one-sided. Names: `K_{2g,M1}` (plain `K2g_M1`) =
 ½∂²I_D/∂v_GS²; `K_{g\,d,M1}` = ∂²I_D/∂v_GS∂v_DS; `K_{2g\,d,M1}` =
 ½∂³I_D/∂v_GS²∂v_DS; variables g, d, b; BJT `K^{C}_{2be,Q1}`,
-`K^{B}_{be\,ce,Q1}` (`KC2be_Q1`, `KBbece_Q1`); diode `K_{2,D1}`. Matched
-devices with equal coefficients share one symbol (`K_{2g,M1,2}`), so a
-matched pair's even orders cancel exactly. Coefficients that are exactly zero,
-or whose omission moves no a_n by more than 1e-9 (proven on the full numeric
-model, smallest first), are left out of the closed form. Bulk junction diodes
-stay linear.
+`K^{B}_{be\,ce,Q1}` (`KC2be_Q1`, `KBbece_Q1`); MOS bulk junction
+`K^{BS}_{2b,M1}` (`KBS2b_M1`); diode `K_{2,D1}`. Matched devices (same g_m
+symbol, or r_o when g_m = 0) with equal coefficients share one symbol
+(`K_{2g,M1,2}`), so a matched pair's even orders cancel exactly. Coefficients
+that are exactly zero, or whose omission moves no a_n by more than 1e-9
+(proven on the full numeric model, smallest first), are left out of the closed
+form. Junction leakage coefficients (bulk junctions, and the collector-base
+branch i_μ = I_BC/BR + gmin·v_BC in I_C and I_B) go with r_bs, r_bd, r_μ.
 
 Method of nonlinear currents: A·x₁ = b, A·x₂ = −i₂(u₁), A·x₃ = −i₃(u₁, u₂)
 with the same MNA matrix, so v_out = a₁v_in + a₂v_in² + a₃v_in³ (memoryless,
@@ -204,8 +213,11 @@ transfer cofactors. Response `distortion`:
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
   `symbols`: the K symbols used; `omissionError`; `check` (closed form vs numeric).
 - When an exact closed form would exceed 100k terms (e.g. a 5T OTA's a₃ with
-  junction leakage kept), `exact` is skipped (`skipped`, value numeric) and
-  `display` comes from the leakage-free model, accepted only within 1e-3.
+  junction leakage kept), or when the analysis model's form misses the full
+  numeric a_n by more than 1e-11 and the full model's would exceed that,
+  `exact` is skipped (`skipped`, value numeric) and `display` comes from the
+  leakage-free model (its Taylor coefficients without leakage), accepted only
+  within 1e-3.
 - `display`/`simplified` work as for the other quantities; simplified is the
   r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
   as output conductances), then magnitude pruning, within `tolerance`.
