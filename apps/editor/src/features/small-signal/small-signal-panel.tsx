@@ -768,8 +768,14 @@ function NoiseDetails({
           ) : null}
           {displayIsExact ? null : exactDisclosure}
         </>
+      ) : low ? (
+        // Every form is over the typesetting limit: say so, not nothing.
+        <>
+          <Formula latex={`${symbol} = \\ldots`} />
+          <small className="small-signal-muted">too large to typeset</small>
+        </>
       ) : null}
-      {(leadSimpler || display) && flicker ? (
+      {low && flicker ? (
         <small className="small-signal-muted">
           Thermal and shot noise. Flicker is in the numbers below.
         </small>
