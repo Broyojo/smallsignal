@@ -11,8 +11,13 @@ evaluated with the circuit's own numbers (noise with ngspice's operating
 point; distortion from the model parameters directly) and must match:
   - ngspice: noise output and input PSD at rtol 1e-9; distortion a1, a2 at
     rtol 1e-7 and a3 at rtol 1e-6 against .disto (exact Volterra
-    coefficients), and against the harmonic-balance fit within its
-    resolution 2^n·1e-9·|Vout|/A^(n+1) (ngspice's solve tolerance);
+    coefficients), against the harmonic-balance fit within its
+    resolution 2^n·1e-9·|Vout|/A^(n+1) (ngspice's solve tolerance), and
+    against the DC-Taylor fit within 3x its uncertainty. Harmonic balance
+    and the Taylor fit use only ngspice's DC solver. Where .disto prints no
+    results (ngspice-47 built on x86-64 Linux), the case reports ".disto
+    unavailable" and skips the .disto checks (and vsFreq) instead of failing;
+    the summary counts those cases;
   - the quoted textbook closed form, where the textbook's assumptions hold
     (λ = 0, γ = 0, ro → ∞), exactly; elsewhere it is reported, not asserted.
 The solver's own results are checked against hand derivations in textbook.py.
@@ -35,6 +40,7 @@ from typing import Callable
 import sympy as sp
 from mpmath import mp, mpf
 
+import distortion
 import run_ngspice
 
 K_B = 1.38064852e-23
@@ -63,6 +69,8 @@ class NDCase:
     """(HD2, HD3) at amplitude A, the textbook form."""
     distortion_textbook_exact: bool = False
     amplitudes: list[float] = field(default_factory=lambda: [1e-3, 2e-3, 5e-3, 1e-2])
+    # Distortion analysis frequency: far below any pole (quasi-static).
+    freq: float = 1000.0
     vs_freq: Callable[[float, float], tuple[float, float]] | None = None
     """(HD2, HD3) at frequency f and amplitude A, exact (hand harmonic perturbation)."""
     vs_freqs: list[float] = field(default_factory=list)
@@ -354,7 +362,7 @@ CASES: list[NDCase] = [
            amplitudes=[2.5e-4, 5e-4, 1e-3, 2e-3]),
     NDCase("dist_cs_cl_tb", "CS, RD with CL (pole 3.4 MHz), lambda = 0.1\nVDD vdd 0 5\nVIN in 0 DC 0.9 AC 1\nRD vdd out 5k\n"
            "CL out 0 10p\nM1 out in 0 0 nch W=10u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n", "VIN", "out",
-           vs_freq=cs_cl_vs_freq, vs_freqs=[1e5, 1e6, 1e7, 1e8]),
+           distortion=lambda: cs_r_dist(0.1), freq=1.0, vs_freq=cs_cl_vs_freq, vs_freqs=[1e5, 1e6, 1e7, 1e8]),
 ]
 
 
@@ -367,10 +375,11 @@ def ngspice_run(case: NDCase) -> dict:
         if case.noise:
             side["noise"] = {"freqs": [1000.0]}
         if case.distortion or case.vs_freq:
-            side["distortion"] = {"amplitudes": case.amplitudes, "freq": 1000.0, "amplitude": case.amplitudes[0],
+            side["distortion"] = {"amplitudes": case.amplitudes, "freq": case.freq, "amplitude": case.amplitudes[0],
                                   "vsFreq": case.vs_freqs}
         c.with_suffix(".json").write_text(json.dumps(side))
-        with run_ngspice.options_override(run_ngspice.OPTIONS.replace("gmin=1e-15", "gmin=1e-18")):
+        with (run_ngspice.options_override(run_ngspice.OPTIONS.replace("gmin=1e-15", "gmin=1e-18")),
+              distortion.disto_optional()):
             return run_ngspice.process(c, Path(tmp) / "e", None)
 
 
@@ -378,9 +387,13 @@ def rel(a, b):
     return abs(a - b) / max(abs(b), 1e-300)
 
 
-def check(case: NDCase, verbose: bool) -> list[str]:
+def check(case: NDCase, verbose: bool) -> tuple[list[str], str | None]:
+    """The failures, and why .disto was unavailable (None when it ran)."""
     fails, notes = [], []
     want = ngspice_run(case)
+    no_disto = None
+    if "distortion" in want and want["distortion"]["disto"].get("unavailable"):
+        no_disto = want["distortion"]["disto"].get("error") or "no output"
     if case.noise:
         s_out, s_in = case.noise(want)
         ng_out, ng_in = want["noise"]["output"][0]["v2"], want["noise"]["input"][0]["v2"]
@@ -397,7 +410,12 @@ def check(case: NDCase, verbose: bool) -> list[str]:
         a = case.distortion()
         d = want["distortion"]
         hb = d["harmonic_balance"]["coefficients"]
-        dis = [d["disto"][k]["re"] for k in ("a1", "a2", "a3")] if "a1" in d.get("disto", {}) else None
+        # .disto's DC limit (the reference when accepted), else its value at f.
+        if d["reference"] == "disto":
+            dis = [c["value"] for c in d["coefficients"]]
+        else:
+            dis = [d["disto"][k]["re"] for k in ("a1", "a2", "a3")] if "a1" in d["disto"] else None
+        tay = d["taylor"]
         # .disto (Volterra, small-signal limit) is the strict reference. The
         # harmonic-balance fit is a consistency check within its resolution:
         # ngspice solves each point to reltol (1e-9) of the output voltage, so
@@ -408,8 +426,14 @@ def check(case: NDCase, verbose: bool) -> list[str]:
         for i, (h, x) in enumerate(zip(a, hb)):
             tol = 1e-7 if i < 2 else 1e-6
             scale = max(abs(h), 1e-12 * abs(a[0]))
-            if dis is None or abs(h - dis[i]) > tol * scale + 1e-12 * abs(a[0]):
-                fails.append(f"a{i+1}: hand {h:.10e} vs ngspice .disto {dis[i] if dis else None}")
+            if dis is None and no_disto is None:
+                fails.append(f"a{i+1}: ngspice .disto printed no a{i+1}")
+            elif dis is not None and abs(h - dis[i]) > tol * scale + 1e-12 * abs(a[0]):
+                fails.append(f"a{i+1}: hand {h:.10e} vs ngspice .disto {dis[i]:.10e}")
+            t = tay[i]
+            if abs(h - t["value"]) > tol * scale + 3 * t["uncertainty"] + 1e-12 * abs(a[0]):
+                fails.append(f"a{i+1}: hand {h:.10e} vs ngspice DC-Taylor {t['value']:.10e} "
+                             f"(uncertainty {t['uncertainty']:.1e})")
             resolution = 2 * 2**i * 1e-9 * vout / amin ** (i + 1)
             if abs(h - x) > max(tol * scale, resolution):
                 fails.append(f"a{i+1}: hand {h:.10e} vs ngspice harmonic {x:.10e} (resolution {resolution:.1e})")
@@ -425,7 +449,7 @@ def check(case: NDCase, verbose: bool) -> list[str]:
                 fails.append(f"textbook HD2/HD3 {tb2:.6e}/{tb3:.6e} != hand {hd2:.6e}/{hd3:.6e}")
             notes.append(f"HD2 {hd2:.6e} HD3 {hd3:.6e} at A={A:g}; textbook {tb2:.6e}/{tb3:.6e} "
                          f"({'exact' if case.distortion_textbook_exact else 'approx'}, rel {r2:.1e}/{r3:.1e})")
-    if case.vs_freq:
+    if case.vs_freq and no_disto is None:
         A = case.amplitudes[0]
         got = {r["f"]: r for r in want["distortion"]["vsFreq"]}
         for f in case.vs_freqs:
@@ -438,7 +462,7 @@ def check(case: NDCase, verbose: bool) -> list[str]:
     if verbose:
         for n in notes:
             print(f"    {n}")
-    return fails
+    return fails, no_disto
 
 
 def main() -> int:
@@ -446,18 +470,22 @@ def main() -> int:
     ap.add_argument("-v", action="store_true")
     ap.add_argument("names", nargs="*")
     args = ap.parse_args()
-    bad = 0
+    bad = without = 0
     cases = [c for c in CASES if not args.names or c.name in args.names]
     for case in cases:
+        no_disto = None
         try:
-            fails = check(case, args.v)
+            fails, no_disto = check(case, args.v)
         except Exception as exc:  # noqa: BLE001 - report every case
             fails = [f"error: {exc!r}"[:300]]
         bad += bool(fails)
-        print(f"{case.name:22s} {'pass' if not fails else 'FAIL'}")
+        without += no_disto is not None
+        print(f"{case.name:22s} {'pass' if not fails else 'FAIL'}"
+              + (f"  .disto unavailable: {no_disto[:120]}" if no_disto is not None else ""))
         for f in fails:
             print(f"    {f}")
-    print(f"\n{len(cases) - bad}/{len(cases)} noise/distortion textbook cases agree with ngspice")
+    print(f"\n{len(cases) - bad}/{len(cases)} noise/distortion textbook cases agree with ngspice"
+          + (f" ({without} without .disto on this platform)" if without else ""))
     return 1 if bad else 0
 
 

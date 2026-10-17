@@ -71,30 +71,44 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   an uncertainty each, HD2/HD3 at A (|a2|A/(2|a1|), |a3|A²/(4|a1|)), and four
   ngspice methods that confirm one another: .disto (Volterra; the reference
   where valid), DC-sweep Taylor fit (the reference otherwise), quasi-static
-  harmonic balance, and transient + DFT. ngspice-47's .disto is wrong by
+  harmonic balance, and transient + DFT. `amplitudes` must be at least three
+  distinct positive numbers. ngspice-47's .disto is wrong by
   several % in a2, a3 for MOSFETs with GAMMA > 0 (shown against an exact
   implicit series), so it is flagged `"valid": false` there. Its
   coefficients are used only at their DC limit (`disto.dc_limit`: real parts
   at freq/10 that move ≤ 1e-9 from freq and agree with the DC-Taylor fit),
   else the fit is the reference. With `inputNeg` every method drives both
-  sources as `mode` does (±v/2, or +v each). A transient that runs must
-  match harmonic balance's HD2, HD3 at every amplitude within
-  `tran_tol_hd2`/`tran_tol_hd3` (`distortion.transient_tolerance`:
-  (n²−1)(2π/ppp)²/4 relative for `linearize`, plus 4×the solve tolerance
-  reltol·Σ|v(node)| + vntol over |c1|), else generation fails ("not
-  quasi-static"); a transient that times out or fails is recorded in
-  `transient_error` and skipped. compare.py checks the solver at
-  rtol 1e-6 + 3×uncertainty, and the expected transient against its
-  tolerance. An optional `"vsFreq": [f...]` adds HD2/HD3 at
-  each f from .disto's complex phasors (valid circuits only), checked at
-  rtol 1e-6 with an absolute floor of 1e-15 (exact zeros). With a capacitor,
-  set `"freq"` far below the poles so the static coefficients stay
-  quasi-static.
+  sources as `mode` does (±v/2, or +v each). Generation fails when:
+  - .disto errors or prints nothing (ngspice-47 built on x86-64 Linux, the
+    CI runner, prints no .disto results; generate on a machine where it
+    works);
+  - a harmonic-balance coefficient misses the reference by more than 3×
+    (`harmonic_balance.uncertainty` + the reference's uncertainty) + 1e-12·|a1|.
+    That uncertainty (`distortion._fit_limit`) carries the samples'
+    measured resolution (mirror-pair spread, floored at the printed step)
+    through the amplitude fit, plus the fit's truncation estimated from its
+    residual;
+  - a transient that runs misses harmonic balance's HD2, HD3 at an amplitude
+    by more than `tran_tol_hd2`/`tran_tol_hd3`
+    (`distortion.transient_tolerance`: (n²−1)(2π/ppp)²/4 relative for
+    `linearize`, plus 4× the solve tolerance reltol·Σ|v(node)| + vntol over
+    |c1|): "not quasi-static". A transient that times out or fails is
+    recorded in `transient_error`; the amplitudes before it are kept.
+
+  compare.py checks the solver at rtol 1e-6 + 3×uncertainty, and repeats
+  the harmonic-balance and transient checks on the expected file. An
+  optional `"vsFreq": [f...]` adds HD2/HD3 at each f from .disto's complex
+  phasors (valid circuits only), checked at rtol 1e-6 with an absolute floor
+  of 1e-15 (exact zeros). With a capacitor, set `"freq"` far below the poles
+  so the static coefficients stay quasi-static.
 - `textbook_nd.py`: textbook noise (CS, degenerated CS, SF, diff pair, 5T
   OTA, BJT CE) and distortion (CS with R / ideal-current-source load, with and
   without λ; degenerated CS; SF; BJT CE; CS with CL above its pole) cases, hand-derived (KCL with noise
   injections; exact implicit Taylor series), checked against ngspice and the
-  quoted closed forms. Note: an ideal current-source load gives HD2 = 3A/(4Vov)
+  quoted closed forms. Every distortion case checks the hand coefficients
+  against harmonic balance and the DC-Taylor fit; against .disto (and its
+  vsFreq) only where .disto prints results, else it reports ".disto
+  unavailable" and counts it in the summary. Note: an ideal current-source load gives HD2 = 3A/(4Vov)
   and HD3 = A²/(2Vov²); A/(4Vov) is the resistor-load (λ = 0) result.
 - `run_ngspice.options_override(...)` changes ngspice options per thread;
   never assign `run_ngspice.OPTIONS` (the evidence tools run threads).
