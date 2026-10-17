@@ -47,14 +47,16 @@ def num(tok: str) -> mp.mpf:
 def model_params(text: str) -> dict[str, dict[str, float]]:
     """{model: {param: value}}, values with SPICE suffixes (KF=1f, TOX=100n).
     Cards are read as the parser's logical lines, so parameters on `+`
-    continuation lines count (and comments do not)."""
+    continuation lines count (and comments do not), and tokenized as the
+    solver does (netlist.rs): parentheses and commas separate, so
+    `(KP=1m,KF=1f)` is two parameters."""
     out = {}
     for line in spice.parse(text).model_lines:
-        m = re.match(r"\.model\s+(\S+)\s+\S+\s*\(?([^)]*)\)?", line, re.I)
+        m = re.match(r"\.model\s+(\S+?)\s+([A-Za-z]+)(.*)$", line, re.I)
         if not m:
             continue
         params = {}
-        for k, v in re.findall(r"(\w+)\s*=\s*([^\s=()]+)", m.group(2)):
+        for k, v in re.findall(r"(\w+)\s*=\s*(\S+)", re.sub(r"[(),]", " ", m.group(3))):
             try:
                 params[k.lower()] = float(num(v))
             except ValueError:

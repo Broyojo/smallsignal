@@ -157,8 +157,9 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   panel with the largest |S₂ − S₁| is split) until those differences sum to
   ≤ 1e-6 of each integral (`converged`) or 200 000 evaluations. `relError` is
   that sum relative to the integral plus κ₁·eps of the band's solves (on the
-  row- and column-equilibrated matrix). A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the band where the
-  output noise does not vanish makes `inputV2`/`inputRms` null, with
+  row- and column-equilibrated matrix). A gain zero on the jω axis (|re| ≤ 1e-9·|im|) in the closed band
+  (within 1e-12 of an endpoint counts as at it) where the output noise does
+  not vanish makes `inputV2`/`inputRms` null, with
   `unavailable`. (ngspice's own `inoise_total` can be off by percent; compare
   with an integral of its spectrum.)
 - `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
@@ -173,7 +174,8 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   `unavailable` says why when there is no DC limit: no gain at DC (also when
   it vanishes at the values or once matched symbols merge), singular at
   s = 0, or too large: any determinant, product, sum or difference in it
-  over `maxTerms` (the spectra are still given).
+  over `maxTerms` (the spectra are still given), including the full model's
+  form, needed when the junctions omitted for the gain matter for the noise.
   Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
   system at s = 0, so the determinant cancels exactly.
 

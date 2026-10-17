@@ -739,3 +739,128 @@ RD2 vdd o2 20k\nM2 o2 in 0 0 nm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=
     assert!(exact["latex"].is_string(), "{exact}");
     assert_eq!(fits["noise"]["inputLowFreq"]["check"]["ok"], true);
 }
+
+/// The reduced model (r_μ omitted, proven negligible for the gain) gives a
+/// closed form that fails its numeric check; the full model's closed form
+/// does not fit 12 terms. The mismatched reduced form must not be published:
+/// inputLowFreq is unavailable with the budget reason. With the default
+/// budget the full model's form is exact and checks.
+#[test]
+fn a_failed_full_model_retry_is_unavailable_not_the_reduced_form() {
+    let net = "q\nVDD vdd 0 5\nVIN in 0 DC 0.665 AC 1\nR3 vdd c 2.249e+05\nQ1 0 c b qn\nD1 b in dd\n\
+.model qn npn (is=1e-16 bf=100 vaf=50)\n.model dd d (is=1e-14)\n";
+    let at = |max_terms: Option<usize>| {
+        let mut q = json!({ "input": "VIN", "output": "b", "noise": true });
+        if let Some(m) = max_terms {
+            q["maxTerms"] = json!(m);
+        }
+        run(net, &req(q))
+    };
+    let full = at(None);
+    assert!(
+        !full["omittedJunctions"].as_array().unwrap().is_empty(),
+        "{}",
+        full["omittedJunctions"]
+    );
+    assert_eq!(full["noise"]["inputLowFreq"]["check"]["ok"], true);
+    let small = at(Some(12));
+    let lf = &small["noise"]["inputLowFreq"];
+    assert!(lf.get("exact").is_none(), "{lf}");
+    assert!(
+        lf["unavailable"]
+            .as_str()
+            .unwrap_or("")
+            .contains("too large (over 12 terms)"),
+        "{lf}"
+    );
+    assert!(!warns(&small, "closed form and numeric"), "{}", small["warnings"]);
+}
+
+/// The trap's gain zero (f0 = 1/(2π√(LC))) 5e-10 above fHigh: outside the
+/// band, so the input-referred integral is finite (if large) and given.
+/// S_in = 4kT(R1 + 2000) + 4kT·2000·R1²/X², X = ωL − 1/(ωC), and
+/// ∫ df/X² = [F(ω)]/(2πL²), F = −ω/(2(ω² − a²)) + ln|(ω − a)/(ω + a)|/(4a),
+/// a = 2πf0. With fHigh at the zero itself the integrand diverges like
+/// 1/(f − f0)² at the endpoint: unbounded.
+#[test]
+fn a_gain_zero_just_outside_the_band_is_not_in_it() {
+    let net = format!("{TRAP}E1 o 0 a 0 1\nR2 o out 1k\nR3 out 0 1k\n");
+    let (r1, l) = (1e3, 1e-3);
+    let a = 1.0 / (l * 1e-9f64).sqrt();
+    let f0 = a / (2.0 * std::f64::consts::PI);
+    let (lo, delta) = (1e3, 5e-10);
+    let hi = f0 * (1.0 - delta);
+    let rq = |hi: f64| req(json!({ "input": "VIN", "output": "out", "noiseBand": [lo, hi] }));
+    let it = &run(&net, &rq(hi))["noise"]["integrated"];
+    // F at ω = a(1 − δ) (ω − a = −aδ, ω + a = a(2 − δ)) and at ω_lo.
+    let f_of = |w: f64, minus: f64, plus: f64| -w / (2.0 * minus * plus) + (minus.abs() / plus).ln() / (4.0 * a);
+    let w_lo = 2.0 * std::f64::consts::PI * lo;
+    let int_x = (f_of(a * (1.0 - delta), -a * delta, a * (2.0 - delta)) - f_of(w_lo, w_lo - a, w_lo + a))
+        / (2.0 * std::f64::consts::PI * l * l);
+    let want = FOUR_KT * (r1 + 2000.0) * (hi - lo) + FOUR_KT * 2000.0 * r1 * r1 * int_x;
+    let got = it["inputV2"].as_f64().unwrap_or_else(|| panic!("{it}"));
+    assert!(rel(got, want) < 1e-5, "{got} vs {want}: {it}");
+    assert!(it.get("unavailable").is_none(), "{it}");
+    let it = &run(&net, &rq(f0))["noise"]["integrated"];
+    assert!(it["inputV2"].is_null(), "{it}");
+    assert!(it["unavailable"].as_str().unwrap().contains("unbounded"), "{it}");
+}
+
+/// AF = 200 (accepted): at 0 Hz a flicker source whose transfer to the
+/// output is identically zero adds nothing, however large AF (a numerator of
+/// degree ≤ the number of capacitors that vanishes through that order is
+/// zero); one that reaches the output through a first-order zero diverges.
+/// (Past a 64-order expansion both used to be reported infinite.)
+#[test]
+fn a_huge_flicker_exponent_at_dc_is_decided_exactly() {
+    // M1 sits in its own subcircuit: no transfer to out at all.
+    let apart = "ap\nVIN in 0 DC 0 AC 1\nR1 in out 1k\nR2 out 0 1k\nC1 out 0 1n\nVDD vdd 0 5\nVG g 0 0.7\n\
+RD vdd d 10k\nM1 d g 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 kf=1e-24 af=200)\n";
+    let r = run(
+        apart,
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [0.0], "noise": true })),
+    );
+    let v0 = r["noise"]["output"][0]["v2"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("{}", r["noise"]["output"]));
+    assert!(rel(v0, FOUR_KT * 500.0) < 1e-12, "{v0}");
+    // M1's flicker AC-coupled to the output: k = 1 < AF/2, unbounded.
+    let coupled = "acc\nVDD vdd 0 5\nVIN in 0 DC 0.7 AC 1\nRD vdd d 10k\nM1 d in 0 0 nm W=10u L=1u\n\
+C1 d out 1u\nRL out 0 10k\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 kf=1e-24 af=200)\n";
+    let r = run(
+        coupled,
+        &req(json!({ "input": "VIN", "output": "out", "freqs": [0.0], "noise": true })),
+    );
+    assert!(r["noise"]["output"][0]["v2"].is_null(), "{}", r["noise"]["output"]);
+}
+
+/// M1 and M2 differ only in bulk-junction IS. The gain's model omits those
+/// junctions (proven negligible) and accepts the match; the noise closed form
+/// needs the full model, which rejects it. That warning belongs in the
+/// response, once (it was built into a throwaway list and dropped).
+#[test]
+fn full_model_symbol_warnings_reach_the_response() {
+    // Both off (gm = 0): their junction leakage is all M1 contributes.
+    let net = "w\nVIN in 0 DC 1 AC 1\nR1 in out 63k\nR0 b out 9.2Meg\nM1 out in in b nm1 W=10u L=1u\n\
+M2 vdd 0 vdd 0 nm2 W=10u L=1u\nR2 in vdd 1099\n\
+.model nm1 nmos (level=1 kp=200u vto=0.5 lambda=0.2 is=1e-14)\n\
+.model nm2 nmos (level=1 kp=200u vto=0.5 lambda=0.2 is=2e-14)\n";
+    let at = |noise: bool| {
+        run(
+            net,
+            &req(json!({ "input": "VIN", "output": "out", "noise": noise, "match": [["M1", "M2"]] })),
+        )
+    };
+    let count = |r: &Value| {
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| *w == "M1 and M2 differ, not matched")
+            .count()
+    };
+    let gain_only = at(false);
+    assert_eq!(count(&gain_only), 0, "{}", gain_only["warnings"]);
+    let with_noise = at(true);
+    assert_eq!(count(&with_noise), 1, "{}", with_noise["warnings"]);
+}

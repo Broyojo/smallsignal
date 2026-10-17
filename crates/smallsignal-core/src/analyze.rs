@@ -376,7 +376,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new());
+        let full_symbols = || {
+            let mut w = Vec::new();
+            (sym::symbols(&net, &full, &matched, symbolic, &mut w), w)
+        };
         let ctx = crate::noise::Ctx {
             net: &net,
             op: op.as_ref(),
