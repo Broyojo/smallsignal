@@ -256,8 +256,11 @@ pub struct Numeric<'a> {
 pub struct Point {
     /// Gain (output per input unit).
     pub gain: Complex64,
-    /// |transfer|² from each source to the output (V²/A²).
-    pub z2: Vec<f64>,
+    /// |transfer| from each source to the output (V/A). Kept unsquared:
+    /// |Z|² alone can underflow or overflow (1e-200 Ω, 1e200 Ω) where
+    /// |Z|²·PSD is representable, so contributions are formed as
+    /// (|Z|·√PSD)² (`sq_scaled`).
+    pub z: Vec<f64>,
     /// At f = 0 only: lim f→0 of |transfer|²·PSD for each flicker source
     /// (exponent > 0) whose transfer vanishes at DC (see `dc_limits`).
     pub dc_limit: Vec<Option<f64>>,
@@ -302,14 +305,14 @@ impl Numeric<'_> {
             .map(|(&b, &v)| v * b as f64)
             .sum::<Complex64>()
             / self.vid;
-        let z2: Vec<f64> = srcs.iter().map(|s| (col(s.a) - col(s.b)).norm_sqr()).collect();
+        let z: Vec<f64> = srcs.iter().map(|s| (col(s.a) - col(s.b)).norm()).collect();
         let dc_limit = if f == 0.0 {
-            self.dc_limits(&y, &lu, srcs, &z2)
+            self.dc_limits(&y, &lu, srcs, &z)
         } else {
             Vec::new()
         };
         let err = if cond { lu.cond1() * f64::EPSILON } else { 0.0 };
-        Some((Point { gain, z2, dc_limit }, err))
+        Some((Point { gain, z, dc_limit }, err))
     }
 
     /// lim f→0 of |Z(j2πf)|²·c/f^x for each flicker source (x > 0) whose
@@ -320,9 +323,9 @@ impl Numeric<'_> {
     /// A₀ᵀ y_n = −Σ_{d≥1} A_dᵀ y_{n−d}, on the LU of A₀ᵀ already factored. A zero is an exact floating-point zero,
     /// as for z₀ (a transfer that only rounds to zero counts as nonzero, so
     /// an unresolved case is ∞, never a dropped term).
-    fn dc_limits(&self, y0: &[Complex64], lu: &ScaledLu, srcs: &[Source], z2: &[f64]) -> Vec<Option<f64>> {
+    fn dc_limits(&self, y0: &[Complex64], lu: &ScaledLu, srcs: &[Source], z0: &[f64]) -> Vec<Option<f64>> {
         let wanted = |k: usize| match srcs[k].flicker {
-            Some((_, x)) if x > 0.0 && z2[k] == 0.0 => Some(x),
+            Some((_, x)) if x > 0.0 && z0[k] == 0.0 => Some(x),
             _ => None,
         };
         if (0..srcs.len()).all(|k| wanted(k).is_none()) {
@@ -370,10 +373,12 @@ impl Numeric<'_> {
                 let (c, _) = srcs[k].flicker?;
                 let s = &srcs[k];
                 let first = (1..=orders)
-                    .map(|o| (o, (at(&ys[o], s.a) - at(&ys[o], s.b)).norm_sqr()))
+                    .map(|o| (o, (at(&ys[o], s.a) - at(&ys[o], s.b)).norm()))
                     .find(|&(_, z)| z != 0.0);
                 Some(match first {
-                    Some((o, z)) if 2.0 * o as f64 == x => c * z * (2.0 * std::f64::consts::PI).powi(2 * o as i32),
+                    Some((o, z)) if 2.0 * o as f64 == x => {
+                        sq_scaled(z * (2.0 * std::f64::consts::PI).powi(o as i32), c)
+                    }
                     Some((o, _)) if 2.0 * o as f64 > x => 0.0,
                     Some(_) => f64::INFINITY,
                     // Zero through every order with 2n ≤ x (the zero's order
@@ -472,19 +477,49 @@ fn s_coeffs(sys: &System, ss: &SsCircuit) -> Vec<Vec<f64>> {
     out
 }
 
+/// (a·√b)² = a²·b without forming a² (which can leave the range where
+/// a²·b does not); 0 when a is 0, whatever b.
+fn sq_scaled(a: f64, b: f64) -> f64 {
+    if a == 0.0 {
+        return 0.0;
+    }
+    let r = a * b.sqrt();
+    r * r
+}
+
 /// Output PSD and each source's share of it at one frequency.
 pub fn output_psd(p: &Point, srcs: &[Source], f: f64) -> (f64, Vec<f64>) {
     let parts: Vec<f64> = srcs
         .iter()
-        .zip(&p.z2)
+        .zip(&p.z)
         .enumerate()
-        .map(|(k, (s, &z2))| match p.dc_limit.get(k).copied().flatten() {
+        .map(|(k, (s, &z))| match p.dc_limit.get(k).copied().flatten() {
             Some(v) => v,
-            None if z2 == 0.0 => 0.0,
-            None => z2 * s.psd(f),
+            None => sq_scaled(z, s.psd(f)),
         })
         .collect();
     (parts.iter().sum(), parts)
+}
+
+/// Input-referred PSD: Σ (|Z_k|/|gain|)²·S_k, each term scaled as in
+/// `output_psd` (|gain|² alone can underflow too). With no gain it is the
+/// output PSD over 0 (∞, or NaN for none).
+pub fn input_psd(p: &Point, srcs: &[Source], f: f64) -> f64 {
+    let g = p.gain.norm();
+    if g == 0.0 {
+        return output_psd(p, srcs, f).0 / 0.0;
+    }
+    srcs.iter()
+        .zip(&p.z)
+        .enumerate()
+        .map(|(k, (s, &z))| match p.dc_limit.get(k).copied().flatten() {
+            Some(v) => {
+                let r = v.sqrt() / g;
+                r * r
+            }
+            None => sq_scaled(z / g, s.psd(f)),
+        })
+        .sum()
 }
 
 pub struct Integral {
@@ -1173,9 +1208,8 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             Some((p, err)) => {
                 lu_worst = lu_worst.max(err);
                 let (total, parts) = output_psd(&p, &srcs, f);
-                let g2 = p.gain.norm_sqr();
                 output.push((f, Some(total)));
-                input.push((f, Some(total / g2)));
+                input.push((f, Some(input_psd(&p, &srcs, f))));
                 let mut items: Vec<(usize, f64)> = parts.iter().copied().enumerate().collect();
                 items.sort_by(|a, b| b.1.total_cmp(&a.1));
                 // The largest sources; the rest as one count and share, so the
@@ -1221,12 +1255,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             // integrable across it unless every noise transfer vanishes there
             // too (then S_in stays level). Without that, S_in at the zero
             // stands far above its neighbours (|H|² falls by (1e-4/root error)²).
-            let s_in = |f: f64| {
-                num.at(f, &srcs).map(|p| {
-                    let (total, _) = output_psd(&p, &srcs, f);
-                    total / p.gain.norm_sqr()
-                })
-            };
+            let s_in = |f: f64| num.at(f, &srcs).map(|p| input_psd(&p, &srcs, f));
             let singular = c
                 .zeros_hz
                 .iter()
@@ -1250,7 +1279,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             let zero_gain = singular.is_none()
                 && [lo, (lo * hi).sqrt(), hi]
                     .iter()
-                    .all(|&f| matches!(num.at_with_cond(f, &srcs, false), Some((p, _)) if p.gain.norm_sqr() == 0.0));
+                    .all(|&f| matches!(num.at_with_cond(f, &srcs, false), Some((p, _)) if p.gain.norm() == 0.0));
             let mut breaks = c.poles_hz.clone();
             breaks.extend(c.zeros_hz.iter().map(|&(re, im)| re.hypot(im)));
             // LU accuracy of the solves the quadrature actually makes.
@@ -1262,7 +1291,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 let input = if singular.is_some() || zero_gain {
                     0.0
                 } else {
-                    total / p.gain.norm_sqr()
+                    input_psd(&p, &srcs, f)
                 };
                 Some([total, input])
             };
@@ -1332,10 +1361,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 
     // Numeric white input-referred PSD at DC on the full model: the check.
     let white: Vec<Source> = srcs.iter().filter(|s| s.flicker.is_none()).cloned().collect();
-    let dc_ref = num.at_with_cond(0.0, &white, true).map(|(p, err)| {
-        let (t, _) = output_psd(&p, &white, 0.0);
-        (t / p.gain.norm_sqr(), err)
-    });
+    let dc_ref = num
+        .at_with_cond(0.0, &white, true)
+        .map(|(p, err)| (input_psd(&p, &white, 0.0), err));
     let input_low = match lf {
         Err(why) => json!({ "unavailable": why }),
         Ok(lf) => {

@@ -645,7 +645,8 @@ function sentence(text: string): string {
  */
 export function topContributions(
   sources: readonly NoiseContribution[],
-  omittedFraction = 0,
+  /** The solver's omitted bucket: null when it is unbounded. */
+  omittedFraction: number | null = 0,
   limit = 4,
 ): { label: string; fraction: number | null }[] {
   const label = (source: NoiseContribution) =>
@@ -665,6 +666,9 @@ export function topContributions(
       .slice(0, room)
       .map((source) => ({ label: label(source), fraction: source.fraction })),
   ];
+  // An unbounded omitted bucket is shown like an unbounded source.
+  if (omittedFraction === null)
+    return [...rows, { label: "others", fraction: null }];
   const rest =
     sorted.slice(room).reduce((sum, s) => sum + s.fraction, 0) +
     omittedFraction;
@@ -826,7 +830,7 @@ function NoiseDetails({
           <tbody>
             {topContributions(
               sources.sources,
-              sources.omitted?.fraction ?? 0,
+              sources.omitted ? sources.omitted.fraction : 0,
             ).map((row) => (
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>

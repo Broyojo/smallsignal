@@ -237,7 +237,11 @@ def compare_noise(got: dict, want: dict, rep: Report):
         expect = {}
     used_rows: set[int] = set()
     for f, ng in expect.items():
-        row = by_freq(gn.get("contributors"), f, used_rows) or {}
+        row = by_freq(gn.get("contributors"), f, used_rows)
+        if row is None:
+            # Even a reference of all-zero shares needs the solver's row.
+            rep.failures.append(f"noise.contributors@{f:g}: no solver row")
+            continue
         listed = {k: s_.get("v2") for s_ in row.get("sources", []) if (k := ng_key(s_))[1]}
         smallest = min((v for v in listed.values() if v is not None), default=0.0)
         omitted = row.get("omitted")
