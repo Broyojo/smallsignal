@@ -823,7 +823,23 @@ export function taylorLatex(term: {
     term.monomial.match(/\d?(?:be|ce|bc|bs|bd|g|d|b)/gu)?.join("\\,") ??
     term.monomial;
   const current = term.current === "D" ? "" : `^{${term.current}}`;
-  return `K${current}_{${factors},${term.element}}`;
+  return `K${current}_{${factors},${texEscape(term.element)}}`;
+}
+
+/**
+ * TeX specials in a name, escaped as the solver's `ss::esc` does, so a name
+ * like `M_load` renders as text and can never inject a macro.
+ */
+export function texEscape(text: string): string {
+  return text.replace(/[_{}$&#%\\^~]/gu, (c) =>
+    c === "\\"
+      ? "\\backslash "
+      : c === "^"
+        ? "\\hat{}"
+        : c === "~"
+          ? "\\sim "
+          : `\\${c}`,
+  );
 }
 
 /** A distortion ratio as a percentage and in dBc. */
@@ -862,8 +878,8 @@ function DistortionDetails({
   // (near a pole): never let the low-frequency value pass for it.
   const differs = (at: number | null, low: number | null | undefined) =>
     at !== null &&
-    low != null &&
-    Math.abs(at - low) > 1e-6 * Math.max(Math.abs(low), Math.abs(at));
+    (low == null ||
+      Math.abs(at - low) > 1e-6 * Math.max(Math.abs(low), Math.abs(at)));
   const varies = distortion.vsFreq.some(
     (point) =>
       differs(point.hd2, distortion.hd2?.value) ||
@@ -872,9 +888,11 @@ function DistortionDetails({
   const a1 = distortion.coefficients.find(
     (coefficient) => coefficient.order === 1,
   )?.value;
-  const large = [distortion.hd2?.value, distortion.hd3?.value].some(
-    (value) => (value ?? 0) > LARGE_DISTORTION,
-  );
+  const large = [
+    distortion.hd2?.value,
+    distortion.hd3?.value,
+    ...distortion.vsFreq.flatMap((point) => [point.hd2, point.hd3]),
+  ].some((value) => (value ?? 0) > LARGE_DISTORTION);
   return (
     <>
       <table className="small-signal-values" aria-label="Distortion">
@@ -1441,9 +1459,20 @@ export function SmallSignalPanel({
   // Distortion likewise: devices left linear (all expand by default) and
   // the input amplitude for HD2, HD3.
   const [distortionOpen, setDistortionOpen] = useState(false);
-  const [linearDevices, setLinearDevices] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
+  // Devices left linear, per circuit (cell): another cell's M1 is another
+  // device, expanded by default.
+  const [linearByCircuit, setLinearByCircuit] = useState<
+    Readonly<Record<string, readonly string[]>>
+  >({});
+  const circuitKey = rootDocumentId ?? "";
+  const linearDevices = new Set(linearByCircuit[circuitKey] ?? []);
+  const setLinearDevices = (
+    update: (previous: ReadonlySet<string>) => ReadonlySet<string>,
+  ) =>
+    setLinearByCircuit((all) => ({
+      ...all,
+      [circuitKey]: [...update(new Set(all[circuitKey] ?? []))],
+    }));
   const [amplitudeText, setAmplitudeText] = useState("");
   const [distortionResponse, setDistortionResponse] =
     useState<SmallSignalResponse | null>(null);

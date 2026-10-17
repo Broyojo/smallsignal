@@ -5,6 +5,7 @@ import {
   formatDensity,
   formatDistortion,
   taylorLatex,
+  texEscape,
   formatPlain,
   formatSpiceNumber,
   modelOverrides,
@@ -273,5 +274,12 @@ describe("Taylor coefficient names", () => {
     expect(t("Q1", "C", "2be")).toBe("K^{C}_{2be,Q1}");
     expect(t("Q1", "C", "bece")).toBe("K^{C}_{be\\,ce,Q1}");
     expect(t("Q1", "B", "2bece")).toBe("K^{B}_{2be\\,ce,Q1}");
+    // As the solver's symbols: K_{2g,M\_load}.
+    expect(t("M_load", "D", "2g")).toBe("K_{2g,M\\_load}");
+  });
+
+  it("escapes TeX specials as the solver does", () => {
+    expect(texEscape("a_b{c}$&#%")).toBe("a\\_b\\{c\\}\\$\\&\\#\\%");
+    expect(texEscape("a\\b^c~d")).toBe("a\\backslash b\\hat{}c\\sim d");
   });
 });

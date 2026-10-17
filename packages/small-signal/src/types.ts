@@ -292,7 +292,13 @@ export interface SmallSignalDistortion {
     kept: boolean;
   }[];
   /** The exact aₙ that materialized, against the numeric expansion. */
-  check: { ok: boolean; maxRelDiff: number; orders: number[] } | null;
+  check: {
+    ok: boolean;
+    maxRelDiff: number;
+    orders: number[];
+    /** The accepted matching mismatch's largest relative effect on aₙ. */
+    matchBound: number;
+  } | null;
   /** Largest relative change from junctions left out of the model. */
   omissionError: number | null;
 }
