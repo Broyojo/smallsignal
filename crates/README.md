@@ -194,8 +194,9 @@ each within 1e-9 V) gets a warning: its expansion is one-sided. Names: `K_{2g,M1
 ½∂²I_D/∂v_GS²; `K_{g\,d,M1}` = ∂²I_D/∂v_GS∂v_DS; `K_{2g\,d,M1}` =
 ½∂³I_D/∂v_GS²∂v_DS; variables g, d, b; BJT `K^{C}_{2be,Q1}`,
 `K^{B}_{be\,ce,Q1}` (`KC2be_Q1`, `KBbece_Q1`); MOS bulk junction
-`K^{BS}_{2b,M1}` (`KBS2b_M1`); diode `K_{2,D1}`. Matched devices (same g_m
-symbol, or r_o when g_m = 0) with equal coefficients share one symbol
+`K^{BS}_{2b,M1}` (`KBS2b_M1`); diode `K_{2,D1}`. Matched devices (any of their
+parameters merged into one symbol: g_m, or r_bs for a MOSFET in cutoff)
+with equal coefficients share one symbol
 (`K_{2g,M1,2}`), so a matched pair's even orders cancel exactly. Coefficients
 that are exactly zero, or whose omission moves no a_n by more than 1e-9
 (proven on the full numeric model, smallest first), are left out of the closed

@@ -470,6 +470,8 @@ fn bilinear(u1: &[Complex64], u2: &[Complex64], m: &[u8; 3]) -> Complex64 {
 
 impl Probe<'_> {
     fn lu(&self, s: Complex64) -> Option<LuComplex> {
+        #[cfg(test)]
+        tests::FACTORED.with(|v| v.borrow_mut().push(s.im));
         LuComplex::factor(self.sys.dim, matrix_at(self.sys, self.ss, s))
     }
 
@@ -539,6 +541,10 @@ impl Probe<'_> {
         }
         let mut terms = [0.0; 3];
         for n in 0..3 {
+            if x[n].iter().any(|v| v.re.is_nan()) {
+                terms[n] = f64::NAN;
+                continue;
+            }
             let a = matrix_at(self.sys, self.ss, jw(f * (n + 1) as f64));
             let mut memo: Vec<Option<f64>> = vec![None; dim];
             let mut busy = vec![false; dim];
@@ -557,8 +563,9 @@ impl Probe<'_> {
     /// `node_terms`, and each Taylor coefficient's part, Σ|K·∂H_n/∂K| (H_n
     /// is a polynomial of degree ≤ 2 in the K, so a central difference with
     /// any step is exact).
-    fn terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64], f: f64) -> Option<[f64; 3]> {
-        let x = self.kernels(devs, coefs, vals, f, true)?;
+    /// H3's (NaN) only when `third`: an order-2 request solves at f, 2f.
+    fn terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64], f: f64, third: bool) -> Option<[f64; 3]> {
+        let x = self.kernels(devs, coefs, vals, f, third)?;
         let mut terms = self.node_terms(&x, f);
         let mut parts = [0.0; 3];
         for (i, &v) in vals.iter().enumerate() {
@@ -568,7 +575,7 @@ impl Probe<'_> {
             let at = |scale: f64| {
                 let mut w = vals.to_vec();
                 w[i] = v * scale;
-                self.volterra(devs, coefs, &w, f, true)
+                self.volterra(devs, coefs, &w, f, third)
             };
             let (up, down) = (at(1.5)?, at(0.5)?);
             for n in 0..3 {
@@ -923,19 +930,17 @@ fn coef_symbols(
     coefs: &[Coef],
     keep: &[bool],
     free: bool,
-    ss: &SsCircuit,
     symbols: &Symbols,
     syms: &mut Vec<Sym>,
 ) -> Vec<Option<usize>> {
-    // A device's match class: its gm (diode rd) symbol, else its ro (a MOS
-    // at v_DS = 0 has gm = 0).
-    let class = |el: &str| {
-        ["gm", "rd", "ro"].iter().find_map(|k| {
-            ss.params
-                .iter()
-                .position(|p| p.name == format!("{k}_{el}"))
-                .map(|p| symbols.class[p])
-        })
+    // Two devices are matched when the symbol layer merged any of their
+    // parameters into one symbol (whatever the device kind or region: a
+    // MOSFET in cutoff keeps only its junctions' r_bs, r_bd).
+    let matched = |a: &str, b: &str| {
+        symbols
+            .syms
+            .iter()
+            .any(|s| s.elements.len() > 1 && s.elements.iter().any(|e| e == a) && s.elements.iter().any(|e| e == b))
     };
     let nbase = syms.len();
     let mut idx = Vec::new();
@@ -952,8 +957,7 @@ fn coef_symbols(
         let twin = (nbase..syms.len()).find(|&t| {
             let s = &syms[t];
             s.name.split('_').next() == name.split('_').next()
-                && class(&s.elements[0]).is_some()
-                && class(&s.elements[0]) == class(&d.element)
+                && matched(&s.elements[0], &d.element)
                 && (s.value - value).abs() <= MATCH_REL * s.value.abs().max(value.abs())
         });
         let latex_of = |els: &[String]| {
@@ -1029,7 +1033,7 @@ pub fn closed(
         ));
     }
     let mut syms = symbols.syms.clone();
-    let cidx = coef_symbols(devs, coefs, keep, free, ss, symbols, &mut syms);
+    let cidx = coef_symbols(devs, coefs, keep, free, symbols, &mut syms);
     let nsym = syms.len();
     let nbase = symbols.syms.len();
     let x = |p: &Poly| -> Result<XPoly, String> { Ok(XPoly::from_poly(p, &symbols.class, nbase)?.padded(nsym)) };
@@ -1715,7 +1719,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // compared relative to at least their size: a matched pair's a2 is 0
     // in closed form and roundoff of that size numerically. (κ₁(A)·eps is
     // no floor here: with gmin-sized conductances it reaches 1e-1.)
-    let terms = probe.terms(&devs, &coefs, &all, 0.0).unwrap_or([0.0; 3]);
+    let terms = probe.terms(&devs, &coefs, &all, 0.0, c.order >= 3).unwrap_or([0.0; 3]);
     let check = |cl: &Closed, model: &SsCircuit, msyms: &Symbols| -> Option<Check> {
         let merge = merge_effect(cl, model, msyms);
         let mut ck = Check {
@@ -1930,7 +1934,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 // H1 = 0: HD_n is infinite unless H_n is 0 too (to roundoff
                 // of its terms), then unavailable.
                 if h1_zero {
-                    let t = probe.terms(&devs, &coefs, &all, f).unwrap_or([0.0; 3]);
+                    let t = probe.terms(&devs, &coefs, &all, f, c.order >= 3).unwrap_or([0.0; 3]);
                     for (n, key) in [(1, "hd2Infinite"), (2, "hd3Infinite")] {
                         if (n == 1 || c.order >= 3) && h[n].norm() > ZERO_REL * t[n] {
                             p[key] = json!(true);
@@ -1949,6 +1953,35 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// ω of every factorization `Probe::lu` makes on this thread.
+        pub(super) static FACTORED: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// An order-2 request classifies a notched fundamental (H1 = 0 to
+    /// roundoff) with solves at f and 2f only, never 3f.
+    #[test]
+    fn order_two_notch_needs_no_third_harmonic_system() {
+        let net = "trap\nVDD vdd 0 5\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nM1 o1 inp tail tail nm W=10u L=1u\n\
+M2 o2 inn tail tail nm W=10u L=1u\nRT tail 0 2k\nL1 o1 t1 1\nC1 t1 0 1\nL2 o2 t2 1\nC2 t2 0 1\n\
+VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+        let f = 0.1591549430918953;
+        let rq: crate::Request = serde_json::from_value(json!({
+            "input": "VIP", "inputNeg": "VINN", "mode": "differential", "output": "o1",
+            "nonlinear": ["M1", "M2"], "freqs": [f], "order": 2,
+            "match": [["M1", "M2"], ["RD1", "RD2"], ["L1", "L2"], ["C1", "C2"]] }))
+        .unwrap();
+        FACTORED.with(|v| v.borrow_mut().clear());
+        let r = crate::analyze(net, &rq).unwrap();
+        let p = &r["distortion"]["vsFreq"][0];
+        assert_eq!(p["hd2Infinite"], true, "{p}");
+        let w3 = jw(3.0 * f).im;
+        FACTORED.with(|v| {
+            let v = v.borrow();
+            assert!(v.contains(&jw(2.0 * f).im) && !v.contains(&w3), "{v:?}");
+        });
+    }
     use crate::devices::{bjt_eval, mos_eval};
 
     fn mos(gamma: f64, lambda: f64, ty: f64) -> MosModel {

@@ -953,3 +953,34 @@ M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 o1 0 0 nm W=10u L=1u\n.model nm nmos (level=1 
     assert!(rel(coef(&r, 1), d["coefficients"][1]["numeric"].as_f64().unwrap()) < 1e-12);
     assert_eq!(d["check"]["ok"], true);
 }
+
+#[test]
+fn matched_cutoff_mosfets_share_their_junction_symbols() {
+    // A matched pair in cutoff (no g_m, no r_o) driven at the bulks: only
+    // the forward-biased bulk-source junctions are nonlinear (the
+    // bulk-drain ones are reverse biased). The pair is matched through its
+    // r_bs, so the junctions' equal coefficients share one symbol and the
+    // differential a2 cancels exactly.
+    let net =
+        "cut\nVDD vdd 0 5\nRS1 s1 0 5k\nRS2 s2 0 5k\nM1 vdd 0 s1 bp nm W=10u L=1u\nM2 vdd 0 s2 bn nm W=10u L=1u\n\
+VIP bp 0 DC 0.3 AC 1\nVINN bn 0 0.3\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+    let r = run(
+        net,
+        &req(
+            json!({ "input": "VIP", "inputNeg": "VINN", "mode": "differential", "output": "s1", "ref": "s2",
+                     "nonlinear": ["M1", "M2"], "match": [["M1", "M2"], ["RS1", "RS2"]] }),
+        ),
+    );
+    let d = &r["distortion"];
+    let latex: Vec<&str> = d["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["latex"].as_str().unwrap())
+        .collect();
+    assert_eq!(latex, ["K^{BS}_{2b,M1,2}", "K^{BS}_{3b,M1,2}"], "{latex:?}");
+    assert_eq!(d["coefficients"][1]["latex"], "0");
+    assert_eq!(d["coefficients"][1]["numeric"], 0.0);
+    assert!(coef(&r, 2) != 0.0);
+    assert_eq!(d["check"]["ok"], true);
+}
