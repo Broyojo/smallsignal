@@ -214,6 +214,7 @@ function saveModelText(text: ModelText) {
 }
 
 export function modelOverrides(text: ModelText): ModelOverrides {
+  // Keys are checked against DEFAULT_MODEL_PARAMETERS below.
   const overrides: Partial<Record<ModelKind, Record<string, number>>> = {};
   for (const kind of Object.keys(DEFAULT_MODEL_PARAMETERS) as ModelKind[]) {
     for (const [name, typed] of Object.entries(text[kind] ?? {})) {
@@ -222,7 +223,7 @@ export function modelOverrides(text: ModelText): ModelOverrides {
       if (value !== null) (overrides[kind] ??= {})[name] = value;
     }
   }
-  return overrides;
+  return overrides as ModelOverrides;
 }
 
 function ModelFields({

@@ -19,9 +19,14 @@ export const DEFAULT_MODEL_PARAMETERS = {
   diode: { IS: 1e-14, N: 1 },
 } as const;
 export type ModelKind = keyof typeof DEFAULT_MODEL_PARAMETERS;
+/** The parameters a device kind's card lets a caller set. */
+export type ModelParameter<K extends ModelKind> =
+  keyof (typeof DEFAULT_MODEL_PARAMETERS)[K];
 /** Overrides of the default parameters, per device kind. */
 export type ModelOverrides = {
-  readonly [K in ModelKind]?: Readonly<Record<string, number>>;
+  readonly [K in ModelKind]?: Readonly<
+    Partial<Record<ModelParameter<K>, number>>
+  >;
 };
 
 const MODEL_CARD_HEAD: Record<ModelKind, string> = {
@@ -34,7 +39,13 @@ const MODEL_CARD_HEAD: Record<ModelKind, string> = {
 
 /** The model card a device kind gets, defaults overridden by `overrides`. */
 export function modelCard(kind: ModelKind, overrides: ModelOverrides = {}) {
-  const params = { ...DEFAULT_MODEL_PARAMETERS[kind], ...overrides[kind] };
+  // Only the editable parameters, and only finite values: anything else
+  // (LEVEL, a typo) never reaches the card.
+  const params: Record<string, number> = { ...DEFAULT_MODEL_PARAMETERS[kind] };
+  for (const [name, value] of Object.entries(overrides[kind] ?? {})) {
+    if (name in params && typeof value === "number" && Number.isFinite(value))
+      params[name] = value;
+  }
   const body = Object.entries(params)
     .map(([name, value]) => `${name}=${value}`)
     .join(" ");

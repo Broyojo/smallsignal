@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
-import { createIdentifier, modelCard, smallSignalNetlist } from "./netlist.js";
+import {
+  createIdentifier,
+  modelCard,
+  smallSignalNetlist,
+  type ModelOverrides,
+} from "./netlist.js";
 
 const example = (name: string) =>
   parseProject(
@@ -82,6 +87,15 @@ describe("model parameters", () => {
     })!;
     expect(custom.text.split("\n")).toContain(
       ".model nmos_l1 NMOS (LEVEL=1 KP=0.0003 VTO=0.5 LAMBDA=0.1 GAMMA=0 PHI=0.6)",
+    );
+  });
+
+  it("writes only the editable parameters, with finite values", () => {
+    const overrides = {
+      nmos: { LEVEL: 2, KPP: 1, KP: Number.NaN, VTO: 0.4 },
+    } as unknown as ModelOverrides;
+    expect(modelCard("nmos", overrides)).toBe(
+      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.4 LAMBDA=0.05 GAMMA=0 PHI=0.6)",
     );
   });
 
