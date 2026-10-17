@@ -171,12 +171,6 @@
   font-size: 15px;
 }
 
-.small-signal-latex-source {
-  overflow-wrap: anywhere;
-  color: var(--icm-text-muted);
-  font-size: var(--icm-font-xs);
-}
-
 .small-signal-simpler {
   display: grid;
   gap: 2px;
@@ -331,6 +325,15 @@
 
 .small-signal-exact > summary {
   cursor: pointer;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-untypeset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
 }

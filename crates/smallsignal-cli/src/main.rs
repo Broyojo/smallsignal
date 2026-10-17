@@ -5,7 +5,7 @@ use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
-[--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] \
+[--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
 [--freq f1,f2,...] [--rin] [--rout] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
@@ -39,6 +39,8 @@ fn run() -> Result<(), String> {
         input_neg: None,
         mode: None,
         matched: Vec::new(),
+        match_auto: false,
+        unmatch: Vec::new(),
     };
     let mut pretty = false;
     let mut certificate = false;
@@ -72,6 +74,7 @@ fn run() -> Result<(), String> {
             "--symbolic" => req.symbolic = true,
             "--input-neg" => req.input_neg = Some(value(&mut it, a)?),
             "--mode" => req.mode = Some(value(&mut it, a)?),
+            "--match-auto" => req.match_auto = true,
             "--match" => {
                 for group in value(&mut it, a)?.split(';') {
                     let names: Vec<String> = group

@@ -85,6 +85,40 @@ export function formatEngineering(value: number, unit = ""): string {
  */
 const StaleBuildContext = createContext<() => void>(() => {});
 
+/**
+ * An expression too long (or impossible) to typeset: said plainly, with its
+ * TeX one click from the clipboard, never shown as raw source.
+ */
+function UntypesetFormula({
+  latex,
+  reason,
+}: {
+  latex: string;
+  reason: "too-long" | "unavailable";
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <p className="small-signal-untypeset">
+      <span>
+        {reason === "too-long"
+          ? "Too long to display as an equation."
+          : "The equation could not be displayed."}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard?.writeText(latex).then(
+            () => setCopied(true),
+            () => setCopied(false),
+          );
+        }}
+      >
+        {copied ? "Copied" : "Copy TeX"}
+      </button>
+    </p>
+  );
+}
+
 function Formula({ latex }: { latex: string }) {
   const onStale = useContext(StaleBuildContext);
   const request: FormulaRequest = {
@@ -133,7 +167,12 @@ function Formula({ latex }: { latex: string }) {
   if (!tooLong && !result && failed !== latex)
     return <span className="small-signal-formula-pending" aria-busy="true" />;
   if (tooLong || !result?.ok)
-    return <code className="small-signal-latex-source">{latex}</code>;
+    return (
+      <UntypesetFormula
+        latex={latex}
+        reason={tooLong ? "too-long" : "unavailable"}
+      />
+    );
   const artifact = result.artifact;
   // Long expressions keep their size and scroll sideways rather than
   // shrinking past legibility.
@@ -477,9 +516,9 @@ export function SmallSignalPanel({
   const [frequencies, setFrequencies] = useState("1k");
   // Hand-analysis mode: no bias, every transistor taken as saturated.
   const [assumeSaturation, setAssumeSaturation] = useState(false);
-  // Matched pairs the user turned off (keys like "M1=M2").
+  // Matched pairs the user turned off (keys like "M1=M2"); the solver
+  // matches every other candidate pair in the same solve.
   const [unmatched, setUnmatched] = useState<ReadonlySet<string>>(new Set());
-  const [candidates, setCandidates] = useState<string[][]>([]);
   const [response, setResponse] = useState<SmallSignalResponse | null>(null);
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
@@ -525,16 +564,7 @@ export function SmallSignalPanel({
   const differential = chosenInput?.startsWith(DIFF_PREFIX)
     ? (chosenInput.slice(DIFF_PREFIX.length).split("|") as [string, string])
     : null;
-  // Pairs from an earlier solve, kept only while all their elements exist.
-  const elementNames = new Set(
-    (netlist?.text ?? "")
-      .split("\n")
-      .map((line) => line.split(" ")[0]?.toLowerCase() ?? ""),
-  );
-  const liveCandidates = candidates.filter((pair) =>
-    pair.every((name) => elementNames.has(name.toLowerCase())),
-  );
-  const match = liveCandidates.filter((pair) => !unmatched.has(pair.join("=")));
+  const unmatch = [...unmatched].map((key) => key.split("="));
   const chosenOutput =
     output && nets.includes(output)
       ? output
@@ -561,7 +591,8 @@ export function SmallSignalPanel({
           ...(differential
             ? { inputNeg: differential[1], mode: "differential" as const }
             : {}),
-          ...(match.length ? { match } : {}),
+          matchAuto: true,
+          ...(unmatch.length ? { unmatch } : {}),
           output: chosenOutput,
           ref: chosenReference === "0" ? null : chosenReference,
           freqs: parseFrequencies(frequencies),
@@ -588,14 +619,6 @@ export function SmallSignalPanel({
       void client.analyze(text, job).then((next) => {
         if (current !== generation.current) return;
         setResponse(next);
-        if (!isSmallSignalError(next) && next.matchCandidates) {
-          const found = next.matchCandidates.map(
-            (candidate) => candidate.elements,
-          );
-          setCandidates((prev) =>
-            JSON.stringify(prev) === JSON.stringify(found) ? prev : found,
-          );
-        }
         setSolving(false);
       });
     }, SOLVE_DEBOUNCE_MS);
@@ -774,12 +797,13 @@ export function SmallSignalPanel({
               </div>
             ) : null}
 
-            {liveCandidates.length && result ? (
+            {result?.matchCandidates?.length ? (
               <div className="small-signal-match" aria-label="Matched pairs">
                 <span>Matched</span>
-                {liveCandidates.map((pair) => {
+                {result.matchCandidates.map((candidate) => {
+                  const pair = candidate.elements;
                   const key = pair.join("=");
-                  const on = !unmatched.has(key);
+                  const on = candidate.applied ?? !unmatched.has(key);
                   return (
                     <button
                       key={key}

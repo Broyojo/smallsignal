@@ -675,3 +675,52 @@ fn leakage_that_matters_stays_in_the_display_form() {
     assert!(d["latex"].as_str().unwrap().contains("r_{bd5}"), "{d}");
     assert!(close(value(&r, "rout", 0), (33.58529565534185, 0.0), 1e-9));
 }
+
+/// The panel matches in one solve (matchAuto): a two-step solve showed the
+/// unmatched expression first and then flipped. `unmatch` opts a pair out.
+#[test]
+fn match_auto_applies_candidates_in_one_solve() {
+    let net = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../oracle/corpus/ota_5t_dm.cir"
+    ))
+    .unwrap();
+    let side: Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../oracle/corpus/ota_5t_dm.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let base = json!({
+        "input": side["input"], "inputNeg": side["inputNeg"], "mode": "differential",
+        "output": side["output"], "matchAuto": true,
+    });
+    let r = analyze(&net, &req(base.clone())).unwrap();
+    let applied: Vec<bool> = r["matchCandidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["applied"].as_bool().unwrap())
+        .collect();
+    assert_eq!(applied, vec![true, true]);
+    let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
+    assert!(
+        simplified.contains("g_{m1,2}") && simplified.contains("r_{o1,2} \\parallel r_{o3,4}"),
+        "{simplified}"
+    );
+
+    let mut opt_out = base;
+    opt_out["unmatch"] = json!([["M1", "M2"]]);
+    let r = analyze(&net, &req(opt_out)).unwrap();
+    let m12 = r["matchCandidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["elements"] == json!(["M1", "M2"]))
+        .unwrap();
+    assert_eq!(m12["applied"], json!(false));
+    let display = r["gain"]["display"]["latex"].as_str().unwrap();
+    assert!(!display.contains("g_{m1,2}") && display.contains("g_{m1}"), "{display}");
+}

@@ -49,6 +49,12 @@ pub struct Request {
     /// Groups of matched elements that share one set of symbols.
     #[serde(default, rename = "match")]
     pub matched: Vec<Vec<String>>,
+    /// Also match every candidate pair (see `matchCandidates`) in this one
+    /// solve, except the pairs listed in `unmatch`.
+    #[serde(default)]
+    pub match_auto: bool,
+    #[serde(default)]
+    pub unmatch: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -211,7 +217,26 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     // value by more than OMIT_REL; symbolic mode leaves them out, as hand
     // analysis does.
     // Matched elements decide together, so twins keep the same parameters.
-    let group_of = element_groups(&net, &req.matched);
+    // Candidate pairs come from the full model, so the omission proof below
+    // cannot make twins look unlike.
+    let candidate_pairs = sym::match_candidates(&net, &full, op.as_ref());
+    let unmatched = |a: &str, b: &str| {
+        req.unmatch.iter().any(|pair| {
+            pair.iter().any(|x| x.eq_ignore_ascii_case(a)) && pair.iter().any(|x| x.eq_ignore_ascii_case(b))
+        })
+    };
+    let matched: Vec<Vec<String>> = req
+        .matched
+        .iter()
+        .cloned()
+        .chain(
+            candidate_pairs
+                .iter()
+                .filter(|(a, b, _)| req.match_auto && !unmatched(a, b))
+                .map(|(a, b, _)| vec![a.clone(), b.clone()]),
+        )
+        .collect();
+    let group_of = element_groups(&net, &matched);
     let (ss, omitted, omit_err) = if symbolic {
         (full.clone(), Vec::new(), 0.0)
     } else {
@@ -238,7 +263,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 .map(|d| format!("{d}: its current has no physical limit; add series resistance")),
         );
     }
-    let symbols = sym::symbols(&net, &ss, &req.matched, symbolic, &mut warnings);
+    let symbols = sym::symbols(&net, &ss, &matched, symbolic, &mut warnings);
     let x = |p: &Poly| XPoly::from_poly(p, &symbols.class, symbols.syms.len());
     let q = Quantities {
         ss: &ss,
@@ -259,10 +284,14 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     resp.insert("params".into(), params_json(&symbols.syms));
     resp.insert("omittedJunctions".into(), json!(omitted));
     resp.insert("omissionError".into(), json!(omit_err));
-    // On the full model: the omission proof must not make twins look unlike.
-    let candidates: Vec<Value> = sym::match_candidates(&net, &full, op.as_ref())
-        .into_iter()
-        .map(|(a, b, kind)| json!({ "elements": [a, b], "kind": kind }))
+    let candidates: Vec<Value> = candidate_pairs
+        .iter()
+        .map(|(a, b, kind)| {
+            let applied = matched
+                .iter()
+                .any(|g| g.iter().any(|x| x.eq_ignore_ascii_case(a)) && g.iter().any(|x| x.eq_ignore_ascii_case(b)));
+            json!({ "elements": [a, b], "kind": kind, "applied": applied })
+        })
         .collect();
     resp.insert("matchCandidates".into(), json!(candidates));
     resp.insert(

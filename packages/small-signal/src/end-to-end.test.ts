@@ -35,17 +35,21 @@ describe.skipIf(!built)("drawing → netlist → solver", () => {
     expect(result.error).toBeUndefined();
     expect(result.warnings).toEqual([]);
     expect(result.op.devices.M1.region).toBe("saturation");
-    expect(result.gain.exact.latex).toBe(
+    // What the panel shows: the leakage-free form, indistinguishable at the
+    // printed precision; the exact form keeps the drain junction.
+    expect(result.gain.display.latex).toBe(
       "-g_{m1} \\left(r_{o1} \\parallel R_{1}\\right)",
     );
+    expect(result.gain.display.maxRelError).toBeLessThan(1e-6);
+    expect(result.gain.exact.latex).toContain("r_{bd1}");
     // A bare parallel group needs no parentheses.
-    expect(result.rout.exact.latex).toBe("r_{o1} \\parallel R_{1}");
-    // The same number from the operating point the solver reports.
+    expect(result.rout.display.latex).toBe("r_{o1} \\parallel R_{1}");
+    // The same number from the operating point the solver reports. The hand
+    // formula leaves out the drain junction's gmin-level conductance
+    // (1e-12 S), which the solver keeps: about 1e-8 relative.
     const m1 = result.op.devices.M1;
-    expect(result.gain.values[0].re).toBeCloseTo(
-      -m1.gm / (m1.gds + 1 / 10e3),
-      10,
-    );
+    const hand = -m1.gm / (m1.gds + 1 / 10e3);
+    expect(Math.abs(result.gain.values[0].re / hand - 1)).toBeLessThan(1e-6);
   });
 });
 
@@ -105,9 +109,10 @@ describe.skipIf(!built)("every shipped example", () => {
 
   it("simulation-common-source: −gm(ro ∥ RD) with its output pole", async () => {
     const { result } = await run("simulation-common-source");
-    expect(result.gain.exact.latex).toBe(
+    expect(result.gain.display.latex).toBe(
       "-\\frac{g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)}{1 + C_{L} \\left(r_{o1} \\parallel R_{D}\\right) s}",
     );
+    expect(result.gain.display.maxRelError).toBeLessThan(1e-6);
     expect(regions(result)).toEqual(["saturation"]);
     expect(result.warnings).toEqual([]);
   });

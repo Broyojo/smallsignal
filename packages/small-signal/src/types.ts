@@ -19,6 +19,9 @@ export interface SmallSignalRequest {
   mode?: "differential" | "common";
   /** Devices that share one set of symbols, e.g. [["M1", "M2"]]. */
   match?: string[][];
+  /** Also match every candidate pair in this solve, except `unmatch`. */
+  matchAuto?: boolean;
+  unmatch?: string[][];
 }
 
 export interface ComplexPoint {
@@ -106,6 +109,8 @@ export type DeviceOperatingPoint =
 export interface MatchCandidate {
   elements: string[];
   kind: "device" | "passive";
+  /** Whether this solve matched them (matchAuto, minus unmatch). */
+  applied?: boolean;
 }
 
 export interface SmallSignalResult {
