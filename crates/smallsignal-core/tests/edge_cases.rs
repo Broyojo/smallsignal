@@ -628,6 +628,30 @@ fn element_on_one_node_is_named() {
     assert_eq!(r["gain"]["exact"]["latex"], "\\frac{R_{2}}{R_{1} + R_{2}}");
 }
 
+/// Symbolic mode has no root values but counts them: a CS stage with C_GD
+/// and C_L has two poles and one zero (g_m/C_GD), as numeric mode finds.
+#[test]
+fn symbolic_counts_poles_and_zeros() {
+    let r = run(
+        "m\nVIN in 0\nRS in g\nVDD vdd 0\nRD vdd out\nM1 out g 0 0\nCGD g out\nCL out 0\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(r["gain"]["poles"], json!([]));
+    assert_eq!(
+        (r["gain"]["poleCount"].as_u64(), r["gain"]["zeroCount"].as_u64()),
+        (Some(2), Some(1))
+    );
+    let r = run(
+        "m\nVIN in 0 DC 0.7 AC 1\nRS in g 1k\nVDD vdd 0 1.8\nRD vdd out 10k\nM1 out g 0 0 nm W=10u L=1u\nCGD g out 1p\n\
+         CL out 0 1p\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n",
+        &request("VIN", "out"),
+    );
+    assert_eq!(
+        r["gain"]["poleCount"].as_u64(),
+        Some(r["gain"]["poles"].as_array().unwrap().len() as u64)
+    );
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported

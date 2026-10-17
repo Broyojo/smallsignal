@@ -10,6 +10,7 @@ import type {
   NoiseSource,
   SmallSignalDistortion,
   SmallSignalNoise,
+  SmallSignalQuantity,
 } from "./types.js";
 
 // Runs the real solver when the WASM has been built (wasm-pack, see
@@ -291,6 +292,61 @@ describe.skipIf(!built)(
   },
 );
 
+const GAIN_KEYS = allKeys<SmallSignalQuantity>()([
+  "unit",
+  "infinite",
+  "exact",
+  "display",
+  "leakageMatters",
+  "simplified",
+  "values",
+  "poles",
+  "zeros",
+  "poleCount",
+  "zeroCount",
+  "check",
+] as const);
+
+describe.skipIf(!built)("the gain JSON matches the TypeScript contract", () => {
+  it.each([
+    ["symbolic", "", 2, 1],
+    ["numeric", " 1k", 2, 1],
+  ])(
+    "%s: poles and zeros are counted, every field declared",
+    async (_, value, poles, zeros) => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      // RC low-pass into an RC high-pass: two poles, one zero at 0 Hz.
+      const net = [
+        "rc",
+        "VIN in 0 AC 1",
+        `R1 in a${value}`,
+        `C1 a 0${value ? " 1n" : ""}`,
+        `C2 a out${value ? " 1n" : ""}`,
+        `R2 out 0${value}`,
+      ].join("\n");
+      const result = JSON.parse(
+        wasm.analyze(net, JSON.stringify({ input: "VIN", output: "out" })),
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.symbolic).toBe(!value);
+      const gain = result.gain;
+      expect(
+        Object.keys(gain).filter(
+          (key) => !(GAIN_KEYS as readonly string[]).includes(key),
+        ),
+      ).toEqual([]);
+      expect(gain.poleCount).toBe(poles);
+      expect(gain.zeroCount).toBe(zeros);
+      expect(gain.poles).toHaveLength(value ? poles : 0);
+    },
+  );
+});
+
 type Coefficient = SmallSignalDistortion["coefficients"][number];
 const DISTORTION_KEYS = allKeys<SmallSignalDistortion>()([
   "coefficients",
@@ -397,8 +453,7 @@ describe.skipIf(!built)(
         declared(distortion[name]?.display, FORM_KEYS);
         declared(distortion[name]?.simplified, FORM_KEYS);
       }
-      for (const point of distortion.vsFreq)
-        declared(point, VS_FREQ_KEYS);
+      for (const point of distortion.vsFreq) declared(point, VS_FREQ_KEYS);
     });
   },
 );

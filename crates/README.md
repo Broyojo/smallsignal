@@ -111,7 +111,9 @@ exceed `maxTerms` terms (default 2,000,000).
   on a shared gate, one's drain on the other's source; that one is in
   triode. Then `values`
   (`f, re, im, mag, phaseDeg`; `inf: true` with null parts when infinite),
-  `poles` and `zeros` (in Hz), and `check`.
+  `poles` and `zeros` (in Hz; empty in symbolic mode), `poleCount` and
+  `zeroCount` (their number, the degree in s of the denominator and
+  numerator, in symbolic mode too), and `check`.
 - `op` (null in symbolic mode) holds node voltages, source branch currents, and
   per-device region, currents, voltages and small-signal conductances.
 - `params` lists each symbol's name, LaTeX, value and unit; `warnings` collects

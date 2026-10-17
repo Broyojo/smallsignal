@@ -1212,9 +1212,12 @@ impl Quantities<'_> {
             display["same"] = json!(true);
             display["maxRelError"] = Value::Null;
             display["leakageMatters"] = json!(false);
+            // No values, so no roots, but their number: the degree in s.
+            let degree = |ts: &[crate::render::Term]| ts.iter().map(|t| t.spow).max().unwrap_or(0);
             return json!({
                 "unit": unit, "exact": ex, "display": display, "simplified": simp,
                 "values": [], "poles": [], "zeros": [],
+                "poleCount": degree(&exact.den), "zeroCount": degree(&exact.num),
             });
         }
         let values: Vec<Value> = self
@@ -1404,6 +1407,8 @@ impl Quantities<'_> {
                 "terms": { "num": simplified.num.len(), "den": simplified.den.len() },
             })),
             "values": values,
+            "poleCount": poles.len(),
+            "zeroCount": zeros.len(),
             "poles": poles,
             "zeros": zeros,
             "check": { "ok": check_ok, "maxRelDiff": max_diff },
