@@ -503,18 +503,59 @@ impl Probe<'_> {
         Some([out(&x[0]) / k, out(&x[1]) / (k * k), out(&x[2]) / (k * k * k)])
     }
 
-    /// At f, the size of the terms each H_n (a_n at DC) is the sum of: the
-    /// two node responses it is the difference of (|v_out| + |v_ref|, per
-    /// input unit^n) and each Taylor coefficient's part, Σ|K·∂H_n/∂K|
-    /// (H_n is a polynomial of degree ≤ 2 in the K, so a central difference
-    /// with any step is exact).
-    fn terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64], f: f64) -> Option<[f64; 3]> {
-        let x = self.kernels(devs, coefs, vals, f, true)?;
+    /// [H1, H2, H3] at f (as `volterra`) and `node_terms` of each.
+    pub fn volterra_terms(
+        &self,
+        devs: &[NlDev],
+        coefs: &[Coef],
+        vals: &[f64],
+        f: f64,
+        third: bool,
+    ) -> Option<([Complex64; 3], [f64; 3])> {
+        let x = self.kernels(devs, coefs, vals, f, third)?;
+        let k = self.vid;
+        let out = |x: &[Complex64]| self.node(x, self.out) - self.node(x, self.rf);
+        let h = [out(&x[0]) / k, out(&x[1]) / (k * k), out(&x[2]) / (k * k * k)];
+        Some((h, self.node_terms(&x, f)))
+    }
+
+    /// The size of what each H_n's node responses are summed from, per
+    /// input unit^n: for v_out and v_ref, their KCL row solved for the
+    /// node, x_c = (rhs_c − Σ_{k≠c} A_ck·x_k)/A_cc, gives
+    /// (|rhs_c| + Σ_{k≠c} |A_ck·x_k|)/|A_cc| (at least |x_c|). A notch at
+    /// the output (branch currents that cancel) leaves H_n a roundoff
+    /// residual of this size.
+    fn node_terms(&self, x: &[Vec<Complex64>; 3], f: f64) -> [f64; 3] {
+        let dim = self.sys.dim;
         let mut terms = [0.0; 3];
         for n in 0..3 {
-            let k = self.vid.abs().powi(n as i32 + 1);
-            terms[n] = (self.node(&x[n], self.out).norm() + self.node(&x[n], self.rf).norm()) / k;
+            let a = matrix_at(self.sys, self.ss, jw(f * (n + 1) as f64));
+            let mut sum = 0.0;
+            for node in [self.out, self.rf] {
+                let Some(c) = self.sys.node_col[node] else { continue };
+                let row = &a[c * dim..(c + 1) * dim];
+                let xc = x[n][c].norm();
+                let diag = row[c].norm();
+                if diag == 0.0 {
+                    sum += xc;
+                    continue;
+                }
+                let off: f64 = (0..dim).filter(|&k| k != c).map(|k| (row[k] * x[n][k]).norm()).sum();
+                let rhs = (0..dim).map(|k| row[k] * x[n][k]).sum::<Complex64>().norm();
+                sum += ((off + rhs) / diag).max(xc);
+            }
+            terms[n] = sum / self.vid.abs().powi(n as i32 + 1);
         }
+        terms
+    }
+
+    /// At f, the size of the terms each H_n (a_n at DC) is the sum of:
+    /// `node_terms`, and each Taylor coefficient's part, Σ|K·∂H_n/∂K| (H_n
+    /// is a polynomial of degree ≤ 2 in the K, so a central difference with
+    /// any step is exact).
+    fn terms(&self, devs: &[NlDev], coefs: &[Coef], vals: &[f64], f: f64) -> Option<[f64; 3]> {
+        let x = self.kernels(devs, coefs, vals, f, true)?;
+        let mut terms = self.node_terms(&x, f);
         let mut parts = [0.0; 3];
         for (i, &v) in vals.iter().enumerate() {
             if v == 0.0 {
@@ -1723,7 +1764,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // a_n is 0 too, to roundoff of its terms.
     let zero = |n: usize| a(n).abs() <= ZERO_REL * terms[n];
     let over_a1 = |n: usize, v: f64| {
-        if a(0) != 0.0 {
+        if !zero(0) {
             v
         } else if zero(n) {
             f64::NAN
@@ -1758,7 +1799,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 c.tol,
             ),
         );
-        let iip3 = if a(2) == 0.0 && a(0) != 0.0 {
+        let iip3 = if zero(2) && !zero(0) {
             infinite()
         } else {
             let wi = |l: &str| format!("\\sqrt{{\\frac{{4}}{{3}}\\left|{l}\\right|}}");
@@ -1767,10 +1808,10 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             quantity(
                 e,
                 nl,
-                if a(0) == 0.0 && zero(2) {
-                    f64::NAN
-                } else {
-                    (4.0 * a(0).abs() / (3.0 * a(2).abs())).sqrt()
+                match (zero(0), zero(2)) {
+                    (true, true) => f64::NAN,
+                    (true, false) => 0.0,
+                    _ => (4.0 * a(0).abs() / (3.0 * a(2).abs())).sqrt(),
                 },
                 &Shape { wrap: &wi, map: &mi },
                 c.tol,
@@ -1819,9 +1860,12 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let vs: Vec<Value> = c
         .freqs
         .iter()
-        .map(|&f| match probe.volterra(&devs, &coefs, &all, f, c.order >= 3) {
-            Some(h) => {
-                let a1 = h[0].norm();
+        .map(|&f| match probe.volterra_terms(&devs, &coefs, &all, f, c.order >= 3) {
+            Some((h, nt)) => {
+                // H1 is 0 to roundoff of what its node responses sum (a
+                // notch at f): then HD_n is infinite or unavailable below.
+                let h1_zero = h[0].norm() <= ZERO_REL * nt[0];
+                let a1 = if h1_zero { 0.0 } else { h[0].norm() };
                 let mut p = json!({
                     "f": f,
                     "hd2": num_or_null(h[1].norm() * amp / (2.0 * a1)),
@@ -1829,7 +1873,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 });
                 // H1 = 0: HD_n is infinite unless H_n is 0 too (to roundoff
                 // of its terms), then unavailable.
-                if a1 == 0.0 {
+                if h1_zero {
                     let t = probe.terms(&devs, &coefs, &all, f).unwrap_or([0.0; 3]);
                     for (n, key) in [(1, "hd2Infinite"), (2, "hd3Infinite")] {
                         if (n == 1 || c.order >= 3) && h[n].norm() > ZERO_REL * t[n] {
