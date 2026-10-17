@@ -6,6 +6,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
+need() {
+  command -v "$1" >/dev/null || { echo "Needs $1. $2" >&2; exit 1; }
+}
+need cargo "Install Rust: https://rustup.rs"
+need wasm-pack "Install it: cargo install wasm-pack"
+need pnpm "Install it: corepack enable"
+rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown ||
+  rustup target add wasm32-unknown-unknown
 if [ "$#" -gt 0 ]; then
   repo="$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
   gh pr checkout "$1" --repo "$repo"

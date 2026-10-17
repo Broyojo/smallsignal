@@ -208,7 +208,7 @@ test("a pin that only looks connected blocks the analysis", async ({
   await expect(card(panel, "Gain")).toHaveCount(0);
   await expect(panel.locator("img.small-signal-formula")).toHaveCount(0);
   const outputs = await panel
-    .getByLabel("Output")
+    .getByLabel("Output", { exact: true })
     .locator("option")
     .allInnerTexts();
   expect(outputs.filter((name) => /^nc\d+$/u.test(name))).toEqual([]);
@@ -230,12 +230,12 @@ test("textbook diff pair: Pins as inputs, hand analysis, then real bias values",
 }) => {
   const panel = await analyze(page, FIXTURES.diffPair);
   const inputs = await panel
-    .getByLabel("Input")
+    .getByLabel("Input", { exact: true })
     .locator("option")
     .allInnerTexts();
   expect(inputs).toEqual(expect.arrayContaining(["Vin1", "Vin2", "Vb"]));
   const outputs = await panel
-    .getByLabel("Output")
+    .getByLabel("Output", { exact: true })
     .locator("option")
     .allInnerTexts();
   expect(outputs.filter((name) => /^nc\d+$/u.test(name))).toEqual([]);
@@ -272,10 +272,12 @@ test("textbook diff pair reads like hand analysis: differential, matched, gm(ro 
 }) => {
   const panel = await analyze(page, FIXTURES.diffPair);
   // The drawn pair is the default input, as a differential drive.
-  await expect(panel.getByLabel("Input")).toHaveValue(/^diff:/u);
-  await expect(panel.getByLabel("Input").locator("option:checked")).toHaveText(
-    "Vin1 − Vin2",
+  await expect(panel.getByLabel("Input", { exact: true })).toHaveValue(
+    /^diff:/u,
   );
+  await expect(
+    panel.getByLabel("Input", { exact: true }).locator("option:checked"),
+  ).toHaveText("Vin1 − Vin2");
   // Only the real pairs: the mirror and the diff pair, never the tail.
   const chips = panel.getByLabel("Matched pairs").getByRole("button");
   await expect(chips).toHaveText(["M1 = M2", "M3 = M4"]);

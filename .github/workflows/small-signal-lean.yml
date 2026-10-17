@@ -6,10 +6,24 @@ name: Small-signal Lean
 on:
   pull_request:
     paths:
+      - Cargo.toml
+      - Cargo.lock
       - crates/**
       - lean/**
       - oracle/corpus/**
       - .github/workflows/small-signal-lean.yml
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - lean/**
+      - oracle/corpus/**
+      - .github/workflows/small-signal-lean.yml
+  # A merge group has no path filter: the job checks its changed paths.
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -25,10 +39,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          if git diff --name-only "$BASE" HEAD |
+            grep -qE '^(Cargo\.(toml|lock)|crates/|lean/|oracle/corpus/|\.github/workflows/small-signal-lean\.yml)'; then
+            echo run=true >> "$GITHUB_OUTPUT"
+          else
+            echo run=false >> "$GITHUB_OUTPUT"
+          fi
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.run != 'false'
       - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.run != 'false'
       - name: Install elan
+        if: steps.scope.outputs.run != 'false'
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - run: lean/check_all.sh
+        if: steps.scope.outputs.run != 'false'

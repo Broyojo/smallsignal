@@ -4,6 +4,8 @@ name: Small-signal
 # oracles, the unit tests, a static build and the panel's browser tests.
 on:
   pull_request:
+  # A merge queue tests the candidate merged with current main.
+  merge_group:
   push:
     branches:
       - main
@@ -36,9 +38,9 @@ jobs:
         env:
           SMALLSIGNAL_BIN: ${{ github.workspace }}/target/release/smallsignal
         run: |
-          uv run compare.py
-          uv run compare.py --corpus regressions --expected regressions/expected
-          uv run textbook.py
+          uv run --locked compare.py
+          uv run --locked compare.py --corpus regressions --expected regressions/expected
+          uv run --locked textbook.py
 
   editor:
     name: Panel
@@ -70,7 +72,16 @@ jobs:
           ICM_STATIC_PAGES: "1"
         run: pnpm --filter @icm/editor build
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm exec playwright test apps/editor/e2e/small-signal.spec.ts
+      - name: Browser tests against that build, served at /smallsignal/
+        run: |
+          (cd apps/editor && pnpm exec vite preview --outDir dist --base /smallsignal/ \
+            --host 127.0.0.1 --port 4180 --strictPort) &
+          for _ in $(seq 60); do
+            curl -sf http://127.0.0.1:4180/smallsignal/ >/dev/null && break
+            sleep 1
+          done
+          ICM_E2E_BASE_URL=http://127.0.0.1:4180/smallsignal \
+            pnpm exec playwright test apps/editor/e2e/small-signal.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
