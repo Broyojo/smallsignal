@@ -121,7 +121,9 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   element the parser reads. An
   optional `"vsFreq": [f...]` adds HD2/HD3 at each f from .disto's complex
   phasors (valid circuits only), checked at rtol 1e-6 with an absolute floor
-  of 1e-15 (exact zeros). With a capacitor, set `"freq"` far below the poles
+  of 1e-15 (exact zeros). compare.py matches every frequency at relative
+  1e-9 (f = 0 only exactly) and checks the reference's frequencies only, so
+  a solver vsFreq point at f = 0 (from a 0 in `freqs`) is ignored. With a capacitor, set `"freq"` far below the poles
   so the static coefficients stay quasi-static.
 - `textbook_nd.py`: textbook noise (CS, degenerated CS, SF, diff pair, 5T
   OTA, BJT CE) and distortion (CS with R / ideal-current-source load, with and
