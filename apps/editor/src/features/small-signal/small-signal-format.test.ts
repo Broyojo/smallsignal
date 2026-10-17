@@ -3,6 +3,7 @@ import type { SmallSignalSource } from "@icm/small-signal";
 import {
   differentialPairs,
   formatPlain,
+  matchedSubscript,
   preferredOutput,
   signalLabel,
 } from "./small-signal-panel";
@@ -81,5 +82,15 @@ describe("real values", () => {
       "-4.191",
     );
     expect(pointTextForTest({ f: 1000, re: -1, im: -0.5 }, "")).toContain("∠");
+  });
+});
+
+describe("matchedSubscript", () => {
+  it("names a matched group the way its symbols are subscripted", () => {
+    expect(matchedSubscript(["M1", "M2"])).toBe("1,2");
+    expect(matchedSubscript(["M3", "M4"])).toBe("3,4");
+    expect(matchedSubscript(["RD1", "RD2"])).toBe("D1,2");
+    expect(matchedSubscript(["M10", "M11"])).toBe("10,11");
+    expect(matchedSubscript(["Q1", "Q2", "Q3"])).toBe("1,2,3");
   });
 });

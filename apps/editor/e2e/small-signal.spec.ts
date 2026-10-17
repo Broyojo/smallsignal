@@ -278,7 +278,7 @@ test("textbook diff pair reads like hand analysis: differential, matched, gm(ro 
   );
   // Only the real pairs: the mirror and the diff pair, never the tail.
   const chips = panel.getByLabel("Matched pairs").getByRole("button");
-  await expect(chips).toHaveText(["M1 = M2", "M3 = M4"]);
+  await expect(chips).toHaveText(["1,2 = M1, M2", "3,4 = M3, M4"]);
   const gain = await formula(panel, "Gain");
   expect(gain).toContain("\\approx");
   expect(gain).toContain("g_{m3,4}");
@@ -287,7 +287,7 @@ test("textbook diff pair reads like hand analysis: differential, matched, gm(ro 
   await expect(panel.locator(".small-signal-alert.is-warning")).toHaveCount(0);
 
   // Treating M3 and M4 separately gives back their own symbols.
-  await chips.filter({ hasText: "M3 = M4" }).click();
+  await chips.filter({ hasText: "M3, M4" }).click();
   await expect
     .poll(async () => formula(panel, "Gain"))
     .not.toContain("g_{m3,4}");

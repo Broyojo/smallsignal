@@ -527,6 +527,20 @@ export function differentialPairs(
 
 const DIFF_PREFIX = "diff:";
 
+/**
+ * The subscript a matched group gets in the equations, for the legend:
+ * M1, M2 → "1,2"; RD1, RD2 → "D1,2" (the solver's g_{m1,2}, R_{D1,2}).
+ */
+export function matchedSubscript(elements: string[]): string {
+  const rests = elements.map((name) => name.slice(1));
+  let prefix = rests[0] ?? "";
+  for (const rest of rests)
+    while (!rest.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  // Keep a whole number together: M10, M11 → "10,11", not "1" + "0,1".
+  while (prefix && /\d$/u.test(prefix)) prefix = prefix.slice(0, -1);
+  return prefix + rests.map((rest) => rest.slice(prefix.length)).join(",");
+}
+
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
 export function SmallSignalPanel({
   project,
@@ -842,33 +856,41 @@ export function SmallSignalPanel({
             {result?.matchCandidates?.length ? (
               <div className="small-signal-match" aria-label="Matched pairs">
                 <span>Matched</span>
-                {result.matchCandidates.map((candidate) => {
-                  const pair = candidate.elements;
-                  const key = pair.join("=");
-                  const on = candidate.applied ?? !unmatched.has(key);
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      aria-pressed={on}
-                      title={
-                        on
-                          ? "Shares one set of symbols. Click to treat separately."
-                          : "Click to treat as a matched pair."
-                      }
-                      onClick={() =>
-                        setUnmatched((prev) => {
-                          const next = new Set(prev);
-                          if (on) next.add(key);
-                          else next.delete(key);
-                          return next;
-                        })
-                      }
-                    >
-                      {pair.join(" = ")}
-                    </button>
-                  );
-                })}
+                {[...result.matchCandidates]
+                  .sort((a, b) =>
+                    (a.elements[0] ?? "").localeCompare(
+                      b.elements[0] ?? "",
+                      undefined,
+                      { numeric: true },
+                    ),
+                  )
+                  .map((candidate) => {
+                    const pair = candidate.elements;
+                    const key = pair.join("=");
+                    const on = candidate.applied ?? !unmatched.has(key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        aria-pressed={on}
+                        title={
+                          on
+                            ? "Shares one set of symbols. Click to treat separately."
+                            : "Click to treat as a matched pair."
+                        }
+                        onClick={() =>
+                          setUnmatched((prev) => {
+                            const next = new Set(prev);
+                            if (on) next.add(key);
+                            else next.delete(key);
+                            return next;
+                          })
+                        }
+                      >
+                        {`${matchedSubscript(pair)} = ${pair.join(", ")}`}
+                      </button>
+                    );
+                  })}
               </div>
             ) : null}
 
