@@ -172,8 +172,11 @@ fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet) -> Jet {
 fn pn_jet(csat: f64, v: Jet, vte: f64) -> Jet {
     let v0 = v.v();
     if v0 >= -3.0 * vte {
+        // Past the clamp (as pn) the exponential is held: the current's
+        // extension is linear in its DC slope, no higher orders.
         if v0 / vte > 709.0 {
-            return Jet::cst(pn(csat, v0, vte).0);
+            let (i, g) = pn(csat, v0, vte);
+            return v.compose([i, g, 0.0, 0.0]);
         }
         let e = (v0 / vte).exp();
         let k = csat * e;
@@ -199,7 +202,13 @@ fn bulk_jet(is: f64, v: Jet, gmin: f64) -> Jet {
     if v0 <= -3.0 * vt {
         return v.scale(gmin).sub(&Jet::cst(is));
     }
-    let e = (v0 / vt).min(709.0).exp();
+    // Past the clamp (as bulk_junction) the exponential is held: the
+    // current's extension is linear in its DC slope, no higher orders.
+    if v0 / vt > 709.0 {
+        let e = 709.0f64.exp();
+        return v.compose([is * (e - 1.0), is * e / vt, 0.0, 0.0]).add(&v.scale(gmin));
+    }
+    let e = (v0 / vt).exp();
     let k = is * e;
     v.compose([is * (e - 1.0), k / vt, k / (2.0 * vt * vt), k / (6.0 * vt * vt * vt)])
         .add(&v.scale(gmin))
@@ -1573,14 +1582,17 @@ fn infinite() -> Value {
 /// of the reference value).
 fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &Shape, tol: f64) -> Value {
     // 0/0 (a ratio over a1 when a1 = 0, e.g. an input blocked at s → 0):
-    // undefined, not the zero its numerator alone would give.
+    // undefined, not the zero its numerator alone would give; x/0:
+    // infinite. The exact form (or the numeric reference) decides; the
+    // leakage-free fallback cannot (leakage may be what carries a1): its
+    // 0/0 or x/0 with a finite reference is a display that leakage
+    // matters for, below.
     let undefined = |v: Option<View>| v.is_some_and(|v| v.num.is_zero() && v.den.is_zero());
-    if reference.is_nan() || undefined(exact) || (exact.is_none() && undefined(noleak)) {
+    if reference.is_nan() || undefined(exact) {
         return Value::Null;
     }
-    // x/0 (a ratio over a1 = 0 with a nonzero numerator): infinite.
     let over_zero = |v: Option<View>| v.is_some_and(|v| !v.num.is_zero() && v.den.is_zero());
-    if reference.is_infinite() || over_zero(exact) || (exact.is_none() && over_zero(noleak)) {
+    if reference.is_infinite() || over_zero(exact) {
         return infinite();
     }
     let rel = |a: f64| {
@@ -1615,10 +1627,17 @@ fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &S
             };
             Some((Cow::Owned(n), Cow::Owned(d), v.syms, false, e))
         }
-        (None, Some(v)) => keep(v.num, v.den).then(|| {
-            let e = v.expr().map(Cow::Borrowed);
-            (Cow::Borrowed(v.num), Cow::Borrowed(v.den), v.syms, false, e)
-        }),
+        // A zero denominator (a1 = 0 without leakage) is kept as a
+        // candidate with no expression: its error is infinite, so the
+        // display says leakage matters.
+        (None, Some(v)) => {
+            let e = if keep(v.num, v.den) {
+                v.expr().map(Cow::Borrowed)
+            } else {
+                None
+            };
+            Some((Cow::Borrowed(v.num), Cow::Borrowed(v.den), v.syms, false, e))
+        }
         (None, None) => None,
     };
     // Base of the simplified form: expression, symbols, num, den.
@@ -2278,6 +2297,29 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 l
             assert!(rel(cc.0[2], -ev.dcc_dvbc()) < 1e-12);
             assert!(rel(cb.0[1], ev.gpi + ev.gmu) < 1e-12);
         }
+    }
+
+    /// Past the exponential's clamp (v > 709·V_T) the junction current is
+    /// held linear, as devices::bulk_junction and pn: its jet has the DC
+    /// current and slope and no higher orders.
+    #[test]
+    fn clamped_junctions_expand_linearly() {
+        let vt = vt();
+        let v = 709.5 * vt;
+        let (i, g) = crate::devices::bulk_junction(1e-14, v, 1e-12);
+        let j = bulk_jet(1e-14, Jet::var(v, 0, 1.0), 1e-12);
+        assert_eq!(j.0[0], i);
+        assert!((j.0[1] - g).abs() <= 1e-15 * g);
+        assert_eq!(j.0[index([2, 0, 0]).unwrap()], 0.0);
+        assert_eq!(j.0[index([3, 0, 0]).unwrap()], 0.0);
+        let (i, g) = pn(1e-16, v, vt);
+        let j = pn_jet(1e-16, Jet::var(v, 0, 1.0), vt);
+        assert_eq!((j.0[0], j.0[1]), (i, g));
+        assert_eq!(j.0[index([2, 0, 0]).unwrap()], 0.0);
+        assert_eq!(j.0[index([3, 0, 0]).unwrap()], 0.0);
+        // Just below the clamp the expansion is the exponential's.
+        let j = bulk_jet(1e-14, Jet::var(708.5 * vt, 0, 1.0), 1e-12);
+        assert!(j.0[index([2, 0, 0]).unwrap()] > 0.0);
     }
 
     #[test]

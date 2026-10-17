@@ -198,7 +198,9 @@ g_mb differ by more than MATCH_REL get one g_mb symbol each (with a
 warning); otherwise their difference joins the match mismatch. A device biased where its
 equations switch branch (v_GS = V_TH, v_DS = V_DSAT, v_DS = 0 with λ or γ,
 v_BS = 0 with γ and the bulk not tied to the source, a junction at −3·V_T,
-each within 1e-9 V) gets a warning: its expansion is one-sided. Names: `K_{2g,M1}` (plain `K2g_M1`) =
+each within 1e-9 V) gets a warning: its expansion is one-sided. Past the
+exponential's clamp (709·V_T forward) a junction's current is linear, as in
+the DC model, so it has no higher-order coefficients. Names: `K_{2g,M1}` (plain `K2g_M1`) =
 ½∂²I_D/∂v_GS²; `K_{g\,d,M1}` = ∂²I_D/∂v_GS∂v_DS; `K_{2g\,d,M1}` =
 ½∂³I_D/∂v_GS²∂v_DS; variables g, d, b; BJT `K^{C}_{2be,Q1}`,
 `K^{B}_{be\,ce,Q1}` (`KC2be_Q1`, `KBbece_Q1`); MOS bulk junction
@@ -262,7 +264,10 @@ transfer cofactors. Response `distortion`:
   a_{n−1}'s, or the D^{2n−1} under it; e.g. a 5T OTA's a₃ with junction
   leakage kept) is `skipped` (value numeric) while lower orders stay exact,
   and its `display` comes from the leakage-free model (its Taylor
-  coefficients without leakage), accepted only within 1e-3. When the
+  coefficients without leakage), accepted only within 1e-3; a leakage-free
+  form with a₁ = 0 (leakage carries the fundamental) is no display, so a
+  finite numeric value is shown with `leakageMatters`, never null or
+  `\infty`. When the
   analysis model's form misses the full numeric a_n by more than 1e-11 the
   full model's forms are used instead (each under the same budget), and a
   match the full model's junctions break is warned

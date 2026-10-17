@@ -1128,3 +1128,31 @@ fn a_huge_amplitude_overflows_to_unavailable_not_infinite() {
         d["hd2"]["value"]
     );
 }
+
+#[test]
+fn a_leakage_held_fundamental_keeps_the_numeric_hd() {
+    // M1's gate reaches the input only through M2's bulk junction (bulk at
+    // the input, everything else at the gate): without leakage a1 = 0, with
+    // it a1 = −9.2e-6. At maxTerms 50 the exact HD2, HD3 are over budget,
+    // and the leakage-free fallback is 0/0; the finite numeric value wins,
+    // shown as a display leakage matters for (before: null).
+    let net = "lk\nVDD vdd 0 5\nVIN in 0 DC 0 AC 1\nVB b 0 0.9\nRG b g 1meg\nM1 out g 0 0 nm W=10u L=1u\n\
+RD vdd out 5k\nM2 g g g in nm W=1u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1"], "maxTerms": 50, "amplitude": 0.01 })),
+    );
+    let d = &r["distortion"];
+    let a = |n: usize| d["coefficients"][n]["numeric"].as_f64().unwrap();
+    assert!(a(0) != 0.0);
+    for (k, want) in [
+        ("hd2", a(1).abs() * 0.01 / (2.0 * a(0).abs())),
+        ("hd3", a(2).abs() * 1e-4 / (4.0 * a(0).abs())),
+    ] {
+        let q = &d[k];
+        assert!(q["skipped"].is_string(), "{k}: {q}");
+        assert!(rel(q["value"].as_f64().unwrap(), want) < 1e-12, "{k}: {q}");
+        assert_eq!(q["display"]["leakageMatters"], true, "{k}: {q}");
+        assert_eq!(q["display"]["value"], q["value"]);
+    }
+}
