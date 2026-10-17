@@ -66,9 +66,24 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   4kT·(2/3)·gm; flicker KF·gm²/(Cox·W·Leff·f^AF) — not SPICE2's
   KF·Id^AF/(f·Cox·L²); AF is the frequency exponent; Cox = 3.9·ε0/TOX,
   TOX = 1e-7 m by default. compare.py checks noise at rtol 1e-6, as AC.
-- `textbook_nd.py`: textbook noise cases (CS, degenerated CS, SF, diff pair,
-  5T OTA, BJT CE), hand-derived (KCL with noise injections), checked against
-  ngspice and the quoted closed forms.
+- Distortion (`"distortion": {"amplitudes": [...], "freq": f, "amplitude": A}`,
+  `distortion.py`): coefficients a1..a3 of v_out = a1·v + a2·v² + a3·v³ with
+  an uncertainty each, HD2/HD3 at A (|a2|A/(2|a1|), |a3|A²/(4|a1|)), and four
+  ngspice methods that confirm one another: .disto (Volterra; the reference
+  where valid), DC-sweep Taylor fit (the reference otherwise), quasi-static
+  harmonic balance, and transient + DFT. ngspice-47's .disto is wrong by
+  several % in a2, a3 for MOSFETs with GAMMA > 0 (shown against an exact
+  implicit series), so it is flagged `"valid": false` there. compare.py
+  checks the solver at rtol 1e-6 + 3×uncertainty. An optional `"vsFreq":
+  [f...]` adds HD2/HD3 at each f from .disto's complex phasors (valid
+  circuits only), checked at rtol 1e-6. With a capacitor, set `"freq"` far
+  below the poles so the static coefficients stay quasi-static.
+- `textbook_nd.py`: textbook noise (CS, degenerated CS, SF, diff pair, 5T
+  OTA, BJT CE) and distortion (CS with R / ideal-current-source load, with and
+  without λ; degenerated CS; SF; BJT CE; CS with CL above its pole) cases, hand-derived (KCL with noise
+  injections; exact implicit Taylor series), checked against ngspice and the
+  quoted closed forms. Note: an ideal current-source load gives HD2 = 3A/(4Vov)
+  and HD3 = A²/(2Vov²); A/(4Vov) is the resistor-load (λ = 0) result.
 - `run_ngspice.options_override(...)` changes ngspice options per thread;
   never assign `run_ngspice.OPTIONS` (the evidence tools run threads).
 

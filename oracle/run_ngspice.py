@@ -491,6 +491,9 @@ def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
             if not band["agreement"] <= AGREEMENT_RTOL:
                 raise NgspiceError(f"{name}: band integral disagrees with ngspice's spectrum by "
                                    f"{band['agreement']:.1e} (limit {AGREEMENT_RTOL:g})")
+    if side.get("distortion"):
+        import distortion  # noqa: PLC0415 - distortion imports this module
+        result["distortion"] = distortion.analyze(cir, net, side, keep)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result

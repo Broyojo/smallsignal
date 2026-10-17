@@ -1,0 +1,21 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  1000.0
+ ],
+ "rin": false,
+ "rout": false,
+ "distortion": {
+  "amplitudes": [
+   1e-05,
+   2e-05,
+   5e-05,
+   0.0001
+  ],
+  "freq": 1000.0,
+  "amplitude": 1e-05
+ },
+ "description": "NMOS CS, ideal current-source load: HD2 = 3A/(4Vov), HD3 = A^2/(2Vov^2)"
+}

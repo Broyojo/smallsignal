@@ -75,6 +75,11 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     if side.get("noise"):
         band = side["noise"].get("band") if isinstance(side["noise"], dict) else None
         args += ["--noise-band", ",".join(repr(float(f)) for f in band)] if band else ["--noise"]
+    if side.get("distortion"):
+        # ngspice is fully nonlinear, so every transistor and diode is selected.
+        devices = [l.split()[0] for l in cir.read_text().splitlines()[1:] if l[:1].lower() in "mqd" and l.split()]
+        args += ["--nonlinear", ",".join(devices), "--order", "3",
+                 "--amplitude", repr(float(side["distortion"].get("amplitude", side["distortion"]["amplitudes"][0])))]
     try:
         proc = subprocess.run(args, cwd=REPO, capture_output=True, text=True, timeout=120)
     finally:
@@ -172,6 +177,9 @@ def by_freq(values: list[dict] | None, f: float) -> dict | None:
 # error budget is the operating-point agreement (~1e-9): same rtol as AC.
 NOISE_RTOL = 1e-6
 NOISE_INT_RTOL = 1e-4
+# Distortion: coefficients within rtol plus 3x the reference's measured
+# uncertainty (distortion.py: .disto vs DC-Taylor, or a half-span refit).
+DIST_RTOL = 1e-6
 
 
 def compare_noise(got: dict, want: dict, rep: Report):
@@ -262,6 +270,43 @@ def compare_noise(got: dict, want: dict, rep: Report):
                 rep.failures.append(f"{what}: error {err:.1e} exceeds the solver's own relError {claimed:.1e}")
 
 
+def compare_distortion(got: dict, want: dict, rep: Report):
+    gd = got.get("distortion") or {}
+    gc = {c.get("order"): c.get("value") for c in gd.get("coefficients") or []}
+    ref = want["distortion"]
+    for c in ref["coefficients"]:
+        g = gc.get(c["order"])
+        what = f"distortion.a{c['order']}"
+        if g is None:
+            rep.failures.append(f"{what}: missing")
+            continue
+        tol = DIST_RTOL * abs(c["value"]) + 3 * c["uncertainty"] + 1e-12 * abs(ref["coefficients"][0]["value"])
+        rep.worst = max(rep.worst, abs(g - c["value"]) / max(abs(c["value"]), 1e-300))
+        if abs(g - c["value"]) > tol:
+            rep.failures.append(f"{what}: got {g:.10e}, want {c['value']:.10e} (tol {tol:.1e}, ref {ref['reference']})")
+    for h in ("hd2", "hd3"):
+        g = (gd.get(h) or {}).get("value")
+        w = ref[h]["value"]
+        if g is None:
+            rep.failures.append(f"distortion.{h}: missing")
+        elif abs(g - w) > 1e-5 * w + 1e-15:
+            rep.failures.append(f"distortion.{h}: got {g:.8e}, want {w:.8e}")
+    # Frequency-dependent HD against .disto's complex Volterra phasors, which
+    # match an exact 50-digit harmonic perturbation to ~4e-12 (textbook_nd).
+    gv = {round(math.log10(r["f"]), 9): r for r in gd.get("vsFreq") or []}
+    for w in ref.get("vsFreq", []):
+        g = gv.get(round(math.log10(w["f"]), 9))
+        for h in ("hd2", "hd3"):
+            what = f"distortion.vsFreq.{h}@{w['f']:g}"
+            if g is None or g.get(h) is None:
+                rep.failures.append(f"{what}: missing")
+                continue
+            err = abs(g[h] - w[h]) / w[h]
+            rep.worst = max(rep.worst, err)
+            if err > DIST_RTOL:
+                rep.failures.append(f"{what}: got {g[h]:.10e}, want {w[h]:.10e} (rel {err:.1e})")
+
+
 def compare(got: dict, want: dict, rep: Report):
     gnodes = lower_keys(got.get("op", {}).get("nodes"))
     for n, v in want["op"]["nodes"].items():
@@ -285,6 +330,8 @@ def compare(got: dict, want: dict, rep: Report):
             rep.complex(f"{q}@{w['f']:g}", by_freq(gq.get("values"), w["f"]), w, kind)
     if "noise" in want:
         compare_noise(got, want, rep)
+    if "distortion" in want:
+        compare_distortion(got, want, rep)
 
 
 def main() -> int:

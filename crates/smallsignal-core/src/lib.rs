@@ -10,6 +10,7 @@ pub mod certificate;
 pub mod dc;
 pub mod det;
 pub mod devices;
+pub mod distortion;
 pub mod gcd;
 pub mod linalg;
 pub mod netlist;

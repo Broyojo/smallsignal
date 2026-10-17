@@ -60,10 +60,10 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 `smallsignal analyze <netlist> --input <V|I source> --output <node>[:<ref>]
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
-[--tol 0.05] [--verify] [--symbolic]`, or
+[--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
-`noise`, `noiseBand`, `tolerance`, `verify`,
+`noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
 `symbolic`, `maxTerms`). The response is JSON, or
 `{"error": "..."}` on failure.
 
@@ -171,3 +171,41 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   over `maxTerms` (the spectra are still given).
   Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
   system at s = 0, so the determinant cancels exactly.
+
+## Distortion (`nonlinear: ["M1", ...]`, `order` 2|3 (default 3), `amplitude` (default 0.01))
+
+Each listed device's DC current is expanded to `order` about the operating
+point in all of its controlling voltages, exactly (truncated Taylor
+arithmetic on the device equations). MOSFET I_D(v_GS, v_DS, v_BS) (in the
+effective frame when v_DS < 0), BJT I_C and I_B in (v_BE, v_CE), diode I_D(v_D):
+i = (small-signal model) + Σ K_α·u^α over 2 ≤ |α| ≤ order, where u are the
+small-signal control voltages. Names: `K_{2g,M1}` (plain `K2g_M1`) =
+½∂²I_D/∂v_GS²; `K_{g\,d,M1}` = ∂²I_D/∂v_GS∂v_DS; `K_{2g\,d,M1}` =
+½∂³I_D/∂v_GS²∂v_DS; variables g, d, b; BJT `K^{C}_{2be,Q1}`,
+`K^{B}_{be\,ce,Q1}` (`KC2be_Q1`, `KBbece_Q1`); diode `K_{2,D1}`. Matched
+devices with equal coefficients share one symbol (`K_{2g,M1,2}`), so a
+matched pair's even orders cancel exactly. Coefficients that are exactly zero,
+or whose omission moves no a_n by more than 1e-9 (proven on the full numeric
+model, smallest first), are left out of the closed form. Bulk junction diodes
+stay linear.
+
+Method of nonlinear currents: A·x₁ = b, A·x₂ = −i₂(u₁), A·x₃ = −i₃(u₁, u₂)
+with the same MNA matrix, so v_out = a₁v_in + a₂v_in² + a₃v_in³ (memoryless,
+s → 0) in closed form: a_n = N_n/(vid^n·D^{2n−1}) from Cramer numerators and
+transfer cofactors. Response `distortion`:
+
+- `coefficients`: `[{order, value, numeric, latex, plain, terms, display, simplified}]`
+  for a₁…a_order (`numeric` from the direct numeric solve, full model).
+- `hd2` = |a₂|A/(2|a₁|), `hd3` = |a₃|A²/(4|a₁|), `iip3` = √(4|a₁|/(3|a₃|)) (input
+  amplitude; `\infty` when a₃ = 0), each `{latex, value, display, simplified}`,
+  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`.
+- `vsFreq`: `[{f, hd2, hd3}]` at `freqs` from H₂(jω,jω) and H₃(jω,jω,jω)
+  (LU solves at ω, 2ω, 3ω on the full model).
+- `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
+  `symbols`: the K symbols used; `omissionError`; `check` (closed form vs numeric).
+- When an exact closed form would exceed 100k terms (e.g. a 5T OTA's a₃ with
+  junction leakage kept), `exact` is skipped (`skipped`, value numeric) and
+  `display` comes from the leakage-free model, accepted only within 1e-3.
+- `display`/`simplified` work as for the other quantities; simplified is the
+  r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
+  as output conductances), then magnitude pruning, within `tolerance`.

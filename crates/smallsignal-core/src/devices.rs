@@ -158,7 +158,7 @@ pub fn bulk_junction(is: f64, v: f64, gmin: f64) -> (f64, f64) {
 }
 
 /// Junction current with ngspice's cubic tail below -3·vte (no gmin).
-fn pn(csat: f64, v: f64, vte: f64) -> (f64, f64) {
+pub fn pn(csat: f64, v: f64, vte: f64) -> (f64, f64) {
     if v >= -3.0 * vte {
         let e = (v / vte).min(MAX_EXP_ARG).exp();
         (csat * (e - 1.0), csat * e / vte)

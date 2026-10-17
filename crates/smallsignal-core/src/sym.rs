@@ -96,6 +96,14 @@ fn merged_rest(elements: &[String]) -> String {
     format!("{}{}", &first[..prefix], tails.join(","))
 }
 
+/// "M1,2" for M1, M2: the elements of a merged symbol, written compactly.
+pub fn merged_name(elements: &[String]) -> String {
+    if elements.len() == 1 {
+        return elements[0].clone();
+    }
+    format!("{}{}", &elements[0][..1], merged_rest(elements))
+}
+
 /// `I_{C1,2}` for a quantity (base, subscript) shared by matched elements.
 pub fn merged_dev_latex(base: &str, sub: &str, elements: &[String]) -> String {
     let name = format!("{}{}", &elements[0][..1], merged_rest(elements));

@@ -8,6 +8,13 @@ import Certs.ccvs
 import Certs.cs_pmos_load
 import Certs.current_input
 import Certs.diode_rd
+import Certs.dist_bjt_ce
+import Certs.dist_cs
+import Certs.dist_cs_cl
+import Certs.dist_cs_degen
+import Certs.dist_cs_isrc
+import Certs.dist_diffpair
+import Certs.dist_sf
 import Certs.divider
 import Certs.floating_input
 import Certs.floating_vsource

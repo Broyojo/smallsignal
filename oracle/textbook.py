@@ -140,6 +140,8 @@ def check_case(case: Case, verbose: bool) -> list[str]:
             notes.append(f"{qname}: exact/approx = {ratio:.4f} at typical values")
     if case.noise is not None:
         fails += check_noise(case, notes)
+    if case.dist is not None:
+        fails += check_dist(case, notes)
     if case.name.startswith("miller"):
         num = sp.numer(sp.together(ours(data["gain"])))
         zeros = sp.solve(num, s)
@@ -201,6 +203,92 @@ def check_noise(case: Case, notes: list[str]) -> list[str]:
         if not identical(simp[k], want[k]):
             fails.append(f"noise {what} leading order: solver {sp.simplify(simp[k])}  !=  textbook {sp.simplify(want[k])}")
     notes.append(f"noise: S_in = {lf['simplified']['latex']}")
+    return fails
+
+
+def lowest_order(e: sp.Expr, eps: sp.Symbol) -> sp.Expr:
+    """The solver's leading order: numerator and denominator each cut to
+    their lowest-order terms in eps."""
+    num, den = sp.fraction(sp.cancel(sp.together(e)))
+
+    def low(p):
+        poly = sp.Poly(sp.expand(p), eps)
+        k = min(m[0] for m in poly.monoms())
+        return poly.coeff_monomial(eps**k)
+    return sp.cancel(low(num) / low(den)) if num != 0 else sp.Integer(0)
+
+
+def check_dist(case: Case, notes: list[str]) -> list[str]:
+    """Distortion closed forms against the hand implicit series. The hand
+    series is solved with every symbol set to a random rational (exact
+    arithmetic), so each comparison is an exact identity test at random
+    points (Schwartz–Zippel), cheap even for the 5T OTA."""
+    import random
+
+    fails: list[str] = []
+    d = case.dist
+    A = 0.01
+    data = run(d.netlist, case, ["--nonlinear", ",".join(d.nonlinear), "--order", "3", "--amplitude", str(A)])
+    dist = data["distortion"]
+    present = {p["name"] for p in data["params"]} | {k["name"] for k in dist.get("symbols", [])}
+    m = lambda e: subs_matched(sp.sympify(e), d.matched)  # noqa: E731
+    eps = sp.Symbol("eps")
+    rng = random.Random(7)
+
+    def output_like(name: str) -> bool:
+        return name.startswith("K") and ("d" in name.split("_")[0][1:] or "ce" in name)
+
+    for trial in range(2):
+        point = {sp.Symbol(n): sp.Rational(rng.randint(1, 997), rng.randint(1, 997)) for n in sorted(present)}
+
+        def restrict(e, scaled=False):
+            """Absent Taylor coefficients → 0, absent r_o → ∞, the rest →
+            the random point (r_o → r_o/eps, output-like K → eps·K when
+            `scaled`)."""
+            e = m(e)
+            sub = {}
+            for x in e.free_symbols:
+                if x.name.startswith("K") and x.name not in present:
+                    sub[x] = 0
+                elif x.name.startswith("ro_") and x.name not in present:
+                    sub[x] = sp.oo
+                elif x in point:
+                    v = point[x]
+                    if scaled and x.name.startswith("ro_"):
+                        v = v / eps
+                    elif scaled and output_like(x.name):
+                        v = v * eps
+                    sub[x] = v
+            inf = [x for x, v in sub.items() if v is sp.oo]
+            for x in inf:
+                z = sp.Symbol("z")
+                e = sp.cancel(sp.together(e.subs(x, 1 / z))).subs(z, 0)
+                del sub[x]
+            return e.subs(sub)
+        hand = [sp.cancel(h) for h in d.hand(restrict)]
+        lead = [lowest_order(sp.cancel(h), eps) for h in d.hand(lambda e: restrict(e, scaled=True))]
+        for n in range(3):
+            q = dist["coefficients"][n]
+            got = m(parse(q["plain"]["num"]) / parse(q["plain"]["den"])).subs(point)
+            if sp.cancel(got - hand[n]) != 0:
+                fails.append(f"a{n + 1} (point {trial}): solver {got}  !=  hand {hand[n]}")
+            simp = m(parse(q["simplified"]["plain"]["num"]) / parse(q["simplified"]["plain"]["den"]))
+            if q["simplified"].get("method", "").startswith("leading order") and "dropped" not in q["simplified"]["method"]:
+                if sp.cancel(simp.subs(point) - lead[n]) != 0:
+                    fails.append(f"a{n + 1} leading order (point {trial}): solver {simp.subs(point)}  !=  {lead[n]}")
+        if d.closed is not None:
+            for n, c in enumerate(d.closed()):
+                if c is not None and sp.cancel(restrict(sp.sympify(c)) - hand[n]) != 0:
+                    fails.append(f"a{n + 1}: textbook closed form {c} != hand KCL (point {trial})")
+    if d.hd2 is not None:
+        dev = data["op"]["devices"][d.nonlinear[0]]
+        want, got = d.hd2(dev, A), dist["hd2"]["value"]
+        if abs(got - want) > 1e-9 * abs(want):
+            fails.append(f"HD2 {got} != textbook {want}")
+        notes.append(f"HD2 = {got:.6e} (textbook {want:.6e})")
+    notes.append(f"distortion: HD2 = {dist['hd2']['simplified']['latex']}")
+    if "hd3" in dist:
+        notes.append(f"distortion: HD3 = {dist['hd3']['simplified']['latex']}")
     return fails
 
 

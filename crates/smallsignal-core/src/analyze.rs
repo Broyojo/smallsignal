@@ -62,6 +62,15 @@ pub struct Request {
     /// [fLow, fHigh] (Hz): also integrate the noise over this band.
     #[serde(default)]
     pub noise_band: Option<[f64; 2]>,
+    /// Devices whose DC currents are expanded to `order` (see `distortion`).
+    #[serde(default)]
+    pub nonlinear: Vec<String>,
+    /// 2 or 3 (default 3).
+    #[serde(default)]
+    pub order: Option<u8>,
+    /// Input amplitude for HD2/HD3 (default 10 mV, or 10 mA for a current input).
+    #[serde(default)]
+    pub amplitude: Option<f64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -385,6 +394,32 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             zeros_hz,
         };
         resp.insert("noise".into(), crate::noise::report(&ctx, &mut warnings)?);
+    }
+
+    if !req.nonlinear.is_empty() {
+        let full_symbols = || sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new());
+        let noleak_symbols = |m: &SsCircuit| sym::symbols(&net, m, &matched, symbolic, &mut Vec::new());
+        let ctx = crate::distortion::Ctx {
+            net: &net,
+            op: op.as_ref(),
+            full: &full,
+            ss: &ss,
+            symbols: &symbols,
+            full_symbols: &full_symbols,
+            noleak_symbols: &noleak_symbols,
+            excite: &excite,
+            out,
+            rf,
+            vid: if mode == Mode::Differential { 2 } else { 1 },
+            input_is_v,
+            freqs: &freqs,
+            names: &req.nonlinear,
+            order: req.order.unwrap_or(3),
+            amplitude: req.amplitude.unwrap_or(0.01),
+            tol,
+            max_terms,
+        };
+        resp.insert("distortion".into(), crate::distortion::report(&ctx, &mut warnings)?);
     }
 
     if req.rin {
