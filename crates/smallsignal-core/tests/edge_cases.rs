@@ -856,16 +856,22 @@ fn a_source_loop_is_still_singular() {
     assert!(err.contains("singular"), "{err}");
 }
 
-/// TOX gives C_ox, not the Meyer gate capacitances ngspice adds: say so.
+/// TOX gives the Meyer gate capacitances, as ngspice: a saturated device
+/// has C_gs = 2/3·C_ox·W·L and no C_gd without overlap. Without TOX there
+/// are none.
 #[test]
-fn tox_warns_that_gate_capacitances_are_not_modeled() {
+fn tox_gives_meyer_gate_capacitances() {
     let with_tox = CS.replace("lambda=0.1)", "lambda=0.1 tox=20n)");
     let out = run(&with_tox, &request("VIN", "out"));
-    let warnings = out["warnings"].to_string();
-    assert!(
-        warnings.contains("Model nm has no gate capacitances from TOX"),
-        "{warnings}"
-    );
+    assert!(!out["warnings"].to_string().contains("TOX"), "{}", out["warnings"]);
+    let params = out["params"].as_array().unwrap();
+    let find = |name: &str| params.iter().find(|p| p["name"] == name);
+    let cgs = find("cgs_M1").expect("C_gs")["value"].as_f64().unwrap();
+    let cox = 3.9 * 8.854214871e-12 / 20e-9;
+    let want = 2.0 / 3.0 * cox * 10e-6 * 1e-6;
+    assert!((cgs - want).abs() <= 1e-14 * want, "{cgs} {want}");
+    assert_eq!(find("cgs_M1").unwrap()["latex"], "C_{gs1}");
+    assert!(find("cgd_M1").is_none());
     let plain = run(CS, &request("VIN", "out"));
-    assert!(!plain["warnings"].to_string().contains("TOX"));
+    assert!(!plain["params"].to_string().contains("cgs_M1"));
 }

@@ -210,6 +210,15 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         (Vec::new(), Vec::new())
     };
     let full = ss::build_with(&net, op.as_ref(), &linear)?;
+    // Past the monomial width only the numeric system exists, which needs
+    // numbers.
+    if symbolic && full.wide() {
+        return Err(format!(
+            "Too many small-signal parameters for a symbolic analysis ({}, limit {})",
+            full.params.len(),
+            ss::MONO_BITS
+        ));
+    }
     let excite = match (mode, neg) {
         (Mode::Single, _) | (_, None) => Excite::Source(input),
         (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
@@ -238,7 +247,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         rin: rin_kind,
         rout: req.rout,
     };
-    let grid = check_grid(full.reactive_mask != 0, &freqs);
+    let grid = check_grid(full.has_reactive(), &freqs);
     // Junction conductances (gbs, gbd, gμ) stay in the exact model unless the
     // full numeric system proves that leaving them out moves no reported
     // value by more than OMIT_REL; symbolic mode leaves them out, as hand
@@ -1301,33 +1310,14 @@ fn xnode(sys: &System, x: &[Complex64], node: usize) -> Complex64 {
     sys.node_col[node].map(|c| x[c]).unwrap_or_default()
 }
 
-fn eval_poly(p: &Poly, ss: &SsCircuit, s: Complex64) -> Complex64 {
-    let mut acc = Complex64::new(0.0, 0.0);
-    for (&m, &c) in &p.terms {
-        let mut v = c as f64;
-        let mut bits = m;
-        while bits != 0 {
-            let i = bits.trailing_zeros() as usize;
-            v *= ss.params[i].mna_value();
-            bits &= bits - 1;
-        }
-        acc += v * s.powu((m & ss.reactive_mask).count_ones());
-    }
-    acc
-}
-
 /// Independent numeric solve of the same system (complex LU), used to
 /// cross-check every symbolic result. Returns the solution and its normwise
 /// forward-error bound κ₁(A)·eps·‖x‖ (an absolute bound on each component).
 pub(crate) fn matrix_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Vec<Complex64> {
     let n = sys.dim;
     let mut a = vec![Complex64::new(0.0, 0.0); n * n];
-    for r in 0..n {
-        for c in 0..n {
-            if !sys.a[r][c].is_zero() {
-                a[r * n + c] = eval_poly(&sys.a[r][c], ss, s);
-            }
-        }
+    for t in &sys.terms {
+        a[t.row * n + t.col] += sys.term_value(t, ss, s);
     }
     a
 }
@@ -1662,6 +1652,24 @@ fn op_json(net: &Netlist, op: &Op) -> Value {
             Some(DevOp::Diode(dd)) => json!({ "type": "diode", "id": dd.id, "vd": dd.vd, "gd": dd.gd }),
             None => continue,
         };
+        // Capacitances (F) at this bias, zeros included; a BJT's substrate
+        // one is `csub` whichever terminal it ends at.
+        let mut d = d;
+        let mut caps: Map<String, Value> = ss::device_caps(e, op, ei)
+            .into_iter()
+            .map(|c| {
+                let key = if matches!(c.kind, "ccs" | "cbsub") {
+                    "csub"
+                } else {
+                    c.kind
+                };
+                (key.to_string(), json!(c.value))
+            })
+            .collect();
+        if matches!(e.kind, Kind::Q { .. }) {
+            caps.entry("csub").or_insert(json!(0.0));
+        }
+        d["caps"] = Value::Object(caps);
         devices.insert(e.name.clone(), d);
     }
     json!({ "nodes": nodes, "sources": sources, "devices": devices, "method": op.method, "iterations": op.iterations })

@@ -77,7 +77,7 @@ fn device_sub(kind: &str) -> Option<(&'static str, &'static str)> {
         "rbs" => ("r", "bs"),
         "rbd" => ("r", "bd"),
         "rd" => ("r", "d"),
-        _ => return None,
+        _ => return crate::ss::cap_sub(kind).map(|sub| ("C", sub)),
     })
 }
 
@@ -334,12 +334,18 @@ pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(
         let e = &net.elements[i];
         let model_type = |ty: f64| if ty > 0.0 { "n" } else { "p" };
         match &e.kind {
-            Kind::M { model, w, l, mult } if !model.name.is_empty() => Some((
+            Kind::M {
+                model,
+                w,
+                l,
+                mult,
+                geom,
+            } if !model.name.is_empty() => Some((
                 format!("M:{}:{}", model.name.to_ascii_lowercase(), model_type(model.ty)),
-                vec![*w, *l, *mult],
+                vec![*w, *l, *mult, geom.ad, geom.as_, geom.pd, geom.ps],
                 "device",
             )),
-            Kind::Q { model, area, mult } if !model.name.is_empty() => Some((
+            Kind::Q { model, area, mult, .. } if !model.name.is_empty() => Some((
                 format!("Q:{}:{}", model.name.to_ascii_lowercase(), model_type(model.ty)),
                 vec![*area, *mult],
                 "device",

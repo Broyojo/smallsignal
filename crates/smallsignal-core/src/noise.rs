@@ -142,7 +142,7 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                     of: SymOf::Param(nm.clone()),
                 }),
             ),
-            Kind::M { model, w, l, mult } => {
+            Kind::M { model, w, l, mult, .. } => {
                 let gm = match dev {
                     Some(DevOp::Mos(m)) => m.gm,
                     _ => f64::NAN,
@@ -337,7 +337,7 @@ impl Numeric<'_> {
         // most the number of reactive parameters (every monomial holds each
         // parameter at most once). So a Z still zero through that order is
         // identically zero, and no larger order is ever needed.
-        let degree = self.ss.reactive_mask.count_ones() as usize;
+        let degree = self.ss.params.iter().filter(|p| p.reactive).count();
         let top = (0..srcs.len())
             .filter_map(wanted)
             .map(|x| (x / 2.0).floor() as usize)
@@ -458,23 +458,19 @@ impl ScaledLu {
 /// term's degree in s is its number of reactive parameters.
 fn s_coeffs(sys: &System, ss: &SsCircuit) -> Vec<Vec<f64>> {
     let n = sys.dim;
-    let mut out: Vec<Vec<f64>> = Vec::new();
-    for (r, row) in sys.a.iter().enumerate() {
-        for (c, p) in row.iter().enumerate() {
-            for (&m, &k) in &p.terms {
-                let d = (m & ss.reactive_mask).count_ones() as usize;
-                while out.len() <= d {
-                    out.push(vec![0.0; n * n]);
-                }
-                let mut v = k as f64;
-                let mut bits = m;
-                while bits != 0 {
-                    v *= ss.params[bits.trailing_zeros() as usize].mna_value();
-                    bits &= bits - 1;
-                }
-                out[d][r * n + c] += v;
-            }
+    let mut out: Vec<Vec<f64>> = vec![vec![0.0; n * n]];
+    for t in &sys.terms {
+        let (d, v) = match t.param {
+            None => (0, t.coef as f64),
+            Some(p) => (
+                usize::from(ss.params[p].reactive),
+                t.coef as f64 * ss.params[p].mna_value(),
+            ),
+        };
+        if out.len() <= d {
+            out.push(vec![0.0; n * n]);
         }
+        out[d][t.row * n + t.col] += v;
     }
     out
 }

@@ -295,7 +295,7 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
         let e = &net.elements[ei];
         let n = &e.nodes;
         let dev = match (&e.kind, &op.dev[ei]) {
-            (Kind::M { model, w, l, mult }, Some(DevOp::Mos(m))) => {
+            (Kind::M { model, w, l, mult, .. }, Some(DevOp::Mos(m))) => {
                 let ty = model.ty;
                 let (ed, es) = if m.reversed { (n[2], n[0]) } else { (n[0], n[2]) };
                 let (vgs, vds, vbs) = if m.reversed {
@@ -341,7 +341,7 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                     boundary: mos_boundary(model, vgs, vds, vbs, n[3] != es, &junctions),
                 }
             }
-            (Kind::Q { model, area, mult }, Some(DevOp::Bjt(q))) => {
+            (Kind::Q { model, area, mult, .. }, Some(DevOp::Bjt(q))) => {
                 let ty = model.ty;
                 let vbe = Jet::var(ty * q.vbe, 0, ty);
                 let vce = Jet::var(ty * q.vce, 1, ty);
@@ -571,23 +571,13 @@ impl Probe<'_> {
         let lu = LuComplex::factor(self.sys.dim, matrix_at(self.sys, self.ss, s))?;
         // Each entry's terms (one per stamp monomial) evaluated alone.
         let n = self.sys.dim;
-        let rows = (0..n)
-            .map(|r| {
-                let mut t = Vec::new();
-                for c in 0..n {
-                    for (&m, &k) in &self.sys.a[r][c].terms {
-                        let mut v = k as f64;
-                        let mut bits = m;
-                        while bits != 0 {
-                            v *= self.ss.params[bits.trailing_zeros() as usize].mna_value();
-                            bits &= bits - 1;
-                        }
-                        t.push((c, v * s.powu((m & self.ss.reactive_mask).count_ones())));
-                    }
-                }
-                t
-            })
-            .collect();
+        let mut rows: Vec<Vec<(usize, Complex64)>> = vec![Vec::new(); n];
+        for t in &self.sys.terms {
+            rows[t.row].push((t.col, self.sys.term_value(t, self.ss, s)));
+        }
+        for row in rows.iter_mut() {
+            row.sort_by_key(|e| e.0);
+        }
         Some(Refined { rows, lu })
     }
 
@@ -2239,6 +2229,7 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 l
             cox: 3.45e-4,
             kf: 0.0,
             af: 1.0,
+            caps: Default::default(),
         }
     }
 
@@ -2294,6 +2285,7 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 l
             vaf: 40.0,
             kf: 0.0,
             af: 1.0,
+            caps: crate::caps::BjtCapModel::new(1.0),
         };
         for (vbe, vbc) in [(0.65, -2.0), (0.7, 0.5), (-1.0, -5.0)] {
             let ev = bjt_eval(&m, 1.0, 1.0, vbe, vbc, 1e-12);
