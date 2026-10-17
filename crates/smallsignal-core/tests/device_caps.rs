@@ -1,6 +1,7 @@
 //! Device capacitances: the values ngspice-47 gives at the operating point
 //! (each reference below printed by ngspice-47 with the oracle's options),
 //! their symbols, and what is left out.
+#![allow(clippy::excessive_precision)] // ngspice prints 16 digits
 
 mod common;
 
@@ -153,4 +154,43 @@ fn matched_pairs_share_capacitance_symbols() {
         .map(|p| p["latex"].as_str().unwrap())
         .collect();
     assert!(syms.contains(&"C_{gs1,2}") && syms.contains(&"C_{gd1,2}"), "{syms:?}");
+}
+
+/// Ignoring C_gd (the assumption term `cgd`) removes the Miller zero at
+/// +g_m/C_gd: the full model's gain has that right-half-plane zero, the
+/// assumed form none, and its fullModelError says how far the assumed form
+/// is from the full model at the requested frequencies.
+#[test]
+fn ignoring_cgd_removes_the_rhp_zero() {
+    let net = format!(
+        "cs\n{OPTIONS}VDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRS in g 1k\nRD vdd out 10k\nM1 out g 0 0 nm W=10u L=1u\n\
+         .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 tox=20n cgso=3e-10 cgdo=3e-10)\n"
+    );
+    let freqs = [1e6, 1e9, 1e10];
+    let full = run(&net, &at("VIN", "out", &freqs));
+    let gm = full["op"]["devices"]["M1"]["gm"].as_f64().unwrap();
+    let cgd = param(&full, "cgd_M1").unwrap()["value"].as_f64().unwrap();
+    let zeros = full["gain"]["zeros"].as_array().unwrap();
+    assert_eq!(zeros.len(), 1, "{zeros:?}");
+    let z = zeros[0]["re"].as_f64().unwrap();
+    assert!(rel(z, gm / cgd / (2.0 * std::f64::consts::PI)) < 1e-9, "{z}");
+
+    let mut req = json!({ "input": "VIN", "output": "out", "freqs": freqs });
+    req["assume"] = json!({ "ignore": [{ "element": "M1", "term": "cgd" }] });
+    let out = run(&net, &serde_json::from_value(req).unwrap());
+    let g = &out["gain"];
+    // Values, poles and zeros stay the full model's; the assumed form's
+    // roots pair with them under `assumed`, the RHP zero with none.
+    let paired = g["assumed"]["zeros"].as_array().unwrap();
+    assert_eq!(paired.len(), 1, "{g}");
+    assert!(paired[0]["assumed"].is_null());
+    assert!(rel(paired[0]["full"]["re"].as_f64().unwrap(), z) < 1e-12);
+    assert!(!g["exact"]["latex"].as_str().unwrap().contains("C_{gd1}"));
+    assert!(g["exact"]["latex"].as_str().unwrap().contains("C_{gs1}"));
+    // Without C_gd the gain is −g_m(r_o ∥ R_D)/(1 + s·C_gs·R_S): close at
+    // 1 MHz, far off by 10 GHz.
+    let err = g["exact"]["fullModelError"].as_f64().unwrap();
+    assert!(err > 0.1, "{err}");
+    let assumptions = out["assumptions"].to_string();
+    assert!(assumptions.contains("C_{gd1} = 0"), "{assumptions}");
 }

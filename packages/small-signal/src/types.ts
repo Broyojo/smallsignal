@@ -2,11 +2,28 @@
 
 /**
  * A term taken to its limit: a device's r_o, g_mb, r_bs, r_bd, r_π or r_μ
- * neglected (r → ∞, g_mb → 0), or a passive or diode taken open or shorted.
- * Reserved for device capacitances: cgs, cgd, cgb, cbs, cbd, cpi, cmu.
+ * neglected (r → ∞, g_mb → 0), a device capacitance taken to 0 (MOS
+ * C_gs, C_gd, C_gb, C_sb, C_db; BJT C_π, C_μ, substrate C_cs; diode C_j),
+ * or a passive or diode taken open or shorted.
  */
 export type AssumptionTerm =
-  "ro" | "gmb" | "rbs" | "rbd" | "rpi" | "rmu" | "open" | "short";
+  | "ro"
+  | "gmb"
+  | "rbs"
+  | "rbd"
+  | "rpi"
+  | "rmu"
+  | "cgs"
+  | "cgd"
+  | "cgb"
+  | "cbs"
+  | "cbd"
+  | "cpi"
+  | "cmu"
+  | "ccs"
+  | "cj"
+  | "open"
+  | "short";
 
 /** Per-device assumptions: terms neglected and regions expected. */
 export interface SmallSignalAssumptions {
