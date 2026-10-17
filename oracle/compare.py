@@ -161,6 +161,8 @@ def lower_keys(d: dict) -> dict:
 
 
 def by_freq(values: list[dict] | None, f: float) -> dict | None:
+    """The entry at frequency f (relative 1e-9, so f = 0 matches only 0).
+    Frequencies are matched, never logged: the solver may return f = 0."""
     for v in values or []:
         if math.isclose(float(v.get("f", math.nan)), f, rel_tol=1e-9):
             return v
@@ -208,18 +210,20 @@ def compare_noise(got: dict, want: dict, rep: Report):
         return el, kind_map.get((el[:1], src.get("kind")))
 
     solver_sources = {ng_key(s_) for s_ in gn.get("sources") or []}
-    expect: dict[float, dict[tuple[str, str], float]] = {}
+    # Per reference frequency (as by_freq matches them): {(element, source): v2}.
+    expect: list[tuple[float, dict[tuple[str, str], float]]] = []
     for c in want["noise"]["contributors"]:
         if c["source"] != "total":
             for w in c["values"]:
-                expect.setdefault(round(math.log10(w["f"]), 9), {})[(c["element"], c["source"])] = w["v2"]
-    rows = {round(math.log10(row["f"]), 9): row for row in gn.get("contributors") or []}
+                at = next((d for f, d in expect if math.isclose(f, w["f"], rel_tol=1e-9)), None)
+                if at is None:
+                    expect.append((w["f"], at := {}))
+                at[(c["element"], c["source"])] = w["v2"]
     if gn.get("contributors") is None:
         rep.failures.append("noise.contributors: missing")
-        expect = {}
-    for lf, ng in expect.items():
-        f = 10 ** lf
-        row = rows.get(lf) or {}
+        expect = []
+    for f, ng in expect:
+        row = by_freq(gn.get("contributors"), f) or {}
         listed = {k: s_.get("v2") for s_ in row.get("sources", []) if (k := ng_key(s_))[1]}
         smallest = min((v for v in listed.values() if v is not None), default=0.0)
         omitted = row.get("omitted")

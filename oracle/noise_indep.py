@@ -126,9 +126,10 @@ def noise(cir: Path, want: dict, freqs: list[float]) -> dict:
     return res
 
 
-def integrated(cir: Path, want: dict, f_low: float, f_high: float, dps: int = 30) -> dict:
+def integrated(cir: Path, want: dict, f_low: float, f_high: float, dps: int = 60) -> dict:
     """∫ S_out df and ∫ S_in df over [f_low, f_high] by adaptive quadrature in
-    log f (one panel per decade) of the exact 60-digit PSD. S_in = S_out/|H|²."""
+    log f (one panel per decade) of the exact PSD, all at `dps` digits (60,
+    as the rebuild). S_in = S_out/|H|²."""
     system, ni, bidx, net, side, models = indep.build_and_solve(cir, want, "full", want_system=True)
     mp.mp.dps = dps
     out_n, ref_n = side["output"], side.get("ref")
