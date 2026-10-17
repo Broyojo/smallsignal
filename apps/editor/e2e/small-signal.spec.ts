@@ -647,6 +647,10 @@ test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", as
     Math.abs((await percent("hd2")) / (0.01 / (4 * overdrive)) - 1),
   ).toBeLessThan(3e-3);
   expect(await percent("hd3")).toBeLessThan(1e-9);
+  // a₃ = 0, so the third-order intercept is infinite, not missing.
+  await expect(
+    section.locator('tr[data-quantity="iip3"] td').first(),
+  ).toHaveText("∞");
   // The output swing the numbers assume: |a₁|·A = gm·R1·A with λ = 0.
   const swing = engineering(
     await section.locator('tr[data-quantity="output"] td').first().innerText(),

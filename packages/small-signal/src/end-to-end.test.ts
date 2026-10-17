@@ -3,8 +3,11 @@ import { parseProject } from "@icm/project-protocol";
 import { describe, expect, it } from "vitest";
 import { smallSignalNetlist } from "./netlist.js";
 import type {
+  DistortionForm,
+  DistortionQuantity,
   NoiseExpression,
   NoiseSource,
+  SmallSignalDistortion,
   SmallSignalNoise,
 } from "./types.js";
 
@@ -283,6 +286,111 @@ describe.skipIf(!built)(
         declared(point, ["f", "sources", "omitted"]);
       for (const point of [...noise.input, ...noise.output])
         declared(point, ["f", "v2"]);
+    });
+  },
+);
+
+type Coefficient = SmallSignalDistortion["coefficients"][number];
+const DISTORTION_KEYS = allKeys<SmallSignalDistortion>()([
+  "coefficients",
+  "hd2",
+  "hd3",
+  "iip3",
+  "amplitude",
+  "inputUnit",
+  "nonlinear",
+  "order",
+  "vsFreq",
+  "symbols",
+  "taylor",
+  "check",
+  "omissionError",
+] as const);
+const FORM_KEYS = allKeys<DistortionForm>()([
+  "latex",
+  "value",
+  "plain",
+  "terms",
+  "relError",
+  "same",
+  "leakageMatters",
+  "method",
+  "tolerance",
+] as const);
+const QUANTITY_KEYS = allKeys<DistortionQuantity>()([
+  ...FORM_KEYS,
+  "display",
+  "simplified",
+  "skipped",
+] as const);
+const COEFFICIENT_KEYS = allKeys<Coefficient>()([
+  ...QUANTITY_KEYS,
+  "order",
+  "numeric",
+] as const);
+
+describe.skipIf(!built)(
+  "the distortion JSON matches the TypeScript contract",
+  () => {
+    it.each([
+      ["order 3", { order: 3 }],
+      ["order 2", { order: 2 }],
+      ["closed forms over budget", { order: 3, maxTerms: 4 }],
+    ])("%s: every field is present and declared", async (_, options) => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const project = parseProject(
+        readFileSync(
+          new URL(
+            "../test-fixtures/cs-vdd-pin-wired.icproj.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      const netlist = smallSignalNetlist(project)!;
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({
+            input: "V1",
+            output: "Vout",
+            freqs: [1e3, 1e6],
+            nonlinear: ["M1"],
+            amplitude: 0.01,
+            ...options,
+          }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      const distortion = result.distortion;
+      // Required fields are always there (null or empty when unavailable)...
+      expect(Object.keys(distortion).sort()).toEqual(
+        [...DISTORTION_KEYS].sort(),
+      );
+      // ...and nothing undeclared is.
+      const declared = (value: object | null, keys: readonly string[]) => {
+        if (value)
+          expect(
+            Object.keys(value).filter((key) => !keys.includes(key)),
+          ).toEqual([]);
+      };
+      for (const coefficient of distortion.coefficients) {
+        declared(coefficient, COEFFICIENT_KEYS);
+        declared(coefficient.display, FORM_KEYS);
+        declared(coefficient.simplified, FORM_KEYS);
+      }
+      for (const name of ["hd2", "hd3", "iip3"]) {
+        declared(distortion[name], QUANTITY_KEYS);
+        declared(distortion[name]?.display, FORM_KEYS);
+        declared(distortion[name]?.simplified, FORM_KEYS);
+      }
+      for (const point of distortion.vsFreq)
+        declared(point, ["f", "hd2", "hd3"]);
     });
   },
 );

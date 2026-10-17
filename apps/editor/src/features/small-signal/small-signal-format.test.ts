@@ -4,6 +4,7 @@ import {
   differentialPairs,
   formatDensity,
   formatDistortion,
+  taylorLatex,
   formatPlain,
   formatSpiceNumber,
   modelOverrides,
@@ -259,5 +260,18 @@ describe("distortion numbers", () => {
     expect(formatDistortion(0.0115)).toEqual(["1.15%", "-38.8 dBc"]);
     expect(formatDistortion(2.35e-5)).toEqual(["2.35e-3%", "-92.6 dBc"]);
     expect(formatDistortion(0)).toEqual(["0%", ""]);
+  });
+});
+
+describe("Taylor coefficient names", () => {
+  it("writes them as the solver's symbols do", () => {
+    const t = (element: string, current: string, monomial: string) =>
+      taylorLatex({ element, current, monomial });
+    expect(t("M1", "D", "2g")).toBe("K_{2g,M1}");
+    expect(t("M1", "D", "gd")).toBe("K_{g\\,d,M1}");
+    expect(t("M1", "D", "2gd")).toBe("K_{2g\\,d,M1}");
+    expect(t("Q1", "C", "2be")).toBe("K^{C}_{2be,Q1}");
+    expect(t("Q1", "C", "bece")).toBe("K^{C}_{be\\,ce,Q1}");
+    expect(t("Q1", "B", "2bece")).toBe("K^{B}_{2be\\,ce,Q1}");
   });
 });

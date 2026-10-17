@@ -236,23 +236,34 @@ export interface SmallSignalNoise {
 
 /** One closed form of a distortion quantity. */
 export interface DistortionForm {
+  /** null when too large to typeset. */
   latex: string | null;
   value: number | null;
-  terms?: number;
-  relError?: number;
+  /** Plain numerator/denominator for checking tools, when small enough. */
+  plain?: PlainFraction | null;
+  terms?: number | null;
+  relError?: number | null;
   same?: boolean;
+  leakageMatters?: boolean;
   /** Simplified forms: how they were made, e.g. "leading order (ro ≫ R, 1/gm)". */
   method?: string;
+  tolerance?: number;
 }
 
 export interface DistortionQuantity extends DistortionForm {
   display?: DistortionForm | null;
   simplified?: DistortionForm | null;
+  /** Why there is no exact form, e.g. "too large for the exact closed form". */
+  skipped?: string;
 }
 
 export interface SmallSignalDistortion {
   /** v_out = a1·v_in + a2·v_in² + a3·v_in³ around the bias. */
-  coefficients: (DistortionQuantity & { order: number })[];
+  coefficients: (DistortionQuantity & {
+    order: number;
+    /** The value from the numeric expansion (the closed forms' check). */
+    numeric: number | null;
+  })[];
   hd2: DistortionQuantity | null;
   hd3: DistortionQuantity | null;
   iip3: DistortionQuantity | null;
@@ -271,6 +282,19 @@ export interface SmallSignalDistortion {
     unit: string;
     elements: string[];
   }[];
+  /** Each device current's Taylor terms, e.g. 2g = v_GS², with its value. */
+  taylor: {
+    element: string;
+    current: string;
+    monomial: string;
+    order: number;
+    value: number;
+    kept: boolean;
+  }[];
+  /** The exact aₙ that materialized, against the numeric expansion. */
+  check: { ok: boolean; maxRelDiff: number; orders: number[] } | null;
+  /** Largest relative change from junctions left out of the model. */
+  omissionError: number | null;
 }
 
 export interface SmallSignalResult {

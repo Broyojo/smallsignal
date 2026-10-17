@@ -644,3 +644,14 @@ fn an_unaffordable_denominator_power_falls_back_per_quantity() {
     assert!(d["check"]["maxRelDiff"].as_f64().unwrap() < 1e-12);
     assert_eq!(fd["check"]["orders"], json!([1, 2, 3]));
 }
+
+/// Without an amplitude, a current input gets 1 µA, not 10 mA (10 mA into a
+/// diode biased at 1 mA is far outside any Taylor series).
+#[test]
+fn current_input_default_amplitude_is_one_microamp() {
+    let net = "ci\nIIN 0 in DC 1m AC 1\nD1 in 0 dm\n.model dm D (IS=1e-14)\n";
+    let r: Request = serde_json::from_value(json!({ "input": "IIN", "output": "in", "nonlinear": ["D1"] })).unwrap();
+    let out = smallsignal_core::analyze(net, &r).unwrap();
+    assert_eq!(out["distortion"]["amplitude"].as_f64(), Some(1e-6));
+    assert_eq!(out["distortion"]["inputUnit"], "A");
+}

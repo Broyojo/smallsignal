@@ -68,7 +68,7 @@ pub struct Request {
     /// 2 or 3 (default 3).
     #[serde(default)]
     pub order: Option<u8>,
-    /// Input amplitude for HD2/HD3 (default 10 mV, or 10 mA for a current input).
+    /// Input amplitude for HD2/HD3 (default 10 mV, or 1 µA for a current input).
     #[serde(default)]
     pub amplitude: Option<f64>,
 }
@@ -415,7 +415,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             freqs: &freqs,
             names: &req.nonlinear,
             order: req.order.unwrap_or(3),
-            amplitude: req.amplitude.unwrap_or(0.01),
+            // 10 mV, or 1 µA for a current input (as the panel).
+            amplitude: req.amplitude.unwrap_or(if input_is_v { 0.01 } else { 1e-6 }),
             tol,
             max_terms,
         };

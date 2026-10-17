@@ -172,7 +172,7 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   Built from S_in = Σ S_k (N_k/N_A)² with Cramer numerators on the gain
   system at s = 0, so the determinant cancels exactly.
 
-## Distortion (`nonlinear: ["M1", ...]`, `order` 2|3 (default 3), `amplitude` (default 0.01))
+## Distortion (`nonlinear: ["M1", ...]`, `order` 2|3 (default 3), `amplitude` (default 10 mV, or 1 µA for a current input))
 
 Each listed device's DC current is expanded to `order` about the operating
 point in all of its controlling voltages, exactly (truncated Taylor

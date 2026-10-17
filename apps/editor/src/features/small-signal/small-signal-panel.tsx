@@ -686,7 +686,7 @@ function ExtraWarnings({
 /** One form of an equation, as the caller knows it. */
 interface ShownForm {
   latex: string | null;
-  terms?: number;
+  terms?: number | null;
   /** Relative error against the exact form (junction leakage dropped). */
   relError?: number | null;
 }
@@ -741,7 +741,15 @@ function LeadFormula({
       </>
     );
   }
-  if (!shown?.latex) return null;
+  if (!shown?.latex) {
+    // No form small enough to typeset: say so rather than show nothing.
+    return (
+      <>
+        <Formula latex={`${symbol} = \\ldots`} />
+        <small className="small-signal-muted">too large to typeset</small>
+      </>
+    );
+  }
   const error = shown.relError ?? 0;
   const equals = shownIsExact || error < INVISIBLE_ERROR;
   return (
@@ -800,6 +808,22 @@ function DistortionFormula({
       exact={shownIsExact ? (shown?.latex ?? null) : quantity.latex}
     />
   );
+}
+
+/**
+ * A device Taylor coefficient as the solver writes it: K_{2g,M1},
+ * K_{g\\,d,M1}, K^{C}_{2be\\,ce,Q1} (the current is omitted for a drain).
+ */
+export function taylorLatex(term: {
+  element: string;
+  current: string;
+  monomial: string;
+}): string {
+  const factors =
+    term.monomial.match(/\d?(?:be|ce|bc|bs|bd|g|d|b)/gu)?.join("\\,") ??
+    term.monomial;
+  const current = term.current === "D" ? "" : `^{${term.current}}`;
+  return `K${current}_{${factors},${term.element}}`;
 }
 
 /** A distortion ratio as a percentage and in dBc. */
@@ -873,11 +897,19 @@ function DistortionDetails({
               </tr>
             ) : null,
           )}
-          {distortion.iip3?.value != null ? (
+          {distortion.iip3 ? (
+            // a₃ = 0 makes the intercept infinite, which is a result too.
             <tr data-quantity="iip3">
               <th scope="row">IIP3</th>
               <td>
-                {formatEngineering(distortion.iip3.value, distortion.inputUnit)}
+                {distortion.iip3.value != null
+                  ? formatEngineering(
+                      distortion.iip3.value,
+                      distortion.inputUnit,
+                    )
+                  : distortion.iip3.latex === "\\infty"
+                    ? "∞"
+                    : "—"}
               </td>
               <td />
             </tr>
@@ -938,26 +970,34 @@ function DistortionDetails({
           </tbody>
         </table>
       ) : null}
-      {distortion.symbols.length ? (
+      {distortion.taylor.length ? (
         <details className="small-signal-exact">
           <summary>Device coefficients</summary>
-          <table className="small-signal-values">
+          <table
+            className="small-signal-values"
+            aria-label="Device coefficients"
+          >
             <tbody>
-              {distortion.symbols.map((symbol) => (
-                <tr key={symbol.name}>
-                  <th scope="row">
-                    <Formula latex={symbol.latex} />
-                  </th>
-                  <td>
-                    {symbol.value == null
-                      ? ""
-                      : formatEngineering(
-                          symbol.value,
-                          symbol.unit.replace("^2", "²").replace("^3", "³"),
-                        )}
-                  </td>
-                </tr>
-              ))}
+              {distortion.taylor.map((term) => {
+                const label = taylorLatex(term);
+                return (
+                  <tr
+                    key={`${term.element} ${term.current} ${term.monomial}`}
+                    className={term.kept ? undefined : "small-signal-muted"}
+                  >
+                    <th scope="row">
+                      <Formula latex={label} />
+                    </th>
+                    <td>
+                      {formatEngineering(
+                        term.value,
+                        `A/V${term.order === 2 ? "²" : term.order === 3 ? "³" : `^${term.order}`}`,
+                      )}
+                    </td>
+                    <td>{term.kept ? "" : "not in the equations"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </details>
@@ -1387,6 +1427,10 @@ export function SmallSignalPanel({
   const [noiseResponse, setNoiseResponse] =
     useState<SmallSignalResponse | null>(null);
   const noiseClientRef = useRef<SmallSignalClient | null>(null);
+  // Distortion likewise has its own worker, so stopping one never stops
+  // the other.
+  const distortionClientRef = useRef<SmallSignalClient | null>(null);
+  const distortionBusy = useRef(false);
   // A noise solve was sent and its job is still the current one.
   const noiseBusy = useRef(false);
   const noiseGeneration = useRef(0);
@@ -1416,6 +1460,8 @@ export function SmallSignalPanel({
       clientRef.current = null;
       noiseClientRef.current?.dispose();
       noiseClientRef.current = null;
+      distortionClientRef.current?.dispose();
+      distortionClientRef.current = null;
     };
   }, []);
 
@@ -1587,8 +1633,9 @@ export function SmallSignalPanel({
     ];
     const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
     const timer = setTimeout(() => {
-      extraClientRef.current ??= createSmallSignalClient();
-      void extraClientRef.current
+      distortionClientRef.current ??= createSmallSignalClient();
+      distortionBusy.current = true;
+      void distortionClientRef.current
         .analyze(text, {
           ...job,
           nonlinear: devices,
@@ -1596,11 +1643,20 @@ export function SmallSignalPanel({
           amplitude: size,
         })
         .then((next) => {
-          if (current === distortionGeneration.current)
-            setDistortionResponse(next);
+          if (current !== distortionGeneration.current) return;
+          distortionBusy.current = false;
+          setDistortionResponse(next);
         });
     }, SOLVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      // As for Noise: stop a solve whose job is no longer wanted.
+      if (distortionBusy.current) {
+        distortionClientRef.current?.dispose();
+        distortionClientRef.current = null;
+        distortionBusy.current = false;
+      }
+    };
   }, [distortionKey]);
 
   const blocked = unconnected.length > 0 || noDcPath.length > 0 || noOutput;
