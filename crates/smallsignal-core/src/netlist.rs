@@ -224,6 +224,11 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
             let list: Vec<&str> = ignored.iter().map(|s| s.as_str()).collect();
             warnings.push(format!("Model {name} ignores {}", list.join(", ")));
         }
+        // TOX sets C_ox (KP, flicker noise), but ngspice also adds Meyer gate
+        // capacitances from it, which this solver does not model.
+        if matches!(kind.as_str(), "nmos" | "pmos") && params.get("tox").is_some_and(|&t| t > 0.0) {
+            warnings.push(format!("Model {name} has no gate capacitances from TOX"));
+        }
         cards.insert(name, Card { kind, params });
     }
 

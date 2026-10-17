@@ -7,6 +7,7 @@ import {
   modelOverrides,
   modelTextEdited,
   modelValue,
+  noiseBandRange,
   parseFrequencies,
   parseSpiceNumber,
   preferredOutput,
@@ -204,5 +205,17 @@ describe("model parameters", () => {
         pmos: { VTO: "-0.4" },
       }),
     ).toEqual({ nmos: { KP: 300e-6 }, pmos: { VTO: -0.4 } });
+  });
+});
+
+describe("noise band", () => {
+  it("takes two frequencies, low then high, within 40 decades", () => {
+    expect(noiseBandRange("1, 10meg")).toEqual([1, 1e7]);
+    expect(noiseBandRange("")).toBeNull();
+    expect(noiseBandRange("10meg, 1")).toBeNull();
+    expect(noiseBandRange("0, 1k")).toBeNull();
+    expect(noiseBandRange("1a, 1t")).toEqual([1e-18, 1e12]);
+    expect(noiseBandRange("1a, 1e30")).toBeNull();
+    expect(noiseBandRange("1, 2, 3")).toBeNull();
   });
 });

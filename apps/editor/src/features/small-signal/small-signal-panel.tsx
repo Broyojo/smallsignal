@@ -611,6 +611,27 @@ export function formatDensity(v2: number, unit: string): string {
   return `${formatEngineering(Math.sqrt(v2), base)}/√Hz`;
 }
 
+/** The solver integrates bands of up to 40 decades. */
+const MAX_BAND_DECADES = 40;
+
+/** "1, 10meg" → [1, 1e7]; null unless 0 < fLow < fHigh within 40 decades. */
+export function noiseBandRange(text: string): [number, number] | null {
+  const band = parseFrequencies(text);
+  if (band.length !== 2) return null;
+  const [low, high] = band as [number, number];
+  return low > 0 && high > low && Math.log10(high / low) <= MAX_BAND_DECADES
+    ? [low, high]
+    : null;
+}
+
+/** A solver note as a sentence: capitalized, with a full stop. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  const capital = trimmed[0]!.toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/u.test(capital) ? capital : `${capital}.`;
+}
+
 /** The largest sources, then one row for the rest. */
 export function topContributions(
   sources: readonly NoiseContribution[],
@@ -700,7 +721,9 @@ function NoiseDetails({
         </small>
       ) : null}
       {"unavailable" in noise.inputLowFreq ? (
-        <p className="small-signal-muted">{noise.inputLowFreq.unavailable}</p>
+        <p className="small-signal-muted">
+          {sentence(noise.inputLowFreq.unavailable)}
+        </p>
       ) : null}
       {noise.input.length ? (
         <table className="small-signal-values" aria-label="Noise density">
@@ -746,6 +769,11 @@ function NoiseDetails({
           Band
           <input
             aria-label="Noise band"
+            aria-invalid={
+              band.trim() !== "" && noiseBandRange(band) === null
+                ? true
+                : undefined
+            }
             placeholder="1, 10meg"
             value={band}
             autoCapitalize="off"
@@ -756,27 +784,37 @@ function NoiseDetails({
         </label>
       ) : null}
       {integrated ? (
-        integrated.inputRms === null || integrated.outputRms === null ? (
-          <small className="small-signal-muted">{integrated.unavailable}</small>
-        ) : (
+        <>
           <table className="small-signal-values" aria-label="Integrated noise">
             <tbody>
-              <tr>
-                <th scope="row">Input</th>
-                <td data-quantity="input-rms">
-                  {formatEngineering(integrated.inputRms, current ? "A" : "V")}{" "}
-                  rms
-                </td>
-              </tr>
-              <tr>
-                <th scope="row">Output</th>
-                <td data-quantity="output-rms">
-                  {formatEngineering(integrated.outputRms, "V")} rms
-                </td>
-              </tr>
+              {integrated.inputRms !== null ? (
+                <tr>
+                  <th scope="row">Input</th>
+                  <td data-quantity="input-rms">
+                    {formatEngineering(
+                      integrated.inputRms,
+                      current ? "A" : "V",
+                    )}{" "}
+                    rms
+                  </td>
+                </tr>
+              ) : null}
+              {integrated.outputRms !== null ? (
+                <tr>
+                  <th scope="row">Output</th>
+                  <td data-quantity="output-rms">
+                    {formatEngineering(integrated.outputRms, "V")} rms
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
-        )
+          {integrated.unavailable ? (
+            <small className="small-signal-muted">
+              {sentence(integrated.unavailable)}
+            </small>
+          ) : null}
+        </>
       ) : null}
     </>
   );
@@ -1149,16 +1187,9 @@ export function SmallSignalPanel({
     // requestKey covers the netlist text and every request field.
   }, [requestKey]);
 
-  const band = parseFrequencies(noiseBand);
+  const band = noiseBandRange(noiseBand);
   const noiseKey =
-    noiseOpen && requestKey
-      ? JSON.stringify([
-          requestKey,
-          band.length === 2 && band[0]! > 0 && band[1]! > band[0]!
-            ? band
-            : null,
-        ])
-      : null;
+    noiseOpen && requestKey ? JSON.stringify([requestKey, band]) : null;
   useEffect(() => {
     if (!noiseKey) return;
     const [key, range] = JSON.parse(noiseKey) as [

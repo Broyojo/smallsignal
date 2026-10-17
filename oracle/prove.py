@@ -36,6 +36,7 @@ from pathlib import Path
 
 import run_ngspice
 import spice
+from indep import model_params  # reads SPICE suffixes (KF=1f, TOX=100n)
 from compare import Report, compare, is_inf
 
 BASE_OPTIONS = run_ngspice.OPTIONS
@@ -133,13 +134,6 @@ def gmin_scaling(binary: str, cir: Path, side: dict, op_only: bool = False) -> t
             continue
         return False, f"{k}: |diff| {d1:.3g} -> {d2:.3g} does not scale with gmin"
     return True, "; ".join(notes)
-
-
-def model_params(text: str) -> dict[str, dict[str, float]]:
-    out = {}
-    for m in re.finditer(r"^\.model\s+(\S+)\s+\S+\s*\(?([^)\n]*)\)?", text, re.I | re.M):
-        out[m.group(1).lower()] = {k.lower(): float(v) for k, v in re.findall(r"(\w+)=([-+\d.eE]+)", m.group(2))}
-    return out
 
 
 def forced_nodes(net: spice.Netlist) -> set[str]:
