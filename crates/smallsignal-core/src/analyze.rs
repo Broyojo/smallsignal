@@ -1017,6 +1017,29 @@ impl AssumeSetup<'_> {
     }
 }
 
+/// The gain system's model under assumptions, with what the gain cannot do
+/// without put back (as `analyze` builds it): the certificate's model.
+pub(crate) fn gain_model(
+    net: &Netlist,
+    full: &SsCircuit,
+    a: &crate::assume::Assume,
+    excite: &Excite,
+    matched: &[Vec<String>],
+) -> SsCircuit {
+    let (amatched, _) = consistent_groups(net, matched, a);
+    let units = crate::assume::units(a, element_groups(net, &amatched));
+    let vanishes = |m: &SsCircuit| {
+        let m = m.omit(&m.optional);
+        crate::pencil::vanishes(&ss::system(net, &m, excite), &m, None, true)
+    };
+    let restored = if vanishes(full) {
+        Vec::new()
+    } else {
+        crate::assume::restore(&units, |r| vanishes(&crate::assume::apply(full, a, r)))
+    };
+    crate::assume::apply(full, a, &restored)
+}
+
 /// "M1", "M1 and M2", "M1, M2 and M3".
 fn join_names(names: &[&str]) -> String {
     match names {
