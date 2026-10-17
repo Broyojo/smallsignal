@@ -315,6 +315,19 @@ fn requests_are_validated() {
     let mut both = miller(&[("M1", Some("cgd"))]);
     both["ignore"] = json!([{ "element": "M1", "term": "cgd" }]);
     assert_eq!(err(both), "assume: cgd of M1 cannot be both neglected and Miller");
+    // A diode taken open leaves out its C_j, a shorted one merges its ends.
+    let net = "diode\nVIN in 0 DC 0.7 AC 1\nR1 in a 1k\nD1 a out dm\nR2 out 0 1k\n.model dm D (IS=1e-14 CJO=1p)\n";
+    let err = |assume: Value| run_err(net, &req("VIN", "out", &[1e3], json!({ "assume": assume })));
+    for (term, word) in [("open", "open"), ("short", "short")] {
+        let mut both = miller(&[("D1", Some("cj"))]);
+        both["ignore"] = json!([{ "element": "D1", "term": term }]);
+        assert_eq!(err(both), format!("assume: D1 cannot be both {word} and Miller"));
+    }
+    let v = run(
+        net,
+        &req("VIN", "out", &[1e3], json!({ "assume": miller(&[("D1", Some("cj"))]) })),
+    );
+    assert_eq!(v["assumptions"]["miller"][0]["latex"], "C_{j1}");
     // A repeat is one split.
     let v = run(
         CS,

@@ -123,7 +123,15 @@ pub fn resolve(
                     e.name
                 ))
             }
-            Some(_) => {}
+            // A diode taken open leaves out its C_j too, a shorted one
+            // merges its ends.
+            Some(_) => {
+                for (t, word) in [(Term::Open, "open"), (Term::Short, "short")] {
+                    if ignored.contains(&(ei, t)) {
+                        return Err(format!("assume: {} cannot be both {word} and Miller", e.name));
+                    }
+                }
+            }
         }
         let name = param_name(&e.kind, term, &e.name);
         let param = full.params.iter().position(|p| p.name == name && p.element == e.name);
@@ -196,7 +204,12 @@ pub fn gains(
         let what = t.what();
         let refuse =
             |why: &str, warnings: &mut Vec<String>| warnings.push(format!("No Miller split for {what}, {why}"));
-        let Some(p) = t.param else {
+        // In the full model, and still in the assumed one.
+        let kept = |p: usize| {
+            let fp = &full.params[p];
+            base.params.iter().any(|q| q.name == fp.name && q.element == fp.element)
+        };
+        let Some(p) = t.param.filter(|&p| kept(p)) else {
             refuse("it is not in the model", warnings);
             continue;
         };
