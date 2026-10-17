@@ -258,6 +258,9 @@ pub struct Point {
     pub gain: Complex64,
     /// |transfer|² from each source to the output (V²/A²).
     pub z2: Vec<f64>,
+    /// At f = 0 only: lim f→0 of |transfer|²·PSD for each flicker source
+    /// (exponent > 0) whose transfer vanishes at DC (see `dc_limits`).
+    pub dc_limit: Vec<Option<f64>>,
 }
 
 impl Numeric<'_> {
@@ -299,10 +302,111 @@ impl Numeric<'_> {
             .map(|(&b, &v)| v * b as f64)
             .sum::<Complex64>()
             / self.vid;
-        let z2 = srcs.iter().map(|s| (col(s.a) - col(s.b)).norm_sqr()).collect();
+        let z2: Vec<f64> = srcs.iter().map(|s| (col(s.a) - col(s.b)).norm_sqr()).collect();
+        let dc_limit = if f == 0.0 {
+            self.dc_limits(&y, &lu, srcs, &z2)
+        } else {
+            Vec::new()
+        };
         let err = if cond { lu.cond1() * f64::EPSILON } else { 0.0 };
-        Some((Point { gain, z2 }, err))
+        Some((Point { gain, z2, dc_limit }, err))
     }
+
+    /// lim f→0 of |Z(j2πf)|²·c/f^x for each flicker source (x > 0) whose
+    /// transfer Z vanishes at s = 0. With Z(s) = Σ z_n sⁿ and k the order of
+    /// its zero (the first z_n ≠ 0): 0 when 2k > x, c·|z_k|²·(2π)^{2k} when
+    /// 2k = x, ∞ when 2k < x. The z_n come from the Taylor series of the
+    /// adjoint: with A(s) = Σ A_d s^d, A₀ᵀ y_n = −Σ_{d≥1} A_dᵀ y_{n−d}, on
+    /// the LU of A₀ᵀ already factored. A zero is an exact floating-point zero,
+    /// as for z₀ (a transfer that only rounds to zero counts as nonzero, so
+    /// an unresolved case is ∞, never a dropped term).
+    fn dc_limits(&self, y0: &[Complex64], lu: &LuComplex, srcs: &[Source], z2: &[f64]) -> Vec<Option<f64>> {
+        let wanted = |k: usize| match srcs[k].flicker {
+            Some((_, x)) if x > 0.0 && z2[k] == 0.0 => Some(x),
+            _ => None,
+        };
+        if (0..srcs.len()).all(|k| wanted(k).is_none()) {
+            return Vec::new();
+        }
+        // Orders beyond this are not expanded: a source still zero there is
+        // left unresolved (∞).
+        const MAX_ORDER: usize = 64;
+        let top = (0..srcs.len())
+            .filter_map(wanted)
+            .map(|x| (x / 2.0).floor() as usize)
+            .max()
+            .unwrap_or(0);
+        let orders = top.min(MAX_ORDER);
+        let n = self.sys.dim;
+        let coeffs = if orders > 0 {
+            s_coeffs(self.sys, self.ss)
+        } else {
+            Vec::new()
+        };
+        let mut ys: Vec<Vec<Complex64>> = vec![y0.to_vec()];
+        for k in 1..=orders {
+            let mut rhs = vec![Complex64::new(0.0, 0.0); n];
+            for (d, a) in coeffs.iter().enumerate().skip(1) {
+                if d > k {
+                    break;
+                }
+                let prev = &ys[k - d];
+                for (r, row) in a.chunks(n).enumerate() {
+                    for (c, &v) in row.iter().enumerate() {
+                        if v != 0.0 {
+                            rhs[c] -= v * prev[r];
+                        }
+                    }
+                }
+            }
+            ys.push(lu.solve(&rhs));
+        }
+        let at = |y: &[Complex64], node: usize| self.sys.node_col[node].map(|k| y[k]).unwrap_or_default();
+        (0..srcs.len())
+            .map(|k| {
+                let x = wanted(k)?;
+                let (c, _) = srcs[k].flicker?;
+                let s = &srcs[k];
+                let first = (1..=orders)
+                    .map(|o| (o, (at(&ys[o], s.a) - at(&ys[o], s.b)).norm_sqr()))
+                    .find(|&(_, z)| z != 0.0);
+                Some(match first {
+                    Some((o, z)) if 2.0 * o as f64 == x => c * z * (2.0 * std::f64::consts::PI).powi(2 * o as i32),
+                    Some((o, _)) if 2.0 * o as f64 > x => 0.0,
+                    Some(_) => f64::INFINITY,
+                    // Zero through every order with 2n ≤ x: the zero's order
+                    // exceeds x/2 (unless the expansion stopped short).
+                    None if (x / 2.0).floor() as usize <= MAX_ORDER => 0.0,
+                    None => f64::INFINITY,
+                })
+            })
+            .collect()
+    }
+}
+
+/// A(s) = Σ_d A_d s^d as dense real matrices A_0, A_1, … (row-major): each
+/// term's degree in s is its number of reactive parameters.
+fn s_coeffs(sys: &System, ss: &SsCircuit) -> Vec<Vec<f64>> {
+    let n = sys.dim;
+    let mut out: Vec<Vec<f64>> = Vec::new();
+    for (r, row) in sys.a.iter().enumerate() {
+        for (c, p) in row.iter().enumerate() {
+            for (&m, &k) in &p.terms {
+                let d = (m & ss.reactive_mask).count_ones() as usize;
+                while out.len() <= d {
+                    out.push(vec![0.0; n * n]);
+                }
+                let mut v = k as f64;
+                let mut bits = m;
+                while bits != 0 {
+                    v *= ss.params[bits.trailing_zeros() as usize].mna_value();
+                    bits &= bits - 1;
+                }
+                out[d][r * n + c] += v;
+            }
+        }
+    }
+    out
 }
 
 /// Output PSD and each source's share of it at one frequency.
@@ -310,7 +414,12 @@ pub fn output_psd(p: &Point, srcs: &[Source], f: f64) -> (f64, Vec<f64>) {
     let parts: Vec<f64> = srcs
         .iter()
         .zip(&p.z2)
-        .map(|(s, &z2)| if z2 == 0.0 { 0.0 } else { z2 * s.psd(f) })
+        .enumerate()
+        .map(|(k, (s, &z2))| match p.dc_limit.get(k).copied().flatten() {
+            Some(v) => v,
+            None if z2 == 0.0 => 0.0,
+            None => z2 * s.psd(f),
+        })
         .collect();
     (parts.iter().sum(), parts)
 }
@@ -528,6 +637,9 @@ pub fn low_freq(
     };
     let mut mismatch = symbols.mismatch;
     let mut cur_index: Vec<Option<usize>> = Vec::new();
+    // Each current symbol's kind (I_C, I_B, I_D), by index from nbase: only
+    // currents of the same kind merge, whatever their names or values.
+    let mut kinds: Vec<(&str, &str)> = Vec::new();
     for s in srcs {
         let Some(SymPsd {
             of: SymOf::Current(c), ..
@@ -538,7 +650,7 @@ pub fn low_freq(
         };
         let twin = (nbase..syms.len()).find(|&k| {
             let t = &syms[k];
-            t.name.split('_').next() == c.name.split('_').next()
+            kinds[k - nbase] == (c.base, c.sub)
                 && dev_class(&t.elements[0]).is_some()
                 && dev_class(&t.elements[0]) == dev_class(&s.element)
                 && (c.value.is_nan() && t.value.is_nan()
@@ -567,6 +679,7 @@ pub fn low_freq(
                     output_r: false,
                     leakage: false,
                 });
+                kinds.push((c.base, c.sub));
                 cur_index.push(Some(syms.len() - 1));
             }
         }

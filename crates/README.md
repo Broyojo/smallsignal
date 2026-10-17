@@ -134,7 +134,11 @@ Output PSD S_out = Σ|Z_k|²·S_k with every transfer Z_k from one adjoint LU
 solve per frequency on the full model (input source zeroed); input-referred
 S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
 
-- `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite, e.g. flicker with AF > 0 at 0 Hz).
+- `output`, `input`: `[{f, v2}]` at `freqs` (v2 null where infinite or
+  undefined). At 0 Hz a flicker source with AF > 0 gives the f → 0 limit of
+  \|Z(f)\|²·c/f^AF: for a transfer Z with a zero of order k at DC (k = 0: none),
+  0 when 2k > AF, c·\|lim Z/fᵏ\|² when 2k = AF, null (∞) when 2k < AF.
+  `input` is null at 0 Hz when the gain vanishes there.
 - `contributors`: `[{f, sources: [{element, kind, v2, fraction}], omitted?}]`,
   per frequency, sorted by output contribution. At most the 32 largest
   sources are listed; the rest are summed in `omitted: {count, v2,

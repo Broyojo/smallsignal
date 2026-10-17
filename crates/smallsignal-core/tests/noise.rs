@@ -557,3 +557,74 @@ fn bjt_flicker_with_af_zero_survives_zero_bias() {
         .unwrap_or_else(|| panic!("no Q1 flicker: {}", out["noise"]["sources"]));
     assert_eq!(flicker["flicker"]["coef"].as_f64().unwrap(), 1e-12);
 }
+
+/// Symbolic BJT: collector and base shot noise are two quantities, each
+/// with its own current symbol (both values are NaN, so only the current's
+/// kind tells them apart).
+#[test]
+fn symbolic_bjt_keeps_collector_and_base_currents_apart() {
+    let net = "ce\nVCC vcc 0\nVIN in 0\nRB in b\nRC vcc c\nQ1 c b 0\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "c", "noise": true })));
+    let lf = &r["noise"]["inputLowFreq"];
+    let cur: Vec<&str> = lf["currents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["latex"].as_str().unwrap())
+        .collect();
+    assert_eq!(cur, ["I_{C1}", "I_{B1}"], "{}", lf["currents"]);
+    let latex = lf["exact"]["latex"].as_str().unwrap();
+    assert!(latex.contains("I_{C1}") && latex.contains("I_{B1}"), "{latex}");
+    let shot = lf["exact"]["shot"]["num"].as_str().unwrap();
+    assert!(shot.contains("IC_Q1") && shot.contains("IB_Q1"), "{shot}");
+}
+
+/// A CS stage AC-coupled to its load: M1's flicker reaches the output
+/// through a first-order zero, Z(s) ≈ z₁·s with |z₁| = Rd·C·RL. As f → 0,
+/// |Z|²·c/f^AF → 0 for AF < 2, c·(2π·Rd·C·RL)² for AF = 2, ∞ for AF > 2;
+/// RL's own thermal noise stays (4kT·RL). The gain vanishes at DC, so the
+/// input-referred value has no limit to give.
+#[test]
+fn flicker_through_an_ac_coupled_output_at_dc() {
+    let base = "acc\n.options gmin=1e-18\nVDD vdd 0 5\nVIN in 0 DC 0.7 AC 1\nRD vdd d 10k\n\
+M1 d in 0 0 nm W=10u L=1u\nC1 d out 1u\nRL out 0 10k\n\
+.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 kf=1e-24 af=AF)\n";
+    let flicker_at_dc = |af: &str| {
+        let r = run(
+            &base.replace("AF", af),
+            &req(json!({ "input": "VIN", "output": "out", "freqs": [0.0, 1e-4], "noise": true })),
+        );
+        let m = dev(&r, "M1");
+        let (gm, gds) = (m["gm"].as_f64().unwrap(), m["gds"].as_f64().unwrap());
+        let rd = 1.0 / (gds + 1e-4);
+        let c = 1e-24 * gm * gm / (COX * 1e-11);
+        let limit = c * (2.0 * std::f64::consts::PI * rd * 1e-6 * 1e4).powi(2);
+        let n = &r["noise"];
+        assert!(n["input"][0]["v2"].is_null(), "{}", n["input"]);
+        let flicker = n["contributors"][0]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "flicker")
+            .map(|s| s["v2"].clone());
+        (
+            n["output"][0]["v2"].as_f64(),
+            n["output"][1]["v2"].as_f64().unwrap(),
+            flicker,
+            limit,
+        )
+    };
+    let white = FOUR_KT * 1e4;
+    // AF = 1: 2k > AF, the flicker term vanishes.
+    let (v0, _, fl, _) = flicker_at_dc("1");
+    assert!(rel(v0.unwrap(), white) < 1e-12, "{v0:?}");
+    assert_eq!(fl.unwrap().as_f64(), Some(0.0));
+    // AF = 2: 2k = AF, a finite flicker term, the limit of the f > 0 spectrum.
+    let (v0, v_small, fl, limit) = flicker_at_dc("2");
+    assert!(rel(v0.unwrap(), white + limit) < 1e-9, "{v0:?} vs {}", white + limit);
+    assert!(rel(fl.unwrap().as_f64().unwrap(), limit) < 1e-9);
+    assert!(rel(v_small, white + limit) < 1e-6, "{v_small}");
+    // AF = 3: 2k < AF, unbounded.
+    let (v0, _, _, _) = flicker_at_dc("3");
+    assert!(v0.is_none(), "{v0:?}");
+}
