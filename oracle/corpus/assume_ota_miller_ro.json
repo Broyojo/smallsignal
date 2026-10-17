@@ -45,5 +45,9 @@
    }
   ]
  },
+ "suggest": {
+  "quantity": "rout",
+  "threshold": 0.05
+ },
  "description": "Every ro ignored: the gain and Zout are unbounded at DC without the ro at the high-impedance nodes, which are kept."
 }
