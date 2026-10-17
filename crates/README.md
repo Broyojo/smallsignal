@@ -191,7 +191,7 @@ defaults are ngspice's and add none (`caps.rs`):
 | MOS | C_db, C_sb | czb·(1 − v/PB)^−MJ + czbsw·(1 − v/PB)^−MJSW below FC·PB, else f2 + f3·v (mos1temp); czb = CBD·M if given, else CJ·AD·M; czbsw = CJSW·PD·M (S side alike) |
 | BJT | C_π | TF·∂I_F/∂v_BE (with v_BE > 0: XTF·exp(v_BC/(1.44·VTF))·(I/(I + ITF·AREA))², over q_b) + CJE·AREA depletion (VJE, MJE ≤ 0.999, FC ≤ 0.9999) |
 | BJT | C_μ | TR·g_bc + CJC·AREA depletion, both XCJC parts (no RB: one node) |
-| BJT | C_cs | CJS·AREA·(1 − v/VJS)^−MJS for v < 0, else ·(1 + MJS·v/VJS); to the collector (SUBS = 1, NPN default) or base (−1, PNP); the substrate is ground unless named, and a named one that connects to nothing else has none |
+| BJT | C_cs | CJS·AREA·(1 − v/VJS)^−MJS for v < 0, else ·(1 + MJS·v/VJS); to the collector (SUBS = 1, NPN default) or base (−1, PNP); the substrate is ground unless named. A named one only BJTs share floats, held (as in ngspice) by each substrate junction's gmin·M (r_{sub}, junction leakage), and one a single BJT names alone has none |
 | BJT | C_x | −geqcb: the b–e diffusion charge's dependence on v_BC (TF with VAF or VTF), a transcapacitance C_x·s·v_bc from emitter to base |
 | diode | C_j | TT·g_d (g_d with gmin) + CJO·AREA·M depletion (VJ, M, FC) |
 

@@ -99,6 +99,7 @@ fn device_sub(kind: &str) -> Option<(&'static str, &'static str)> {
         "rbs" => ("r", "bs"),
         "rbd" => ("r", "bd"),
         "rd" => ("r", "d"),
+        "rsub" => ("r", "sub"),
         _ => return crate::ss::cap_sub(kind).map(|sub| ("C", sub)),
     })
 }
@@ -301,8 +302,8 @@ pub fn symbols(
                 role: p.role,
                 unit: p.unit,
                 elements,
-                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
-                leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd"),
+                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd" | "rsub") && !p.linear,
+                leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd" | "rsub"),
             });
         }
     }
@@ -325,8 +326,11 @@ pub fn unmerged(ss: &SsCircuit) -> Symbols {
             role: p.role,
             unit: p.unit,
             elements: vec![p.element.clone()],
-            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
-            leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd"),
+            output_r: matches!(
+                kind_of(&p.name, &p.element).as_str(),
+                "ro" | "rmu" | "rbs" | "rbd" | "rsub"
+            ) && !p.linear,
+            leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd" | "rsub"),
         })
         .collect();
     Symbols {

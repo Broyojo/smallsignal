@@ -554,7 +554,10 @@ pub fn s_orders(
     class: Option<&[usize]>,
 ) -> Option<(usize, usize)> {
     let reactive: Vec<bool> = ss.params.iter().map(|p| p.reactive).collect();
-    let m = reactive.iter().filter(|&&r| r).count();
+    // det's degree in s is at most the number of reactive parameters and at
+    // most the matrix order (each row contributes one factor).
+    let order = sys.dim + usize::from(border.is_some());
+    let m = reactive.iter().filter(|&&r| r).count().min(order);
     let of = |i: usize| class.map_or(i, |c| c[i]);
     let classes = (0..reactive.len()).map(|i| of(i) + 1).max().unwrap_or(0);
     let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
