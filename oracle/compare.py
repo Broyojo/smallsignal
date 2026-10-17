@@ -21,7 +21,7 @@ from pathlib import Path
 
 import distortion
 import spice
-from run_ngspice import OPTIONS, requested, settings, rel_diff
+from run_ngspice import requested, settings, rel_diff, sidecar_options
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -46,18 +46,18 @@ def cli_command() -> list[str]:
     return ["cargo", "run", "-q", "--release", "-p", "smallsignal-cli", "--"]
 
 
-def with_options(cir: Path) -> Path:
+def with_options(cir: Path, side: dict) -> Path:
     """Copy of the netlist with the same .options (gmin etc.) ngspice ran with."""
     title, _, body = cir.read_text().partition("\n")
     tmp = tempfile.NamedTemporaryFile("w", suffix=".cir", delete=False)
-    tmp.write(f"{title}\n{OPTIONS}\n{body}")
+    tmp.write(f"{title}\n{sidecar_options(side)}\n{body}")
     tmp.close()
     return Path(tmp.name)
 
 
 def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
     out = side["output"] + (f":{side['ref']}" if side.get("ref") else "")
-    net = with_options(cir)
+    net = with_options(cir, side)
     args = [*cmd, "analyze", str(net), "--input", side["input"], "--output", out, "--verify"]
     # The CLI takes one frequency list: the sidecar's freqs plus any noise.freqs.
     noise_spec = settings(side, "noise") or {}

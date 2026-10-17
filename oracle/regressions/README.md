@@ -37,6 +37,12 @@ same evidence verdict, and checked to be physical (no junction above 1 A,
 | `bulk_junction_threshold` | 15 OMITTED_PHYSICS (10 threshold-only, 4 with the stiff rule, 1 needing several small junctions together) | `JUNCTION_REL = 1e-6`: a junction under 1e-6 of its node's other DC conductance is dropped. Zero- and weak-bias junctions (IS/Vt ≈ 3.9e-13 S, up to about 8e-10 S) on high-impedance or Miller-amplified nodes still move outputs by ≥ 1e-6 (here Rin by 1.1e-6; elsewhere up to 1e-4 of Rin on 1e10–1e12 Ω nodes). A relative node-local threshold can't bound the effect on the output. | Keep every junction conductance in the exact model (they are model terms, not numerics); prune only in the simplified view, where the error is already measured. |
 | `bjt_gmu_threshold` | 4 OMITTED_PHYSICS (wildmixed_504_011, _503_003, _505_040; wildmos_500_030 partly) | `ss.rs`: rμ is kept only if `q.gmu > 1e-6 * q.gpi`. gμ couples base and collector and is Miller-multiplied. In the repro the collector is on the signal path, so the gain is exactly 0 without it (ngspice 2.27e-9). In wildmixed_504_011 the collector is the input node and Rin is off by 9.5e-4. | Always include rμ (gμ = gbc/BR + gmin) in the exact model. |
 
+## Large circuits
+
+| File | Root cause |
+|---|---|
+| `dc_opamp_bjt_15v` | A 25-BJT op-amp (741 topology) at ±15 V: DC failed with "Q6's model overflows" at about 5% of input offsets. `pnjlim` lacked ngspice's reverse step limit (−vold − 1 from forward bias, else 2·vold − 1), so Newton threw junctions hundreds of volts negative and the swing back overflowed; gmin and source stepping failed too. Every exact form is over the term budget (`tooLarge`). |
+
 ## Fuzz differences proven NOT to be solver bugs (`triage.py` verdicts)
 
 Each verdict comes from a check that can fail. The tools are `prove.py`,

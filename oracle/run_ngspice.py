@@ -38,6 +38,14 @@ def current_options() -> str:
     return _OPTIONS_OVERRIDE.get() or OPTIONS
 
 
+def sidecar_options(side: dict) -> str:
+    """OPTIONS at the sidecar's `gmin` when it sets one (both simulators run
+    with it, e.g. 1e-18 where a gmin-level gap the solver does not model
+    vanishes)."""
+    gmin = side.get("gmin")
+    return OPTIONS if gmin is None else re.sub(r"gmin=\S+", f"gmin={float(gmin)!r}", OPTIONS)
+
+
 @contextlib.contextmanager
 def options_override(options: str):
     """Run ngspice with `options` in this thread only."""
@@ -464,6 +472,13 @@ def cval(f: float, z: complex | None) -> dict:
 
 def process(cir: Path, out_dir: Path, keep: Path | None) -> dict:
     side = json.loads(cir.with_suffix(".json").read_text())
+    if side.get("gmin") is None:
+        return _process(cir, side, out_dir, keep)
+    with options_override(sidecar_options(side)):
+        return _process(cir, side, out_dir, keep)
+
+
+def _process(cir: Path, side: dict, out_dir: Path, keep: Path | None) -> dict:
     net = spice.parse(cir.read_text())
     name = cir.stem
     op, gain, zin = op_and_ac(net, side, keep, name)
