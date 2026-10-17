@@ -372,6 +372,17 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         ),
     );
 
+    // Stability at this bias: the circuit's natural frequencies (the roots of
+    // its determinant, every source zeroed).
+    if !symbolic {
+        let modes = Expr::from_mna(&XPoly::constant(1, symbols.syms.len()), &x(&d)?, &symbols.syms);
+        match rhp_poles(&modes) {
+            0 => {}
+            1 => warnings.push("Unstable at this bias: a right-half-plane pole.".to_string()),
+            _ => warnings.push("Unstable at this bias: right-half-plane poles.".to_string()),
+        }
+    }
+
     if req.noise || req.noise_band.is_some() {
         let poles_hz: Vec<f64> = if symbolic {
             Vec::new()
@@ -1019,6 +1030,28 @@ pub(crate) fn cancel(num: &XPoly, den: &XPoly) -> (XPoly, XPoly) {
         (Some(qn), Some(qd)) => (to_x(qn), to_x(qd)),
         _ => (num.clone(), den.clone()),
     }
+}
+
+/// Roots of `e`'s denominator in the right half-plane (re > 1e-6·|p|, so
+/// roundoff on the jω axis does not count), or 0 when the sign of some
+/// coefficient is uncertain (its terms cancel below their rounding error).
+fn rhp_poles(e: &Expr) -> usize {
+    let deg = e.den.iter().map(|t| t.spow).max().unwrap_or(0) as usize;
+    if deg == 0 {
+        return 0;
+    }
+    let shift = e.den.iter().map(|t| t.lmag).fold(f64::NEG_INFINITY, f64::max);
+    let (mut sum, mut abs) = (vec![0.0; deg + 1], vec![0.0; deg + 1]);
+    for t in &e.den {
+        let m = (t.lmag - shift).exp();
+        sum[t.spow as usize] += t.sign * m;
+        abs[t.spow as usize] += m;
+    }
+    let rounding = (e.den.len() as f64 + 4.0) * f64::EPSILON;
+    if sum.iter().zip(&abs).any(|(c, a)| *a > 0.0 && c.abs() <= rounding * a) {
+        return 0;
+    }
+    roots(&sum).iter().filter(|p| p.re > 1e-6 * p.norm()).count()
 }
 
 /// Assumption labels of the symbolic hand-analysis forms.

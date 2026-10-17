@@ -652,6 +652,30 @@ fn symbolic_counts_poles_and_zeros() {
     );
 }
 
+/// An operating point with a right-half-plane natural frequency is named:
+/// positive feedback through a VCVS of gain k puts the pole at
+/// (k − 2)/(2π R C), unstable above k = 2. A lossless LC (poles on the jω
+/// axis) is not.
+#[test]
+fn right_half_plane_poles_are_warned() {
+    let net = |k: &str| format!("pf\nVIN in 0 AC 1\nR1 in a 1k\nR2 out a 1k\nC1 a 0 1n\nE1 out 0 a 0 {k}\n");
+    let r = run(&net("3"), &request("VIN", "out"));
+    assert_eq!(
+        r["warnings"],
+        json!(["Unstable at this bias: a right-half-plane pole."])
+    );
+    let pole = r["gain"]["poles"][0]["re"].as_f64().unwrap();
+    assert!(
+        (pole / (1.0 / (2.0 * std::f64::consts::PI * 1e-6)) - 1.0).abs() < 1e-9,
+        "{pole}"
+    );
+    let r = run(&net("1.5"), &request("VIN", "out"));
+    assert_eq!(r["warnings"], json!([]));
+    let lc = "lc\nIIN 0 a AC 1\nL1 a 0 1u\nC1 a 0 1n\nL2 a b 1u\nC2 b 0 1n\n";
+    let r = run(lc, &request("IIN", "b"));
+    assert_eq!(r["warnings"], json!([]));
+}
+
 // ---- Overflowing models -----------------------------------------------------
 
 /// A device equation that overflows names the device; it is never reported
