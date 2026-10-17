@@ -124,7 +124,12 @@ pub fn analyze_json(netlist: &str, request: &str) -> String {
 }
 
 pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
-    let net = parse(text)?;
+    let mut net = parse(text)?;
+    let inputs: Vec<&str> = std::iter::once(req.input.as_str())
+        .chain(req.input_neg.as_deref())
+        .collect();
+    drop_shorted_branches(&mut net, &inputs)?;
+    let net = net;
     let find_source = |name: &str| -> Result<(usize, bool), String> {
         let i = net
             .element(name)
@@ -959,6 +964,74 @@ fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
     (linear, warnings)
 }
 
+/// V sources and inductors with both ends on one node. Nothing fixes their
+/// branch current, so the MNA system (at DC for an inductor) is singular.
+/// A 0 V source or an inductor there does nothing else: it is dropped and
+/// named as any element on one node is. A source with a value there
+/// contradicts itself, the input must drive something, and an F or H
+/// cannot sense an undefined current: those are errors naming it.
+fn drop_shorted_branches(net: &mut Netlist, inputs: &[&str]) -> Result<(), String> {
+    let mut index = vec![usize::MAX; net.elements.len()];
+    let mut kept = 0;
+    let mut dropped = Vec::new();
+    for (i, e) in net.elements.iter().enumerate() {
+        let zero = match e.kind {
+            Kind::V { dc, ac } => dc == 0.0 && ac == 0.0,
+            Kind::L { .. } => true,
+            _ => {
+                index[i] = kept;
+                kept += 1;
+                continue;
+            }
+        };
+        if e.nodes[0] != e.nodes[1] {
+            index[i] = kept;
+            kept += 1;
+            continue;
+        }
+        let at = &net.nodes[e.nodes[0]];
+        if inputs.iter().any(|n| n.trim().eq_ignore_ascii_case(&e.name)) {
+            return Err(format!("Input {} has both ends at {at}", e.name));
+        }
+        if !zero {
+            return Err(format!("{} has both ends at {at}. Remove it or make it 0 V.", e.name));
+        }
+        dropped.push(i);
+    }
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    for e in &net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = e.kind {
+            if index[ctrl] == usize::MAX {
+                let v = &net.elements[ctrl];
+                return Err(format!(
+                    "{} senses {}, which has both ends at {}",
+                    e.name, v.name, net.nodes[v.nodes[0]]
+                ));
+            }
+        }
+    }
+    for &i in &dropped {
+        let e = &net.elements[i];
+        net.warnings
+            .push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));
+    }
+    let names: Vec<String> = dropped.iter().map(|&i| net.elements[i].name.clone()).collect();
+    net.missing.retain(|m| !names.iter().any(|n| n.eq_ignore_ascii_case(m)));
+    let mut k = 0;
+    net.elements.retain(|_| {
+        k += 1;
+        index[k - 1] != usize::MAX
+    });
+    for e in &mut net.elements {
+        if let Kind::F { ctrl, .. } | Kind::H { ctrl, .. } = &mut e.kind {
+            *ctrl = index[*ctrl];
+        }
+    }
+    Ok(())
+}
+
 /// Cross-coupled transistor pairs (each one's gate/base on the other's
 /// drain/collector): positive feedback, so the circuit may have several DC
 /// solutions (a latch). A structural check only: it cannot prove uniqueness.
@@ -1002,11 +1075,12 @@ fn wiring_warnings(net: &Netlist, op: Option<&Op>) -> Vec<String> {
             out.push(format!("{} has an open end at {}", users[0], net.nodes[n]));
         }
     }
-    // A two-terminal element with both ends on one node does nothing.
+    // A two-terminal element with both ends on one node does nothing (V
+    // and L there were dropped before the DC solve).
     for e in &net.elements {
         let two = matches!(
             e.kind,
-            Kind::R { .. } | Kind::C { .. } | Kind::L { .. } | Kind::D { .. } | Kind::V { .. } | Kind::I { .. }
+            Kind::R { .. } | Kind::C { .. } | Kind::D { .. } | Kind::I { .. }
         );
         if two && e.nodes[0] == e.nodes[1] {
             out.push(format!("{} has both ends at {}", e.name, net.nodes[e.nodes[0]]));

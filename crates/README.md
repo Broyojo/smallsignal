@@ -123,7 +123,9 @@ exceed `maxTerms` terms (default 2,000,000).
   cross-coupled (latch) pairs that may have several DC solutions, junctions
   forward-biased by ideal sources (also named in the DC error when that is
   why DC fails), two-terminal elements with both ends on one node
-  ("CSB has both ends at 0"), a root of the circuit determinant (every
+  ("CSB has both ends at 0"; a 0 V source or an inductor there carries no
+  defined current and is dropped before the DC solve, while a source with a
+  value there, the input source, or one an F or H senses is an error), a root of the circuit determinant (every
   source zeroed, on the full model with each parameter's own value) with
   re > 1e-6·|p| in numeric mode ("Unstable at this bias: …", not when a
   coefficient's sign is below its rounding error; "Stability not checked"

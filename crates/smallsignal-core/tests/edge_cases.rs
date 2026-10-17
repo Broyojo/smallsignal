@@ -691,6 +691,31 @@ fn stability_uses_the_full_model() {
     );
 }
 
+/// A 0 V source or an inductor with both ends on one node carries no
+/// defined current and does nothing: it is dropped and named, and the
+/// circuit solves (before: no DC solution). A nonzero source there, or one
+/// that is the input or controls an F or H, is an error that names it.
+#[test]
+fn branch_on_one_node_is_dropped() {
+    let net = "deg\nV9 out out 0\nL9 out out 1u\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n";
+    for r in [
+        run(net, &request("VIN", "out")),
+        run(net, &req(json!({ "input": "VIN", "output": "out", "symbolic": true }))),
+    ] {
+        assert_eq!(
+            r["warnings"],
+            json!(["V9 has both ends at out", "L9 has both ends at out"])
+        );
+        assert_eq!(r["gain"]["exact"]["latex"], "\\frac{R_{2}}{R_{1} + R_{2}}");
+    }
+    let err = run_err(&net.replace("V9 out out 0", "V9 out out 1"), &request("VIN", "out"));
+    assert_eq!(err, "V9 has both ends at out. Remove it or make it 0 V.");
+    let err = run_err("deg\nVIN in in AC 1\nR1 in 0 1k\n", &request("VIN", "in"));
+    assert_eq!(err, "Input VIN has both ends at in");
+    let err = run_err(&format!("{net}F1 0 out V9 2\n"), &request("VIN", "out"));
+    assert_eq!(err, "F1 senses V9, which has both ends at out");
+}
+
 /// An element with both ends on one node contributes nothing: it is named,
 /// and the result is the circuit's without it.
 #[test]
