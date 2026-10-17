@@ -19,6 +19,7 @@ import {
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
   ASSUMPTION_REGIONS,
+  CAPACITANCE_PARAMETERS,
   createSmallSignalClient,
   DEFAULT_MODEL_PARAMETERS,
   DEFAULT_SUPPLY_VOLTAGE,
@@ -179,6 +180,34 @@ const MODEL_RANGE: Record<
   // Flicker noise: KF·I^AF/f (ngspice's level-1 MOS form uses gm²).
   KF: { min: 0, max: 1 },
   AF: { min: 0, max: 10 },
+  // Capacitances, all 0 (none) by default. TOX in m (0: no Meyer gate
+  // capacitances); overlap and sidewall per m, CJ per m²; potentials in V;
+  // grading coefficients and FC below the 1 where the formulas diverge.
+  TOX: { min: 1e-10, max: 1e-5, zero: true },
+  CGSO: { min: 0, max: 1e-6 },
+  CGDO: { min: 0, max: 1e-6 },
+  CGBO: { min: 0, max: 1e-6 },
+  CJ: { min: 0, max: 10 },
+  MJ: { min: 0, max: 0.99 },
+  CJSW: { min: 0, max: 1e-6 },
+  MJSW: { min: 0, max: 0.99 },
+  PB: { min: 0.01, max: 10 },
+  FC: { min: 0, max: 0.95 },
+  CBD: { min: 0, max: 1e-6 },
+  CBS: { min: 0, max: 1e-6 },
+  CJE: { min: 0, max: 1e-6 },
+  VJE: { min: 0.01, max: 10 },
+  MJE: { min: 0, max: 0.99 },
+  CJC: { min: 0, max: 1e-6 },
+  VJC: { min: 0.01, max: 10 },
+  MJC: { min: 0, max: 0.99 },
+  XCJC: { min: 0, max: 1 },
+  CJS: { min: 0, max: 1e-6 },
+  TF: { min: 0, max: 1e-3 },
+  CJO: { min: 0, max: 1e-6 },
+  VJ: { min: 0.01, max: 10 },
+  M: { min: 0, max: 0.99 },
+  TT: { min: 0, max: 1e-3 },
 };
 
 export function modelValue(name: string, text: string): number | null {
@@ -274,44 +303,63 @@ function ModelFields({
       kinds.includes(kind) ||
       Object.values(text[kind] ?? {}).some((typed) => typed.trim()),
   );
+  const field = (kind: ModelKind, name: string, fallback: number) => {
+    const typed = text[kind]?.[name] ?? "";
+    const invalid = typed.trim() !== "" && modelValue(name, typed) === null;
+    return (
+      <label key={name}>
+        {name}
+        <input
+          aria-label={`${MODEL_TITLE[kind]} ${name}`}
+          aria-invalid={invalid || undefined}
+          title={invalid ? rangeText(name) : undefined}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          placeholder={formatSpiceNumber(fallback)}
+          value={typed}
+          onChange={(event) =>
+            onChange({
+              ...text,
+              [kind]: {
+                ...text[kind],
+                [name]: event.currentTarget.value,
+              },
+            })
+          }
+        />
+      </label>
+    );
+  };
   return (
     <>
-      {shown.map((kind) => (
-        <fieldset key={kind} className="small-signal-model">
-          <legend>{MODEL_TITLE[kind]}</legend>
-          {Object.entries(DEFAULT_MODEL_PARAMETERS[kind]).map(
-            ([name, fallback]) => {
-              const typed = text[kind]?.[name] ?? "";
-              const invalid =
-                typed.trim() !== "" && modelValue(name, typed) === null;
-              return (
-                <label key={name}>
-                  {name}
-                  <input
-                    aria-label={`${MODEL_TITLE[kind]} ${name}`}
-                    aria-invalid={invalid || undefined}
-                    title={invalid ? rangeText(name) : undefined}
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    placeholder={formatSpiceNumber(fallback)}
-                    value={typed}
-                    onChange={(event) =>
-                      onChange({
-                        ...text,
-                        [kind]: {
-                          ...text[kind],
-                          [name]: event.currentTarget.value,
-                        },
-                      })
-                    }
-                  />
-                </label>
-              );
-            },
-          )}
-        </fieldset>
-      ))}
+      {shown.map((kind) => {
+        const entries = Object.entries(DEFAULT_MODEL_PARAMETERS[kind]);
+        const charge = CAPACITANCE_PARAMETERS[kind];
+        const typedCharge = charge.filter((name) => text[kind]?.[name]?.trim());
+        return (
+          <fieldset key={kind} className="small-signal-model">
+            <legend>{MODEL_TITLE[kind]}</legend>
+            {entries
+              .filter(([name]) => !charge.includes(name))
+              .map(([name, fallback]) => field(kind, name, fallback))}
+            <details
+              className="small-signal-model-caps"
+              open={typedCharge.length > 0 || undefined}
+            >
+              <summary>
+                Capacitances
+                {typedCharge.length ? ` (${typedCharge.length} set)` : ""}
+              </summary>
+              <div className="small-signal-model">
+                {entries
+                  .filter(([name]) => charge.includes(name))
+                  .map(([name, fallback]) => field(kind, name, fallback))}
+              </div>
+            </details>
+          </fieldset>
+        );
+      })}
       {modelTextEdited(text) ? (
         <button
           type="button"
@@ -1699,16 +1747,49 @@ function MatchedPairs({
 
 /** Junction leakage (r_bs, r_bd, r_μ) shares one column. */
 const LEAKAGE_TERMS: ReadonlySet<string> = new Set(["rbs", "rbd", "rmu"]);
+/** Device capacitances share one column, each its own choice in it. */
+const CAP_TERMS: readonly AssumptionTerm[] = [
+  "cgs",
+  "cgd",
+  "cgb",
+  "cbd",
+  "cbs",
+  "cpi",
+  "cmu",
+  "ccs",
+];
 /** Known columns first, in hand-analysis order; any others follow. */
-const COLUMN_ORDER = ["ro", "gmb", "rpi", "leakage"];
+const COLUMN_ORDER = ["ro", "gmb", "rpi", "leakage", "caps"];
 
 function termColumn(term: string): string {
-  return LEAKAGE_TERMS.has(term) ? "leakage" : term;
+  if (LEAKAGE_TERMS.has(term)) return "leakage";
+  return (CAP_TERMS as readonly string[]).includes(term) ? "caps" : term;
+}
+
+/** C_gs, C_db, C_π: a capacitance term as the equations write it. */
+const CAP_SUB: Record<string, string> = {
+  cgs: "gs",
+  cgd: "gd",
+  cgb: "gb",
+  cbd: "db",
+  cbs: "sb",
+  cpi: "π",
+  cmu: "μ",
+  ccs: "cs",
+};
+
+function CapSymbol({ term }: { term: string }) {
+  return (
+    <span>
+      C<sub>{CAP_SUB[term] ?? term.slice(1)}</sub>
+    </span>
+  );
 }
 
 /** A column's symbol as the bias table writes it: r_o, g_mb, r_π, C_gs. */
 function ColumnSymbol({ column }: { column: string }) {
   if (column === "leakage") return <>Leakage</>;
+  if (column === "caps") return <>Caps</>;
   const [head = "", ...rest] = column;
   return (
     <>
@@ -1884,9 +1965,16 @@ function AssumptionTable({
         ?.scrollIntoView({ block: "nearest" });
   }, [selectedRows]);
 
-  const setTerms = (row: AssumptionRow, column: string, on: boolean) => {
+  const setTerms = (
+    row: AssumptionRow,
+    column: string,
+    on: boolean,
+    only?: AssumptionTerm,
+  ) => {
     const terms = (member: AssumptionMember) =>
-      member.terms.filter((term) => termColumn(term) === column);
+      member.terms.filter(
+        (term) => termColumn(term) === column && (!only || term === only),
+      );
     if (row.scope === "type" && isTransistor(row.type)) {
       onChange(
         withDefault(
@@ -1913,7 +2001,68 @@ function AssumptionTable({
     onChange({ parts: next });
   };
 
+  /** Each capacitance the row's devices have, neglected or not: a popover
+   * of checkboxes, the summary naming those neglected. */
+  const capsCell = (row: AssumptionRow) => {
+    const state = CAP_TERMS.flatMap((term) => {
+      const flags = row.members
+        .filter((member) => member.terms.includes(term))
+        .map((member) =>
+          isIgnored(row.type, term, parts[member.path], defaults),
+        );
+      if (!flags.length) return [];
+      const on = flags.filter(Boolean).length;
+      return [
+        {
+          term,
+          checked: on === flags.length,
+          mixed: on > 0 && on < flags.length,
+        },
+      ];
+    });
+    if (!state.length)
+      return (
+        <td key="caps" className="small-signal-muted">
+          —
+        </td>
+      );
+    const neglected = state.filter((cap) => cap.checked || cap.mixed);
+    return (
+      <td key="caps">
+        <details className="small-signal-caps">
+          <summary aria-label={`${row.label} caps`}>
+            {neglected.length
+              ? neglected.map((cap, i) => (
+                  <span key={cap.term}>
+                    {i ? " " : ""}
+                    <CapSymbol term={cap.term} />
+                  </span>
+                ))
+              : "none"}
+          </summary>
+          <div>
+            {state.map((cap) => (
+              <label key={cap.term}>
+                <input
+                  type="checkbox"
+                  aria-label={`${row.label} ${cap.term}`}
+                  checked={cap.checked}
+                  ref={(input) => {
+                    if (input) input.indeterminate = cap.mixed;
+                  }}
+                  onChange={() => setTerms(row, "caps", !cap.checked, cap.term)}
+                />
+                <CapSymbol term={cap.term} />
+              </label>
+            ))}
+          </div>
+        </details>
+      </td>
+    );
+  };
+
   const termCell = (row: AssumptionRow, column: string) => {
+    if (column === "caps") return capsCell(row);
     const pairs = row.members.flatMap((member) =>
       member.terms
         .filter((term) => termColumn(term) === column)
@@ -2014,11 +2163,13 @@ function AssumptionTable({
           }}
         >
           <option value="" />
-          {member.terms.map((term) => (
-            <option key={term} value={term}>
-              {term}
-            </option>
-          ))}
+          {member.terms
+            .filter((term) => term === "open" || term === "short")
+            .map((term) => (
+              <option key={term} value={term}>
+                {term}
+              </option>
+            ))}
         </select>
       </td>
     );
@@ -2574,7 +2725,9 @@ export function SmallSignalPanel({
     result &&
     !result.warnings?.length &&
     devices.every(([, device]) =>
-      ["saturation", "forward-active"].includes(String(device.region)),
+      ["saturation", "forward-active"].includes(
+        "region" in device ? device.region : "",
+      ),
     );
   const pinsNeedingBias = sources.filter(
     (source) => source.pin && unknownBias.includes(source.pin),

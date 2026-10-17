@@ -11,6 +11,50 @@ import {
  * the drawing names: the solver linearizes square-law and exponential
  * devices, not BSIM or PDK subcircuits. A drawing's own W and L are kept.
  */
+/**
+ * Charge parameters, ngspice's defaults: none of them adds a capacitance
+ * until set (TOX = 0 means no Meyer gate capacitances, CBD = CBS = 0 means
+ * CJ·AD and CJ·AS instead). A card writes them only when they differ.
+ */
+const MOS_CAPACITANCES = {
+  TOX: 0,
+  CGSO: 0,
+  CGDO: 0,
+  CGBO: 0,
+  CJ: 0,
+  MJ: 0.5,
+  CJSW: 0,
+  MJSW: 0.5,
+  PB: 0.8,
+  FC: 0.5,
+  CBD: 0,
+  CBS: 0,
+};
+const BJT_CAPACITANCES = {
+  CJE: 0,
+  VJE: 0.75,
+  MJE: 0.33,
+  CJC: 0,
+  VJC: 0.75,
+  MJC: 0.33,
+  XCJC: 1,
+  CJS: 0,
+  TF: 0,
+  FC: 0.5,
+};
+const DIODE_CAPACITANCES = { CJO: 0, VJ: 1, M: 0.5, TT: 0, FC: 0.5 };
+
+/** The charge parameters of each kind (the Models panel's Capacitances). */
+export const CAPACITANCE_PARAMETERS: Readonly<
+  Record<"nmos" | "pmos" | "npn" | "pnp" | "diode", readonly string[]>
+> = {
+  nmos: Object.keys(MOS_CAPACITANCES),
+  pmos: Object.keys(MOS_CAPACITANCES),
+  npn: Object.keys(BJT_CAPACITANCES),
+  pnp: Object.keys(BJT_CAPACITANCES),
+  diode: Object.keys(DIODE_CAPACITANCES),
+};
+
 export const DEFAULT_MODEL_PARAMETERS = {
   // KF and AF: flicker noise, off (KF = 0) unless set.
   nmos: {
@@ -21,6 +65,7 @@ export const DEFAULT_MODEL_PARAMETERS = {
     PHI: 0.6,
     KF: 0,
     AF: 1,
+    ...MOS_CAPACITANCES,
   },
   pmos: {
     KP: 100e-6,
@@ -30,10 +75,11 @@ export const DEFAULT_MODEL_PARAMETERS = {
     PHI: 0.6,
     KF: 0,
     AF: 1,
+    ...MOS_CAPACITANCES,
   },
-  npn: { IS: 1e-15, BF: 100, VAF: 50, KF: 0, AF: 1 },
-  pnp: { IS: 1e-15, BF: 50, VAF: 50, KF: 0, AF: 1 },
-  diode: { IS: 1e-14, N: 1, KF: 0, AF: 1 },
+  npn: { IS: 1e-15, BF: 100, VAF: 50, KF: 0, AF: 1, ...BJT_CAPACITANCES },
+  pnp: { IS: 1e-15, BF: 50, VAF: 50, KF: 0, AF: 1, ...BJT_CAPACITANCES },
+  diode: { IS: 1e-14, N: 1, KF: 0, AF: 1, ...DIODE_CAPACITANCES },
 } as const;
 export type ModelKind = keyof typeof DEFAULT_MODEL_PARAMETERS;
 /** The parameters a device kind's card lets a caller set. */
@@ -63,7 +109,15 @@ export function modelCard(kind: ModelKind, overrides: ModelOverrides = {}) {
     if (name in params && typeof value === "number" && Number.isFinite(value))
       params[name] = value;
   }
+  // Charge parameters at their default are left off: the card then reads
+  // as before, and CBD = 0 would override CJ·AD in ngspice.
+  const defaults: Record<string, number> = DEFAULT_MODEL_PARAMETERS[kind];
   const body = Object.entries(params)
+    .filter(
+      ([name, value]) =>
+        !CAPACITANCE_PARAMETERS[kind].includes(name) ||
+        value !== defaults[name],
+    )
     .map(([name, value]) => `${name}=${value}`)
     .join(" ");
   const head = MODEL_CARD_HEAD[kind];
@@ -576,6 +630,12 @@ function translate(
           );
           const m = parameter(instance, scope, "m", "mult");
           if (m) card.push(`M=${m}`);
+          // Junction geometry, when the part carries it (the editor's
+          // MOSFETs do not: their bulk junctions come from CBD and CBS).
+          for (const key of ["ad", "as", "pd", "ps"]) {
+            const found = parameter(instance, scope, key);
+            if (found) card.push(`${key.toUpperCase()}=${found}`);
+          }
           break;
         }
         case "Q":

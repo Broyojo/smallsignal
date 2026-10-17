@@ -160,9 +160,27 @@ export interface AssumableElement {
   terms: AssumptionTerm[];
 }
 
-const MOS_TERMS: readonly AssumptionTerm[] = ["ro", "gmb", "rbs", "rbd"];
-const BJT_TERMS: readonly AssumptionTerm[] = ["ro", "rpi", "rmu"];
+const MOS_TERMS: readonly AssumptionTerm[] = [
+  "ro",
+  "gmb",
+  "rbs",
+  "rbd",
+  "cgs",
+  "cgd",
+  "cgb",
+  "cbs",
+  "cbd",
+];
+const BJT_TERMS: readonly AssumptionTerm[] = [
+  "ro",
+  "rpi",
+  "rmu",
+  "cpi",
+  "cmu",
+  "ccs",
+];
 const PASSIVE_TERMS: readonly AssumptionTerm[] = ["open", "short"];
+const DIODE_TERMS: readonly AssumptionTerm[] = ["open", "short", "cj"];
 
 /**
  * Every term each element type accepts (the solver's `assume::terms_for`);
@@ -175,7 +193,7 @@ export const ASSUMPTION_TERMS: Readonly<
   pmos: MOS_TERMS,
   npn: BJT_TERMS,
   pnp: BJT_TERMS,
-  diode: PASSIVE_TERMS,
+  diode: DIODE_TERMS,
   resistor: PASSIVE_TERMS,
   capacitor: PASSIVE_TERMS,
   inductor: PASSIVE_TERMS,
@@ -247,6 +265,27 @@ export interface MosOperatingPoint {
   vth: number;
   vdsat: number;
   reversed: boolean;
+  /** Capacitances at this bias (F), zeros included: Meyer plus overlap
+   * gate capacitances and the bulk junctions (cbd: C_db, cbs: C_sb). */
+  caps: MosCapacitances;
+}
+
+export interface MosCapacitances {
+  cgs: number;
+  cgd: number;
+  cgb: number;
+  cbd: number;
+  cbs: number;
+}
+
+/** BJT capacitances (F): C_π, C_μ, the substrate's (to the collector, or the
+ * base of a lateral device), and the transcapacitance C_x (TF with VAF or
+ * VTF: C_x·s·v_bc from emitter to base). */
+export interface BjtCapacitances {
+  cpi: number;
+  cmu: number;
+  csub: number;
+  cx: number;
 }
 
 export interface BjtOperatingPoint {
@@ -260,12 +299,20 @@ export interface BjtOperatingPoint {
   gm: number;
   gpi: number;
   go: number;
+  caps: BjtCapacitances;
+}
+
+export interface DiodeOperatingPoint {
+  type: "diode";
+  id: number;
+  vd: number;
+  gd: number;
+  /** CJO depletion plus TT·g_d (F). */
+  caps: { cj: number };
 }
 
 export type DeviceOperatingPoint =
-  | MosOperatingPoint
-  | BjtOperatingPoint
-  | ({ type: string } & Record<string, number | string>);
+  MosOperatingPoint | BjtOperatingPoint | DiodeOperatingPoint;
 
 export interface SmallSignalParam {
   name: string;

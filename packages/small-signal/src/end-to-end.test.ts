@@ -5,6 +5,10 @@ import { smallSignalNetlist } from "./netlist.js";
 import { ASSUMPTION_TERMS } from "./types.js";
 import type {
   AssumableElement,
+  BjtCapacitances,
+  MosCapacitances,
+  MosOperatingPoint,
+  Root,
   AssumedQuantity,
   DistortionForm,
   DistortionQuantity,
@@ -539,8 +543,113 @@ describe.skipIf(!built)(
       expect(Object.keys(result.op.devices)).toHaveLength(25);
       expect(Date.now() - started).toBeLessThan(15_000);
     });
+
+    it("the op-amp with device capacitances: past 128 parameters, numeric", async () => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const netlist = smallSignalNetlist(
+        parseProject(
+          readFileSync(
+            new URL("../test-fixtures/bjt-op-amp.icproj.json", import.meta.url),
+            "utf8",
+          ),
+        ),
+        {
+          models: {
+            npn: { CJE: 1e-12, CJC: 0.5e-12, TF: 0.35e-9 },
+            pnp: { CJE: 0.3e-12, CJC: 1e-12, TF: 30e-9 },
+          },
+        },
+      )!;
+      const started = Date.now();
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({
+            input: "VINP",
+            inputNeg: "VINN",
+            mode: "differential",
+            output: "OUT",
+            freqs: [1, 1e6],
+            rin: true,
+            rout: true,
+          }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.params.length).toBeGreaterThan(128);
+      for (const name of ["gain", "rin", "rout"]) {
+        declared(result[name]);
+        expect(result[name].skipped).toBe(
+          "too large for the exact closed form",
+        );
+      }
+      // Each BJT's C_π and C_μ add poles; the 30 pF one stays dominant.
+      expect(result.gain.poles.length).toBeGreaterThan(10);
+      const slowest = Math.min(
+        ...result.gain.poles.map((p: Root) => Math.hypot(p.re, p.im)),
+      );
+      expect(slowest).toBeCloseTo(10.6, 0);
+      for (const device of Object.values(result.op.devices) as {
+        caps: object;
+      }[])
+        expect(Object.keys(device.caps).sort()).toEqual(
+          [...BJT_CAP_KEYS].sort(),
+        );
+      expect(Date.now() - started).toBeLessThan(15_000);
+    });
+
+    it("device capacitances: every op field is declared", async () => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const netlist = smallSignalNetlist(
+        parseProject(
+          readFileSync(
+            new URL(
+              "../test-fixtures/cs-vdd-pin-wired.icproj.json",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        ),
+        { models: { nmos: { TOX: 20e-9, CGDO: 3e-10, CBD: 1e-15 } } },
+      )!;
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({ input: "V1", output: "Vout" }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      const m1 = result.op.devices.M1 as MosOperatingPoint;
+      expect(Object.keys(m1.caps).sort()).toEqual([...MOS_CAP_KEYS].sort());
+      expect(m1.caps.cgs).toBeGreaterThan(0);
+      const value = (name: string) =>
+        result.params.find((p: { name: string }) => p.name === name)?.value;
+      // Saturated: C_gd is CGDO·W alone, as the parameter list has it.
+      expect(m1.caps.cgd).toBeGreaterThan(0);
+      expect(value("cgd_M1")).toBe(m1.caps.cgd);
+      expect(value("cbd_M1")).toBeGreaterThan(0);
+    });
   },
 );
+
+const MOS_CAP_KEYS = allKeys<MosCapacitances>()([
+  "cgs",
+  "cgd",
+  "cgb",
+  "cbd",
+  "cbs",
+]);
+const BJT_CAP_KEYS = allKeys<BjtCapacitances>()(["cpi", "cmu", "csub", "cx"]);
 
 const ASSUMED_KEYS = allKeys<AssumedQuantity>()([
   "values",
