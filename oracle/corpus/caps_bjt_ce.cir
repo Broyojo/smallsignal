@@ -1,0 +1,8 @@
+BJT common emitter with CJE, CJC, TF (XTF, VTF, ITF) and CJS
+VCC vcc 0 5
+VIN in 0 DC 0.74 AC 1
+RS in b 1k
+RC vcc c 2k
+Q1 c b 0 npnc
+.model npnc NPN (IS=1e-16 BF=100 VAF=50 CJE=1p VJE=0.8 MJE=0.4 TF=0.3n XTF=2 VTF=4 ITF=0.01 CJC=0.5p VJC=0.6 MJC=0.35 XCJC=0.7 CJS=0.8p MJS=0.3 VJS=0.7)
+.end

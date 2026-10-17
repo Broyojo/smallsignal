@@ -1,0 +1,17 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "freqs": [
+  1000,
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0,
+  10000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "pz": true,
+ "description": "Triode (V_DS < V_GS - V_TH): Meyer splits the channel charge between C_gs and C_gd (1 - (V_DSAT - V_DS)^2/(2 V_DSAT - V_DS)^2 and 1 - V_DSAT^2/(2 V_DSAT - V_DS)^2, times 2/3 Cox W L)."
+}

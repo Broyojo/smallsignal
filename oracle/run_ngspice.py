@@ -25,6 +25,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pz
 import spice
 
 HERE = Path(__file__).resolve().parent
@@ -181,6 +182,9 @@ def op_and_ac(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> d
             # Current leaves an I source at its n- node and returns at n+.
             lines.append(f"let vk{k} = {spice.vexpr(inp.nodes[1], inp.nodes[0])}")
             lines.append(f"print vk{k}")
+    if freqs:
+        # Capacitances exist once an ac run has done its small-signal load.
+        lines += pz.print_lines(net)
     deck = spice.render(net, inp.name, ac=ac) + "\n".join(control(lines)) + "\n"
     v = run_deck(deck, keep, name)
 
@@ -247,6 +251,9 @@ def op_and_ac(net: spice.Netlist, side: dict, keep: Path | None, name: str) -> d
             devices[e.name] = {"type": "diode", "id": get(f"@{e.name}[id]"), "gd": get(f"@{e.name}[gd]"),
                                "vd": vn(e.nodes[0]) - vn(e.nodes[1])}
 
+    if freqs:
+        for dev, caps in pz.device_caps(net, v).items():
+            devices[dev]["caps"] = caps
     branch = {e.name: get(f"i({e.name})") for e in net.elements if e.kind == "v"}
     gain, zin = [], []
     for k, f in enumerate(freqs):
@@ -525,9 +532,36 @@ def _process(cir: Path, side: dict, out_dir: Path, keep: Path | None) -> dict:
     if requested(side, "distortion"):
         import distortion  # noqa: PLC0415 - distortion imports this module
         result["distortion"] = distortion.analyze(cir, net, side, keep)
+    if side.get("pz"):
+        result["gain"].update(pz_reference(cir, net, side, keep, name, result))
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
+
+
+def pz_reference(cir: Path, net: spice.Netlist, side: dict, keep: Path | None, name: str, result: dict) -> dict:
+    """The gain's poles and zeros (Hz) from the 100-digit rebuild
+    (pz.reference), confirmed by ngspice's .pz to pz.PZ_AGREEMENT for a
+    single voltage input unless the sidecar says `"pz": {"ngspice": false}`
+    (ngspice's .pz fails there; the reason goes in the sidecar)."""
+    ref = pz.reference(cir, result)
+    spec = side["pz"] if isinstance(side["pz"], dict) else {}
+    inp = net.element(side["input"])
+    if spec.get("ngspice", True):
+        if side.get("inputNeg") or inp.kind != "v":
+            raise NgspiceError(f"{name}: ngspice .pz confirms a single voltage input only")
+        out, refn = side["output"], side.get("ref") or "0"
+        ng = {}
+        # Poles and zeros in two runs: `print all` names a lone root "all".
+        for what, key in (("pol", "poles"), ("zer", "zeros")):
+            lines = ["op", f"pz {inp.nodes[0]} {inp.nodes[1]} {out} {refn} vol {what}", "print all"]
+            deck = spice.render(net, inp.name) + "\n".join(control(lines)) + "\n"
+            ng[key] = pz.parse_ngspice(run_deck_text(deck, keep, f"{name}.{what}"))
+        problems = pz.check(ng, ref, pz.PZ_AGREEMENT)
+        if problems:
+            raise NgspiceError(f"{name}: ngspice .pz disagrees with the reference: " + "; ".join(problems[:3]))
+        ref["pzNgspice"] = ng
+    return ref
 
 
 def settings(side: dict, key: str) -> dict | None:

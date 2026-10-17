@@ -193,6 +193,13 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     vj = tt * (v(bn) - v(other))
                     phys = isat / VT * mp.exp(vj / VT) if vj > -3 * VT else mp.mpf(0)
                     adm(bn, other, term(f"r{which}_{e.name}", phys, gmin_full))
+                # ngspice's capacitances at this bias (pz.py), on the
+                # physical terminals as mos1acld stamps them.
+                caps = d.get("caps") or {}
+                for a_, b_, key in ((gn, sn, "cgs"), (gn, dn, "cgd"), (gn, bn, "cgb"), (bn, dn, "cbd"),
+                                    (bn, sn, "cbs")):
+                    if caps.get(key) and not dropped(e, key):
+                        adm(a_, b_, s * P(caps[key]))
             elif k == "q":
                 d = devs[e.name.lower()]
                 c, bb, em = e.nodes[:3]
@@ -207,9 +214,26 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     adm(bb, em, gpi)
                 if not dropped(e, "rmu"):
                     adm(bb, c, gmu)
+                caps = d.get("caps") or {}
+                if caps:
+                    if not dropped(e, "cpi"):
+                        adm(bb, em, s * P(caps["cpi"]))
+                    if not dropped(e, "cmu"):
+                        adm(bb, c, s * P(caps["cmu"]))
+                    # The substrate (ground when not given) ends at the
+                    # collector (vertical, the NPN default) or base (lateral).
+                    sub = e.nodes[3] if len(e.nodes) == 4 else "0"
+                    mname = (t[5] if len(e.nodes) == 4 else t[4]).lower()
+                    subs = models.get(mname, {}).get("subs", 1 if net.models.get(mname) == "npn" else -1)
+                    if not dropped(e, "ccs"):
+                        adm(sub, c if subs > 0 else bb, s * P(caps["csub"]))
+                    # bjtacld's geqcb = −C_x: s·geqcb·v_bc from base to emitter.
+                    vccs(bb, em, bb, c, -s * P(caps["cx"]))
             elif k == "d":
                 d = devs[e.name.lower()]
                 adm(e.nodes[0], e.nodes[1], P(d["gd"]) - gmin_full + gmin)
+                if (d.get("caps") or {}).get("cj") and not dropped(e, "cj"):
+                    adm(e.nodes[0], e.nodes[1], s * P(d["caps"]["cj"]))
             else:
                 raise ValueError(f"unsupported element {e.name}")
         if mode == "rout":

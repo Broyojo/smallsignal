@@ -1,0 +1,31 @@
+{
+ "input": "VP",
+ "inputNeg": "VN",
+ "mode": "differential",
+ "output": "o1",
+ "ref": "o2",
+ "freqs": [
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0,
+  10000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "match": [
+  [
+   "M1",
+   "M2"
+  ],
+  [
+   "R1",
+   "R2"
+  ]
+ ],
+ "pz": {
+  "ngspice": false
+ },
+ "description": "Matched pair driven differentially: symbols C_{gs1,2}, C_{gd1,2}, C_{db1,2}. ngspice's .pz takes one input port, so the 100-digit roots alone are the reference. From 100 kHz: ngspice opens the port through series inductors, whose 2j\u03c9L shunts the gate capacitances' 1e10 \u03a9 by 1e-6 at 1 kHz."
+}

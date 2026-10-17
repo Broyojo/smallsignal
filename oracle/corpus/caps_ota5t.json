@@ -1,0 +1,17 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "freqs": [
+  1000,
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0,
+  10000000000.0
+ ],
+ "rin": false,
+ "rout": true,
+ "pz": true,
+ "description": "5T OTA: the mirror pole at node x (C_gs3 + C_gs4 + C_db1 + C_db3) and its pole-zero doublet, the output pole, and the C_gd feedthrough zeros."
+}

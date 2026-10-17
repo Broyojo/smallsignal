@@ -1,0 +1,10 @@
+MOSFETs in cutoff loading a node with gate capacitance
+VIN in 0 DC 0 AC 1
+RS in g 10k
+M1 d1 g 0 0 nch W=20u L=2u AD=20p AS=20p PD=24u PS=24u
+RD1 d1 0 10k
+M2 d2 g s2 0 nch W=20u L=2u AD=20p AS=20p PD=24u PS=24u
+VS2 s2 0 0.2
+VD2 d2 0 1
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CGBO=1e-10 CJ=5e-4 CJSW=3e-10 MJ=0.4 MJSW=0.3 PB=0.85)
+.end

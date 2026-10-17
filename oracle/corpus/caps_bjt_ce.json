@@ -1,0 +1,17 @@
+{
+ "input": "VIN",
+ "output": "c",
+ "freqs": [
+  1000,
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0,
+  10000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "pz": true,
+ "description": "CE stage: Miller multiplication of C_mu by g_m R_C at the base, the RHP zero near g_m/C_mu, C_pi with ngspice's XTF/VTF/ITF modulation of TF, the transcapacitance C_x (TF with VAF and VTF), and C_cs to ground (vertical NPN)."
+}
