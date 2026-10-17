@@ -127,7 +127,7 @@ to 1e-6 (`oracle/`):
 
 Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
 ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
-noise does (2q·gmin·|v| ≈ 3e-31 A²/Hz at 1 V and gmin = 1e-12). (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
+noise does. (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
 KF·Id^AF/(Cox·L²·f). With TOX given and KP not, KP = UO·Cox, UO default 600.)
 
 Output PSD S_out = Σ|Z_k|²·S_k with every transfer Z_k from one adjoint LU
