@@ -72,7 +72,7 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
 [--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--ignore M1:ro,C1:short]
-[--region M3:triode] [--tol 0.05] [--verify] [--symbolic]`, or
+[--region M3:triode] [--miller CC,M2:cgd] [--tol 0.05] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
@@ -176,7 +176,8 @@ Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 Device capacitances: `cgs_M1` → C_{gs1}, `cgd_M1` → C_{gd1}, `cgb_M1` →
 C_{gb1}, `cbd_M1` → C_{db1}, `cbs_M1` → C_{sb1}; `cpi_Q1` → C_{π1}, `cmu_Q1`
 → C_{μ1}, `ccs_Q1` → C_{cs1} (`cbsub_Q1` → C_{bs1} when lateral), `cx_Q1` →
-C_{x1}; `cj_D1` → C_{j1}; matched, C_{gs1,2}.
+C_{x1}; `cj_D1` → C_{j1}; matched, C_{gs1,2}. A Miller split's gain:
+`K_CC` → K_{CC}, `K_cgd_M2` → K_{gd2}.
 
 ## Device capacitances
 
@@ -204,8 +205,9 @@ Assumption terms `cgs`, `cgd`, `cgb`, `cbs`, `cbd`, `cpi`, `cmu`, `ccs`,
 ## Assumptions (`assume`)
 
 Terms an engineer neglects (`ignore`: a device's r_o, g_mb, r_bs, r_bd,
-r_π, r_μ, or a device capacitance; a passive or diode `open` or `short`) and regions expected
-(`regions`), as rules and fields in
+r_π, r_μ, or a device capacitance; a passive or diode `open` or `short`),
+feedback capacitances split by the Miller approximation (`miller`) and
+regions expected (`regions`), as rules and fields in
 [docs/specs/small-signal-assumptions.md](../docs/specs/small-signal-assumptions.md).
 Each is an exact limit taken before expansion (`assume.rs`): a neglected
 conductance's stamps are left out (`SsCircuit::omit`, exact because every
@@ -216,6 +218,9 @@ without assumptions; the forms are the assumed model's, with
 the smallest set of assumptions that avoids it is put back for that
 quantity (`assume::restore`, singularity decided exactly by
 `pencil::vanishes` modulo 2⁶¹−1).
+A Miller split (`miller.rs`) stamps C_in and C_out to ground as two
+independent parameters, K from an LU solve at s = 0, and maps each expanded
+form onto C and the symbol K exactly.
 `cargo run --release -p smallsignal-core --example bench_assume` times the
 µA741 (`oracle/corpus/ua741.cir`) under them.
 
