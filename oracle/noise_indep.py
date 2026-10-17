@@ -44,6 +44,9 @@ K = mp.mpf("1.38064852e-23")
 Q = mp.mpf("1.6021766208e-19")
 T = mp.mpf("300.15")
 EPS_OX = mp.mpf("3.9") * mp.mpf("8.854214871e-12")  # ngspice: 3.9 * 8.854214871e-12 F/m
+# bjtnoise.c and dionoise.c floor |I| here before ^AF (AF = 0 gives KF/f at
+# zero bias, as the solver does).
+N_MINLOG = mp.mpf("1e-38")
 TOX_DEFAULT = mp.mpf("1e-7")
 
 
@@ -78,14 +81,15 @@ def sources(net, want, models, f):
             mp_ = models.get(mname, {})
             kf, af = mp.mpf(mp_.get("kf", 0)), mp.mpf(mp_.get("af", 1))
             if kf:
-                out.append((e.name, "1overf", b, em, kf * mp.exp(af * mp.log(abs(indep.P(d["ib"])))) / f))
+                i_b = max(abs(indep.P(d["ib"])), N_MINLOG)
+                out.append((e.name, "1overf", b, em, kf * mp.exp(af * mp.log(i_b)) / f))
         elif k == "d":
             d = devs[e.name.lower()]
             out.append((e.name, "id", e.nodes[0], e.nodes[1], 2 * Q * abs(indep.P(d["id"]))))
             mp_ = models.get(t[3].lower(), {})
             kf, af = mp.mpf(mp_.get("kf", 0)), mp.mpf(mp_.get("af", 1))
-            i_d = abs(indep.P(d["id"]))
-            if kf and i_d:
+            i_d = max(abs(indep.P(d["id"])), N_MINLOG)
+            if kf:
                 out.append((e.name, "1overf", e.nodes[0], e.nodes[1], kf * mp.exp(af * mp.log(i_d)) / f))
     return out
 

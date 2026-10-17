@@ -721,9 +721,8 @@ function NoiseDetails({
   const simplerNote = simpler?.assumption
     ? `assuming ${simpler.assumption}`
     : `within ${formatPercent(simpler?.relError ?? 0)} of exact`;
-  const flicker = noise.contributors.some((point) =>
-    point.sources.some((source) => source.kind === "flicker"),
-  );
+  // From every source: the contributor lists stop at the 32 largest.
+  const flicker = noise.sources.some((source) => source.kind === "flicker");
   const sources = noise.contributors[0];
   const integrated = noise.integrated;
   const exactDisclosure = (
