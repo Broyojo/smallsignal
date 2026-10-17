@@ -346,8 +346,17 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     // doubled, exactly.
     // An exact form over the term budget (or beyond i128 coefficients) leaves
     // its quantity numeric, from the full model; without numbers it fails.
+    // Matched parameters share one value in its orders in s, as they share
+    // one symbol in an exact form (so a matched pair's cancelling numerator
+    // vanishes there too).
+    let full_class = if omitted.is_empty() {
+        symbols.class.clone()
+    } else {
+        sym::symbols(&net, &full, &matched, symbolic, &mut Vec::new()).class
+    };
     let numeric = Numeric {
         full: &full,
+        class: &full_class,
         freqs: &freqs,
     };
     let gsys = ss::system(&net, &ss, &excite);
@@ -396,9 +405,14 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         "gain".into(),
         match &gain_exact {
             Some((n, den)) => q.json(n, den, unit, |s| probe.gain_at(&fsys, &full, s), &mut warnings, "gain"),
-            None => numeric.quantity(unit, &fsys.gain, Form::Ratio(gain_w), |s| {
-                probe.gain_at(&fsys, &full, s)
-            }),
+            None => numeric.quantity(
+                unit,
+                "Gain",
+                &fsys.gain,
+                Form::Ratio(gain_w),
+                |s| probe.gain_at(&fsys, &full, s),
+                &mut warnings,
+            ),
         },
     );
 
@@ -609,7 +623,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         if let Some((form, sys, numeric_form)) = exact {
             let value = match form.map(Some).or_else(|e| numeric_if_over_budget(symbolic, e))? {
                 Some((n, dd)) => q.json(&n, &dd, "Ω", rin_at, &mut warnings, "rin"),
-                None => numeric.quantity("Ω", sys, numeric_form, rin_at),
+                None => numeric.quantity("Ω", "Zin", sys, numeric_form, rin_at, &mut warnings),
             };
             resp.insert("rin".into(), value);
         }
@@ -636,7 +650,14 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             Some((n, dd)) => q.json(&n, &dd, "Ω", rout_at, &mut warnings, "rout"),
             None => {
                 let r = fsys.rout.as_ref().expect("rout system");
-                numeric.quantity("Ω", r, Form::Ratio(numeric.diff(r, out, rf)), rout_at)
+                numeric.quantity(
+                    "Ω",
+                    "Zout",
+                    r,
+                    Form::Ratio(numeric.diff(r, out, rf)),
+                    rout_at,
+                    &mut warnings,
+                )
             }
         };
         resp.insert("rout".into(), value);
@@ -930,6 +951,8 @@ fn numeric_if_over_budget<T>(symbolic: bool, e: String) -> Result<Option<T>, Str
 /// finite roots of the MNA determinants (see `pencil`).
 struct Numeric<'a> {
     full: &'a SsCircuit,
+    /// `full`'s parameter → symbol, as matching merges them.
+    class: &'a [usize],
     freqs: &'a [f64],
 }
 
@@ -955,7 +978,7 @@ impl Numeric<'_> {
     /// Cramer numerator of wᵀx; None when it is the zero polynomial (all
     /// exactly, as the symbolic form would have them).
     fn orders(&self, sys: &System, border: Option<&[(usize, i128)]>) -> Option<(usize, usize)> {
-        crate::pencil::s_orders(sys, self.full, border)
+        crate::pencil::s_orders(sys, self.full, border, Some(self.class))
     }
 
     fn vanishes(&self, sys: &System, border: Option<&[(usize, i128)]>) -> bool {
@@ -963,12 +986,15 @@ impl Numeric<'_> {
     }
 
     /// `value` gives the quantity at s (the cross-check's LU solve).
+    /// `title` names it in a warning when its poles or zeros are not found.
     fn quantity(
         &self,
         unit: &str,
+        title: &str,
         sys: &System,
         form: Form,
         value: impl Fn(Complex64) -> Option<(Complex64, f64)>,
+        warnings: &mut Vec<String>,
     ) -> Value {
         let (num_border, den_border) = match &form {
             Form::Ratio(w) => (Some(w.as_slice()), None),
@@ -991,15 +1017,19 @@ impl Numeric<'_> {
         };
         // At DC a vanishing numerator or denominator is known exactly, where
         // LU would leave rounding (an open circuit at DC is ∞, not 1e18 Ω).
+        // So is a numerator that vanishes identically: 0 wherever the solve
+        // is regular.
         let dc_den_zero = den_orders.0 > 0;
         let dc_num_zero = num_orders.is_none_or(|o| o.0 > 0);
+        let zero = Complex64::new(0.0, 0.0);
         let values: Vec<Value> = self
             .freqs
             .iter()
             .map(|&f| {
                 let h = match f == 0.0 {
                     true if dc_den_zero => None,
-                    true if dc_num_zero => Some(Complex64::new(0.0, 0.0)),
+                    true if dc_num_zero => Some(zero),
+                    _ if num_orders.is_none() => value(jw(f)).map(|_| zero),
                     _ => value(jw(f)).map(|(h, _)| h),
                 };
                 match h {
@@ -1011,22 +1041,25 @@ impl Numeric<'_> {
                 }
             })
             .collect();
-        let roots = |border: Option<&[(usize, i128)]>, orders: Option<(usize, usize)>| {
-            orders
-                .and_then(|o| Pencil::new(sys, self.full, border)?.roots(o))
-                .unwrap_or_default()
-        };
         // No common factor is cancelled, as for an exact form too large for
-        // the GCD.
-        let (zeros, poles) = (roots(num_border, num_orders), roots(den_border, Some(den_orders)));
+        // the GCD. Their number is exact even when the roots are not found.
+        let zeros = pencil_roots(sys, self.full, num_border, num_orders);
+        let poles = pencil_roots(sys, self.full, den_border, Some(den_orders));
+        match (poles.is_some(), zeros.is_some()) {
+            (true, true) => {}
+            (false, true) => warnings.push(format!("{title} poles not found.")),
+            (true, false) => warnings.push(format!("{title} zeros not found.")),
+            (false, false) => warnings.push(format!("{title} poles and zeros not found.")),
+        }
+        let listed = |r: Option<Vec<Complex64>>| r.map(|r| r.iter().map(hz).collect::<Vec<_>>());
         json!({
             "unit": unit,
             "exact": null, "display": null, "simplified": null, "skipped": skipped,
             "values": values,
-            "poleCount": poles.len(),
-            "zeroCount": zeros.len(),
-            "poles": poles.iter().map(hz).collect::<Vec<_>>(),
-            "zeros": zeros.iter().map(hz).collect::<Vec<_>>(),
+            "poleCount": den_orders.1,
+            "zeroCount": num_orders.map_or(0, |o| o.1),
+            "poles": listed(poles),
+            "zeros": listed(zeros),
             "check": null,
         })
     }
@@ -1051,7 +1084,7 @@ fn pencil_roots(
 /// The circuit's natural frequencies (rad/s), the roots of det A, every
 /// source zeroed. None when the pencil cannot find them.
 fn circuit_roots(sys: &System, ss: &SsCircuit) -> Option<Vec<Complex64>> {
-    pencil_roots(sys, ss, None, crate::pencil::s_orders(sys, ss, None))
+    pencil_roots(sys, ss, None, crate::pencil::s_orders(sys, ss, None, None))
 }
 
 fn poly_add(a: &Poly, b: &Poly) -> Poly {

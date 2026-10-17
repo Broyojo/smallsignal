@@ -85,18 +85,22 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   whenever the gain's determinant is (they expand the same circuit). In
   symbolic mode (no numbers) it is an error.
 - A numeric quantity comes from the full model: `values` from the
-  cross-check's LU solve, except at 0 Hz where a numerator or denominator
-  that vanishes there (exactly, below) gives 0 or null; `infinite` when its
-  denominator vanishes identically. `poles` and `zeros` are the finite roots
+  cross-check's LU solve, except where a numerator vanishes identically
+  (0) and at 0 Hz where a numerator or denominator that vanishes there
+  (exactly, below) gives 0 or null; `infinite` when its denominator
+  vanishes identically. `poles` and `zeros` are the finite roots
   of the MNA determinants det(G + sC) (the Cramer numerator as the bordered
   matrix [[A, b], [wᵀ, 0]]), without expanding them: their lowest and
   highest power of s, and whether one vanishes identically, are exact
-  (interpolation modulo 2⁶¹−1 at random parameter values); the roots are
+  (interpolation modulo 2⁶¹−1 at random parameter values, matched
+  parameters sharing one as they share a symbol); the roots are
   eigenvalues of Ṽᵀ(G + σC)⁻¹ŨW, with C = ŨWṼᵀ reduced exactly to
   independent stamp columns, at the trial shift σ whose eigenvalues spread
   least, then polished by Newton's method on det. No common factor is
   cancelled, as for an exact form too large for the GCD; `poleCount` and
-  `zeroCount` are their number. Noise `inputLowFreq` (unavailable:
+  `zeroCount` are their number. Roots no shift resolves (e.g. spread over
+  more than about 15 decades) are null, with a warning ("Gain poles not
+  found."), while their number stays exact. Noise `inputLowFreq` (unavailable:
   "too large for the exact closed form") and the distortion closed forms
   (`skipped`) are then not attempted: they expand the same circuit.
 
