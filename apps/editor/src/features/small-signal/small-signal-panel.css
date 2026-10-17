@@ -321,48 +321,28 @@
   font-size: var(--icm-font-xs);
 }
 
-/* Which transistor each symbol belongs to: names in one column. */
-.small-signal-legend {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+/* Matched pairs: one chip per pair, each a toggle. */
+.small-signal-match {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
+  gap: 6px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
 }
 
-.small-signal-legend-row {
-  display: contents;
-  font-size: var(--icm-font-sm);
-}
-
-.small-signal-legend-row > b {
-  font-weight: 650;
-}
-
-.small-signal-legend-row .small-signal-formula {
-  font-size: 15px;
-}
-
-.small-signal-legend-row button {
-  justify-self: start;
-  padding: 1px 8px;
+.small-signal-match button {
+  padding: 2px 8px;
   border: 1px solid var(--icm-border);
   border-radius: 999px;
   background: var(--icm-surface);
   color: var(--icm-text-muted);
   font: inherit;
-  font-weight: 650;
   cursor: pointer;
 }
 
-.small-signal-legend-row button[aria-pressed="true"] {
+.small-signal-match button[aria-pressed="true"] {
   border-color: transparent;
   background: var(--icm-accent-soft);
   color: var(--icm-accent);
-}
-
-/* The "Match …" toggles span both columns. */
-.small-signal-legend-row.is-actions {
-  display: flex;
-  grid-column: 1 / -1;
-  gap: 6px;
 }

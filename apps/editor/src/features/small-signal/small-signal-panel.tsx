@@ -466,83 +466,49 @@ function BiasTable({
   );
 }
 
-/** Junction leakage symbols appear only in the Exact form: not listed. */
-const LEAKAGE_SYMBOL = /^r_\{b[sd]/u;
-
 /**
- * Which transistor each symbol belongs to, one line per device or matched
- * group: "M1: g_m1, r_o1", "M1, M2: g_m1,2, r_o1,2". A matched group's name
- * is a toggle that treats its devices separately; an unmatched candidate
- * pair gets a "Match" toggle.
+ * Pairs the solver treats as identical, so the equations write one symbol
+ * for both (g_m1,2): "Matched M1 = M2", each chip a toggle. Hidden when
+ * there is nothing to match.
  */
-function SymbolLegend({
+function MatchedPairs({
   result,
   onToggle,
 }: {
   result: SmallSignalResult;
   onToggle(key: string, on: boolean): void;
 }) {
-  const groups = new Map<string, { elements: string[]; latex: string[] }>();
-  for (const param of result.params ?? []) {
-    const elements = param.elements ?? [param.element];
-    if (!elements.every((name) => /^[MQ]/iu.test(name))) continue;
-    if (LEAKAGE_SYMBOL.test(param.latex)) continue;
-    const key = elements.join("=");
-    const group = groups.get(key) ?? { elements, latex: [] };
-    group.latex.push(param.latex);
-    groups.set(key, group);
-  }
-  if (!groups.size) return null;
-  const candidates = result.matchCandidates ?? [];
-  const applied = new Set(
-    candidates
-      .filter((candidate) => candidate.applied)
-      .map((candidate) => candidate.elements.join("=")),
-  );
-  const unapplied = candidates.filter(
-    (candidate) => candidate.applied === false && candidate.kind === "device",
-  );
-  const rows = [...groups.entries()].sort(([a], [b]) =>
-    a.localeCompare(b, undefined, { numeric: true }),
-  );
+  const candidates = [...(result.matchCandidates ?? [])]
+    .filter((candidate) => candidate.kind === "device")
+    .sort((a, b) =>
+      (a.elements[0] ?? "").localeCompare(b.elements[0] ?? "", undefined, {
+        numeric: true,
+      }),
+    );
+  if (!candidates.length) return null;
   return (
-    <section className="small-signal-legend" aria-label="Symbols">
-      {rows.map(([key, group]) => (
-        <div key={key} className="small-signal-legend-row">
-          {applied.has(key) ? (
-            <button
-              type="button"
-              aria-pressed
-              title="Matched: they share these symbols. Click to treat them separately."
-              onClick={() => onToggle(key, true)}
-            >
-              {group.elements.join(", ")}
-            </button>
-          ) : (
-            <b>{group.elements.join(", ")}</b>
-          )}
-          <Formula latex={group.latex.join(",\\ ")} />
-        </div>
-      ))}
-      {unapplied.length ? (
-        <div className="small-signal-legend-row is-actions">
-          {unapplied.map((candidate) => {
-            const key = candidate.elements.join("=");
-            return (
-              <button
-                key={key}
-                type="button"
-                aria-pressed={false}
-                title="Click to match them: they would share one set of symbols."
-                onClick={() => onToggle(key, false)}
-              >
-                Match {candidate.elements.join(", ")}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </section>
+    <div className="small-signal-match" aria-label="Matched pairs">
+      <span>Matched</span>
+      {candidates.map((candidate) => {
+        const key = candidate.elements.join("=");
+        const on = candidate.applied ?? false;
+        return (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={on}
+            title={
+              on
+                ? "Treated as identical. Click to treat separately."
+                : "Click to treat as identical."
+            }
+            onClick={() => onToggle(key, on)}
+          >
+            {candidate.elements.join(" = ")}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -607,20 +573,6 @@ export function differentialPairs(
 }
 
 const DIFF_PREFIX = "diff:";
-
-/**
- * The subscript a matched group gets in the equations, for the legend:
- * M1, M2 → "1,2"; RD1, RD2 → "D1,2" (the solver's g_{m1,2}, R_{D1,2}).
- */
-export function matchedSubscript(elements: string[]): string {
-  const rests = elements.map((name) => name.slice(1));
-  let prefix = rests[0] ?? "";
-  for (const rest of rests)
-    while (!rest.startsWith(prefix)) prefix = prefix.slice(0, -1);
-  // Keep a whole number together: M10, M11 → "10,11", not "1" + "0,1".
-  while (prefix && /\d$/u.test(prefix)) prefix = prefix.slice(0, -1);
-  return prefix + rests.map((rest) => rest.slice(prefix.length)).join(",");
-}
 
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
 export function SmallSignalPanel({
@@ -935,7 +887,7 @@ export function SmallSignalPanel({
             ) : null}
 
             {result ? (
-              <SymbolLegend
+              <MatchedPairs
                 result={result}
                 onToggle={(key, on) =>
                   setUnmatched((prev) => {
