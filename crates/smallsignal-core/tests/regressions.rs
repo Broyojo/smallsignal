@@ -125,14 +125,29 @@ fn forward_biased_bulk_junction_is_in_the_small_signal_model() {
     assert!(r["params"].to_string().contains("rbd_M5"));
 }
 
+/// Junction leakage is in the exact model wherever it moves a result by more
+/// than 1e-9 (proved on the full numeric system), never by a size heuristic:
+/// with the default gmin (1e-12 S) a CS stage's drain junction next to a
+/// 10 kΩ load moves the gain by ~1e-8, so it shows; the simplified form
+/// prunes it; with negligible leakage the exact form is the textbook one.
 #[test]
-fn reverse_biased_bulk_junctions_stay_out_of_textbook_results() {
+fn junction_leakage_appears_exactly_when_it_matters() {
     let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
     let r = run(net, &req(json!({ "input": "VIN", "output": "out" })));
     assert_eq!(
         r["gain"]["exact"]["latex"],
+        "-g_{m1} \\left(r_{o1} \\parallel r_{bd1} \\parallel R_{D}\\right)"
+    );
+    assert!(!r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{bd1}"));
+    assert!(!r["omittedJunctions"].to_string().contains("rbd_M1"));
+    let tiny = net.replace("cs\n", "cs\n.options gmin=1e-18\n");
+    let r = run(&tiny, &req(json!({ "input": "VIN", "output": "out" })));
+    assert_eq!(
+        r["gain"]["exact"]["latex"],
         "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)"
     );
+    assert!(r["omittedJunctions"].to_string().contains("rbd_M1"));
+    assert!(r["omissionError"].as_f64().unwrap() <= 1e-9);
 }
 
 /// The island vdd–n2 hangs only on M1's drain junction (M1 off), inside an
@@ -270,7 +285,7 @@ fn zero_gain_is_explained() {
 
 #[test]
 fn a_bare_parallel_group_has_no_parentheses() {
-    let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
+    let net = "cs\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
     let r = run(net, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
     assert_eq!(r["rout"]["exact"]["latex"], "r_{o1} \\parallel R_{D}");
     assert_eq!(
@@ -456,4 +471,207 @@ fn candidates_never_chain_and_passives_need_symmetry() {
     let passives = "t\nVIN in 0 1\nVDD vdd 0 1\nRD1 vdd o1 5k\nRD2 vdd o2 5k\nRA in a 5k\nRB b o1 5k\nRP1 o2 0 7k\nRP2 o2 0 7k\nRZ a b 1k\n";
     let r = run(passives, &req(json!({ "input": "VIN", "output": "o1" })));
     assert_eq!(candidate_pairs(&r), pairs(&[("RD1", "RD2")]));
+}
+
+// ---- Round 4: gate-fuzz root causes (oracle/regressions, ngspice values) ----
+
+/// Reverse-mode PMOS at vdd = 2.85 V: limiting recomposed vgs − (vgs − vds),
+/// 1 ulp off, so every iteration counted as limited and DC never converged.
+#[test]
+fn reverse_mode_limiting_converges() {
+    let net = with_options(
+        "random wild mos circuit\nV1 vdd 0 DC 2.85\nV2 in 0 DC 0.236 AC 1\nR1 n1 vdd 3.983e+05\nR2 n2 in 828.1\n\
+         M6 vdd in 0 vdd pch W=62.12u L=1u\n\
+         .model pch PMOS (LEVEL=1 KP=0.0004965 VTO=-0.7163 LAMBDA=0.08075 GAMMA=0.459 PHI=0.7)\n",
+    );
+    let r = run(
+        &net,
+        &req(json!({ "input": "V2", "output": "n2", "ref": "n1", "rout": true, "freqs": [69235.8] })),
+    );
+    assert!(close(value(&r, "gain", 0), (1.0, 0.0), 1e-12));
+    assert!(close(value(&r, "rout", 0), (399128.1, 0.0), 1e-9));
+    assert_eq!(r["op"]["devices"]["M6"]["reversed"], true);
+}
+
+/// A junction on the input source's node (both of its ends "stiff" by the
+/// old rule) carries the signal: gain 0 and Rin ∞ without it.
+#[test]
+fn junction_on_the_input_node_is_kept() {
+    let net = with_options(
+        "random wild mos circuit\nV1 vdd 0 DC 1.57\nV2 in 0 DC 1.11 AC 1\nR1 n3 vdd 2.198e+04\nM2 in n3 n3 n3 nch W=8.76u L=1u\n\
+         V3 m1 n3 DC 0\n.model nch NMOS (LEVEL=1 KP=3.421e-05 VTO=0.6166 LAMBDA=0.0818 GAMMA=0 PHI=0.7)\n",
+    );
+    let r = run(
+        &net,
+        &req(json!({ "input": "V2", "output": "n3", "rin": true, "rout": true, "freqs": [8747.4] })),
+    );
+    assert!(
+        close(value(&r, "gain", 0), (0.2453113746359534, 0.0), 1e-9),
+        "{}",
+        r["gain"]["values"]
+    );
+    assert!(close(value(&r, "rin", 0), (89600.4110393118, 0.0), 1e-9));
+    assert!(close(value(&r, "rout", 0), (16588.05598550174, 0.0), 1e-9));
+}
+
+/// gμ on the signal path: without it (the old gμ > 1e-6·gπ rule) the gain
+/// was exactly 0; ngspice gives 2.27e-9.
+#[test]
+fn bjt_gmu_is_kept_when_it_matters() {
+    let net = with_options(
+        "random wild mixed circuit\nV1 vdd 0 DC 6.5\nV2 in 0 DC 0.544 AC 1\nR4 n4 0 132.5\nR5 n1 n4 464.8\n\
+         M1 n2 n2 vdd vdd nch W=2.685u L=1u\nQ2 n1 n2 n5 qn\nQ3 in n4 0 qn\n\
+         .model nch NMOS (LEVEL=1 KP=7.323e-05 VTO=0.2004 LAMBDA=0.2636 GAMMA=0 PHI=0.7)\n\
+         .model qn NPN (IS=6.375e-14 BF=281.2 VAF=169.9)\n",
+    );
+    let r = run(
+        &net,
+        &req(json!({ "input": "V2", "output": "n5", "rin": true, "rout": true, "freqs": [36.5047] })),
+    );
+    assert!(
+        close(value(&r, "gain", 0), (2.266626197137731e-09, 0.0), 1e-6),
+        "{}",
+        r["gain"]["values"]
+    );
+    assert!(close(value(&r, "rin", 0), (177.01132851088292, 0.0), 1e-9));
+    for q in ["gain", "rin", "rout"] {
+        assert_eq!(r[q]["check"]["ok"], true, "{q}");
+    }
+}
+
+/// Weak-bias junctions under the old 1e-6 node-relative threshold still
+/// moved Rin by 1.1e-6.
+#[test]
+fn weak_junctions_are_kept_when_they_matter() {
+    let net = with_options(
+        "random wild mixed circuit\nV1 vdd 0 DC 1.9\nV2 in 0 DC 0.238 AC 1\nR1 n5 vdd 2.98e+05\nR2 n2 in 1526\nR3 n6 0 308.1\n\
+         R4 n1 n2 2.754e+04\nR5 n4 in 5238\nR6 n3 n5 3.222e+04\nM1 n6 n3 n4 n4 nch W=14.51u L=1u\nM2 n5 n5 n1 n1 pch W=0.7879u L=0.35u\n\
+         .model nch NMOS (LEVEL=1 KP=2.045e-05 VTO=0.4992 LAMBDA=0.288 GAMMA=0 PHI=0.7)\n\
+         .model pch PMOS (LEVEL=1 KP=2.045e-05 VTO=-0.4992 LAMBDA=0.288 GAMMA=0 PHI=0.7)\n",
+    );
+    let r = run(
+        &net,
+        &req(json!({ "input": "V2", "output": "n4", "rin": true, "rout": true, "freqs": [5136350.0] })),
+    );
+    assert!(
+        close(value(&r, "rin", 0), (12308.027948906687, 0.0), 1e-9),
+        "{}",
+        r["rin"]["values"]
+    );
+    assert!(close(value(&r, "gain", 0), (0.5900878308262557, 0.0), 1e-9));
+    assert!(close(value(&r, "rout", 0), (4010.32522462296, 0.0), 1e-9));
+}
+
+/// An omission is accepted only if the full system proves it moves nothing
+/// by more than 1e-9, and the cross-check always solves the full system.
+#[test]
+fn omitted_junctions_are_proven_negligible() {
+    let mut rng = common::Rng::new(41);
+    for _ in 0..60 {
+        let vin = 0.55 + rng.unit() * 0.5;
+        let rd = rng.decade(1e3, 1e6);
+        let net = format!(
+            "cs\nVDD vdd 0 1.8\nVIN in 0 DC {vin} AC 1\nRD vdd out {rd:.6e}\nM1 out in s 0 nm W=10u L=1u\nRS s 0 1k\nCL out 0 1p\n\
+             .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.4)\n"
+        );
+        let r = run(
+            &net,
+            &req(json!({ "input": "VIN", "output": "out", "rin": true, "rout": true, "freqs": [0, 1e3, 1e9] })),
+        );
+        assert!(r["omissionError"].as_f64().unwrap() <= 1e-9);
+        for q in ["gain", "rout"] {
+            assert_eq!(r[q]["check"]["ok"], true, "{q}\n{net}");
+        }
+    }
+}
+
+#[test]
+fn degenerate_junctions_are_named() {
+    // DC that converges to an unphysical point is flagged, not silent.
+    let r = run(
+        "deg\nV1 a 0 1.5\nD1 a 0 dm\nVIN in 0 AC 1\nR1 in 0 1k\n.model dm d is=1e-14\n",
+        &req(json!({ "input": "VIN", "output": "in" })),
+    );
+    let w = r["warnings"].to_string();
+    assert!(w.contains("D1's diode junction is forward-biased by 1.500 V"), "{w}");
+    // A BJT base-emitter junction across an ideal 2 V source.
+    let r = analyze(
+        "deg\nVB b 0 2\nVC c 0 5\nQ1 c b 0 qn\nVIN in 0 AC 1\nR1 in 0 1k\n.model qn npn is=1e-15 bf=100\n",
+        &req(json!({ "input": "VIN", "output": "in" })),
+    );
+    let text = match r {
+        Ok(v) => v["warnings"].to_string(),
+        Err(e) => e,
+    };
+    assert!(
+        text.contains("Q1's base-emitter junction is forward-biased by 2.000 V"),
+        "{text}"
+    );
+}
+
+#[test]
+fn cross_coupled_pairs_warn_about_multiple_solutions() {
+    let net = "latch\nVDD vdd 0 1.8\nVIN in 0 DC 0 AC 1\nRIN in 0 1k\nR1 vdd a 10k\nR2 vdd b 10k\n\
+               M1 a b 0 0 nm W=10u L=1u\nM2 b a 0 0 nm W=10u L=1u\n.model nm nmos kp=200u vto=0.5\n";
+    let r = run(net, &req(json!({ "input": "VIN", "output": "a" })));
+    assert!(
+        r["warnings"].to_string().contains("M1 and M2 are cross-coupled"),
+        "{}",
+        r["warnings"]
+    );
+    // A diff pair is not cross-coupled.
+    let pair = "p\nVDD vdd 0 1.8\nVIP inp 0 DC 1 AC 1\nVINN inn 0 DC 1\nIT t 0 100u\nM1 o1 inp t 0 nm W=1u L=1u\nM2 o2 inn t 0 nm W=1u L=1u\n\
+                R1 vdd o1 5k\nR2 vdd o2 5k\n.model nm nmos kp=200u vto=0.5\n";
+    let r = run(pair, &req(json!({ "input": "VIP", "output": "o1" })));
+    assert!(!r["warnings"].to_string().contains("cross-coupled"));
+}
+
+/// The display form drops junction leakage (r_bs, r_bd, r_μ → ∞) when that
+/// moves no value by more than 1e-3, and says how much it does move them;
+/// values stay those of the full model.
+#[test]
+fn display_form_neglects_junction_leakage() {
+    let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.7 AC 1\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "rout": true, "freqs": [1e3] })),
+    );
+    let (g, d) = (&r["gain"], &r["gain"]["display"]);
+    assert!(g["exact"]["latex"].as_str().unwrap().contains("r_{bd1}"));
+    assert_eq!(d["latex"], "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)");
+    assert_eq!(d["same"], false);
+    assert_eq!(d["leakageMatters"], false);
+    assert!(d["maxRelError"].as_f64().unwrap() < 1e-6);
+    assert_eq!(r["rout"]["display"]["latex"], "r_{o1} \\parallel R_{D}");
+    assert!(!g["simplified"]["latex"].as_str().unwrap().contains("r_{bd"));
+    // Values come from the model with the junction, not from the display.
+    let m = &r["op"]["devices"]["M1"];
+    let (gm, ro) = (m["gm"].as_f64().unwrap(), 1.0 / m["gds"].as_f64().unwrap());
+    let textbook = -gm * ro * 1e4 / (ro + 1e4);
+    let v = value(&r, "gain", 0).0;
+    assert!(v != textbook && ((v - textbook) / textbook).abs() < 1e-6);
+    // No leakage at all: display is exact.
+    let r = run(
+        "t\nVIN in 0 AC 1\nR1 in out 1k\nR2 out 0 1k\n",
+        &req(json!({ "input": "VIN", "output": "out" })),
+    );
+    assert_eq!(r["gain"]["display"]["same"], true);
+    assert_eq!(r["gain"]["display"]["latex"], r["gain"]["exact"]["latex"]);
+}
+
+#[test]
+fn leakage_that_matters_stays_in_the_display_form() {
+    let net = with_options(
+        "random wild mos circuit\nV1 vdd 0 DC 2.72\nV2 in 0 DC 0.414 AC 1\nR1 n2 vdd 2724\nM5 0 n2 n2 n2 nch W=4.595u L=5u\n\
+         .model nch NMOS (LEVEL=1 KP=0.0003131 VTO=0.747 LAMBDA=0.006308 GAMMA=0 PHI=0.7)\n",
+    );
+    let r = run(
+        &net,
+        &req(json!({ "input": "V2", "output": "n2", "rout": true, "freqs": [117.235] })),
+    );
+    let d = &r["rout"]["display"];
+    assert_eq!(d["leakageMatters"], true);
+    assert_eq!(d["same"], true);
+    assert!(d["latex"].as_str().unwrap().contains("r_{bd5}"), "{d}");
+    assert!(close(value(&r, "rout", 0), (33.58529565534185, 0.0), 1e-9));
 }

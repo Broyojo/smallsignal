@@ -274,7 +274,8 @@ CASES: list[Case] = [
         rin=Quantity(lambda: sp.oo),
         rout=Quantity(cs_rd_rout, closed=lambda: par(ro, RD), lead=lambda: RD),
         parallel=["gain", "rout"],
-        numeric_netlist="cs\nVIN in 0 DC 0.7\nVDD vdd 0 1.8\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n"
+        # gmin 1e-18: the hand formula has no junction leakage (see textbook.py).
+        numeric_netlist="cs\n.options gmin=1e-18\nVIN in 0 DC 0.7\nVDD vdd 0 1.8\nRD vdd out 10k\nM1 out in 0 0 nm W=10u L=1u\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n",
     ),
     Case(
@@ -301,7 +302,7 @@ CASES: list[Case] = [
         rin=Quantity(lambda: sp.oo),
         rout=Quantity(sf_rout, closed=lambda: par(1 / g, 1 / gmb, ro, RL), lead=lambda: par(1 / g, 1 / gmb, RL)),
         parallel=["gain", "rout"],
-        numeric_netlist="sf\nVDD vdd 0 1.8\nVIN in 0 1.2\nM1 vdd in out 0 nm W=10u L=1u\nRL out 0 10k\n"
+        numeric_netlist="sf\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN in 0 1.2\nM1 vdd in out 0 nm W=10u L=1u\nRL out 0 10k\n"
         ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05 gamma=0.4)\n",
     ),
     Case(

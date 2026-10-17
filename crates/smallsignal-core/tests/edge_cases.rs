@@ -300,7 +300,7 @@ fn current_source_input_gives_a_transimpedance() {
 
 #[test]
 fn differential_output_of_a_balanced_pair() {
-    let net = "dp\nVDD vdd 0 1.8\nVIN inp inn DC 0 AC 1\nVCM inn 0 0.9\nIT tail 0 100u\n\
+    let net = "dp\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN inp inn DC 0 AC 1\nVCM inn 0 0.9\nIT tail 0 100u\n\
                M1 op inp tail 0 nm W=10u L=1u\nM2 on inn tail 0 nm W=10u L=1u\nR1 vdd op 10k\nR2 vdd on 10k\n\
                .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.05)\n";
     let rq = req(json!({ "input": "VIN", "output": "on", "ref": "op", "verify": true }));
@@ -340,7 +340,10 @@ fn values_at_dc_with_a_pole_at_dc_are_null_not_garbage() {
 
 // ---- Two-source inputs and matching -------------------------------------------
 
-const PAIR: &str = "pair\nVDD vdd 0 1.8\nVIP inp 0 DC 1 AC 1\nVINN inn 0 DC 1\nIT tail 0 200u\nIX x 0 1u\nRX x 0 1k\n\
+// gmin = 1e-18: these compare with textbook formulas, which leave out the
+// junction leakage that the default gmin (1e-12 S, ~5e-9 of a 5 kΩ load)
+// puts into the exact model.
+const PAIR: &str = "pair\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIP inp 0 DC 1 AC 1\nVINN inn 0 DC 1\nIT tail 0 200u\nIX x 0 1u\nRX x 0 1k\n\
                     M1 o1 inp tail 0 nm W=10u L=1u\nM2 o2 inn tail 0 nm W=10u L=1u\nRD1 vdd o1 5k\nRD2 vdd o2 5k\n\
                     .model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1)\n";
 

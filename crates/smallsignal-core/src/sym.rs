@@ -32,6 +32,9 @@ pub struct Sym {
     /// A device output resistance (r_o, r_μ, bulk junction): the quantities
     /// hand analysis takes to infinity.
     pub output_r: bool,
+    /// Junction leakage (r_bs, r_bd, r_μ): present only through gmin-level
+    /// junction conductance; the `display` form drops it.
+    pub leakage: bool,
 }
 
 impl Sym {
@@ -253,6 +256,7 @@ pub fn symbols(
                 unit: p.unit,
                 elements,
                 output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+                leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd"),
             });
         }
     }
@@ -276,6 +280,7 @@ pub fn unmerged(ss: &SsCircuit) -> Symbols {
             unit: p.unit,
             elements: vec![p.element.clone()],
             output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd"),
+            leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd"),
         })
         .collect();
     Symbols {

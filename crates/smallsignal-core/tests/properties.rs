@@ -365,7 +365,9 @@ fn solver_self_checks_always_hold() {
                 "{q} simplified error over tolerance\n{net}"
             );
             if s["same"] == true {
-                assert_eq!(s["maxRelError"].as_f64().unwrap(), 0.0);
+                // Measured against the full numeric model: only rounding (and
+                // a proven ≤ 1e-9 junction omission) remains.
+                assert!(s["maxRelError"].as_f64().unwrap() <= 1e-9, "{}", s["maxRelError"]);
             }
         }
     }
@@ -394,7 +396,9 @@ fn gain_polys(text: &str, symbolic: bool, out: &str) -> Option<(SsCircuit, Poly,
     } else {
         Some(dc::operating_point(&net).ok()?)
     };
-    let ss = ss::build(&net, op.as_ref()).unwrap();
+    // Junction conductances left out, as in symbolic mode (hand analysis).
+    let full = ss::build(&net, op.as_ref()).unwrap();
+    let ss = full.omit(&full.optional);
     let sys = ss::system(&net, &ss, &Excite::Source(net.element("VIN").unwrap()));
     let d = det::det(&sys.a, 1 << 22).unwrap();
     let col = sys.node_col[net.node(out).unwrap()]?;

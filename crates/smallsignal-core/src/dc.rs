@@ -267,10 +267,8 @@ impl Ctx<'_> {
                         if use_init {
                             (vgs, vds, vbs) = (og, od, ob);
                         } else if limit {
-                            let (lg, ld, lb) = limit_mos(vgs, vds, vbs, og, od, ob, von, model.is * mult);
-                            if (lg, ld, lb) != (vgs, vds, vbs) {
-                                limited = true;
-                            }
+                            let (lg, ld, lb, clamped) = limit_mos(vgs, vds, vbs, og, od, ob, von, model.is * mult);
+                            limited |= clamped;
                             (vgs, vds, vbs) = (lg, ld, lb);
                         }
                     }
@@ -444,29 +442,46 @@ impl Ctx<'_> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn limit_mos(vgs: f64, vds: f64, vbs: f64, og: f64, od: f64, ob: f64, von: f64, is: f64) -> (f64, f64, f64) {
+/// ngspice's MOS step limiting; also says whether any limiter clamped. Each
+/// limiter returns its input unchanged unless it clamps, so "clamped" is a
+/// comparison of a limiter's output with its own input; voltages are
+/// recomposed only after a clamp (recomposing an unclamped one, e.g.
+/// vgs − (vgs − vds), can be 1 ulp off and would count as a clamp forever).
+fn limit_mos(vgs: f64, vds: f64, vbs: f64, og: f64, od: f64, ob: f64, von: f64, is: f64) -> (f64, f64, f64, bool) {
     let vt = vt();
     let vgd = vgs - vds;
     let ogd = og - od;
-    // Recompose vds = vgs − vgd only when fetlim moved the gate voltage;
-    // otherwise rounding would flag every iteration as limited.
-    let (vgs, vds) = if od >= 0.0 {
+    let (lvgs, lvds, c_gate, c_vds) = if od >= 0.0 {
         let lg = fetlim(vgs, og, von);
-        let vds = if lg == vgs { vds } else { lg - vgd };
-        (lg, limvds(vds, od))
+        let c_gate = lg != vgs;
+        let vds1 = if c_gate { lg - vgd } else { vds };
+        let ld = limvds(vds1, od);
+        (lg, ld, c_gate, ld != vds1)
     } else {
         let lgd = fetlim(vgd, ogd, von);
-        let vds = if lgd == vgd { vds } else { vgs - lgd };
-        let vds = -limvds(-vds, -od);
-        (if lgd == vgd && vds == vgs - vgd { vgs } else { lgd + vds }, vds)
+        let c_gate = lgd != vgd;
+        let vds1 = if c_gate { vgs - lgd } else { vds };
+        let t = limvds(-vds1, -od);
+        let c_vds = t != -vds1;
+        let ld = -t;
+        // vgd is the limited quantity here: vgs follows from it and vds.
+        let lg = if c_gate || c_vds { lgd + ld } else { vgs };
+        (lg, ld, c_gate, c_vds)
     };
     let vc = vcrit(is, vt);
-    let vbs = if vds >= 0.0 {
-        pnjlim(vbs, ob, vt, vc)
+    let (lvbs, c_bulk) = if lvds >= 0.0 {
+        let lb = pnjlim(vbs, ob, vt, vc);
+        (lb, lb != vbs)
     } else {
-        pnjlim(vbs - vds, ob - od, vt, vc) + vds
+        let vbd = vbs - lvds;
+        let lb = pnjlim(vbd, ob - od, vt, vc);
+        if lb != vbd {
+            (lb + lvds, true)
+        } else {
+            (vbs, false)
+        }
     };
-    (vgs, vds, vbs)
+    (lvgs, lvds, lvbs, c_gate || c_vds || c_bulk)
 }
 
 /// Newton iterations before node-voltage steps are capped at MAX_STEP volts

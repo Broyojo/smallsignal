@@ -20,7 +20,14 @@ with numeric values, poles and zeros, and the operating point.
    device equations follow ngspice exactly: MOS level 1 with body effect and
    bulk junctions; Gummel–Poon with IS, BF, BR and VAF; diode IS and N.
 3. **Linearize**: MOSFETs get gm, ro and gmb (gmb only when body ≠ source);
-   BJTs get gm, rπ, ro, plus rμ when significant; diodes get rd.
+   BJTs get gm, rπ, ro; diodes get rd. Junction conductances (MOS bulk
+   gbs/gbd, BJT gμ) are all in the model; a set of them is left out of the
+   exact expression only when the full numeric system proves no reported
+   value (gain, rin, rout at DC and every check-grid frequency) moves by more
+   than 1e-9 (absolute floors 1e-12, 1e-9 Ω). They are tried all at once, then
+   put back largest first (matched twins together). The cross-check always
+   solves the full system. Symbolic mode leaves them out, as hand analysis
+   does. Response: `omittedJunctions`, `omissionError`.
 4. **Symbolic MNA**. The determinant is computed division-free by memoized
    Laplace expansion over the sparse matrix. Monomials are parameter bitsets,
    because every minor is multilinear in the element parameters (and s is
@@ -75,6 +82,13 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 - Common factors of numerator and denominator cancel (exact multivariate GCD),
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
 - `rout`: the impedance at out/ref with every independent source zeroed.
+- Each quantity also carries `display`: the exact expression with junction
+  leakage (r_bs, r_bd, r_μ) taken to zero conductance (their monomials dropped,
+  then cancelled and normalized as usual), with `maxRelError` against the full
+  model and `same` when it equals `exact`. If dropping the leakage would move
+  a value by more than 1e-3, `display` keeps it (`leakageMatters: true`).
+  `simplified` is derived from `display`, so neither shows leakage that does
+  not matter; `values` always come from the full model.
 - Each quantity carries `exact` and `simplified` (`latex`, `latexExpanded`,
   `num`, `den`, `terms`; `same` when nothing was dropped). In numeric mode
   `simplified` drops numerically small terms within `maxRelError`; in symbolic
@@ -86,7 +100,10 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 - `op` (null in symbolic mode) holds node voltages, source branch currents, and
   per-device region, currents, voltages and small-signal conductances.
 - `params` lists each symbol's name, LaTeX, value and unit; `warnings` collects
-  devices out of their intended region, ignored model parameters, and so on.
+  devices out of their intended region, ignored model parameters,
+  cross-coupled (latch) pairs that may have several DC solutions, junctions
+  forward-biased by ideal sources (also named in the DC error when that is
+  why DC fails), and so on.
 
 Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.

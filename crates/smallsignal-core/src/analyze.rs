@@ -163,8 +163,63 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
 
     let symbolic = req.symbolic || !net.missing.is_empty();
-    let op = if symbolic { None } else { Some(operating_point(&net)?) };
-    let ss = ss::build(&net, op.as_ref())?;
+    let op = if symbolic {
+        None
+    } else {
+        Some(
+            operating_point(&net).map_err(|e| match degenerate_junctions(&net).as_slice() {
+                [] => e,
+                found => format!(
+                    "{e}. No physical DC solution: {}. Add series resistance.",
+                    found.join("; ")
+                ),
+            })?,
+        )
+    };
+    let full = ss::build(&net, op.as_ref())?;
+    let excite = match (mode, neg) {
+        (Mode::Single, _) | (_, None) => Excite::Source(input),
+        (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
+        (Mode::Common, Some(n)) => Excite::Sources(vec![(input, 1), (n, 1)]),
+    };
+    let (p_in, n_in) = (net.elements[input].nodes[0], net.elements[input].nodes[1]);
+    let rin_kind = match (req.rin, mode, neg) {
+        (false, ..) => None,
+        (true, Mode::Differential, Some(ng)) => Some(RinKind::Ports {
+            into: p_in,
+            outof: net.elements[ng].nodes[0],
+            open: inputs.clone(),
+        }),
+        (true, Mode::Common, Some(ng)) if input_is_v => Some(RinKind::Common { neg: ng }),
+        (true, Mode::Common, Some(_)) => None,
+        (true, ..) => Some(RinKind::Single { p: p_in, n: n_in }),
+    };
+    let probe = Probe {
+        net: &net,
+        excite: excite.clone(),
+        out,
+        rf,
+        vid: if mode == Mode::Differential { 2.0 } else { 1.0 },
+        input,
+        input_is_v,
+        rin: rin_kind,
+        rout: req.rout,
+    };
+    let grid = check_grid(full.reactive_mask != 0, &freqs);
+    // Junction conductances (gbs, gbd, gμ) stay in the exact model unless the
+    // full numeric system proves that leaving them out moves no reported
+    // value by more than OMIT_REL; symbolic mode leaves them out, as hand
+    // analysis does.
+    // Matched elements decide together, so twins keep the same parameters.
+    let group_of = element_groups(&net, &req.matched);
+    let (ss, omitted, omit_err) = if symbolic {
+        (full.clone(), Vec::new(), 0.0)
+    } else {
+        prove_omission(&probe, &full, &grid, |p| {
+            let kind = p.name.split('_').next().unwrap_or("");
+            format!("{kind}:{}", group_of(&p.element))
+        })
+    };
     let mut warnings: Vec<String> = net.warnings.iter().chain(&ss.warnings).cloned().collect();
     if !net.missing.is_empty() {
         warnings.push(format!(
@@ -173,16 +228,26 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         ));
     }
     warnings.extend(wiring_warnings(&net, op.as_ref()));
+    if op.is_some() {
+        warnings.extend(latch_warnings(&net));
+        // A converged point can still be unphysical (an ideal source
+        // forcing a junction): say so rather than report its numbers quietly.
+        warnings.extend(
+            degenerate_junctions(&net)
+                .into_iter()
+                .map(|d| format!("{d}: its current has no physical limit; add series resistance")),
+        );
+    }
     let symbols = sym::symbols(&net, &ss, &req.matched, symbolic, &mut warnings);
     let x = |p: &Poly| XPoly::from_poly(p, &symbols.class, symbols.syms.len());
-    let has_reactive = ss.reactive_mask != 0;
     let q = Quantities {
         ss: &ss,
         sym: &symbols,
         freqs: &freqs,
+        grid: &grid,
         tol,
-        has_reactive,
         symbolic,
+        omit_err,
     };
 
     let mut resp = Map::new();
@@ -192,7 +257,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         op.as_ref().map(|op| op_json(&net, op)).unwrap_or(Value::Null),
     );
     resp.insert("params".into(), params_json(&symbols.syms));
-    let candidates: Vec<Value> = sym::match_candidates(&net, &ss, op.as_ref())
+    resp.insert("omittedJunctions".into(), json!(omitted));
+    resp.insert("omissionError".into(), json!(omit_err));
+    // On the full model: the omission proof must not make twins look unlike.
+    let candidates: Vec<Value> = sym::match_candidates(&net, &full, op.as_ref())
         .into_iter()
         .map(|(a, b, kind)| json!({ "elements": [a, b], "kind": kind }))
         .collect();
@@ -206,15 +274,13 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         }),
     );
 
+    // The cross-check always solves the FULL model (every junction), so an
+    // omission can never hide.
+    let fsys = probe.systems(&full);
+
     // Gain: input source(s) excited, output voltage per unit input. A
     // differential pair is driven ±1 (so v_id = 2) and the denominator
     // doubled, exactly.
-    let excite = match (mode, neg) {
-        (Mode::Single, _) | (_, None) => Excite::Source(input),
-        (Mode::Differential, Some(n)) => Excite::Sources(vec![(input, 1), (n, -1)]),
-        (Mode::Common, Some(n)) => Excite::Sources(vec![(input, 1), (n, 1)]),
-    };
-    let vid = if mode == Mode::Differential { 2.0 } else { 1.0 };
     let gsys = ss::system(&net, &ss, &excite);
     let d = crate::det::det(&gsys.a, max_terms)?;
     if d.is_zero() {
@@ -231,11 +297,6 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             req.input
         ));
     }
-    let numeric_gain = |s: Complex64| {
-        let (xs, err) = solve_at(&gsys, &ss, s)?;
-        let v = (xnode(&gsys, &xs, out) - xnode(&gsys, &xs, rf)) / vid;
-        Some((v, 2.0 * err / vid / v.norm()))
-    };
     let unit = if input_is_v { "V/V" } else { "V/A" };
     let gain_den = if mode == Mode::Differential {
         x(&d)?.scaled(2)?
@@ -244,78 +305,84 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     };
     resp.insert(
         "gain".into(),
-        q.json(&x(&n_out)?, &gain_den, unit, numeric_gain, &mut warnings, "gain"),
+        q.json(
+            &x(&n_out)?,
+            &gain_den,
+            unit,
+            |s| probe.gain_at(&fsys, &full, s),
+            &mut warnings,
+            "gain",
+        ),
     );
 
     if req.rin {
-        let e = &net.elements[input];
-        let (p, n) = (e.nodes[0], e.nodes[1]);
-        match (mode, neg) {
-            (Mode::Differential, Some(ng)) => {
+        match &probe.rin {
+            Some(RinKind::Ports { into, outof, open }) => {
                 // The port between the two inputs' + nodes, both sources removed.
-                let (p2, into) = (net.elements[ng].nodes[0], p);
                 let isys = ss::system(
                     &net,
                     &ss,
                     &Excite::InjectOpen {
-                        into,
-                        outof: p2,
-                        open: inputs.clone(),
+                        into: *into,
+                        outof: *outof,
+                        open: open.clone(),
                     },
                 );
                 let id = crate::det::det(&isys.a, max_terms)?;
-                let inum = sub(&node_num(&isys, into, max_terms)?, &node_num(&isys, p2, max_terms)?);
-                let numeric = |s: Complex64| {
-                    let (xs, err) = solve_at(&isys, &ss, s)?;
-                    let v = xnode(&isys, &xs, into) - xnode(&isys, &xs, p2);
-                    Some((v, 2.0 * err / v.norm()))
-                };
+                let inum = sub(
+                    &node_num(&isys, *into, max_terms)?,
+                    &node_num(&isys, *outof, max_terms)?,
+                );
                 resp.insert(
                     "rin".into(),
-                    q.json(&x(&inum)?, &x(&id)?, "Ω", numeric, &mut warnings, "rin"),
+                    q.json(
+                        &x(&inum)?,
+                        &x(&id)?,
+                        "Ω",
+                        |s| probe.rin_at(&fsys, &full, s),
+                        &mut warnings,
+                        "rin",
+                    ),
                 );
             }
-            (Mode::Common, Some(ng)) if input_is_v => {
+            Some(RinKind::Common { neg: ng }) => {
                 // Both inputs at the same 1 V: Z = 1 / (total current in).
-                let (k1, k2) = (gsys.branch_col[&input], gsys.branch_col[&ng]);
+                let (k1, k2) = (gsys.branch_col[&input], gsys.branch_col[ng]);
                 let total = poly_add(&gsys.cramer(k1, max_terms)?, &gsys.cramer(k2, max_terms)?);
-                let numeric = |s: Complex64| {
-                    let (xs, err) = solve_at(&gsys, &ss, s)?;
-                    let i = xs[k1] + xs[k2];
-                    Some((Complex64::new(-1.0, 0.0) / i, 2.0 * err / i.norm()))
-                };
                 resp.insert(
                     "rin".into(),
-                    q.json(&x(&d)?, &x(&total.neg())?, "Ω", numeric, &mut warnings, "rin"),
+                    q.json(
+                        &x(&d)?,
+                        &x(&total.neg())?,
+                        "Ω",
+                        |s| probe.rin_at(&fsys, &full, s),
+                        &mut warnings,
+                        "rin",
+                    ),
                 );
             }
-            (Mode::Common, Some(_)) => {
-                warnings.push("rin in common mode needs voltage-source inputs".to_string());
-            }
-            _ => {
+            None => warnings.push("rin in common mode needs voltage-source inputs".to_string()),
+            Some(RinKind::Single { p, n }) => {
                 let (num, den) = if input_is_v {
                     // Zin = V / I_into_circuit = 1 / (−I_branch).
                     let k = gsys.branch_col[&input];
                     (d.clone(), gsys.cramer(k, max_terms)?.neg())
                 } else {
                     (
-                        sub(&node_num(&gsys, n, max_terms)?, &node_num(&gsys, p, max_terms)?),
+                        sub(&node_num(&gsys, *n, max_terms)?, &node_num(&gsys, *p, max_terms)?),
                         d.clone(),
                     )
                 };
-                let numeric = |s: Complex64| {
-                    let (xs, err) = solve_at(&gsys, &ss, s)?;
-                    Some(if input_is_v {
-                        let ib = xs[gsys.branch_col[&input]];
-                        (Complex64::new(-1.0, 0.0) / ib, err / ib.norm())
-                    } else {
-                        let v = xnode(&gsys, &xs, n) - xnode(&gsys, &xs, p);
-                        (v, 2.0 * err / v.norm())
-                    })
-                };
                 resp.insert(
                     "rin".into(),
-                    q.json(&x(&num)?, &x(&den)?, "Ω", numeric, &mut warnings, "rin"),
+                    q.json(
+                        &x(&num)?,
+                        &x(&den)?,
+                        "Ω",
+                        |s| probe.rin_at(&fsys, &full, s),
+                        &mut warnings,
+                        "rin",
+                    ),
                 );
             }
         }
@@ -325,14 +392,16 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         let osys = ss::system(&net, &ss, &Excite::Inject { into: out, outof: rf });
         let od = crate::det::det(&osys.a, max_terms)?;
         let on = sub(&node_num(&osys, out, max_terms)?, &node_num(&osys, rf, max_terms)?);
-        let numeric = |s: Complex64| {
-            let (xs, err) = solve_at(&osys, &ss, s)?;
-            let v = xnode(&osys, &xs, out) - xnode(&osys, &xs, rf);
-            Some((v, 2.0 * err / v.norm()))
-        };
         resp.insert(
             "rout".into(),
-            q.json(&x(&on)?, &x(&od)?, "Ω", numeric, &mut warnings, "rout"),
+            q.json(
+                &x(&on)?,
+                &x(&od)?,
+                "Ω",
+                |s| probe.rout_at(&fsys, &full, s),
+                &mut warnings,
+                "rout",
+            ),
         );
     }
 
@@ -357,10 +426,339 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     Ok(Value::Object(resp))
 }
 
+/// Largest relative error the `display` form may have from dropping junction
+/// leakage; beyond it the display form keeps the junctions.
+const LEAKAGE_REL: f64 = 1e-3;
+
+/// Largest relative change of any reported value that omitting junction
+/// conductances may cause (absolute floors: 1e-12 for gains, 1e-9 Ω).
+const OMIT_REL: f64 = 1e-9;
+
+enum RinKind {
+    Single {
+        p: usize,
+        n: usize,
+    },
+    /// Between two + nodes, the listed sources removed.
+    Ports {
+        into: usize,
+        outof: usize,
+        open: Vec<usize>,
+    },
+    /// Both voltage inputs at 1 V: 1 / total input current.
+    Common {
+        neg: usize,
+    },
+}
+
+/// What the analysis reports, as numbers on a given small-signal model:
+/// shared by the omission proof and the cross-check.
+struct Probe<'a> {
+    net: &'a Netlist,
+    excite: Excite,
+    out: usize,
+    rf: usize,
+    vid: f64,
+    input: usize,
+    input_is_v: bool,
+    rin: Option<RinKind>,
+    rout: bool,
+}
+
+struct Systems {
+    gain: System,
+    rin: Option<System>,
+    rout: Option<System>,
+}
+
+impl Probe<'_> {
+    fn systems(&self, ss: &SsCircuit) -> Systems {
+        Systems {
+            gain: ss::system(self.net, ss, &self.excite),
+            rin: match &self.rin {
+                Some(RinKind::Ports { into, outof, open }) => Some(ss::system(
+                    self.net,
+                    ss,
+                    &Excite::InjectOpen {
+                        into: *into,
+                        outof: *outof,
+                        open: open.clone(),
+                    },
+                )),
+                _ => None,
+            },
+            rout: self.rout.then(|| {
+                ss::system(
+                    self.net,
+                    ss,
+                    &Excite::Inject {
+                        into: self.out,
+                        outof: self.rf,
+                    },
+                )
+            }),
+        }
+    }
+
+    fn gain_at(&self, sy: &Systems, ss: &SsCircuit, s: Complex64) -> Option<(Complex64, f64)> {
+        let g = &sy.gain;
+        let (xs, err) = solve_at(g, ss, s)?;
+        let v = (xnode(g, &xs, self.out) - xnode(g, &xs, self.rf)) / self.vid;
+        Some((v, 2.0 * err / self.vid / v.norm()))
+    }
+
+    fn rin_at(&self, sy: &Systems, ss: &SsCircuit, s: Complex64) -> Option<(Complex64, f64)> {
+        let g = &sy.gain;
+        match self.rin.as_ref()? {
+            RinKind::Ports { into, outof, .. } => {
+                let r = sy.rin.as_ref()?;
+                let (xs, err) = solve_at(r, ss, s)?;
+                let v = xnode(r, &xs, *into) - xnode(r, &xs, *outof);
+                Some((v, 2.0 * err / v.norm()))
+            }
+            RinKind::Common { neg } => {
+                let (k1, k2) = (g.branch_col[&self.input], g.branch_col[neg]);
+                let (xs, err) = solve_at(g, ss, s)?;
+                let i = xs[k1] + xs[k2];
+                Some((Complex64::new(-1.0, 0.0) / i, 2.0 * err / i.norm()))
+            }
+            RinKind::Single { p, n } => {
+                let (xs, err) = solve_at(g, ss, s)?;
+                Some(if self.input_is_v {
+                    let ib = xs[g.branch_col[&self.input]];
+                    (Complex64::new(-1.0, 0.0) / ib, err / ib.norm())
+                } else {
+                    let v = xnode(g, &xs, *n) - xnode(g, &xs, *p);
+                    (v, 2.0 * err / v.norm())
+                })
+            }
+        }
+    }
+
+    fn rout_at(&self, sy: &Systems, ss: &SsCircuit, s: Complex64) -> Option<(Complex64, f64)> {
+        let r = sy.rout.as_ref()?;
+        let (xs, err) = solve_at(r, ss, s)?;
+        let v = xnode(r, &xs, self.out) - xnode(r, &xs, self.rf);
+        Some((v, 2.0 * err / v.norm()))
+    }
+
+    /// Every reported value on the grid, with its absolute floor.
+    fn values(&self, ss: &SsCircuit, grid: &[f64]) -> Vec<(Option<Complex64>, f64)> {
+        let sy = self.systems(ss);
+        let mut out = Vec::new();
+        for &f in grid {
+            let s = jw(f);
+            out.push((self.gain_at(&sy, ss, s).map(|v| v.0), 1e-12));
+            if self.rin.is_some() {
+                out.push((self.rin_at(&sy, ss, s).map(|v| v.0), 1e-9));
+            }
+            if self.rout {
+                out.push((self.rout_at(&sy, ss, s).map(|v| v.0), 1e-9));
+            }
+        }
+        out
+    }
+}
+
+/// Largest normalized difference d / (scale + floor/OMIT_REL) between two
+/// value lists (≤ OMIT_REL exactly when every pair is within OMIT_REL·scale
+/// + floor), or None if a pair is not, or only one of it is finite.
+fn within(a: &[(Option<Complex64>, f64)], b: &[(Option<Complex64>, f64)]) -> Option<f64> {
+    let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+    let mut worst = 0.0f64;
+    for ((x, floor), (y, _)) in a.iter().zip(b) {
+        match (x, y) {
+            (None, None) => {}
+            (Some(x), Some(y)) if !finite(x) && !finite(y) => {}
+            (Some(x), Some(y)) if finite(x) && finite(y) => {
+                let scale = x.norm().max(y.norm());
+                let d = (x - y).norm();
+                if d > OMIT_REL * scale + floor {
+                    return None;
+                }
+                worst = worst.max(d / (scale + floor / OMIT_REL));
+            }
+            _ => return None,
+        }
+    }
+    Some(worst)
+}
+
+/// Which junction conductances may be left out of the exact model: all of
+/// them if the full numeric system shows no reported value moves by more
+/// than OMIT_REL; otherwise they are put back, largest conductance first,
+/// until it holds. Returns the model, the omitted parameters' names and the
+/// largest relative change the omission causes.
+/// Junctions sharing a `unit` key (same kind, same matched group) are kept or
+/// omitted together.
+fn prove_omission(
+    probe: &Probe,
+    full: &SsCircuit,
+    grid: &[f64],
+    unit: impl Fn(&ss::Param) -> String,
+) -> (SsCircuit, Vec<String>, f64) {
+    if full.optional.is_empty() {
+        return (full.clone(), Vec::new(), 0.0);
+    }
+    let reference = probe.values(full, grid);
+    let mut units: Vec<(String, Vec<usize>)> = Vec::new();
+    for &p in &full.optional {
+        let k = unit(&full.params[p]);
+        match units.iter_mut().find(|(u, _)| *u == k) {
+            Some((_, ps)) => ps.push(p),
+            None => units.push((k, vec![p])),
+        }
+    }
+    // Smallest resistance (largest conductance) first: the first put back.
+    let least_r = |ps: &[usize]| ps.iter().map(|&p| full.params[p].value).fold(f64::INFINITY, f64::min);
+    units.sort_by(|a, b| least_r(&a.1).total_cmp(&least_r(&b.1)));
+    while !units.is_empty() {
+        let omitted: Vec<usize> = units.iter().flat_map(|(_, ps)| ps.iter().copied()).collect();
+        let cand = full.omit(&omitted);
+        if let Some(err) = within(&reference, &probe.values(&cand, grid)) {
+            let names = omitted.iter().map(|&p| full.params[p].name.clone()).collect();
+            return (cand, names, err);
+        }
+        units.remove(0);
+    }
+    (full.clone(), Vec::new(), 0.0)
+}
+
+/// Group id of each element name under the requested matches (its own name
+/// when unmatched).
+fn element_groups(net: &Netlist, groups: &[Vec<String>]) -> impl Fn(&str) -> String {
+    let mut of: Vec<(String, String)> = Vec::new();
+    for g in groups {
+        let names: Vec<String> = g
+            .iter()
+            .filter_map(|n| net.element(n))
+            .map(|i| net.elements[i].name.clone())
+            .collect();
+        let existing = names
+            .iter()
+            .find_map(|n| of.iter().find(|(e, _)| e == n).map(|(_, id)| id.clone()));
+        let id = existing.unwrap_or_else(|| names.first().cloned().unwrap_or_default());
+        for n in names {
+            if !of.iter().any(|(e, _)| *e == n) {
+                of.push((n, id.clone()));
+            }
+        }
+    }
+    move |name: &str| {
+        of.iter()
+            .find(|(e, _)| e == name)
+            .map(|(_, id)| id.clone())
+            .unwrap_or_else(|| name.to_string())
+    }
+}
+
+fn check_grid(has_reactive: bool, freqs: &[f64]) -> Vec<f64> {
+    let mut g: Vec<f64> = vec![0.0];
+    if has_reactive {
+        g.extend((0..=44).map(|k| 10f64.powf(k as f64 / 4.0)));
+    }
+    g.extend_from_slice(freqs);
+    g
+}
+
 fn poly_add(a: &Poly, b: &Poly) -> Poly {
     let mut p = a.clone();
     p.add_scaled(b, 1);
     p
+}
+
+/// Node voltages fixed by ideal sources alone: reached from ground through
+/// independent V sources (their DC value) and inductors (0 V at DC).
+fn forced_voltages(net: &Netlist) -> Vec<Option<f64>> {
+    let mut v: Vec<Option<f64>> = vec![None; net.nodes.len()];
+    v[0] = Some(0.0);
+    loop {
+        let mut changed = false;
+        for e in &net.elements {
+            let drop = match e.kind {
+                Kind::V { dc, .. } => dc,
+                Kind::L { .. } => 0.0,
+                _ => continue,
+            };
+            let (p, n) = (e.nodes[0], e.nodes[1]);
+            match (v[p], v[n]) {
+                (Some(_), Some(_)) | (None, None) => {}
+                (Some(vp), None) => {
+                    v[n] = Some(vp - drop);
+                    changed = true;
+                }
+                (None, Some(vn)) => {
+                    v[p] = Some(vn + drop);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return v;
+        }
+    }
+}
+
+/// Junctions an ideal source loop forward-biases hard (both ends pinned by
+/// sources, > 0.8 V): their current has no physical limit, so DC cannot
+/// converge to anything meaningful.
+fn degenerate_junctions(net: &Netlist) -> Vec<String> {
+    let v = forced_voltages(net);
+    let mut out = Vec::new();
+    let mut check = |name: &str, what: &str, anode: usize, cathode: usize, polarity: f64| {
+        if let (Some(a), Some(k)) = (v[anode], v[cathode]) {
+            let fwd = polarity * (a - k);
+            if fwd > 0.8 {
+                out.push(format!(
+                    "{name}'s {what} junction is forward-biased by {fwd:.3} V between nodes {} and {}, both held by ideal sources",
+                    net.nodes[anode], net.nodes[cathode]
+                ));
+            }
+        }
+    };
+    for e in &net.elements {
+        let n = &e.nodes;
+        match &e.kind {
+            Kind::D { .. } => check(&e.name, "diode", n[0], n[1], 1.0),
+            Kind::Q { model, .. } => {
+                check(&e.name, "base-emitter", n[1], n[2], model.ty);
+                check(&e.name, "base-collector", n[1], n[0], model.ty);
+            }
+            Kind::M { model, .. } => {
+                check(&e.name, "bulk-source", n[3], n[2], model.ty);
+                check(&e.name, "bulk-drain", n[3], n[0], model.ty);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Cross-coupled transistor pairs (each one's gate/base on the other's
+/// drain/collector): positive feedback, so the circuit may have several DC
+/// solutions (a latch). A structural check only: it cannot prove uniqueness.
+fn latch_warnings(net: &Netlist) -> Vec<String> {
+    let ends = |i: usize| -> Option<(usize, usize)> {
+        let e = &net.elements[i];
+        match e.kind {
+            Kind::M { .. } | Kind::Q { .. } => Some((e.nodes[1], e.nodes[0])),
+            _ => None,
+        }
+    };
+    let mut out = Vec::new();
+    for i in 0..net.elements.len() {
+        let Some((gi, di)) = ends(i) else { continue };
+        for j in i + 1..net.elements.len() {
+            let Some((gj, dj)) = ends(j) else { continue };
+            if gi == dj && gj == di && gi != 0 && gj != 0 {
+                out.push(format!(
+                    "{} and {} are cross-coupled (positive feedback): the circuit may have more than one DC solution; this is the one reached from the default start",
+                    net.elements[i].name, net.elements[j].name
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// Wiring that makes a result meaningless even though it solves: a node only
@@ -518,9 +916,11 @@ struct Quantities<'a> {
     ss: &'a SsCircuit,
     sym: &'a Symbols,
     freqs: &'a [f64],
+    grid: &'a [f64],
     tol: f64,
-    has_reactive: bool,
     symbolic: bool,
+    /// Largest relative change from proven-negligible junction omissions.
+    omit_err: f64,
 }
 
 fn jw(f: f64) -> Complex64 {
@@ -540,16 +940,6 @@ fn hz(r: &Complex64) -> Value {
 }
 
 impl Quantities<'_> {
-    fn grid(&self) -> Vec<f64> {
-        let mut g: Vec<f64> = if self.has_reactive {
-            (0..=44).map(|k| 10f64.powf(k as f64 / 4.0)).collect()
-        } else {
-            vec![0.0]
-        };
-        g.extend_from_slice(self.freqs);
-        g
-    }
-
     fn json(
         &self,
         num: &XPoly,
@@ -593,7 +983,15 @@ impl Quantities<'_> {
             simp["same"] = json!(same);
             simp["assumption"] = json!("ro ≫ R, 1/gm");
             simp["terms"] = json!({ "num": lead.num.len(), "den": lead.den.len() });
-            return json!({ "unit": unit, "exact": ex, "simplified": simp, "values": [], "poles": [], "zeros": [] });
+            // No junction leakage in symbolic mode: the display form is exact.
+            let mut display = ex.clone();
+            display["same"] = json!(true);
+            display["maxRelError"] = Value::Null;
+            display["leakageMatters"] = json!(false);
+            return json!({
+                "unit": unit, "exact": ex, "display": display, "simplified": simp,
+                "values": [], "poles": [], "zeros": [],
+            });
         }
         let values: Vec<Value> = self
             .freqs
@@ -612,11 +1010,11 @@ impl Quantities<'_> {
         // the symbolic sum's cancellation bound plus the LU forward-error
         // bound (both relative).
         // (An exactly zero numerator is certified by the KCL identity.)
-        let grid = self.grid();
+        let grid = self.grid;
         let mut max_diff = 0.0f64;
         let mut check_ok = true;
         if !num.is_zero() {
-            for &f in &grid {
+            for &f in grid {
                 if let Some((hn, lu_rel)) = numeric(jw(f)) {
                     let (h, bound) = exact.eval_with_bound(jw(f));
                     let finite = |z: Complex64| z.re.is_finite() && z.im.is_finite();
@@ -637,7 +1035,13 @@ impl Quantities<'_> {
                         // members agree to `mismatch`, which moves the result by at
                         // most that per merged factor, amplified by cancellation.
                         let merge = self.sym.mismatch * exact.max_degree() as f64 * exact.cancellation(jw(f));
-                        if diff > 1e-12 + 4.0 * bound + 4.0 * lu_rel + 4.0 * merge {
+                        // The cross-check solves the full model; a proven
+                        // omission accounts for at most omit_err.
+                        // In relative terms a proven omission may move this
+                        // point by omit_err·(1 + floor/(OMIT_REL·scale)).
+                        let floor = if unit == "Ω" { 1e-9 } else { 1e-12 };
+                        let omit = self.omit_err * (1.0 + floor / (OMIT_REL * scale));
+                        if diff > 1e-12 + 4.0 * bound + 4.0 * lu_rel + 4.0 * merge + 2.0 * omit {
                             check_ok = false;
                         }
                     }
@@ -650,21 +1054,66 @@ impl Quantities<'_> {
             ));
         }
 
-        // Simplified form: the coarsest pruning whose error stays in budget.
-        let hs: Vec<Complex64> = grid.iter().map(|&f| exact.eval(jw(f))).collect();
-        let peak = hs.iter().map(|h| h.norm()).fold(0.0, f64::max);
+        // Reference: the exact expression, which is the full model (every
+        // junction) to within the proven omission error, and evaluates more
+        // accurately than an LU solve of the same system. Errors below are
+        // against the full model: measured against this, plus omit_err.
+        let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+        let refs: Vec<Complex64> = grid.iter().map(|&f| exact.eval(jw(f))).collect();
+        let peak = refs.iter().filter(|h| finite(h)).map(|h| h.norm()).fold(0.0, f64::max);
         let floor = 1e-3 * peak;
+        // Worst relative error against the reference, with a floor at 1e-3 of
+        // the peak (−60 dB) so zeros of the response do not dominate.
         let err_of = |e: &Expr| {
-            grid.iter()
-                .zip(&hs)
-                .map(|(&f, h)| (e.eval(jw(f)) - h).norm() / h.norm().max(floor))
-                .fold(0.0, f64::max)
+            let measured = grid
+                .iter()
+                .zip(&refs)
+                .map(|(&f, h)| {
+                    let v = e.eval(jw(f));
+                    match (finite(&v), finite(h)) {
+                        (true, true) => (v - h).norm() / h.norm().max(floor),
+                        (false, false) => 0.0,
+                        _ => f64::INFINITY,
+                    }
+                })
+                .fold(0.0, f64::max);
+            measured + self.omit_err
         };
-        let mut simplified = exact.clone();
-        let mut simp_err = 0.0;
+
+        // Display form: the exact expression in the limit of zero junction
+        // leakage (r_bs, r_bd, r_μ → ∞: their conductance monomials dropped),
+        // unless that moves a value by more than LEAKAGE_REL.
+        let leak: Vec<bool> = syms.iter().map(|s| s.leakage).collect();
+        let leaky = |e: &[u8]| e.iter().zip(&leak).any(|(&x, &l)| l && x > 0);
+        // (An exactly zero quantity has nothing to show differently.)
+        let leak_present = !num.is_zero() && num.terms.iter().chain(&den.terms).any(|(e, _)| leaky(e));
+        let drop_leak = |p: &XPoly| XPoly {
+            terms: p.terms.iter().filter(|(e, _)| !leaky(e)).cloned().collect(),
+        };
+        let mut leakage_matters = false;
+        let display = if leak_present {
+            let (dn, dd) = cancel(&drop_leak(num), &drop_leak(den));
+            let cand = (!dd.is_zero()).then(|| Expr::from_mna(&dn, &dd, syms));
+            match cand {
+                Some(c) if err_of(&c) <= LEAKAGE_REL => c,
+                _ => {
+                    leakage_matters = true;
+                    exact.clone()
+                }
+            }
+        } else {
+            exact.clone()
+        };
+        let display_same = !leak_present || leakage_matters;
+        let display_err = err_of(&display);
+
+        // Simplified form: the coarsest pruning of the display form whose
+        // error (against the full model) stays in budget.
+        let mut simplified = display.clone();
+        let mut simp_err = display_err;
         for eps in [1.0, 0.5, 0.3, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 1e-4] {
-            let cand = exact.prune(eps, syms);
-            if cand.term_count() >= exact.term_count() {
+            let cand = display.prune(eps, syms);
+            if cand.term_count() >= display.term_count() {
                 break;
             }
             let err = err_of(&cand);
@@ -680,27 +1129,30 @@ impl Quantities<'_> {
         let zeros: Vec<Value> = roots(&nc).iter().map(hz).collect();
         // Text forms only for expressions small enough to read; building them
         // for a huge expression would cost more than the solve.
-        let small = exact.term_count() <= LATEX_TERM_LIMIT;
-        let simp_small = simplified.term_count() <= LATEX_TERM_LIMIT;
-        let same = simplified.term_count() == exact.term_count();
-        let exact_json = if small {
-            let (en, ed) = exact.plain(syms);
-            let expanded = exact.latex(syms);
-            let latex = structured(num, den, syms).unwrap_or_else(|| expanded.clone());
-            json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed })
+        let text = |e: &Expr| {
+            if e.term_count() <= LATEX_TERM_LIMIT {
+                let (n, d) = e.plain(syms);
+                let expanded = e.latex(syms);
+                let (mn, md) = e.to_mna(syms);
+                let latex = structured(&mn, &md, syms).unwrap_or_else(|| expanded.clone());
+                json!({ "latex": latex, "latexExpanded": expanded, "num": n, "den": d })
+            } else {
+                json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
+            }
+        };
+        let exact_json = text(&exact);
+        let same = display_same && simplified.term_count() == exact.term_count();
+        let display_json = if display_same {
+            exact_json.clone()
         } else {
-            json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
+            text(&display)
         };
         let simp_json = if same {
             exact_json.clone()
-        } else if simp_small {
-            let (sn, sd) = simplified.plain(syms);
-            let expanded = simplified.latex(syms);
-            let (smn, smd) = simplified.to_mna(syms);
-            let latex = structured(&smn, &smd, syms).unwrap_or_else(|| expanded.clone());
-            json!({ "latex": latex, "latexExpanded": expanded, "num": sn, "den": sd })
+        } else if simplified.term_count() == display.term_count() {
+            display_json.clone()
         } else {
-            json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
+            text(&simplified)
         };
         let with = |mut v: Value, extra: Value| {
             if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
@@ -711,6 +1163,14 @@ impl Quantities<'_> {
         json!({
             "unit": unit,
             "exact": with(exact_json, json!({ "terms": { "num": exact.num.len(), "den": exact.den.len() } })),
+            "display": with(display_json, json!({
+                // True when the display form is the exact one (no leakage
+                // parameters, or leakage that matters).
+                "same": display_same,
+                "maxRelError": display_err,
+                "leakageMatters": leakage_matters,
+                "terms": { "num": display.num.len(), "den": display.den.len() },
+            })),
             "simplified": with(simp_json, json!({
                 // True when nothing was dropped: the simplified form is exact.
                 "same": same,

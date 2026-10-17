@@ -12,7 +12,10 @@ For each case in textbook_cases.py:
   equal the case's textbook hand-analysis form (`lead`) exactly, or equal the
   exact form when the circuit has no r_o;
 - numeric-mode runs must render the expected ∥ notation and agree with the
-  hand formula evaluated at the solver's own operating-point values.
+  hand formula evaluated at the solver's own operating-point values. Their
+  netlists set gmin = 1e-18: the solver keeps junction leakage (gmin) in the
+  exact model wherever it moves a result by more than 1e-9, and hand formulas
+  leave it out.
 The CLI is $SMALLSIGNAL_BIN if set, else target/release/smallsignal.
 """
 
