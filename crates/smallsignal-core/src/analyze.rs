@@ -79,6 +79,30 @@ pub struct Request {
     /// the full model (see `suggestions`).
     #[serde(default)]
     pub suggest: Option<crate::suggest::SuggestRequest>,
+    /// How numeric mode makes the simplified forms of gain, Zin and Zout:
+    /// "named" (default, named assumptions chosen by the numbers) or
+    /// "terms" (the smallest terms dropped).
+    #[serde(default)]
+    pub approx: Option<String>,
+}
+
+/// How numeric mode simplifies gain, Zin and Zout (`approx`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ApproxMethod {
+    /// The exact form under named assumptions chosen by the numbers.
+    Named,
+    /// The smallest terms dropped within the tolerance.
+    Terms,
+}
+
+impl ApproxMethod {
+    pub fn parse(s: Option<&str>) -> Result<ApproxMethod, String> {
+        match s.map(str::trim) {
+            None | Some("") | Some("named") => Ok(ApproxMethod::Named),
+            Some("terms") => Ok(ApproxMethod::Terms),
+            Some(m) => Err(format!("approx: no method '{m}' (use named or terms)")),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -181,6 +205,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
     let max_terms = req.max_terms.unwrap_or(2_000_000);
     let tol = req.tolerance.unwrap_or(0.05);
+    let approx = ApproxMethod::parse(req.approx.as_deref())?;
     let freqs = if req.freqs.is_empty() {
         vec![1e3]
     } else {
@@ -232,30 +257,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             })?,
         )
     };
-    // Symbolic mode assumes saturation except where the region is known.
-    let (mut linear, mut region_warnings) = if symbolic {
-        symbolic_regions(&net)
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    // Without an operating point a declared region decides which r_o the
-    // hand-analysis form keeps finite (MOS triode, BJT saturation).
-    if symbolic {
-        for r in req.assume.iter().flat_map(|a| &a.regions) {
-            let Some(ei) = net.element(&r.element) else { continue };
-            let e = &net.elements[ei];
-            let small = match (&e.kind, r.region.trim()) {
-                (Kind::M { .. }, "triode") | (Kind::Q { .. }, "saturation") => true,
-                (Kind::M { .. }, "saturation") | (Kind::Q { .. }, "forward-active") => false,
-                _ => continue,
-            };
-            linear.retain(|&x| x != ei);
-            region_warnings.retain(|w| *w != format!("{} is in triode", e.name));
-            if small {
-                linear.push(ei);
-            }
-        }
-    }
+    let (linear, region_warnings) = known_regions(&net, req, symbolic);
     let full = ss::build_with(&net, op.as_ref(), &linear)?;
     // Past the monomial width only the numeric system exists, which needs
     // numbers.
@@ -448,7 +450,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         freqs: &freqs,
     };
     let differential = mode == Mode::Differential;
-    let forms = exact_forms(&probe, &ss, &x, differential, max_terms, symbolic)?;
+    let forms = exact_forms(&probe, &ss, &x, differential, max_terms, symbolic, None)?;
     let d = &forms.d;
     let unit = if input_is_v { "V/V" } else { "V/A" };
     let gain_w = numeric.diff(&fsys.gain, out, rf);
@@ -468,12 +470,50 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         };
         warnings.push(format!("No signal reaches {at}"));
     }
+    // Named-assumption simplified forms (numeric mode): on the forms shown,
+    // which are the assumed model's under assumptions.
+    let simplify = Simplify {
+        probe: &probe,
+        net: &net,
+        full: &full,
+        op: op.as_ref(),
+        matched: &matched,
+        accepted: accepted_groups(&symbols),
+        current: req.assume.as_ref(),
+        grid: &grid,
+        differential,
+        max_terms,
+        tol,
+        seen: Default::default(),
+    };
+    let named_of = |which: Which| {
+        let simplify = &simplify;
+        move |e: &Expr, s: &[Sym], g: &Grid| simplify.named(which, e, s, g, None)
+    };
+    let (gain_named, rin_named, rout_named) = (named_of(Which::Gain), named_of(Which::Rin), named_of(Which::Rout));
+    // Under assumptions the full model's forms are replaced by the assumed
+    // model's: they need only the cheap kind.
+    let full_method = if assumptions.is_some() {
+        ApproxMethod::Terms
+    } else {
+        approx
+    };
+    let full_approx = |f| Approx::of(full_method, f);
     // Each quantity's full-model response on the check grid: the reference
     // the assumed model is measured against.
     let mut full_grids: Vec<(&str, Grid)> = Vec::new();
     let gain_at = |s| probe.gain_at(&fsys, &full, s);
     let (gain_json, gain_grid) = match &forms.gain {
-        Some((n, den)) => q.json(n, den, unit, gain_at, &mut warnings, "gain", None),
+        Some((n, den)) => q.json(
+            n,
+            den,
+            unit,
+            gain_at,
+            &mut warnings,
+            "gain",
+            None,
+            full_approx(&gain_named),
+        ),
         None => numeric.quantity(
             unit,
             "Gain",
@@ -601,7 +641,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     };
                     let asym = sym::symbols(&net, &ass, &amatched, symbolic, &mut warnings);
                     let ax = |p: &Poly| XPoly::from_poly(p, &asym.class, asym.syms.len());
-                    let mut aforms = exact_forms(&probe, &ass, &ax, differential, max_terms, symbolic)?;
+                    let mut aforms = exact_forms(&probe, &ass, &ax, differential, max_terms, symbolic, None)?;
                     // The forms over C and K in place of C_in and C_out.
                     let (shown, slots) = crate::miller::shown(&ass, &asym, splits);
                     if !slots.is_empty() {
@@ -798,7 +838,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             let rin_at = |s| probe.rin_at(&fsys, &full, s);
             let (sys, numeric_form) = probe.rin_numeric(&fsys, &numeric);
             let (value, g) = match form {
-                Some((n, dd)) => q.json(n, dd, "Ω", rin_at, &mut warnings, "rin", None),
+                Some((n, dd)) => q.json(n, dd, "Ω", rin_at, &mut warnings, "rin", None, full_approx(&rin_named)),
                 None => numeric.quantity("Ω", "Zin", sys, numeric_form, rin_at, &mut warnings, &grid),
             };
             resp.insert("rin".into(), value);
@@ -809,7 +849,16 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     if req.rout {
         let rout_at = |s| probe.rout_at(&fsys, &full, s);
         let (value, g) = match &forms.rout {
-            Some(Some((n, dd))) => q.json(n, dd, "Ω", rout_at, &mut warnings, "rout", None),
+            Some(Some((n, dd))) => q.json(
+                n,
+                dd,
+                "Ω",
+                rout_at,
+                &mut warnings,
+                "rout",
+                None,
+                full_approx(&rout_named),
+            ),
             _ => {
                 let r = fsys.rout.as_ref().expect("rout system");
                 numeric.quantity(
@@ -865,8 +914,23 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 "rin" => m.forms.rin.as_ref().and_then(|f| f.as_ref()),
                 _ => m.forms.rout.as_ref().and_then(|f| f.as_ref()),
             };
+            let which = match *name {
+                "gain" => Which::Gain,
+                "rin" => Which::Rin,
+                _ => Which::Rout,
+            };
+            let named = |e: &Expr, s: &[Sym], g: &Grid| simplify.named(which, e, s, g, Some(&st.splits));
             let (value, agrid) = match form {
-                Some((n, dd)) => aq.json(n, dd, unit, at, &mut warnings, name, Some(full_grid)),
+                Some((n, dd)) => aq.json(
+                    n,
+                    dd,
+                    unit,
+                    at,
+                    &mut warnings,
+                    name,
+                    Some(full_grid),
+                    Approx::of(approx, &named),
+                ),
                 None => {
                     let (sys, nform) = match *name {
                         "gain" => (&asys.gain, Form::Ratio(anum.diff(&asys.gain, out, rf))),
@@ -957,6 +1021,17 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             }),
         );
     }
+    // A named form's model can keep a junction the shown forms leave out.
+    if let Some(params) = resp.get_mut("params").and_then(Value::as_array_mut) {
+        for s in simplify.seen.take() {
+            let listed = params
+                .iter()
+                .any(|p| p["name"] == json!(s.name) && p["latex"] == json!(s.latex));
+            if !listed {
+                params.push(params_json(std::slice::from_ref(&s))[0].clone());
+            }
+        }
+    }
 
     if let Some((which, threshold, limits)) = suggest {
         let name = match which {
@@ -976,8 +1051,9 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             accepted: accepted_groups(&symbols),
             current: req.assume.as_ref(),
             which,
-            full_grid,
+            reference: full_grid,
             grid: &grid,
+            splits: None,
         };
         resp.insert(
             "suggestions".into(),
@@ -1046,8 +1122,9 @@ struct ExactForms {
     rout: Option<Option<(XPoly, XPoly)>>,
 }
 
-/// Gain, rin and rout as exact num/den on `ss` (symbols by `x`). rin and
-/// rout expand the gain's circuit, so they are over budget with its D.
+/// Gain, rin and rout as exact num/den on `ss` (symbols by `x`); with
+/// `only`, that quantity alone (the others None). rin and rout expand the
+/// gain's circuit, so they are over budget with its D.
 fn exact_forms(
     probe: &Probe,
     ss: &SsCircuit,
@@ -1055,8 +1132,10 @@ fn exact_forms(
     differential: bool,
     max_terms: usize,
     symbolic: bool,
+    only: Option<Which>,
 ) -> Result<ExactForms, String> {
     let net = probe.net;
+    let wanted = |w: Which| only.is_none_or(|o| o == w);
     let gsys = ss::system(net, ss, &probe.excite);
     let d = crate::det::det(&gsys.a, max_terms)
         .map(Some)
@@ -1066,6 +1145,7 @@ fn exact_forms(
     }
     let gain = d
         .as_ref()
+        .filter(|_| wanted(Which::Gain))
         .map(|d| -> Result<(XPoly, XPoly), String> {
             let n_out = fit(
                 sub(
@@ -1080,6 +1160,7 @@ fn exact_forms(
         .transpose()
         .or_else(|e| numeric_if_over_budget(symbolic, e))?;
     let rin = match &probe.rin {
+        _ if !wanted(Which::Rin) => None,
         None => None,
         Some(kind) => {
             let form = d.as_ref().ok_or_else(|| too_large(max_terms)).and_then(|d| match kind {
@@ -1134,7 +1215,7 @@ fn exact_forms(
             Some(form.map(Some).or_else(|e| numeric_if_over_budget(symbolic, e))?)
         }
     };
-    let rout = if probe.rout {
+    let rout = if probe.rout && wanted(Which::Rout) {
         // Its determinant is the gain's, up to sign.
         let osys = ss::system(
             net,
@@ -1329,8 +1410,9 @@ fn k_definition(
     Some((json!({ "latex": latex, "num": n, "den": d }), used))
 }
 
-/// What `suggest` needs of the analysis: the quantity's full-model values
-/// on the check grid and how to build an assumed model as `analyze` does.
+/// What `suggest` (and a named form) needs of the analysis: the values a
+/// candidate is measured against on the check grid and how to build an
+/// assumed model as `analyze` does.
 struct SuggestCtx<'a> {
     probe: &'a Probe<'a>,
     net: &'a Netlist,
@@ -1343,8 +1425,13 @@ struct SuggestCtx<'a> {
     accepted: Vec<Vec<String>>,
     current: Option<&'a crate::assume::AssumeRequest>,
     which: Which,
-    full_grid: &'a Grid,
+    /// The quantity's full-model values (suggestions), or those of the
+    /// model its forms describe (a named form).
+    reference: &'a Grid,
     grid: &'a [f64],
+    /// Miller splits kept as the analysis made them (K unchanged); None:
+    /// each model's K from its own gain model, as a suggestion is applied.
+    splits: Option<&'a [crate::miller::Split]>,
 }
 
 impl SuggestCtx<'_> {
@@ -1380,6 +1467,9 @@ impl SuggestCtx<'_> {
         let base = crate::assume::apply(self.full, a, &restored);
         if a.miller.is_empty() {
             return (back, base);
+        }
+        if let Some(splits) = self.splits {
+            return (back, crate::miller::split(&base, splits, &a.miller));
         }
         let gain_base = match self.which {
             Which::Gain => base.clone(),
@@ -1424,7 +1514,28 @@ impl SuggestCtx<'_> {
     }
 
     fn report(&self, threshold: f64, limits: crate::suggest::Limits) -> crate::suggest::Report {
-        use crate::assume::{resolve, AssumeRequest, IgnoreRequest};
+        self.search(threshold, limits, |_| true)
+    }
+
+    /// The current assumptions with `extra` added, resolved.
+    fn with_extra(&self, extra: &[(String, crate::assume::Term)]) -> Result<crate::assume::Assume, String> {
+        let mut req = self.current.cloned().unwrap_or_default();
+        req.ignore
+            .extend(extra.iter().map(|(e, t)| crate::assume::IgnoreRequest {
+                element: e.clone(),
+                term: t.as_str().to_string(),
+            }));
+        crate::assume::resolve(self.net, self.full, self.op, &req)
+    }
+
+    /// `suggest::run` over the candidates `keep` accepts.
+    fn search(
+        &self,
+        threshold: f64,
+        limits: crate::suggest::Limits,
+        keep: impl Fn(&crate::suggest::Candidate) -> bool,
+    ) -> crate::suggest::Report {
+        use crate::assume::resolve;
         use crate::suggest::Outcome;
         let current = self.current.cloned().unwrap_or_default();
         let resolved = resolve(self.net, self.full, self.op, &current).unwrap_or_default();
@@ -1450,32 +1561,310 @@ impl SuggestCtx<'_> {
             );
         }
         let (amatched, _) = consistent_groups(self.net, &self.accepted, &resolved);
-        let cands = crate::suggest::candidates(
+        let cands: Vec<crate::suggest::Candidate> = crate::suggest::candidates(
             &crate::assume::assumable_terms(self.net, self.full),
             &taken,
             element_groups(self.net, &amatched),
-        );
+        )
+        .into_iter()
+        .filter(|c| keep(c))
+        .collect();
         let eval = |extra: &[(String, crate::assume::Term)]| {
             if extra.is_empty() && in_effect.is_empty() && resolved.miller.is_empty() {
                 // The full model itself: 0, or nothing to compare.
-                return Outcome::Deviation(deviation(&self.full_grid.vals, self.full_grid));
+                return Outcome::Deviation(deviation(&self.reference.vals, self.reference));
             }
-            let mut req: AssumeRequest = current.clone();
-            req.ignore.extend(extra.iter().map(|(e, t)| IgnoreRequest {
-                element: e.clone(),
-                term: t.as_str().to_string(),
-            }));
-            let Ok(a) = resolve(self.net, self.full, self.op, &req) else {
+            let Ok(a) = self.with_extra(extra) else {
                 return Outcome::Unbounded;
             };
             let (back, model) = self.model(&a);
             if back != base_back {
                 return Outcome::Unbounded;
             }
-            Outcome::Deviation(deviation(&self.values(&model), self.full_grid))
+            Outcome::Deviation(deviation(&self.values(&model), self.reference))
         };
         crate::suggest::run(cands, threshold, limits, crate::clock::now_ms, eval)
     }
+}
+
+/// A named-assumption simplified form (`approx: "named"`) and what it
+/// assumes.
+struct Named {
+    expr: Expr,
+    /// The symbols `expr` is over.
+    syms: Vec<Sym>,
+    /// The assumptions made on top of the request's, in label order.
+    units: Vec<crate::approx::Unit>,
+    label: String,
+}
+
+/// The outcome of the named-assumption search for one quantity.
+enum NamedOutcome {
+    /// No named assumption appears in the form: nothing to try.
+    Nothing,
+    /// No set within the tolerance gives a simpler form.
+    NoneWithin,
+    Found(Named),
+}
+
+/// How `Quantities::json` makes a numeric simplified form.
+enum Approx<'a> {
+    /// The smallest terms dropped (`approx: "terms"`).
+    Terms,
+    /// Named assumptions (`approx: "named"`).
+    Named(NamedFn<'a>),
+}
+
+/// A named form from the display form, its symbols and the values of the
+/// model the forms describe on the check grid.
+type NamedFn<'a> = &'a dyn Fn(&Expr, &[Sym], &Grid) -> NamedOutcome;
+
+impl<'a> Approx<'a> {
+    fn of(method: ApproxMethod, named: NamedFn<'a>) -> Approx<'a> {
+        match method {
+            ApproxMethod::Named => Approx::Named(named),
+            ApproxMethod::Terms => Approx::Terms,
+        }
+    }
+}
+
+/// Sets of named assumptions tried, the greedy one first, each next without
+/// its last assumption, before there is no named form.
+const NAMED_TRIES: usize = 4;
+
+/// The named search's caps: generous, so that the time cap almost never
+/// decides (the result would then depend on the machine).
+const NAMED_LIMITS: crate::suggest::Limits = crate::suggest::Limits {
+    time_ms: 10_000.0,
+    candidates: 400,
+};
+
+/// The named-assumption simplified form of each quantity: `suggest`'s
+/// greedy search within the tolerance of the model the forms describe (the
+/// full model, or the request's assumed one), over the named assumptions
+/// that appear in the form, then the exact form of the model under the set
+/// found (`assume::apply`, restored as `analyze` restores), junction
+/// leakage left out as in `display`, common factors cancelled.
+struct Simplify<'a> {
+    probe: &'a Probe<'a>,
+    net: &'a Netlist,
+    full: &'a SsCircuit,
+    op: Option<&'a Op>,
+    matched: &'a [Vec<String>],
+    accepted: Vec<Vec<String>>,
+    current: Option<&'a crate::assume::AssumeRequest>,
+    grid: &'a [f64],
+    differential: bool,
+    max_terms: usize,
+    tol: f64,
+    /// The symbols of every named form made, for `params`.
+    seen: std::cell::RefCell<Vec<Sym>>,
+}
+
+impl Simplify<'_> {
+    fn ctx<'b>(
+        &'b self,
+        which: Which,
+        reference: &'b Grid,
+        splits: Option<&'b [crate::miller::Split]>,
+    ) -> SuggestCtx<'b> {
+        SuggestCtx {
+            probe: self.probe,
+            net: self.net,
+            full: self.full,
+            op: self.op,
+            matched: self.matched,
+            accepted: self.accepted.clone(),
+            current: self.current,
+            which,
+            reference,
+            grid: self.grid,
+            splits,
+        }
+    }
+
+    /// `which`'s named form, from its display form `display` over `syms`,
+    /// within the tolerance of `reference` (the values of the model the
+    /// forms describe on the check grid).
+    fn named(
+        &self,
+        which: Which,
+        display: &Expr,
+        syms: &[Sym],
+        reference: &Grid,
+        splits: Option<&[crate::miller::Split]>,
+    ) -> NamedOutcome {
+        use crate::approx::{symbol_of, Unit, NAMED_TERMS};
+        let mut used = vec![false; syms.len()];
+        for t in display.num.iter().chain(&display.den) {
+            for (k, &x) in t.e.iter().enumerate() {
+                used[k] |= x > 0;
+            }
+        }
+        // A unit's symbol in the form, if it appears there.
+        let symbol = |elements: &[String], term: crate::assume::Term| -> Option<&Sym> {
+            elements.iter().find_map(|e| {
+                let ei = self.net.element(e)?;
+                let name = crate::assume::param_name(&self.net.elements[ei].kind, term, e);
+                let kind = name.strip_suffix(e.as_str())?.strip_suffix('_')?;
+                symbol_of(syms, e, kind).filter(|(k, _)| used[*k]).map(|(_, s)| s)
+            })
+        };
+        let unit = |c: &crate::suggest::Candidate| Unit {
+            elements: c.elements.clone(),
+            term: c.term,
+            symbol: symbol(&c.elements, c.term).map(|s| s.latex.clone()),
+        };
+        // Every candidate in the form, for the label's "all of a kind".
+        let present: std::cell::RefCell<Vec<Unit>> = Default::default();
+        let named = |c: &crate::suggest::Candidate| {
+            let keep = c.scope != crate::suggest::Scope::Type
+                && NAMED_TERMS.contains(&c.term)
+                && symbol(&c.elements, c.term).is_some();
+            if keep {
+                present.borrow_mut().push(unit(c));
+            }
+            keep
+        };
+        let ctx = self.ctx(which, reference, splits);
+        let report = ctx.search(self.tol, NAMED_LIMITS, named);
+        if report.candidates == 0 {
+            return NamedOutcome::Nothing;
+        }
+        let present = present.into_inner();
+        let mut kept: Vec<&crate::suggest::Candidate> = report
+            .items
+            .iter()
+            .filter(|i| i.cumulative.is_some())
+            .map(|i| &i.candidate)
+            .collect();
+        for _ in 0..NAMED_TRIES {
+            if kept.is_empty() {
+                break;
+            }
+            if let Some((expr, syms)) = self.derive(&ctx, which, &kept, splits, display.term_count(), reference) {
+                let mut units: Vec<Unit> = kept.iter().map(|c| unit(c)).collect();
+                // Label order: by term, then as the netlist lists them.
+                let order = |u: &Unit| self.net.element(&u.elements[0]).unwrap_or(usize::MAX);
+                units.sort_by(|a, b| a.term.cmp(&b.term).then(order(a).cmp(&order(b))));
+                let label = crate::approx::label(&units, &present);
+                let mut seen = self.seen.borrow_mut();
+                for (k, s) in syms.iter().enumerate() {
+                    let used = expr
+                        .num
+                        .iter()
+                        .chain(&expr.den)
+                        .any(|t| t.e.get(k).is_some_and(|&x| x > 0));
+                    if used && !seen.iter().any(|x| x.name == s.name && x.latex == s.latex) {
+                        seen.push(s.clone());
+                    }
+                }
+                return NamedOutcome::Found(Named {
+                    expr,
+                    syms,
+                    units,
+                    label,
+                });
+            }
+            kept.pop();
+        }
+        NamedOutcome::NoneWithin
+    }
+
+    /// The form of `which` under the request's assumptions and `kept`:
+    /// None over the budget, unbounded, no simpler than `terms` terms, or
+    /// beyond the tolerance of `reference`.
+    fn derive(
+        &self,
+        ctx: &SuggestCtx,
+        which: Which,
+        kept: &[&crate::suggest::Candidate],
+        splits: Option<&[crate::miller::Split]>,
+        terms: usize,
+        reference: &Grid,
+    ) -> Option<(Expr, Vec<Sym>)> {
+        let extra: Vec<(String, crate::assume::Term)> = kept
+            .iter()
+            .flat_map(|c| c.elements.iter().map(|e| (e.clone(), c.term)))
+            .collect();
+        let a = ctx.with_extra(&extra).ok()?;
+        let (_, model) = ctx.model(&a);
+        let (amatched, _) = consistent_groups(self.net, self.matched, &a);
+        let agroup = element_groups(self.net, &amatched);
+        let (ass, _, omit_err) = prove_omission(self.probe, &model, self.grid, |p| {
+            let kind = p.name.split('_').next().unwrap_or("");
+            format!("{kind}:{}", agroup(&p.element))
+        });
+        let asym = sym::symbols(self.net, &ass, &amatched, false, &mut Vec::new());
+        let ax = |p: &Poly| XPoly::from_poly(p, &asym.class, asym.syms.len());
+        let forms = exact_forms(
+            self.probe,
+            &ass,
+            &ax,
+            self.differential,
+            self.max_terms,
+            false,
+            Some(which),
+        )
+        .ok()?;
+        let (mut num, mut den) = match which {
+            Which::Gain => forms.gain,
+            Which::Rin => forms.rin.flatten(),
+            Which::Rout => forms.rout.flatten(),
+        }?;
+        let mut shown = asym.clone();
+        if let Some(sp) = splits.filter(|s| !s.is_empty()) {
+            let (s, slots) = crate::miller::shown(&ass, &asym, sp);
+            if !slots.is_empty() {
+                (num, den) = crate::miller::substitute(&num, &den, &slots, self.max_terms).ok()?;
+            }
+            shown = s;
+        }
+        let (num, den) = cancel(&num, &den);
+        if den.is_zero() || num.is_zero() {
+            return None;
+        }
+        let syms = shown.syms;
+        let exact = Expr::from_mna(&num, &den, &syms);
+        let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+        let on_grid = |e: &Expr| -> Vec<Option<Complex64>> {
+            self.grid.iter().map(|&f| Some(e.eval(jw(f))).filter(finite)).collect()
+        };
+        // Junction leakage left out where that moves this model's values by
+        // at most LEAKAGE_REL, as the display form leaves it out.
+        let form = match drop_leakage(&num, &den, &syms) {
+            Some((n, d)) => {
+                let cand = Expr::from_mna(&n, &d, &syms);
+                let own = Grid {
+                    vals: on_grid(&exact),
+                    bounds: Vec::new(),
+                };
+                if deviation(&on_grid(&cand), &own) + omit_err <= LEAKAGE_REL {
+                    cand
+                } else {
+                    exact
+                }
+            }
+            None => exact,
+        };
+        let err = deviation(&on_grid(&form), reference);
+        (form.term_count() < terms && err <= self.tol).then_some((form, syms))
+    }
+}
+
+/// num/den without junction leakage (r_bs, r_bd, r_μ → ∞: their
+/// conductance monomials dropped), cancelled; None when there is none to
+/// drop, or nothing left of the denominator.
+fn drop_leakage(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<(XPoly, XPoly)> {
+    let leaky = |e: &[u8]| e.iter().zip(syms).any(|(&x, s)| s.leakage && x > 0);
+    if num.is_zero() || !num.terms.iter().chain(&den.terms).any(|(e, _)| leaky(e)) {
+        return None;
+    }
+    let drop = |p: &XPoly| XPoly {
+        terms: p.terms.iter().filter(|(e, _)| !leaky(e)).cloned().collect(),
+    };
+    let (n, d) = cancel(&drop(num), &drop(den));
+    (!d.is_zero()).then_some((n, d))
 }
 
 /// The matched groups `symbols` merged: the members of each symbol that
@@ -2235,6 +2624,34 @@ fn symbolic_regions(net: &Netlist) -> (Vec<usize>, Vec<String>) {
     (linear, warnings)
 }
 
+/// The devices whose region is known without an operating point, and their
+/// warnings: in symbolic mode the inferred triode stacks, then each
+/// declared region (`assume.regions`), which decides which output
+/// resistance the hand-analysis form keeps finite (a MOS triode channel's
+/// R_on, a saturated BJT's r_o). None in numeric mode, where the operating
+/// point says.
+pub(crate) fn known_regions(net: &Netlist, req: &Request, symbolic: bool) -> (Vec<usize>, Vec<String>) {
+    if !symbolic {
+        return (Vec::new(), Vec::new());
+    }
+    let (mut linear, mut region_warnings) = symbolic_regions(net);
+    for r in req.assume.iter().flat_map(|a| &a.regions) {
+        let Some(ei) = net.element(&r.element) else { continue };
+        let e = &net.elements[ei];
+        let small = match (&e.kind, r.region.trim()) {
+            (Kind::M { .. }, "triode") | (Kind::Q { .. }, "saturation") => true,
+            (Kind::M { .. }, "saturation") | (Kind::Q { .. }, "forward-active") => false,
+            _ => continue,
+        };
+        linear.retain(|&x| x != ei);
+        region_warnings.retain(|w| *w != format!("{} is in triode", e.name));
+        if small {
+            linear.push(ei);
+        }
+    }
+    (linear, region_warnings)
+}
+
 /// V sources and inductors with both ends on one node. Nothing fixes their
 /// branch current, so the MNA system (at DC for an inductor) is singular.
 /// A 0 V source or an inductor there does nothing else: it is dropped and
@@ -2561,6 +2978,7 @@ impl Quantities<'_> {
         warnings: &mut Vec<String>,
         what: &str,
         full: Option<&Grid>,
+        approx: Approx,
     ) -> (Value, Grid) {
         let syms = &self.sym.syms;
         let (num, den) = &cancel(num, den);
@@ -2750,21 +3168,54 @@ impl Quantities<'_> {
         let display_same = !leak_present || leakage_matters;
         let display_err = err_of(&display);
 
-        // Simplified form: the coarsest pruning of the display form whose
-        // error (against the full model) stays in budget, with no single
-        // coefficient moved by more than twice the tolerance.
         let mut simplified = display.clone();
         let mut simp_err = display_err;
-        for eps in Expr::prune_levels(self.tol) {
-            let cand = display.prune(eps, syms);
-            if cand.term_count() >= display.term_count() {
-                break;
+        // The simplified form's symbols, when not `syms` (a named form's
+        // model has its own).
+        let mut simp_syms: Option<Vec<Sym>> = None;
+        let mut method = json!({ "method": "terms" });
+        match approx {
+            Approx::Terms => {
+                // The coarsest pruning of the display form whose error
+                // (against the full model) stays in budget, with no single
+                // coefficient moved by more than twice the tolerance.
+                for eps in Expr::prune_levels(self.tol) {
+                    let cand = display.prune(eps, syms);
+                    if cand.term_count() >= display.term_count() {
+                        break;
+                    }
+                    let err = err_of(&cand);
+                    if err <= self.tol {
+                        simplified = cand.cancelled(syms);
+                        simp_err = err;
+                        break;
+                    }
+                }
             }
-            let err = err_of(&cand);
-            if err <= self.tol {
-                simplified = cand.cancelled(syms);
-                simp_err = err;
-                break;
+            Approx::Named(named) => {
+                // Within the tolerance of the model the forms describe, as
+                // `tolerance` always is: the full model, or the request's
+                // assumed one (whose own cost `fullModelError` reports).
+                method = match named(&display, syms, &exact_grid) {
+                    NamedOutcome::Found(n) => {
+                        simp_err = err_of(&n.expr);
+                        simplified = n.expr;
+                        simp_syms = Some(n.syms);
+                        let items: Vec<Value> = n
+                            .units
+                            .iter()
+                            .map(|u| {
+                                json!({
+                                    "elements": u.elements, "term": u.term.as_str(),
+                                    "latex": crate::approx::unit_latex(u),
+                                })
+                            })
+                            .collect();
+                        json!({ "method": "named", "assumption": n.label, "named": items })
+                    }
+                    NamedOutcome::NoneWithin => json!({ "method": "named", "named": [], "none": true }),
+                    NamedOutcome::Nothing => json!({ "method": "named", "named": [] }),
+                };
             }
         }
 
@@ -2773,7 +3224,7 @@ impl Quantities<'_> {
         let zeros: Vec<Value> = roots(&nc).iter().map(hz).collect();
         // Text forms only for expressions small enough to read; building them
         // for a huge expression would cost more than the solve.
-        let text = |e: &Expr| {
+        let text_over = |e: &Expr, syms: &[Sym]| {
             if e.term_count() <= LATEX_TERM_LIMIT {
                 let (n, d) = e.plain(syms);
                 let expanded = e.latex(syms);
@@ -2784,6 +3235,7 @@ impl Quantities<'_> {
                 json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
             }
         };
+        let text = |e: &Expr| text_over(e, syms);
         let exact_json = text(&exact);
         let same = display_same && simplified.term_count() == exact.term_count();
         let display_json = if display_same {
@@ -2796,7 +3248,7 @@ impl Quantities<'_> {
         } else if simplified.term_count() == display.term_count() {
             display_json.clone()
         } else {
-            text(&simplified)
+            text_over(&simplified, simp_syms.as_deref().unwrap_or(syms))
         };
         let with = |mut v: Value, extra: Value| {
             if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
@@ -2815,7 +3267,7 @@ impl Quantities<'_> {
                 "leakageMatters": leakage_matters,
                 "terms": { "num": display.num.len(), "den": display.den.len() },
             })),
-            "simplified": with(simp_json, json!({
+            "simplified": with(with(simp_json, method), json!({
                 // True when nothing was dropped: the simplified form is exact.
                 "same": same,
                 "maxRelError": simp_err,

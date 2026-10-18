@@ -176,7 +176,7 @@ def ngspice_params(res: dict, want: dict) -> dict[str, mp.mpf]:
         if not d:
             continue
         src = {"gm": ("gm", False), "gmb": ("gmb", False), "rpi": ("gpi", True), "rmu": ("gmu", True),
-               "ro": ("gds" if "gds" in d else "go", True), "rd": ("gd", True)}.get(kind)
+               "ro": ("gds" if "gds" in d else "go", True), "ron": ("gds", True), "rd": ("gd", True)}.get(kind)
         if src and src[0] in d and d[src[0]] != 0:
             v = mp.mpf(repr(d[src[0]]))
             out[name] = 1 / v if src[1] else v

@@ -1,6 +1,6 @@
 //! `smallsignal analyze <netlist> --input VIN --output out[:ref] [--freq 1,1k]
 //! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--miller CC]
-//! [--suggest gain:0.01] [--tol 0.05] [--verify] [--pretty]`
+//! [--suggest gain:0.01] [--tol 0.05] [--approx named|terms] [--verify] [--pretty]`
 
 use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
@@ -8,7 +8,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
 [--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] \
-[--ignore M1:ro,C1:short] [--region M3:triode] [--miller CC,M2:cgd] [--suggest gain|rin|rout[:threshold]] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--ignore M1:ro,C1:short] [--region M3:triode] [--miller CC,M2:cgd] [--suggest gain|rin|rout[:threshold]] [--tol x] [--approx named|terms] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -53,6 +53,7 @@ fn run() -> Result<(), String> {
                 }
             }
             "--tol" => req.tolerance = Some(value(&mut it, a)?.parse().map_err(|_| "bad --tol")?),
+            "--approx" => req.approx = Some(value(&mut it, a)?),
             "--max-terms" => req.max_terms = Some(value(&mut it, a)?.parse().map_err(|_| "bad --max-terms")?),
             "--rin" => req.rin = true,
             "--rout" => req.rout = true,

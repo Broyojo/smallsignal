@@ -94,6 +94,7 @@ fn device_sub(kind: &str) -> Option<(&'static str, &'static str)> {
         "gm" => ("g", "m"),
         "gmb" => ("g", "mb"),
         "ro" => ("r", "o"),
+        "ron" => ("R", "on"),
         "rpi" => ("r", "\\pi "),
         "rmu" => ("r", "\\mu "),
         "rbs" => ("r", "bs"),

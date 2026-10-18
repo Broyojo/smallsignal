@@ -30,7 +30,7 @@ on. Each topic has one owner spec; others link to it.
 | [`editor-interaction.md`](editor-interaction.md)                   | Gestures, selection, previews, controls (sole owner)                   |
 | [`community-gallery.md`](community-gallery.md)                     | Gallery feed, accounts, moderation                                     |
 | [`analog-arena.md`](analog-arena.md)                               | Contract with the AnalogArena Worker (cross-repo)                      |
-| [`small-signal-assumptions.md`](small-signal-assumptions.md)       | Per-device small-signal assumptions: limits, restore, full-model error |
+| [`small-signal-assumptions.md`](small-signal-assumptions.md)       | Per-device small-signal assumptions: limits, restore, full-model error, named ≈ forms |
 
 ## Writing a spec
 

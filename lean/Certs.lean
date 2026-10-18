@@ -43,6 +43,7 @@ import Certs.dist_sf
 import Certs.divider
 import Certs.floating_input
 import Certs.floating_vsource
+import Certs.inverter_triode
 import Certs.nmos_cascode
 import Certs.nmos_cg
 import Certs.nmos_cs

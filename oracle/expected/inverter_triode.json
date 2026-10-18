@@ -1,0 +1,72 @@
+{
+  "name": "inverter_triode",
+  "netlist": "inverter_triode.cir",
+  "input": "VIN",
+  "output": "out",
+  "ref": null,
+  "freqs": [
+    1000
+  ],
+  "generator": {
+    "tool": "ngspice",
+    "version": "47",
+    "options": ".options reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15 itl1=1000 itl2=1000"
+  },
+  "op": {
+    "nodes": {
+      "vdd": 1.8,
+      "in": 1.1,
+      "out": 0.04040114334521371
+    },
+    "devices": {
+      "m1": {
+        "type": "nmos",
+        "region": "triode",
+        "reverse": false,
+        "id": 4.703839543837861e-05,
+        "vgs": 1.1,
+        "vds": 0.04040114334521371,
+        "vbs": 0.0,
+        "vov": 0.6000000000000001,
+        "gm": 8.112873716714731e-05,
+        "gds": 0.001128404311997344,
+        "gmb": 0.0
+      },
+      "m2": {
+        "type": "pmos",
+        "region": "saturation",
+        "reverse": false,
+        "id": -4.703839543837872e-05,
+        "vgs": -0.7,
+        "vds": -1.7595988566547864,
+        "vbs": 0.0,
+        "vov": 0.19999999999999996,
+        "gm": 0.0004703839542661913,
+        "gds": 3.999999999999998e-06,
+        "gmb": 0.0
+      }
+    },
+    "vsource_currents": {
+      "vdd": -4.70383954383788e-05,
+      "vin": 0.0
+    }
+  },
+  "gain": {
+    "values": [
+      {
+        "f": 1000,
+        "re": -0.487028074292753,
+        "im": 0.0
+      }
+    ]
+  },
+  "rout": {
+    "values": [
+      {
+        "f": 1000,
+        "re": 883.0768210011714,
+        "im": 0.0
+      }
+    ]
+  }
+}
