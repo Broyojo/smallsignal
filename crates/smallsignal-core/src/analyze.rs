@@ -531,7 +531,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         // Miller splits, with K from the gain's model (the first built), so
         // one split model serves every quantity.
         let mut splits: Option<Vec<crate::miller::Split>> = None;
-        let mut definitions: Vec<Option<Value>> = Vec::new();
+        let mut definitions: Vec<Option<(Value, Vec<Sym>)>> = Vec::new();
         for (which, name) in wanted {
             // Unbounded: the denominator vanishes at s = 0 (identically, or
             // a pole at DC). Without junction leakage, which hand analysis
@@ -586,7 +586,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     if !slots.is_empty() {
                         let sub = |f: &mut Option<(XPoly, XPoly)>| -> Result<(), String> {
                             if let Some((n, d)) = f.take() {
-                                *f = crate::miller::substitute(&n, &d, &slots)
+                                *f = crate::miller::substitute(&n, &d, &slots, max_terms)
                                     .map(Some)
                                     .or_else(|e| numeric_if_over_budget(symbolic, e))?;
                             }
@@ -597,11 +597,20 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                             sub(f)?;
                         }
                     }
-                    if models.is_empty() {
+                    // K's closed form, on the model K's value comes from
+                    // (every junction kept: an omission is proven only for
+                    // the reported quantities, not for v_b/v_a).
+                    if models.is_empty() && aforms.d.is_some() {
+                        let ksys = ss::system(&net, &model, &excite);
+                        let ksym = sym::symbols(&net, &model, &amatched, symbolic, &mut Vec::new());
+                        let (kshown, _) = crate::miller::shown(&model, &ksym, splits);
+                        let kx = |p: &Poly| XPoly::from_poly(p, &ksym.class, ksym.syms.len());
                         definitions = splits
                             .iter()
-                            .map(|sp| k_definition(&aforms, &ax, &shown, sp, ass.reactive_mask, max_terms))
+                            .map(|sp| k_definition(&ksys, &kx, &kshown, sp, model.reactive_mask, max_terms))
                             .collect();
+                    } else if models.is_empty() {
+                        definitions = vec![None; splits.len()];
                     }
                     models.push(AModel {
                         restored: restored.clone(),
@@ -876,6 +885,14 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 }
             }
         }
+        // K's definitions keep junctions the forms may leave out.
+        for s in st.definitions.iter().flatten().flat_map(|d| &d.1) {
+            let key = (s.name.clone(), s.latex.clone());
+            if !listed.contains(&key) {
+                listed.push(key);
+                params.push(params_json(std::slice::from_ref(s))[0].clone());
+            }
+        }
         resp.insert("params".into(), Value::Array(params));
         let gm = st.model("gain");
         resp.insert("omittedJunctions".into(), json!(gm.omitted));
@@ -913,7 +930,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     json!({
                         "element": t.element, "term": t.term.map(|x| x.as_str()),
                         "latex": sp.latex, "symbol": sp.k_latex,
-                        "k": num_or_null(sp.k), "definition": def,
+                        "k": num_or_null(sp.k), "definition": def.as_ref().map(|d| &d.0),
                     })
                 }).collect::<Vec<_>>(),
             }),
@@ -1133,7 +1150,7 @@ struct AssumeSetup<'a> {
     of_quantity: Vec<(&'a str, usize)>,
     /// The Miller splits made, and each one's K as a closed form.
     splits: Vec<crate::miller::Split>,
-    definitions: Vec<Option<Value>>,
+    definitions: Vec<Option<(Value, Vec<Sym>)>>,
 }
 
 impl AssumeSetup<'_> {
@@ -1192,19 +1209,18 @@ pub(crate) fn gain_model(
 }
 
 /// K = v_b(0)/v_a(0) of a Miller split over `shown` ({latex, num, den}):
-/// the ratio of the gain system's Cramer numerators with every reactive
-/// term dropped (`reactive`, the parameters' mask), cancelled. None without
-/// an exact form, or past LATEX_TERM_LIMIT terms.
+/// the ratio of the Cramer numerators of `sys` (the gain system of the model
+/// K's value comes from) with every reactive term dropped (`reactive`, the
+/// parameters' mask), cancelled. None over the term budget, or past
+/// LATEX_TERM_LIMIT terms.
 fn k_definition(
-    forms: &ExactForms,
+    sys: &System,
     x: &dyn Fn(&Poly) -> Result<XPoly, String>,
     shown: &Symbols,
     split: &crate::miller::Split,
     reactive: u128,
     max_terms: usize,
-) -> Option<Value> {
-    forms.d.as_ref()?;
-    let sys = &forms.gsys;
+) -> Option<(Value, Vec<Sym>)> {
     let (ca, cb) = (sys.node_col[split.a]?, sys.node_col[split.b]?);
     let dc: Vec<Vec<Poly>> = sys
         .a
@@ -1257,7 +1273,12 @@ fn k_definition(
     let (mn, md) = e.to_mna(&shown.syms);
     let (n, d) = e.plain(&shown.syms);
     let latex = structured(&mn, &md, &shown.syms).unwrap_or_else(|| e.latex(&shown.syms));
-    Some(json!({ "latex": latex, "num": n, "den": d }))
+    // Its symbols, for `params` (a junction the forms leave out may be one).
+    let used: Vec<Sym> = (0..shown.syms.len())
+        .filter(|&k| num.terms.iter().chain(&den.terms).any(|(e, _)| e[k] > 0))
+        .map(|k| shown.syms[k].clone())
+        .collect();
+    Some((json!({ "latex": latex, "num": n, "den": d }), used))
 }
 
 /// "M1", "M1 and M2", "M1, M2 and M3".

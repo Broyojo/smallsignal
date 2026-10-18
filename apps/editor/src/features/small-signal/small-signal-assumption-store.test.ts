@@ -302,6 +302,47 @@ describe("assumptionRequest", () => {
   });
 });
 
+describe("Miller splits the solver no longer offers", () => {
+  const elements: SmallSignalElement[] = [
+    { name: "M1", instancePath: ["m1"], kind: "nmos" },
+    { name: "CC", instancePath: ["cc"], kind: "capacitor" },
+  ];
+  const parts = {
+    [partKey(["m1"])]: { miller: ["cgd" as const] },
+    [partKey(["cc"])]: { miller: [null] },
+  };
+  const offered = (cc: (null | "cgd")[], m1: ("cgd" | null)[]) => [
+    { element: "CC", type: "capacitor" as const, terms: [], miller: cc },
+    {
+      element: "M1",
+      type: "nmos" as const,
+      terms: ["cgd" as const],
+      miller: m1 as "cgd"[],
+    },
+  ];
+
+  it("are not sent, and the part acts as without them", () => {
+    // CC now ends at ground, M1's C_gd at a supply: neither is offered.
+    expect(
+      assumptionRequest(elements, { nmos: ["cgd"] }, parts, offered([], [])),
+    ).toEqual({ ignore: [{ element: "M1", term: "cgd" }] });
+    expect(assumptionRequest(elements, {}, parts, offered([null], []))).toEqual(
+      { miller: [{ element: "CC" }] },
+    );
+  });
+
+  it("are sent while offered, or before the circuit has an answer", () => {
+    const both = {
+      miller: [{ element: "M1", term: "cgd" }, { element: "CC" }],
+    };
+    expect(
+      assumptionRequest(elements, {}, parts, offered([null], ["cgd"])),
+    ).toEqual(both);
+    expect(assumptionRequest(elements, {}, parts)).toEqual(both);
+    expect(assumptionRequest(elements, {}, parts, null)).toEqual(both);
+  });
+});
+
 describe("Miller splits in storage", () => {
   it("keeps known splits, drops unknown ones and those the part also neglects", () => {
     const stored = {

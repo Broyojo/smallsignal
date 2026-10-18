@@ -2527,17 +2527,6 @@ export function SmallSignalPanel({
       }),
     [project, rootDocumentId, supplyVoltage, pinBias, models],
   );
-  const assume = useMemo(
-    () =>
-      netlist
-        ? assumptionRequest(
-            netlist.elements,
-            assumptionDefaults,
-            assumptionParts,
-          )
-        : null,
-    [netlist, assumptionDefaults, assumptionParts],
-  );
   const updateAssumptions = ({ defaults, parts }: AssumptionChange) => {
     if (defaults) setAssumptionDefaults(defaults);
     if (parts) {
@@ -2572,6 +2561,21 @@ export function SmallSignalPanel({
     circuit: string;
     result: SmallSignalResult;
   } | null>(null);
+  // Miller splits the circuit's last answer no longer offers are not sent
+  // (the request is keyed by its text, so this re-solves at most once).
+  const offered = resultForCircuit(lastResult, assumptionKey)?.assumable;
+  const assume = useMemo(
+    () =>
+      netlist
+        ? assumptionRequest(
+            netlist.elements,
+            assumptionDefaults,
+            assumptionParts,
+            offered,
+          )
+        : null,
+    [netlist, assumptionDefaults, assumptionParts, offered],
+  );
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);

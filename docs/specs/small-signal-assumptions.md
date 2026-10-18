@@ -132,9 +132,12 @@ Response:
   made: `latex` the capacitance (`C_{C}`, `C_{gd2}`), `symbol` its K
   (`K_{CC}`, `K_{gd2}`; in `params` as `K_CC`, `K_cgd_M2` with K's value),
   `k` null in symbolic mode, `definition` `{latex, num, den}` the exact DC
-  ratio of the gain system's Cramer numerators (junction leakage left out
-  where it moves K by at most 1e-3), null without an exact form or past
-  400 terms. C_in and C_out appear in no form and no `params`.
+  ratio of the Cramer numerators of the model K's value comes from (every
+  junction kept, its symbols in `params`; junction leakage left out where
+  it moves K by at most 1e-3), null without an exact form or past 400
+  terms. C_in and C_out appear in no form and no `params`. A form whose
+  substitution passes `maxTerms` is numeric, as an over-budget
+  determinant is.
 - Each of `gain`, `rin`, `rout`: `assumed` `{values, relError,
 maxRelError, infinite?, resolution, restored: [{element, term, latex}],
 poles, zeros}`, the root lists as pairs `{assumed, full, relError}`

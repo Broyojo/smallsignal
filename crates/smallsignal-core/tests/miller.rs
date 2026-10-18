@@ -444,3 +444,94 @@ fn certificates_are_over_the_split_parameters() {
     assert!(names.contains(&"Cin_CC") && names.contains(&"Cout_CC"), "{names:?}");
     assert!(!names.contains(&"CC"), "{names:?}");
 }
+
+#[test]
+fn the_substitution_keeps_to_the_term_budget() {
+    // Three feedback capacitances: the split model's determinant has about
+    // 36 terms, the gain over C and K 133. At 60 the gain is numeric, as an
+    // over-budget determinant leaves it, never an exact form past the budget.
+    let net = "three stage\nVIN in 0 DC 0 AC 1\nG1 n1 0 in 0 1m\nR1 n1 0 100k\nG2 n2 0 n1 0 2m\nR2 n2 0 50k\n\
+G3 out 0 n2 0 1m\nR3 out 0 20k\nC1 n1 n2 1p\nC2 n2 out 1p\nC3 n1 out 1p\nCL out 0 1p\n";
+    let split = miller(&[("C1", None), ("C2", None), ("C3", None)]);
+    let v = run(
+        net,
+        &req("VIN", "out", &[1e3], json!({ "maxTerms": 60, "assume": split.clone() })),
+    );
+    assert_eq!(v["gain"]["exact"], Value::Null, "{}", v["gain"]["exact"]);
+    assert!(v["gain"]["skipped"].is_string());
+    assert!(points(&v["gain"]["assumed"]["values"]).len() == 1);
+    let v = run(
+        net,
+        &req("VIN", "out", &[1e3], json!({ "maxTerms": 200, "assume": split })),
+    );
+    assert_eq!(v["gain"]["exact"]["terms"]["den"], json!(133));
+}
+
+#[test]
+fn splits_with_alike_parameter_names_stay_apart() {
+    // A capacitor named cgd_M1 beside M1's own C_gd (parameter cgd_M1), both
+    // from g to out: two splits, two K, the same split as their sum.
+    let net = CS.replace("RD vdd out 10k", "RD vdd out 10k\ncgd_M1 g out 1p");
+    let both = miller(&[("cgd_M1", None), ("M1", Some("cgd"))]);
+    let v = run(&net, &req("VIN", "out", &FREQS[1..], json!({ "assume": both })));
+    let splits = v["assumptions"]["miller"].as_array().unwrap();
+    assert_eq!(splits.len(), 2);
+    let ks: Vec<&str> = v["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["name"].as_str())
+        .filter(|n| n.starts_with("K_"))
+        .collect();
+    assert_eq!(ks.len(), 2, "{ks:?}");
+    assert_ne!(ks[0], ks[1]);
+    assert_eq!(v["gain"]["check"]["ok"], json!(true));
+    let latex = v["gain"]["exact"]["latex"].as_str().unwrap();
+    assert!(!latex.contains("^{in}") && !latex.contains("^{out}"), "{latex}");
+    let k = splits[0]["k"].as_f64().unwrap();
+    assert_eq!(splits[1]["k"].as_f64().unwrap(), k);
+    let cgd = v["op"]["devices"]["M1"]["caps"]["cgd"].as_f64().unwrap();
+    let neglect = req(
+        "VIN",
+        "out",
+        &FREQS[1..],
+        json!({ "assume": { "ignore": [{ "element": "M1", "term": "cgd" }] } }),
+    );
+    let s = run(&split_netlist(&net, "cgd_M1", "g", "out", cgd + 1e-12, k), &neglect);
+    for (x, y) in points(&v["gain"]["assumed"]["values"])
+        .iter()
+        .zip(points(&s["gain"]["assumed"]["values"]))
+    {
+        assert!(close(*x, y, 1e-9), "{x:?} vs {y:?}");
+    }
+}
+
+#[test]
+fn ks_definition_comes_from_the_model_its_value_does() {
+    // b is held at DC only by RB (1e15) to a and by M2's drain leakage: the
+    // leakage is negligible for the gain at a, but sets v_b/v_a. Leaving it
+    // out of K's definition would read K = 1 beside a K of about 1400.
+    let net = "leak\nVIN in 0 DC 0 AC 1\nR1 in a 1k\nR2 a 0 1k\nRB a b 1e15\nM2 b 0 0 0 nch W=10u L=1u\n\
+CF a b 1p\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5)\n";
+    let v = run(
+        net,
+        &req("VIN", "a", &[1e3], json!({ "assume": miller(&[("CF", None)]) })),
+    );
+    assert_eq!(v["omittedJunctions"], json!(["rbd_M2"]));
+    let m = &v["assumptions"]["miller"][0];
+    let k = m["k"].as_f64().unwrap();
+    assert_eq!(m["definition"]["num"], "RB + rbd_M2");
+    assert_eq!(m["definition"]["den"], "rbd_M2");
+    // Its symbols are in params, and evaluate to K.
+    let value = |name: &str| {
+        v["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .and_then(|p| p["value"].as_f64())
+            .unwrap()
+    };
+    let (rb, rbd) = (value("RB"), value("rbd_M2"));
+    assert!(((rb + rbd) / rbd - k).abs() <= 1e-9 * k, "{} vs {k}", (rb + rbd) / rbd);
+}

@@ -171,6 +171,23 @@ pub struct Split {
     /// The K symbol's name and LaTeX (K_cgd_M1, K_{gd1}).
     pub k_name: String,
     pub k_latex: String,
+    /// The split's C_in and C_out parameter names (Cin_CC, Cout_CC), unique
+    /// among the full model's parameters and the other splits'.
+    pub cin_name: String,
+    pub cout_name: String,
+}
+
+/// `want`, or with the first free suffix `_2`, `_3`… when another name in
+/// `taken` already has it (a capacitor named cgd_M1 beside M1's C_gd).
+fn unique(want: String, taken: &mut Vec<String>) -> String {
+    let mut name = want.clone();
+    let mut k = 2;
+    while taken.contains(&name) {
+        name = format!("{want}_{k}");
+        k += 1;
+    }
+    taken.push(name.clone());
+    name
 }
 
 /// The split of each target that has one, on `base` (the gain's assumed
@@ -200,6 +217,8 @@ pub fn gains(
         crate::linalg::LuComplex::factor(sys.dim, a).map(|lu| lu.solve(&b))
     };
     let mut out = Vec::new();
+    // Parameter and symbol names in use: each split's own stay distinct.
+    let mut taken: Vec<String> = full.params.iter().map(|p| p.name.clone()).collect();
     for (i, t) in targets.iter().enumerate() {
         let what = t.what();
         let refuse =
@@ -283,6 +302,9 @@ pub fn gains(
                 (format!("K_{}", fp.name), dev_latex_sub("K", sub, &t.element))
             }
         };
+        let k_name = unique(k_name, &mut taken);
+        let cin_name = unique(format!("Cin_{}", fp.name), &mut taken);
+        let cout_name = unique(format!("Cout_{}", fp.name), &mut taken);
         out.push(Split {
             target: i,
             a,
@@ -293,6 +315,8 @@ pub fn gains(
             latex: fp.latex.clone(),
             k_name,
             k_latex,
+            cin_name,
+            cout_name,
         });
     }
     out
@@ -352,7 +376,7 @@ pub fn with_targets(
 
 /// Names of a split's two grounded parameters in the split model.
 fn split_names(s: &Split) -> (String, String) {
-    (format!("Cin_{}", s.name), format!("Cout_{}", s.name))
+    (s.cin_name.clone(), s.cout_name.clone())
 }
 
 /// `base` with each split's capacitance replaced by C_in = C(1 − K) from a
@@ -468,17 +492,24 @@ fn binomial(n: u32, k: u32) -> i128 {
 /// slot holds C, C_out's holds K), exactly: C_in^x C_out^y →
 /// (−1)^y C^(x+y) (1 − K)^(x+y) K^(m−y), m the highest y in either, which
 /// multiplies both by K^m.
-pub fn substitute(num: &XPoly, den: &XPoly, slots: &[(usize, usize)]) -> Result<(XPoly, XPoly), String> {
+/// Past `max_terms` terms in either, the over-budget error (the quantity is
+/// then numeric, as for an over-budget determinant).
+pub fn substitute(
+    num: &XPoly,
+    den: &XPoly,
+    slots: &[(usize, usize)],
+    max_terms: usize,
+) -> Result<(XPoly, XPoly), String> {
     let (mut n, mut d) = (num.clone(), den.clone());
     for &(i, j) in slots {
         let m = n.terms.iter().chain(&d.terms).map(|(e, _)| e[j]).max().unwrap_or(0);
-        n = one(&n, i, j, m)?;
-        d = one(&d, i, j, m)?;
+        n = one(&n, i, j, m, max_terms)?;
+        d = one(&d, i, j, m, max_terms)?;
     }
     Ok((n, d))
 }
 
-fn one(p: &XPoly, i: usize, j: usize, m: u8) -> Result<XPoly, String> {
+fn one(p: &XPoly, i: usize, j: usize, m: u8, max_terms: usize) -> Result<XPoly, String> {
     let overflow = || "coefficient overflow in the Miller substitution".to_string();
     let mut map: BTreeMap<Vec<u8>, i128> = BTreeMap::new();
     for (e, c) in &p.terms {
@@ -496,6 +527,9 @@ fn one(p: &XPoly, i: usize, j: usize, m: u8) -> Result<XPoly, String> {
                 .ok_or_else(overflow)?;
             let v = map.entry(f).or_insert(0);
             *v = v.checked_add(coef).ok_or_else(overflow)?;
+            if map.len() > max_terms {
+                return Err(crate::det::too_large(max_terms));
+            }
         }
     }
     Ok(XPoly {
@@ -525,7 +559,7 @@ mod tests {
         let den = XPoly {
             terms: vec![t([0, 0, 0], 1), t([1, 1, 0], 4), t([0, 1, 1], -3), t([1, 0, 1], 2)],
         };
-        let (n2, d2) = substitute(&num, &den, &[(1, 2)]).unwrap();
+        let (n2, d2) = substitute(&num, &den, &[(1, 2)], usize::MAX).unwrap();
         let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
         let mut rnd = || {
             seed ^= seed << 13;
@@ -556,12 +590,26 @@ mod tests {
         let den = XPoly {
             terms: vec![t([0, 0, 0], 1), t([0, 0, 1], 6), t([1, 1, 1], -1)],
         };
-        let (n2, d2) = substitute(&num, &den, &[(1, 2)]).unwrap();
+        let (n2, d2) = substitute(&num, &den, &[(1, 2)], usize::MAX).unwrap();
         for (g, c) in [(0.3, 1.7), (2.5, -0.4), (1.1, 9.0)] {
             let open = eval(&num, &[g, 0.0, 0.0]) / eval(&den, &[g, 0.0, 0.0]);
             let got = eval(&n2, &[g, c, 1.0]) / eval(&d2, &[g, c, 1.0]);
             assert!((got - open).abs() <= 1e-12 * open.abs(), "{got} vs {open}");
         }
+    }
+
+    #[test]
+    fn substitution_keeps_to_the_term_budget() {
+        // 3 terms after the substitution: g·K and C·g·(1 − K).
+        let num = XPoly {
+            terms: vec![(vec![1, 0, 0], 1), (vec![1, 0, 1], 2)],
+        };
+        let den = XPoly {
+            terms: vec![(vec![0, 0, 0], 1)],
+        };
+        let err = substitute(&num, &den, &[(1, 2)], 2).unwrap_err();
+        assert!(err.starts_with("exact expression too large"), "{err}");
+        assert!(substitute(&num, &den, &[(1, 2)], 3).is_ok());
     }
 
     #[test]
@@ -572,7 +620,7 @@ mod tests {
         let den = XPoly {
             terms: vec![(vec![0, 0], 1)],
         };
-        let (n, d) = substitute(&num, &den, &[(0, 1)]).unwrap();
+        let (n, d) = substitute(&num, &den, &[(0, 1)], usize::MAX).unwrap();
         // C_in → C(1 − K): C − C·K over 1.
         assert_eq!(n.terms, vec![(vec![1, 0], 1), (vec![1, 1], -1)]);
         assert_eq!(d, den);

@@ -419,18 +419,37 @@ export function withDefault(
   };
 }
 
-/** The solver's `assume` for the drawn parts; null when nothing is assumed. */
+/**
+ * The solver's `assume` for the drawn parts; null when nothing is assumed.
+ * With `available` (the circuit's last `assumable`), a stored Miller split
+ * the solver no longer offers (the capacitance now ends at ground or a
+ * supply) is not sent, and the part acts as without it. It stays stored,
+ * and returns when the drawing offers it again.
+ */
 export function assumptionRequest(
   elements: readonly SmallSignalElement[],
   defaults: AssumptionDefaults,
   parts: CircuitAssumptions,
+  available?: readonly AssumableElement[] | null,
 ): SmallSignalAssumptions | null {
   const ignore: { element: string; term: AssumptionTerm }[] = [];
   const regions: { element: string; region: string }[] = [];
   const miller: MillerAssumption[] = [];
+  const offered = available
+    ? new Map(available.map((entry) => [entry.element, entry.miller ?? []]))
+    : null;
   for (const { name, kind, instancePath } of elements) {
     if (!isAssumable(kind)) continue;
-    const part = parts[partKey(instancePath)];
+    const stored = parts[partKey(instancePath)];
+    const part =
+      offered && stored?.miller
+        ? withoutMiller(
+            stored,
+            stored.miller.filter(
+              (term) => !(offered.get(name) ?? []).includes(term),
+            ),
+          )
+        : stored;
     for (const term of ASSUMPTION_TERMS[kind])
       if (isIgnored(kind, term, part, defaults))
         ignore.push({ element: name, term });
