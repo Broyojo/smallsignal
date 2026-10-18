@@ -268,10 +268,16 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             ss::MONO_BITS
         ));
     }
+    // Imposed regions: the model every assumption starts from.
+    let imposed = region_model(&net, op.as_ref(), &linear, req.assume.as_ref())?;
+    let (rop, afull) = match &imposed {
+        Some((rop, m)) => (Some(rop), m),
+        None => (None, &full),
+    };
     let assumptions = req
         .assume
         .as_ref()
-        .map(|a| crate::assume::resolve(&net, &full, op.as_ref(), a))
+        .map(|a| crate::assume::resolve(&net, afull, op.as_ref(), a))
         .transpose()?;
     let excite = match (mode, neg) {
         (Mode::Single, _) | (_, None) => Excite::Source(input),
@@ -342,8 +348,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         .chain(&region_warnings)
         .cloned()
         .collect();
-    // A region that matches its assumption needs no warning; one that does
-    // not says both.
+    // A region that matches its assumption needs no warning. An imposed one
+    // names the bias's region, a refused one why, a checked one both.
     for r in assumptions.iter().flat_map(|a| &a.regions) {
         let Some(actual) = &r.actual else { continue };
         let generic = |region: &str| match region {
@@ -352,13 +358,22 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         };
         let now = generic(actual);
         let at = warnings.iter().position(|w| *w == now);
-        if *actual == r.assumed {
-            if let Some(i) = at {
-                warnings.remove(i);
+        use crate::assume::RegionEffect;
+        use crate::devices::Refusal;
+        let text = match r.effect {
+            _ if *actual == r.assumed => {
+                if let Some(i) = at {
+                    warnings.remove(i);
+                }
+                continue;
             }
-            continue;
-        }
-        let text = format!("{now}, assumed {}", r.assumed);
+            RegionEffect::Imposed => format!("{} bias says {actual}", r.element),
+            RegionEffect::Refused(Refusal::Off) => format!("{} is off, cannot assume {}", r.element, r.assumed),
+            RegionEffect::Refused(Refusal::Saturated) => {
+                format!("{} is saturated, cannot assume {}", r.element, r.assumed)
+            }
+            _ => format!("{now}, assumed {}", r.assumed),
+        };
         match at {
             Some(i) => warnings[i] = text,
             None => warnings.push(text),
@@ -420,10 +435,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     resp.insert(
         "assumable".into(),
         crate::miller::with_targets(
-            crate::assume::assumable(&net, &full),
+            crate::assume::assumable(&net, afull),
             &net,
-            &full,
-            &ss::system(&net, &full, &excite),
+            afull,
+            &ss::system(&net, afull, &excite),
         ),
     );
 
@@ -475,7 +490,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     let simplify = Simplify {
         probe: &probe,
         net: &net,
-        full: &full,
+        full: afull,
         op: op.as_ref(),
         matched: &matched,
         accepted: accepted_groups(&symbols),
@@ -604,10 +619,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 let (sys, border) = probe.den_system(which, &m);
                 crate::pencil::vanishes(&sys, &m, border.as_deref(), true)
             };
-            let restored = if vanishes(&full) {
+            let restored = if vanishes(afull) {
                 Vec::new()
             } else {
-                crate::assume::restore(&units, |r| vanishes(&crate::assume::apply(&full, a, r)))
+                crate::assume::restore(&units, |r| vanishes(&crate::assume::apply(afull, a, r)))
             };
             for unit in units.iter().filter(|u| u.iter().any(|i| restored.contains(i))) {
                 let x0 = &a.applied[unit[0]];
@@ -626,9 +641,9 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             let k = match models.iter().position(|m| m.restored == restored) {
                 Some(k) => k,
                 None => {
-                    let base = crate::assume::apply(&full, a, &restored);
+                    let base = crate::assume::apply(afull, a, &restored);
                     let splits = splits.get_or_insert_with(|| {
-                        crate::miller::gains(&net, &full, &base, &excite, &a.miller, &mut warnings)
+                        crate::miller::gains(&net, afull, &base, &excite, &a.miller, &mut warnings)
                     });
                     let model = crate::miller::split(&base, splits, &a.miller);
                     let (ass, aomitted, aerr) = if symbolic {
@@ -753,6 +768,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         let ctx = crate::noise::Ctx {
             net: &net,
             op: op.as_ref(),
+            model_op: setup.as_ref().and(rop),
             full: &full,
             model: an_model,
             ss: an_ss,
@@ -785,6 +801,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         let ctx = crate::distortion::Ctx {
             net: &net,
             op: op.as_ref(),
+            model_op: setup.as_ref().and(rop),
             full: &full,
             model: an_model,
             ss: an_ss,
@@ -953,7 +970,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 .iter()
                 .filter(|u| u.iter().any(|i| m.restored.contains(i)))
                 .flat_map(|u| {
-                    let latex = st.symbol_latex(&full, u);
+                    let latex = st.symbol_latex(afull, u);
                     u.iter().map(move |&i| {
                         let x = &st.assume.applied[i];
                         json!({ "element": x.element, "term": x.term.as_str(), "latex": latex })
@@ -995,7 +1012,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     .iter()
                     .find(|u| u.contains(&i))
                     .expect("every assumption has a unit");
-                let latex = st.symbol_latex(&full, unit);
+                let latex = st.symbol_latex(afull, unit);
                 json!({
                     "element": x.element, "term": x.term.as_str(),
                     "latex": crate::assume::latex_of(netr, x, latex.as_deref()),
@@ -1007,9 +1024,16 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             json!({
                 "applied": applied,
                 "absent": a.absent.iter().map(|(e, t)| json!({ "element": e, "term": t.as_str() })).collect::<Vec<_>>(),
-                "regions": a.regions.iter().map(|r| json!({
-                    "element": r.element, "assumed": r.assumed, "actual": r.actual,
-                })).collect::<Vec<_>>(),
+                "regions": a.regions.iter().map(|r| {
+                    let mut v = json!({
+                        "element": r.element, "assumed": r.assumed, "actual": r.actual,
+                        "effect": r.effect.as_str(),
+                    });
+                    if let Some((gm, gds, gmb)) = r.linearized {
+                        v["linearized"] = json!({ "gm": gm, "gds": gds, "gmb": gmb });
+                    }
+                    v
+                }).collect::<Vec<_>>(),
                 "miller": st.splits.iter().zip(&st.definitions).map(|(sp, def)| {
                     let t = &a.miller[sp.target];
                     json!({
@@ -1045,7 +1069,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         let ctx = SuggestCtx {
             probe: &probe,
             net: &net,
-            full: &full,
+            full: afull,
             op: op.as_ref(),
             matched: &matched,
             accepted: accepted_groups(&symbols),
@@ -1309,6 +1333,28 @@ impl AssumeSetup<'_> {
             .unwrap_or("");
         let els: Vec<String> = unit.iter().map(|&i| self.assume.applied[i].element.clone()).collect();
         Some(sym::merged_latex(kind, &els))
+    }
+}
+
+/// With regions imposed (numeric mode), the operating point linearized in
+/// them and the full model built on it: the model the other assumptions
+/// apply to. None when no region is imposed.
+pub(crate) fn region_model(
+    net: &Netlist,
+    op: Option<&Op>,
+    linear: &[usize],
+    req: Option<&crate::assume::AssumeRequest>,
+) -> Result<Option<(Op, SsCircuit)>, String> {
+    let (Some(op), Some(a)) = (op, req) else {
+        return Ok(None);
+    };
+    let checks = crate::assume::region_checks(net, Some(op), a)?;
+    match crate::assume::region_op(net, op, &checks) {
+        Some(rop) => {
+            let m = ss::build_with(net, Some(&rop), linear)?;
+            Ok(Some((rop, m)))
+        }
+        None => Ok(None),
     }
 }
 

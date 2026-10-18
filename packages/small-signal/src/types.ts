@@ -34,11 +34,12 @@ export interface MillerAssumption {
   term?: AssumptionTerm | null;
 }
 
-/** Per-device assumptions: terms neglected and regions expected. */
+/** Per-device assumptions: terms neglected and regions imposed. */
 export interface SmallSignalAssumptions {
   ignore?: { element: string; term: AssumptionTerm }[];
-  /** MOS saturation, triode, cutoff; BJT forward-active, saturation,
-   * reverse-active, cutoff. Checked against the operating point only. */
+  /** MOS saturation or triode, imposed on the bias (`RegionReport`); MOS
+   * cutoff and BJT forward-active, saturation, reverse-active, cutoff are
+   * only checked against it. */
   regions?: { element: string; region: string }[];
   /** Feedback capacitances split into C(1 − K) at a and C(K − 1)/K at b,
    * K = v_b(0)/v_a(0) under the gain's excitation. */
@@ -192,12 +193,29 @@ export interface AssumedQuantity {
   zeros: RootPair[];
 }
 
+/**
+ * A declared region: `imposed` (a MOSFET linearized in it at the bias, or
+ * without a bias the region its forms take), `same` (the bias is in it),
+ * `refused` (off, or triode with V_DS ≥ V_ov: the bias's model stays) or
+ * `checked` (BJT regions and MOS cutoff, compared only).
+ */
+export interface RegionReport {
+  element: string;
+  assumed: string;
+  /** The bias's region; null without an operating point. */
+  actual: string | null;
+  effect: "imposed" | "same" | "refused" | "checked";
+  /** Imposed on a bias: that region's conductances (S). */
+  linearized?: { gm: number; gds: number; gmb: number };
+}
+
 export interface SmallSignalAssumptionReport {
   applied: { element: string; term: AssumptionTerm; latex: string }[];
   /** Asked for, but the full model has no such term (e.g. g_mb with the
    * body on the source). */
   absent: { element: string; term: AssumptionTerm }[];
-  regions: { element: string; assumed: string; actual: string | null }[];
+  regions: RegionReport[];
+
   /** The Miller splits made (a refused one is a warning instead). */
   miller: MillerReport[];
 }
@@ -282,13 +300,16 @@ const BJT_REGIONS = [
   "cutoff",
 ] as const;
 
-/** The regions an assumption can expect, per transistor type. */
+/** The regions the solver accepts, per transistor type. */
 export const ASSUMPTION_REGIONS = {
   nmos: MOS_REGIONS,
   pmos: MOS_REGIONS,
   npn: BJT_REGIONS,
   pnp: BJT_REGIONS,
 } as const;
+
+/** The regions the solver imposes (the others it only checks). */
+export const IMPOSED_REGIONS = ["saturation", "triode"] as const;
 
 export interface SmallSignalQuantity {
   unit?: string;

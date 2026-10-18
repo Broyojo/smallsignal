@@ -217,8 +217,12 @@ Assumption terms `cgs`, `cgd`, `cgb`, `cbs`, `cbd`, `cpi`, `cmu`, `ccs`,
 Terms an engineer neglects (`ignore`: a device's r_o, g_mb, r_bs, r_bd,
 r_π, r_μ, or a device capacitance; a passive or diode `open` or `short`),
 feedback capacitances split by the Miller approximation (`miller`) and
-regions expected (`regions`), as rules and fields in
+MOSFET regions imposed (`regions`), as rules and fields in
 [docs/specs/small-signal-assumptions.md](../docs/specs/small-signal-assumptions.md).
+An imposed region relinearizes its device at the operating point's
+voltages (`assume::region_op`, `devices::mos_eval_in`,
+`caps::mos_caps_in`), and the model built on that is the one the other
+assumptions apply to.
 Each is an exact limit taken before expansion (`assume.rs`): a neglected
 conductance's stamps are left out (`SsCircuit::omit`, exact because every
 minor is multilinear), a short merges its nodes (`Stamp::Short`). The

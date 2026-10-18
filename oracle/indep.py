@@ -36,6 +36,75 @@ def num(tok: str) -> mp.mpf:
     return mp.mpf(str(spice.decimal(tok)))
 
 
+EPS_OX = mp.mpf("3.9") * mp.mpf("8.854214871e-12")
+
+
+def forced_mos(tokens: list[str], params: dict, mtype: int, d: dict, region: str):
+    """A MOSFET linearized in an imposed region, as the solver's
+    `assume.regions` asks: ngspice-47 mos1load's level-1 equations of that
+    region at ngspice's own V_GS, V_DS, V_BS (`d`, the op entry), in the
+    same effective frame (drain and source swapped when V_DS < 0), λ in
+    betap. Returns (verdict, values): "refused" (V_GS <= V_TH, or triode
+    with V_DS >= V_GS - V_TH, where the triode current falls), "same" (the
+    bias is in it: ngspice's own values stand) or "imposed" with
+    {gm, gds, gmb, cgs, cgd, cgb}: the region's conductances and, with TOX,
+    its Meyer capacitances plus overlap on the physical terminals."""
+    if params.get("ld", 0) or params.get("level", 1) != 1:
+        raise NotImplementedError("forced region: LD and levels other than 1")
+    opt = {k.lower(): num(v) for k, v in (x.split("=", 1) for x in tokens[6:] if "=" in x)}
+    w, l, mult = opt["w"], opt["l"], opt.get("m", mp.mpf(1))
+    tox = params.get("tox")
+    cox = EPS_OX / mp.mpf(repr(tox)) if tox else mp.mpf(0)
+    kp = (mp.mpf(repr(params["kp"])) if "kp" in params
+          else mp.mpf(repr(params.get("uo", 600))) * mp.mpf("1e-4") * cox if tox else mp.mpf("2e-5"))
+    vto = mp.mpf(repr(params.get("vto", 0)))
+    gamma = mp.mpf(repr(params.get("gamma", 0)))
+    phi = mp.mpf(repr(params.get("phi", 0.6)))
+    lam = mp.mpf(repr(params.get("lambda", 0)))
+    vgs, vds, vbs = (mtype * P(d[k]) for k in ("vgs", "vds", "vbs"))
+    mode = 1 if vds >= 0 else -1
+    if mode < 0:
+        vgs, vds, vbs = vgs - vds, -vds, vbs - vds
+    sqphi = mp.sqrt(phi)
+    sarg = mp.sqrt(phi - vbs) if vbs <= 0 else max(mp.mpf(0), sqphi - vbs / (2 * sqphi))
+    von = mtype * vto - gamma * sqphi + gamma * sarg
+    vgst = vgs - von
+    natural = "cutoff" if vgst <= 0 else "saturation" if vgst <= vds else "triode"
+    if natural == region:
+        return "same", None
+    if natural == "cutoff" or region == "triode":
+        return "refused", None
+    beta = kp * w / l * mult
+    betap = beta * (1 + lam * vds)
+    gm = betap * vgst
+    arg = 0 if sarg <= 0 else gamma / (2 * sarg)
+    out = {"gm": gm, "gds": lam * beta * vgst**2 / 2, "gmb": gm * arg}
+    # Meyer in saturation: 2·Cox·W·L·M/3 on the effective gate-source,
+    # nothing on gate-drain or gate-bulk, plus each overlap.
+    meyer = 2 * cox * w * l * mult / 3
+    ovl = {k: mp.mpf(repr(params.get(k, 0))) for k in ("cgso", "cgdo", "cgbo")}
+    cs, cd = (meyer, 0) if mode > 0 else (0, meyer)
+    out.update(cgs=cs + ovl["cgso"] * mult * w, cgd=cd + ovl["cgdo"] * mult * w, cgb=ovl["cgbo"] * mult * l)
+    return "imposed", out
+
+
+def region_verdicts(cir: Path, want: dict, regions: dict[str, str]) -> dict:
+    """{element: (verdict, values)} of `forced_mos` for each MOSFET region."""
+    text = cir.read_text()
+    net = spice.parse(text)
+    models = model_params(text)
+    devs = {k.lower(): d for k, d in want["op"]["devices"].items()}
+    out = {}
+    for e in net.elements:
+        region = {k.lower(): v for k, v in regions.items()}.get(e.name.lower())
+        if e.kind != "m" or region not in ("saturation", "triode"):
+            continue
+        mname = e.tokens[5].lower()
+        mtype = -1 if net.models.get(mname) == "pmos" else 1
+        out[e.name.lower()] = forced_mos(e.tokens, models.get(mname, {}), mtype, devs[e.name.lower()], region)
+    return out
+
+
 def model_params(text: str) -> dict[str, dict[str, float]]:
     """{model: {param: value}}, values with SPICE suffixes (KF=1f, TOX=100n).
     Cards are read as the parser's logical lines, so parameters on `+`
@@ -60,7 +129,8 @@ def model_params(text: str) -> dict[str, dict[str, float]]:
 def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt"),
                     want_system: bool = False, drop: set[tuple[str, str]] | None = None,
-                    miller: list[tuple[str, str | None]] | None = None, kvalues: dict | None = None):
+                    miller: list[tuple[str, str | None]] | None = None, kvalues: dict | None = None,
+                    regions: dict[str, str] | None = None):
     """variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
     "solverlike" (only the junction / g_mu terms in `kept`, the solver's own
     parameter names such as rbd_m1, rmu_q2, each as ngspice has it) or
@@ -78,7 +148,11 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
     to ground, K = v(b)/v(a) of this rebuild at s = 0 under the gain
     excitation (a, b as the solver orients them: a capacitor so |K| >= 1,
     a device's capacitance gate/base first), or kvalues["e:term"] when
-    given. out[("miller", "e:term")] is K."""
+    given. out[("miller", "e:term")] is K.
+
+    regions: {element: "saturation" | "triode"}, each MOSFET linearized
+    in that region where `forced_mos` imposes it (its gm, gds, gmb and
+    Meyer capacitances replace ngspice's)."""
     mp.mp.dps = dps
     mill: dict = {(e.lower(), t or None): None for e, t in (miller or [])}
     ks: dict | None = None
@@ -115,6 +189,7 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
     volt = {k.lower(): mp.mpf(repr(v)) for k, v in want["op"]["nodes"].items()}
     v = lambda n: mp.mpf(0) if n in spice.GROUND else volt[n.lower()]
     devs = {k.lower(): d for k, d in want["op"]["devices"].items()}
+    forced = {k: v for k, (verdict, v) in region_verdicts(cir, want, regions or {}).items() if verdict == "imposed"}
     inp = side["input"].lower()
     # Gain excitation: the input alone, or with inputNeg the pair driven
     # ±1/2 (differential) or both +1 (common), as the solver and the ngspice
@@ -200,13 +275,15 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     add(r, r, -s * num(t[3]))
             elif k == "m":
                 d = devs[e.name.lower()]
+                fv = forced.get(e.name.lower())
+                lin = (lambda key: fv[key]) if fv else (lambda key: P(d[key]))
                 dn, gn, sn, bn = e.nodes
                 ed, es = (sn, dn) if d["reverse"] else (dn, sn)
-                vccs(ed, es, gn, es, P(d["gm"]))
+                vccs(ed, es, gn, es, lin("gm"))
                 if not dropped(e, "ro"):
-                    adm(ed, es, P(d["gds"]))
+                    adm(ed, es, lin("gds"))
                 if not dropped(e, "gmb"):
-                    vccs(ed, es, bn, es, P(d["gmb"]))
+                    vccs(ed, es, bn, es, lin("gmb"))
                 mname = t[5].lower()
                 tt = -1 if net.models.get(mname) == "pmos" else 1
                 mult = next((float(x.split("=")[1]) for x in t[6:] if x.lower().startswith("m=")), 1.0)
@@ -219,11 +296,13 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     adm(bn, other, term(f"r{which}_{e.name}", phys, gmin_full))
                 # ngspice's capacitances at this bias (pz.py), on the
                 # physical terminals as mos1acld stamps them.
-                caps = d.get("caps") or {}
+                caps = {k: P(x) for k, x in (d.get("caps") or {}).items()}
+                if fv and caps:
+                    caps.update({k: fv[k] for k in ("cgs", "cgd", "cgb")})
                 for a_, b_, key in ((gn, sn, "cgs"), (gn, dn, "cgd"), (gn, bn, "cgb"), (bn, dn, "cbd"),
                                     (bn, sn, "cbs")):
                     if caps.get(key) and not dropped(e, key):
-                        cap(e, key, a_, b_, P(caps[key]))
+                        cap(e, key, a_, b_, caps[key])
             elif k == "q":
                 d = devs[e.name.lower()]
                 c, bb, em = e.nodes[:3]

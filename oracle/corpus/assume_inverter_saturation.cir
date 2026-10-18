@@ -1,0 +1,10 @@
+CMOS inverter, M1 in triode, saturation assumed
+VDD vdd 0 1.8
+VIN in 0 DC 1.1 AC 1
+RS in g 1k
+M1 out g 0 0 nch W=10u L=1u
+M2 out g vdd vdd pch W=20u L=1u
+CL out 0 50f
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CGBO=1e-10)
+.model pch PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CGBO=1e-10)
+.end

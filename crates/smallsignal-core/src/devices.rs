@@ -94,6 +94,40 @@ pub struct MosEval {
 
 /// Level-1 (Shichman–Hodges) channel current; `beta` = KP·W/L·M.
 pub fn mos_eval(m: &MosModel, beta: f64, vgs: f64, vds: f64, vbs: f64) -> MosEval {
+    level1(m, beta, vgs, vds, vbs, None)
+}
+
+/// Why a region cannot be imposed at a bias.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// V_GS ≤ V_TH (effective frame): no channel to linearize.
+    Off,
+    /// Triode asked with V_DS ≥ V_GS − V_TH: the triode current falls
+    /// there, so its g_ds is no channel resistance.
+    Saturated,
+}
+
+/// `mos_eval` with `region` (saturation or triode) imposed: that region's
+/// level-1 equations at the same voltages, in the same effective frame
+/// (drain and source swapped when vds < 0), λ included. Refused when the
+/// channel is off, and for triode when V_DS ≥ V_GS − V_TH.
+pub fn mos_eval_in(
+    m: &MosModel,
+    beta: f64,
+    vgs: f64,
+    vds: f64,
+    vbs: f64,
+    region: MosRegion,
+) -> Result<MosEval, Refusal> {
+    let ev = level1(m, beta, vgs, vds, vbs, Some(region));
+    match ev.region {
+        MosRegion::Cutoff => Err(Refusal::Off),
+        r if r != region => Err(Refusal::Saturated),
+        _ => Ok(ev),
+    }
+}
+
+fn level1(m: &MosModel, beta: f64, vgs: f64, vds: f64, vbs: f64, imposed: Option<MosRegion>) -> MosEval {
     let (mode, vgs, vds, vbs) = if vds >= 0.0 {
         (1, vgs, vds, vbs)
     } else {
@@ -122,7 +156,9 @@ pub fn mos_eval(m: &MosModel, beta: f64, vgs: f64, vds: f64, vbs: f64) -> MosEva
         };
     }
     let betap = beta * (1.0 + m.lambda * vds);
-    if vgst <= vds {
+    // Triode only where its equations hold (V_DS < V_GS − V_TH); past that
+    // the bias's region comes back, which `mos_eval_in` refuses.
+    if imposed == Some(MosRegion::Saturation) || vgst <= vds {
         let gm = betap * vgst;
         MosEval {
             mode,

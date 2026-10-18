@@ -10,8 +10,11 @@
 //! An open C (C → 0) is left out; an open R, L or diode is the limit
 //! R, L, r_d → ∞, which leaves the element out too.
 //!
-//! The operating point always comes from the full netlist, and a region is
-//! only checked against it, never imposed. When a substitution makes a
+//! The operating point always comes from the full netlist. A MOSFET's
+//! saturation or triode is imposed on it: the device is linearized with
+//! that region's level-1 equations at the same voltages (`region_op`), and
+//! the other terms apply to that model. Other regions are only checked.
+//! When a substitution makes a
 //! quantity's denominator vanish identically (a node held only by the r_o
 //! that was neglected), the smallest set of assumptions that avoids it is
 //! put back for that quantity, with a label (`restore`).
@@ -176,12 +179,122 @@ pub struct Applied {
     pub short: Option<(usize, usize)>,
 }
 
+/// What a declared region does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegionEffect {
+    /// A MOSFET's saturation or triode: in numeric mode its model is
+    /// linearized in that region at the operating point's voltages
+    /// (`region_op`); in symbolic mode it decides r_o or R_on.
+    Imposed,
+    /// The operating point is already in it: nothing changes.
+    Same,
+    /// It cannot be imposed at this bias: the bias's region stays.
+    Refused(crate::devices::Refusal),
+    /// Only checked against the bias (BJT regions, MOS cutoff).
+    Checked,
+}
+
+impl RegionEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RegionEffect::Imposed => "imposed",
+            RegionEffect::Same => "same",
+            RegionEffect::Refused(_) => "refused",
+            RegionEffect::Checked => "checked",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RegionCheck {
     pub element: String,
     pub assumed: String,
     /// The operating point's region; None in symbolic mode.
     pub actual: Option<String>,
+    pub effect: RegionEffect,
+    /// Imposed in numeric mode: the region's (gm, gds, gmb).
+    pub linearized: Option<(f64, f64, f64)>,
+}
+
+/// The regions a request declares, validated, each with its effect at the
+/// operating point (None: symbolic mode).
+pub fn region_checks(net: &Netlist, op: Option<&Op>, req: &AssumeRequest) -> Result<Vec<RegionCheck>, String> {
+    use crate::devices::MosRegion;
+    let mut out: Vec<RegionCheck> = Vec::new();
+    for item in &req.regions {
+        let ei = net
+            .element(&item.element)
+            .ok_or_else(|| format!("assume: no element '{}'", item.element.trim()))?;
+        let e = &net.elements[ei];
+        let region = item.region.trim();
+        if !regions_for(&e.kind).contains(&region) {
+            return Err(format!("assume: {} has no region {region}", e.name));
+        }
+        if out.iter().any(|r| r.element == e.name) {
+            return Err(format!("assume: {} has two regions", e.name));
+        }
+        let dev = op.and_then(|op| op.dev[ei].as_ref());
+        let actual = dev.and_then(|d| match d {
+            DevOp::Mos(m) => Some(m.region.as_str().to_string()),
+            DevOp::Bjt(q) => Some(q.region.to_string()),
+            _ => None,
+        });
+        let wanted = match region {
+            "saturation" => Some(MosRegion::Saturation),
+            "triode" => Some(MosRegion::Triode),
+            _ => None,
+        };
+        let (mut effect, mut linearized) = (RegionEffect::Checked, None);
+        if let (Kind::M { model, w, l, mult, .. }, Some(want)) = (&e.kind, wanted) {
+            effect = match dev {
+                None => RegionEffect::Imposed,
+                Some(DevOp::Mos(m)) if m.region == want => RegionEffect::Same,
+                Some(DevOp::Mos(m)) => {
+                    let ty = model.ty;
+                    let beta = model.kp * w / l * mult;
+                    match crate::devices::mos_eval_in(model, beta, ty * m.vgs, ty * m.vds, ty * m.vbs, want) {
+                        Ok(ev) => {
+                            linearized = Some((ev.gm, ev.gds, ev.gmbs));
+                            RegionEffect::Imposed
+                        }
+                        Err(why) => RegionEffect::Refused(why),
+                    }
+                }
+                Some(_) => RegionEffect::Checked,
+            };
+        }
+        out.push(RegionCheck {
+            element: e.name.clone(),
+            assumed: region.to_string(),
+            actual,
+            effect,
+            linearized,
+        });
+    }
+    Ok(out)
+}
+
+/// The operating point with each imposed region's linearization in place
+/// of its device's (the voltages, currents and junctions unchanged), or
+/// None when no region is imposed.
+pub fn region_op(net: &Netlist, op: &Op, checks: &[RegionCheck]) -> Option<Op> {
+    let mut out: Option<Op> = None;
+    for r in checks {
+        let Some((gm, gds, gmb)) = r.linearized else { continue };
+        let Some(ei) = net.element(&r.element) else { continue };
+        let o = out.get_or_insert_with(|| op.clone());
+        if let Some(DevOp::Mos(m)) = &mut o.dev[ei] {
+            let region = if r.assumed == "triode" {
+                crate::devices::MosRegion::Triode
+            } else {
+                crate::devices::MosRegion::Saturation
+            };
+            m.region = region;
+            m.imposed = Some(region);
+            (m.gm, m.gds, m.gmb) = (gm, gds, gmb);
+        }
+    }
+    out
 }
 
 #[derive(Clone, Debug, Default)]
@@ -196,7 +309,7 @@ pub struct Assume {
 }
 
 /// Validates the request against the netlist and maps each term onto the
-/// full model's parameter.
+/// parameter of `full`, the full model with any imposed region in place.
 pub fn resolve(net: &Netlist, full: &SsCircuit, op: Option<&Op>, req: &AssumeRequest) -> Result<Assume, String> {
     let mut out = Assume::default();
     let mut seen: Vec<(usize, Term)> = Vec::new();
@@ -235,29 +348,7 @@ pub fn resolve(net: &Netlist, full: &SsCircuit, op: Option<&Op>, req: &AssumeReq
         });
     }
     out.miller = crate::miller::resolve(net, full, &req.miller, &seen)?;
-    for item in &req.regions {
-        let ei = net
-            .element(&item.element)
-            .ok_or_else(|| format!("assume: no element '{}'", item.element.trim()))?;
-        let e = &net.elements[ei];
-        let region = item.region.trim();
-        if !regions_for(&e.kind).contains(&region) {
-            return Err(format!("assume: {} has no region {region}", e.name));
-        }
-        if out.regions.iter().any(|r| r.element == e.name) {
-            return Err(format!("assume: {} has two regions", e.name));
-        }
-        let actual = op.and_then(|op| match &op.dev[ei] {
-            Some(DevOp::Mos(m)) => Some(m.region.as_str().to_string()),
-            Some(DevOp::Bjt(q)) => Some(q.region.to_string()),
-            _ => None,
-        });
-        out.regions.push(RegionCheck {
-            element: e.name.clone(),
-            assumed: region.to_string(),
-            actual,
-        });
-    }
+    out.regions = region_checks(net, op, req)?;
     Ok(out)
 }
 

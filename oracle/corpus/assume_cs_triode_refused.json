@@ -1,0 +1,12 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [0, 1000, 1000000.0, 100000000.0],
+ "rin": true,
+ "rout": true,
+ "assume": {"regions": [{"element": "M1", "region": "triode"}]},
+ "regionEffect": {"M1": "refused"},
+ "restored": {"gain": [], "rin": [], "rout": []},
+ "description": "M1 is saturated (V_DS > V_GS - V_TH), where the level-1 triode current falls with V_DS: triode cannot be imposed, so the bias's model stays and the assumed values equal ngspice's."
+}
