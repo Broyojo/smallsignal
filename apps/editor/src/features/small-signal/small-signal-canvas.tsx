@@ -35,6 +35,10 @@ interface Geometry {
 
 const EMPTY: Geometry = { rects: new Map(), wires: new Map(), container: null };
 
+/** Zoomed out past these, a label would only cover the drawing. */
+const MIN_WIRE_PX = 28;
+const MIN_PART_PX = 10;
+
 /** A route's hit polyline on the canvas, by route id. */
 function routeHit(id: string): SVGPolylineElement | null {
   return document.querySelector<SVGPolylineElement>(
@@ -78,7 +82,7 @@ function longestSegment(
         };
     }
   }
-  return best && best.length >= 12 ? best : null;
+  return best && best.length >= MIN_WIRE_PX ? best : null;
 }
 
 /** Screen boxes of parts and wire midpoints, measured each frame while
@@ -232,7 +236,7 @@ export function CanvasOverlay({
       })}
       {op?.devices.map((device) => {
         const rect = geometry.rects.get(device.instanceId);
-        return rect ? (
+        return rect && Math.min(rect.width, rect.height) >= MIN_PART_PX ? (
           <span
             key={`op-${device.instanceId}`}
             className={`small-signal-op-device is-${device.tone}`}
