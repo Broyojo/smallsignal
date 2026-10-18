@@ -906,7 +906,7 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
 }
 
 /// Inverted and reactive masks; both 0 for a wide circuit (no monomials).
-fn masks(params: &[Param]) -> (Mono, Mono) {
+pub(crate) fn masks(params: &[Param]) -> (Mono, Mono) {
     let (mut inv_mask, mut reactive_mask) = (0, 0);
     if params.len() > MONO_BITS {
         return (0, 0);

@@ -1,0 +1,3114 @@
+{
+  "schemaVersion": 55,
+  "id": "project-two-stage-miller-ota",
+  "name": "Two-stage Miller OTA",
+  "source": {
+    "entry": null,
+    "dialect": "none",
+    "sourcePolicy": "copy",
+    "files": []
+  },
+  "symbolLibrary": {
+    "id": "razavi-symbols",
+    "version": "1",
+    "hash": "razavi-reference-v1"
+  },
+  "structureRevision": 85,
+  "topDocumentId": "document-ota-5t-testbench",
+  "documents": [
+    {
+      "id": "document-ota-5t-testbench",
+      "name": "Testbench",
+      "revision": 161,
+      "sourceStatus": "connectivity-modified",
+      "netlist": {
+        "name": "Testbench",
+        "terminals": [],
+        "formalParameters": []
+      },
+      "instances": [
+        {
+          "id": "XDUT",
+          "symbolId": "hierarchical-symbol-72404fc79d737213",
+          "placement": {
+            "position": {
+              "x": 560,
+              "y": 320
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "XDUT",
+          "netlist": {
+            "binding": {
+              "kind": "subcircuit",
+              "childDocumentId": "document-ota-5t"
+            },
+            "parameters": {}
+          }
+        },
+        {
+          "id": "VDD",
+          "symbolId": "voltage-source",
+          "placement": {
+            "position": {
+              "x": 490,
+              "y": 160
+            },
+            "rotation": 90,
+            "mirror": "none"
+          },
+          "reference": "VDD",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "voltage-source"
+            },
+            "parameters": {
+              "dc": "1.8"
+            }
+          }
+        },
+        {
+          "id": "VINP",
+          "symbolId": "voltage-source",
+          "placement": {
+            "position": {
+              "x": 400,
+              "y": 300
+            },
+            "rotation": 90,
+            "mirror": "none"
+          },
+          "reference": "VINP",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "voltage-source"
+            },
+            "parameters": {
+              "acMagnitude": "1",
+              "dc": "0.9",
+              "delay": "1u",
+              "fall": "1n",
+              "high": "0.91",
+              "low": "0.9",
+              "period": "3u",
+              "rise": "1n",
+              "waveform": "pulse",
+              "width": "1u"
+            }
+          }
+        },
+        {
+          "id": "VINN",
+          "symbolId": "voltage-source",
+          "placement": {
+            "position": {
+              "x": 400,
+              "y": 350
+            },
+            "rotation": 90,
+            "mirror": "none"
+          },
+          "reference": "VINN",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "voltage-source"
+            },
+            "parameters": {
+              "dc": "0.9"
+            }
+          }
+        },
+        {
+          "id": "IBIAS",
+          "symbolId": "current-source",
+          "placement": {
+            "position": {
+              "x": 550,
+              "y": 210
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "IBIAS",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "current-source"
+            },
+            "parameters": {
+              "dc": "15u"
+            }
+          }
+        },
+        {
+          "id": "CL",
+          "symbolId": "capacitor",
+          "placement": {
+            "position": {
+              "x": 900,
+              "y": 360
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "CL",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "capacitor"
+            },
+            "parameters": {
+              "value": "1p"
+            }
+          }
+        },
+        {
+          "id": "GND1",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 430,
+              "y": 160
+            },
+            "rotation": 90,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "GND2",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 340,
+              "y": 300
+            },
+            "rotation": 90,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "GND3",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 340,
+              "y": 350
+            },
+            "rotation": 90,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "GND4",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 560,
+              "y": 420
+            },
+            "rotation": 0,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "GND5",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 900,
+              "y": 400
+            },
+            "rotation": 0,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "M7",
+          "symbolId": "pmos",
+          "mosBulkBinding": {
+            "origin": "instance-override",
+            "netId": "net-tb-vdd"
+          },
+          "placement": {
+            "position": {
+              "x": 840,
+              "y": 180
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "XM7",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-27f716b14d59fc10"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "16",
+              "w": "128u"
+            }
+          }
+        },
+        {
+          "id": "M8",
+          "symbolId": "nmos",
+          "mosBulkBinding": {
+            "origin": "instance-override",
+            "netId": "net-power-gnd4"
+          },
+          "placement": {
+            "position": {
+              "x": 840,
+              "y": 420
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "XM8",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-e5ee3d17d0c7c89a"
+            },
+            "parameters": {
+              "l": "3u",
+              "nf": "20",
+              "w": "100u"
+            }
+          }
+        },
+        {
+          "id": "CC",
+          "symbolId": "capacitor",
+          "placement": {
+            "position": {
+              "x": 790,
+              "y": 250
+            },
+            "rotation": 90,
+            "mirror": "none"
+          },
+          "reference": "CC",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "capacitor"
+            },
+            "parameters": {
+              "value": "0.5p"
+            }
+          }
+        }
+      ],
+      "nets": [
+        {
+          "id": "net-power-gnd3",
+          "terminals": [
+            {
+              "instanceId": "GND3",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "VINN",
+              "pinName": "-"
+            }
+          ]
+        },
+        {
+          "id": "net-power-gnd4",
+          "terminals": [
+            {
+              "instanceId": "GND4",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "XDUT",
+              "pinName": "vss"
+            },
+            {
+              "instanceId": "M8",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M8",
+              "pinName": "B"
+            }
+          ]
+        },
+        {
+          "id": "net-power-gnd5",
+          "terminals": [
+            {
+              "instanceId": "GND5",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "CL",
+              "pinName": "2"
+            }
+          ]
+        },
+        {
+          "id": "net-tb-vdd",
+          "terminals": [
+            {
+              "instanceId": "VDD",
+              "pinName": "+"
+            },
+            {
+              "instanceId": "IBIAS",
+              "pinName": "+"
+            },
+            {
+              "instanceId": "XDUT",
+              "pinName": "vdd"
+            },
+            {
+              "instanceId": "M7",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M7",
+              "pinName": "B"
+            }
+          ]
+        },
+        {
+          "id": "tb-ibias-net",
+          "terminals": [
+            {
+              "instanceId": "IBIAS",
+              "pinName": "-"
+            },
+            {
+              "instanceId": "XDUT",
+              "pinName": "ibias"
+            },
+            {
+              "instanceId": "M8",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "tb-vinp-net",
+          "terminals": [
+            {
+              "instanceId": "VINP",
+              "pinName": "+"
+            },
+            {
+              "instanceId": "XDUT",
+              "pinName": "vinp"
+            }
+          ]
+        },
+        {
+          "id": "tb-vinn-net",
+          "terminals": [
+            {
+              "instanceId": "VINN",
+              "pinName": "+"
+            },
+            {
+              "instanceId": "XDUT",
+              "pinName": "vinn"
+            }
+          ]
+        },
+        {
+          "id": "tb-vout-net",
+          "terminals": [
+            {
+              "instanceId": "XDUT",
+              "pinName": "vout"
+            },
+            {
+              "instanceId": "CC",
+              "pinName": "1"
+            },
+            {
+              "instanceId": "M7",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "net-split-a810f1946a2e3084",
+          "terminals": [
+            {
+              "instanceId": "GND1",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "VDD",
+              "pinName": "-"
+            }
+          ]
+        },
+        {
+          "id": "net-split-f3cbcac420d93ece",
+          "terminals": [
+            {
+              "instanceId": "GND2",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "VINP",
+              "pinName": "-"
+            }
+          ]
+        },
+        {
+          "id": "tb-vout2-net",
+          "terminals": [
+            {
+              "instanceId": "M7",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M8",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "CC",
+              "pinName": "2"
+            },
+            {
+              "instanceId": "CL",
+              "pinName": "1"
+            }
+          ]
+        }
+      ],
+      "connectivityEvidence": [
+        {
+          "id": "connectivity-evidence-33dd40c74ee1950d",
+          "kind": "name-claim",
+          "netId": "net-split-a810f1946a2e3084",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND1"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-4fd51303c6ed3225",
+          "kind": "name-claim",
+          "netId": "net-split-f3cbcac420d93ece",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND2"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-97019202b6a994e5",
+          "kind": "name-claim",
+          "netId": "net-power-gnd3",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND3"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-d2bb87eae3b4a1c5",
+          "kind": "name-claim",
+          "netId": "net-power-gnd4",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND4"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-7ec67ce55c90646d",
+          "kind": "name-claim",
+          "netId": "net-power-gnd5",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND5"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-7df4b9f72a121645",
+          "kind": "name-claim",
+          "netId": "net-tb-vdd",
+          "name": "vdd",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-tb-vdd-source-route"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-f7b96bb5ab25d11a",
+          "kind": "name-claim",
+          "netId": "tb-ibias-net",
+          "name": "ibias",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-tb-ibias-route"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-ade80d1dc122d646",
+          "kind": "name-claim",
+          "netId": "tb-vinp-net",
+          "name": "vinp",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-tb-vinp-route"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-b66084c183ee210e",
+          "kind": "name-claim",
+          "netId": "tb-vinn-net",
+          "name": "vinn",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-tb-vinn-route"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-db342e0a821d20d0",
+          "kind": "name-claim",
+          "netId": "tb-vout-net",
+          "name": "vo1",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-tb-vout-route"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-tb-vout2",
+          "kind": "name-claim",
+          "netId": "tb-vout2-net",
+          "name": "vout",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-tb-vout2"
+          },
+          "scope": "local"
+        }
+      ],
+      "routes": [
+        {
+          "id": "tb-gnd-vinn-route",
+          "netId": "net-power-gnd3",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "VINN",
+            "pinName": "-"
+          },
+          "legs": [
+            {
+              "id": "route-leg-34fd6882297027f4",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "GND3",
+                  "pinName": "0"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-gnd-dut-route",
+          "netId": "net-power-gnd4",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "GND4",
+            "pinName": "0"
+          },
+          "legs": [
+            {
+              "id": "route-leg-ac185f3591d27db9",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "XDUT",
+                  "pinName": "vss"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-gnd-cl-route",
+          "netId": "net-power-gnd5",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "CL",
+            "pinName": "2"
+          },
+          "legs": [
+            {
+              "id": "route-leg-af02721fb438a990",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "GND5",
+                  "pinName": "0"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-ibias-route",
+          "netId": "tb-ibias-net",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "IBIAS",
+            "pinName": "-"
+          },
+          "legs": [
+            {
+              "id": "route-leg-9c7f13cc644db106",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "XDUT",
+                  "pinName": "ibias"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-vinp-route",
+          "netId": "tb-vinp-net",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "VINP",
+            "pinName": "+"
+          },
+          "legs": [
+            {
+              "id": "route-leg-db9df07a18d56c80",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "XDUT",
+                  "pinName": "vinp"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-vinn-route",
+          "netId": "tb-vinn-net",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "VINN",
+            "pinName": "+"
+          },
+          "legs": [
+            {
+              "id": "route-leg-42de77b6b7306ba2",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "XDUT",
+                  "pinName": "vinn"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-vout-route",
+          "netId": "tb-vout-net",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "XDUT",
+            "pinName": "vout"
+          },
+          "legs": [
+            {
+              "id": "route-leg-9cbad225568967f9",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-9cbad225568967f9",
+                "position": {
+                  "x": 730,
+                  "y": 320
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-9cbad12556896646",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "CC",
+                  "pinName": "1"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "route-ui-1",
+          "netId": "net-split-a810f1946a2e3084",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "GND1",
+            "pinName": "0"
+          },
+          "legs": [
+            {
+              "id": "route-leg-ace29482c237b3d7",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "VDD",
+                  "pinName": "-"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "route-35e042e11550de52",
+          "netId": "net-split-f3cbcac420d93ece",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "GND2",
+            "pinName": "0"
+          },
+          "legs": [
+            {
+              "id": "route-leg-94c48a25d3985fe6",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "VINP",
+                  "pinName": "-"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "route-ui-3",
+          "netId": "net-tb-vdd",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "VDD",
+            "pinName": "+"
+          },
+          "legs": [
+            {
+              "id": "route-leg-950eb45aec291af5",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-canonical-fa66a02887bbb6d9"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-vdd-dut-route-a-2",
+          "netId": "net-tb-vdd",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-fa66a02887bbb6d9"
+          },
+          "legs": [
+            {
+              "id": "route-leg-624f4d1edaa3951c",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "IBIAS",
+                  "pinName": "+"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "tb-vdd-dut-route-b-2",
+          "netId": "net-tb-vdd",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-fa66a02887bbb6d9"
+          },
+          "legs": [
+            {
+              "id": "route-leg-c64a8aa78eb2d60f",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-624f4d1edaa3951c",
+                "position": {
+                  "x": 590,
+                  "y": 160
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-624f4e1edaa396cf",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "XDUT",
+                  "pinName": "vdd"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        }
+      ],
+      "junctions": [
+        {
+          "id": "junction-canonical-fa66a02887bbb6d9",
+          "netId": "net-tb-vdd",
+          "position": {
+            "x": 550,
+            "y": 160
+          },
+          "role": "branch"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "instance-label-XDUT",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "XDUT"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "XDUT",
+            "localOffset": {
+              "x": 55,
+              "y": 80
+            },
+            "fallbackPosition": {
+              "x": 615,
+              "y": 400
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-VDD",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "VDD"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VDD",
+            "localOffset": {
+              "x": -30,
+              "y": -45
+            },
+            "fallbackPosition": {
+              "x": 460,
+              "y": 115
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-VDD",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "VDD"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VDD",
+            "localOffset": {
+              "x": 10,
+              "y": -45
+            },
+            "fallbackPosition": {
+              "x": 500,
+              "y": 115
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-VINP",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "VINP"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VINP",
+            "localOffset": {
+              "x": -25,
+              "y": -35
+            },
+            "fallbackPosition": {
+              "x": 375,
+              "y": 265
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-VINP",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "VINP"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VINP",
+            "localOffset": {
+              "x": 20,
+              "y": -35
+            },
+            "fallbackPosition": {
+              "x": 420,
+              "y": 265
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-VINN",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "VINN"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VINN",
+            "localOffset": {
+              "x": -20,
+              "y": 40
+            },
+            "fallbackPosition": {
+              "x": 380,
+              "y": 390
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-VINN",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "VINN"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VINN",
+            "localOffset": {
+              "x": 25,
+              "y": 40
+            },
+            "fallbackPosition": {
+              "x": 425,
+              "y": 390
+            }
+          },
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-IBIAS",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "IBIAS"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "IBIAS",
+            "localOffset": {
+              "x": -50,
+              "y": -5
+            },
+            "fallbackPosition": {
+              "x": 500,
+              "y": 205
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-IBIAS",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "IBIAS"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "IBIAS",
+            "localOffset": {
+              "x": -50,
+              "y": 20
+            },
+            "fallbackPosition": {
+              "x": 500,
+              "y": 230
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-CL",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "CL"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "CL",
+            "localOffset": {
+              "x": 20,
+              "y": -5
+            },
+            "fallbackPosition": {
+              "x": 750,
+              "y": 355
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-CL",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "CL"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "CL",
+            "localOffset": {
+              "x": 45,
+              "y": -5
+            },
+            "fallbackPosition": {
+              "x": 775,
+              "y": 355
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-tb-vout-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "tb-vout-net"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "tb-vout-route",
+            "legId": "route-leg-9cbad225568967f9",
+            "t": 0.5,
+            "normalOffset": -10,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 685,
+              "y": 310
+            }
+          },
+          "netId": "tb-vout-net",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-tb-vdd-source-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "net-tb-vdd"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "route-ui-3",
+            "legId": "route-leg-950eb45aec291af5",
+            "t": 0.5,
+            "normalOffset": -10,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 530,
+              "y": 150
+            }
+          },
+          "netId": "net-tb-vdd",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-tb-ibias-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "tb-ibias-net"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "tb-ibias-route",
+            "legId": "route-leg-9c7f13cc644db106",
+            "t": 0.5,
+            "normalOffset": 14,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 536,
+              "y": 240
+            }
+          },
+          "netId": "tb-ibias-net",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-tb-vinp-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "tb-vinp-net"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "tb-vinp-route",
+            "legId": "route-leg-db9df07a18d56c80",
+            "t": 0.5,
+            "normalOffset": -10,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 450,
+              "y": 290
+            }
+          },
+          "netId": "tb-vinp-net",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-tb-vinn-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "tb-vinn-net"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "tb-vinn-route",
+            "legId": "route-leg-42de77b6b7306ba2",
+            "t": 0.5,
+            "normalOffset": -10,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 450,
+              "y": 340
+            }
+          },
+          "netId": "tb-vinn-net",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-tb-vout2",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "tb-vout2-net"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "CL",
+            "localOffset": {
+              "x": 0,
+              "y": -40
+            },
+            "fallbackPosition": {
+              "x": 900,
+              "y": 320
+            }
+          },
+          "netId": "tb-vout2-net",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        }
+      ],
+      "presentation": {
+        "styleProfileId": "razavi-textbook-v1",
+        "grid": 10,
+        "compactness": "normal"
+      },
+      "layoutGroups": [],
+      "constraints": [],
+      "noConnects": [],
+      "drafting": {
+        "objects": []
+      }
+    },
+    {
+      "id": "document-ota-5t",
+      "name": "ota_5t",
+      "revision": 162,
+      "sourceStatus": "connectivity-modified",
+      "netlist": {
+        "name": "ota_5t",
+        "terminals": [
+          {
+            "id": "terminal-pvss",
+            "name": "vss",
+            "netId": "net-cell-pin-pvss",
+            "direction": "passive",
+            "interfaceInstanceIds": ["PVSS"]
+          },
+          {
+            "id": "terminal-pibias",
+            "name": "ibias",
+            "netId": "net-cell-pin-pibias",
+            "direction": "input",
+            "interfaceInstanceIds": ["PIBIAS"]
+          },
+          {
+            "id": "terminal-pvdd",
+            "name": "vdd",
+            "netId": "net-cell-pin-pvdd",
+            "direction": "passive",
+            "interfaceInstanceIds": ["PVDD"]
+          },
+          {
+            "id": "terminal-pvinn",
+            "name": "vinn",
+            "netId": "net-cell-pin-pvinn",
+            "direction": "input",
+            "interfaceInstanceIds": ["PVINN"]
+          },
+          {
+            "id": "terminal-pvinp",
+            "name": "vinp",
+            "netId": "net-cell-pin-pvinp",
+            "direction": "input",
+            "interfaceInstanceIds": ["PVINP"]
+          },
+          {
+            "id": "terminal-pvout",
+            "name": "vout",
+            "netId": "net-cell-pin-pvout",
+            "direction": "output",
+            "interfaceInstanceIds": ["PVOUT"]
+          }
+        ],
+        "formalParameters": []
+      },
+      "instances": [
+        {
+          "id": "M1",
+          "symbolId": "nmos",
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-cell-pin-pvss"
+          },
+          "placement": {
+            "position": {
+              "x": 370,
+              "y": 280
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "XM1",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-e5ee3d17d0c7c89a"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "12",
+              "w": "96u"
+            }
+          }
+        },
+        {
+          "id": "M2",
+          "symbolId": "nmos",
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-cell-pin-pvss"
+          },
+          "placement": {
+            "position": {
+              "x": 570,
+              "y": 280
+            },
+            "rotation": 0,
+            "mirror": "horizontal"
+          },
+          "reference": "XM2",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-e5ee3d17d0c7c89a"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "12",
+              "w": "96u"
+            }
+          }
+        },
+        {
+          "id": "M3",
+          "symbolId": "pmos",
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-cell-pin-pvdd"
+          },
+          "placement": {
+            "position": {
+              "x": 390,
+              "y": 160
+            },
+            "rotation": 0,
+            "mirror": "horizontal"
+          },
+          "reference": "XM3",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-27f716b14d59fc10"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "8",
+              "w": "64u"
+            }
+          }
+        },
+        {
+          "id": "M4",
+          "symbolId": "pmos",
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-cell-pin-pvdd"
+          },
+          "placement": {
+            "position": {
+              "x": 550,
+              "y": 160
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "XM4",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-27f716b14d59fc10"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "8",
+              "w": "64u"
+            }
+          }
+        },
+        {
+          "id": "M5",
+          "symbolId": "nmos",
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-cell-pin-pvss"
+          },
+          "placement": {
+            "position": {
+              "x": 470,
+              "y": 440
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "reference": "XM5",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-e5ee3d17d0c7c89a"
+            },
+            "parameters": {
+              "l": "3u",
+              "nf": "20",
+              "w": "100u"
+            }
+          }
+        },
+        {
+          "id": "M6",
+          "symbolId": "nmos",
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-cell-pin-pvss"
+          },
+          "placement": {
+            "position": {
+              "x": 300,
+              "y": 440
+            },
+            "rotation": 0,
+            "mirror": "horizontal"
+          },
+          "reference": "XM6",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-e5ee3d17d0c7c89a"
+            },
+            "parameters": {
+              "l": "3u",
+              "nf": "6",
+              "w": "60u"
+            }
+          }
+        },
+        {
+          "id": "PVSS",
+          "symbolId": "port",
+          "placement": {
+            "position": {
+              "x": 290,
+              "y": 540
+            },
+            "rotation": 270,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "PIBIAS",
+          "symbolId": "port",
+          "placement": {
+            "position": {
+              "x": 290,
+              "y": 360
+            },
+            "rotation": 90,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "PVDD",
+          "symbolId": "port",
+          "placement": {
+            "position": {
+              "x": 310,
+              "y": 100
+            },
+            "rotation": 0,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "PVINN",
+          "symbolId": "port",
+          "placement": {
+            "position": {
+              "x": 610,
+              "y": 280
+            },
+            "rotation": 180,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "PVINP",
+          "symbolId": "port",
+          "placement": {
+            "position": {
+              "x": 330,
+              "y": 280
+            },
+            "rotation": 0,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "PVOUT",
+          "symbolId": "port",
+          "placement": {
+            "position": {
+              "x": 630,
+              "y": 220
+            },
+            "rotation": 180,
+            "mirror": "none"
+          }
+        }
+      ],
+      "nets": [
+        {
+          "id": "net-cell-pin-pvss",
+          "terminals": [
+            {
+              "instanceId": "PVSS",
+              "pinName": "P"
+            },
+            {
+              "instanceId": "M6",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M5",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "B"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "B"
+            },
+            {
+              "instanceId": "M5",
+              "pinName": "B"
+            },
+            {
+              "instanceId": "M6",
+              "pinName": "B"
+            }
+          ]
+        },
+        {
+          "id": "net-cell-pin-pibias",
+          "terminals": [
+            {
+              "instanceId": "PIBIAS",
+              "pinName": "P"
+            },
+            {
+              "instanceId": "M6",
+              "pinName": "G"
+            },
+            {
+              "instanceId": "M6",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M5",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "net-cell-pin-pvdd",
+          "terminals": [
+            {
+              "instanceId": "PVDD",
+              "pinName": "P"
+            },
+            {
+              "instanceId": "M3",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M4",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M3",
+              "pinName": "B"
+            },
+            {
+              "instanceId": "M4",
+              "pinName": "B"
+            }
+          ]
+        },
+        {
+          "id": "net-cell-pin-pvinn",
+          "terminals": [
+            {
+              "instanceId": "PVINN",
+              "pinName": "P"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "net-cell-pin-pvinp",
+          "terminals": [
+            {
+              "instanceId": "PVINP",
+              "pinName": "P"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "net-cell-pin-pvout",
+          "terminals": [
+            {
+              "instanceId": "PVOUT",
+              "pinName": "P"
+            },
+            {
+              "instanceId": "M4",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "D"
+            }
+          ]
+        },
+        {
+          "id": "net-dut-nleft",
+          "terminals": [
+            {
+              "instanceId": "M3",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M3",
+              "pinName": "G"
+            },
+            {
+              "instanceId": "M4",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "net-dut-tail",
+          "terminals": [
+            {
+              "instanceId": "M5",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "S"
+            }
+          ]
+        }
+      ],
+      "connectivityEvidence": [
+        {
+          "id": "connectivity-evidence-9f1ce905a5db8772",
+          "kind": "name-claim",
+          "netId": "net-dut-nleft",
+          "name": "nleft",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-dut-nleft-trunk-route"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-ca7bbcf380650530",
+          "kind": "name-claim",
+          "netId": "net-dut-tail",
+          "name": "tail",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-dut-tail-m1s-route"
+          },
+          "scope": "local"
+        }
+      ],
+      "routes": [
+        {
+          "id": "dut-vdd-port-route",
+          "netId": "net-cell-pin-pvdd",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "PVDD",
+            "pinName": "P"
+          },
+          "legs": [
+            {
+              "id": "route-leg-a720db58bbd8e3ad",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-vdd"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vdd-m3-route",
+          "netId": "net-cell-pin-pvdd",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M3",
+            "pinName": "S"
+          },
+          "legs": [
+            {
+              "id": "route-leg-e029990b3e5d06bc",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-vdd"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vdd-m4-route",
+          "netId": "net-cell-pin-pvdd",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M4",
+            "pinName": "S"
+          },
+          "legs": [
+            {
+              "id": "route-leg-5b9805254e937a59",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-5b9805254e937a59",
+                "position": {
+                  "x": 560,
+                  "y": 100
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-5b9804254e9378a6",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-vdd"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vout-port-route",
+          "netId": "net-cell-pin-pvout",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "PVOUT",
+            "pinName": "P"
+          },
+          "legs": [
+            {
+              "id": "route-leg-6043a3e9d6720b4e",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-vout"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vout-m4-route",
+          "netId": "net-cell-pin-pvout",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M4",
+            "pinName": "D"
+          },
+          "legs": [
+            {
+              "id": "route-leg-ae091c386561f66a",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-vout"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vout-m2-route",
+          "netId": "net-cell-pin-pvout",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M2",
+            "pinName": "D"
+          },
+          "legs": [
+            {
+              "id": "route-leg-109a650f1a292f40",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-vout"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vinp-route",
+          "netId": "net-cell-pin-pvinp",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "PVINP",
+            "pinName": "P"
+          },
+          "legs": [
+            {
+              "id": "route-leg-a72f03f468a1d2f4",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M1",
+                  "pinName": "G"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vinn-route",
+          "netId": "net-cell-pin-pvinn",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "PVINN",
+            "pinName": "P"
+          },
+          "legs": [
+            {
+              "id": "route-leg-d16ea816ee4bf8ce",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M2",
+                  "pinName": "G"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-nleft-m3d-route",
+          "netId": "net-dut-nleft",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M3",
+            "pinName": "D"
+          },
+          "legs": [
+            {
+              "id": "route-leg-f449712ee4a17702",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-nleft-a"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-nleft-m1d-route",
+          "netId": "net-dut-nleft",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M1",
+            "pinName": "D"
+          },
+          "legs": [
+            {
+              "id": "route-leg-4449fdaa3f37ea4c",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-nleft-a"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-nleft-trunk-route",
+          "netId": "net-dut-nleft",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-dut-nleft-a"
+          },
+          "legs": [
+            {
+              "id": "route-leg-220f44782704e593",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-adb5e8be6b3344d6",
+                "position": {
+                  "x": 470,
+                  "y": 210
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-c5b2e6b4e8fd7635",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-nleft-b"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-nleft-m3g-route",
+          "netId": "net-dut-nleft",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M3",
+            "pinName": "G"
+          },
+          "legs": [
+            {
+              "id": "route-leg-a7d85c5a0e43f8af",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-nleft-b"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-nleft-m4g-route",
+          "netId": "net-dut-nleft",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M4",
+            "pinName": "G"
+          },
+          "legs": [
+            {
+              "id": "route-leg-5dee764c63230748",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-nleft-b"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-tail-m5d-route",
+          "netId": "net-dut-tail",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M5",
+            "pinName": "D"
+          },
+          "legs": [
+            {
+              "id": "route-leg-beabd8e3dedf141e",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-tail"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-tail-m1s-route",
+          "netId": "net-dut-tail",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M1",
+            "pinName": "S"
+          },
+          "legs": [
+            {
+              "id": "route-leg-ada2b826f49de203",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-ada2b826f49de203",
+                "position": {
+                  "x": 380,
+                  "y": 340
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-ada2b726f49de050",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-tail"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-tail-m2s-route",
+          "netId": "net-dut-tail",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M2",
+            "pinName": "S"
+          },
+          "legs": [
+            {
+              "id": "route-leg-a525c367f98f1f50",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-a525c367f98f1f50",
+                "position": {
+                  "x": 560,
+                  "y": 340
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-a525c467f98f2103",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-dut-tail"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vss-m5-route",
+          "netId": "net-cell-pin-pvss",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M6",
+            "pinName": "S"
+          },
+          "legs": [
+            {
+              "id": "route-leg-1fd2cacc728a5fec",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-canonical-3993d1302f152696"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-vss-port-route",
+          "netId": "net-cell-pin-pvss",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-3993d1302f152696"
+          },
+          "legs": [
+            {
+              "id": "route-leg-9a243a8749f3f47b",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "PVSS",
+                  "pinName": "P"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "route-canonical-e161f2c6f556c327",
+          "netId": "net-cell-pin-pvss",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-3993d1302f152696"
+          },
+          "legs": [
+            {
+              "id": "route-leg-6406fbb3dde68137",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-6406fbb3dde68137",
+                "position": {
+                  "x": 480,
+                  "y": 490
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-6406fab3dde67f84",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M5",
+                  "pinName": "S"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-ibias-port-route",
+          "netId": "net-cell-pin-pibias",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "PIBIAS",
+            "pinName": "P"
+          },
+          "legs": [
+            {
+              "id": "route-leg-df9387cdaaaab728",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-canonical-a69a92ac5a85be8f"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-ibias-m6d-route",
+          "netId": "net-cell-pin-pibias",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-a69a92ac5a85be8f"
+          },
+          "legs": [
+            {
+              "id": "route-leg-dfa853aaa4309a7e",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M6",
+                  "pinName": "D"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-ibias-m5g-route",
+          "netId": "net-cell-pin-pibias",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-a69a92ac5a85be8f"
+          },
+          "legs": [
+            {
+              "id": "route-leg-7172d946242cfd98",
+              "to": {
+                "kind": "bend",
+                "bendId": "route-bend-9351f6029255a2bb",
+                "position": {
+                  "x": 380,
+                  "y": 400
+                }
+              },
+              "mode": "manual"
+            },
+            {
+              "id": "route-leg-a63007ca9d22b9cc",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-canonical-0fddbcfe7d216a81"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "dut-ibias-m6g-route",
+          "netId": "net-cell-pin-pibias",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M6",
+            "pinName": "G"
+          },
+          "legs": [
+            {
+              "id": "route-leg-36accc90d5a60eab",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "junction-canonical-0fddbcfe7d216a81"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "route-canonical-781ca20d250b5d82",
+          "netId": "net-cell-pin-pibias",
+          "start": {
+            "kind": "junction",
+            "junctionId": "junction-canonical-0fddbcfe7d216a81"
+          },
+          "legs": [
+            {
+              "id": "route-leg-77da2da4eeb4e9de",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M5",
+                  "pinName": "G"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        }
+      ],
+      "junctions": [
+        {
+          "id": "junction-dut-vdd",
+          "netId": "net-cell-pin-pvdd",
+          "position": {
+            "x": 380,
+            "y": 100
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-dut-vout",
+          "netId": "net-cell-pin-pvout",
+          "position": {
+            "x": 560,
+            "y": 220
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-dut-nleft-a",
+          "netId": "net-dut-nleft",
+          "position": {
+            "x": 380,
+            "y": 210
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-dut-nleft-b",
+          "netId": "net-dut-nleft",
+          "position": {
+            "x": 470,
+            "y": 160
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-dut-tail",
+          "netId": "net-dut-tail",
+          "position": {
+            "x": 480,
+            "y": 340
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-canonical-a69a92ac5a85be8f",
+          "netId": "net-cell-pin-pibias",
+          "position": {
+            "x": 290,
+            "y": 400
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-canonical-3993d1302f152696",
+          "netId": "net-cell-pin-pvss",
+          "position": {
+            "x": 290,
+            "y": 490
+          },
+          "role": "branch"
+        },
+        {
+          "id": "junction-canonical-0fddbcfe7d216a81",
+          "netId": "net-cell-pin-pibias",
+          "position": {
+            "x": 380,
+            "y": 440
+          },
+          "role": "branch"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "instance-label-PVSS",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "cell-terminal-name",
+            "terminalId": "terminal-pvss"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "PVSS",
+            "localOffset": {
+              "x": 10,
+              "y": 20
+            },
+            "fallbackPosition": {
+              "x": 300,
+              "y": 560
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-PIBIAS",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "cell-terminal-name",
+            "terminalId": "terminal-pibias"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "PIBIAS",
+            "localOffset": {
+              "x": -45,
+              "y": -5
+            },
+            "fallbackPosition": {
+              "x": 245,
+              "y": 355
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-PVDD",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "cell-terminal-name",
+            "terminalId": "terminal-pvdd"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "PVDD",
+            "localOffset": {
+              "x": -5,
+              "y": -15
+            },
+            "fallbackPosition": {
+              "x": 305,
+              "y": 85
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-PVINN",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "cell-terminal-name",
+            "terminalId": "terminal-pvinn"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "PVINN",
+            "localOffset": {
+              "x": 20,
+              "y": -10
+            },
+            "fallbackPosition": {
+              "x": 630,
+              "y": 270
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-PVINP",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "cell-terminal-name",
+            "terminalId": "terminal-pvinp"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "PVINP",
+            "localOffset": {
+              "x": -20,
+              "y": -10
+            },
+            "fallbackPosition": {
+              "x": 310,
+              "y": 270
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-PVOUT",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "cell-terminal-name",
+            "terminalId": "terminal-pvout"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "PVOUT",
+            "localOffset": {
+              "x": 15,
+              "y": 0
+            },
+            "fallbackPosition": {
+              "x": 645,
+              "y": 220
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-dut-nleft-trunk-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "net-dut-nleft"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "dut-nleft-trunk-route",
+            "legId": "route-leg-220f44782704e593",
+            "t": 0.625,
+            "normalOffset": -10,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 436,
+              "y": 200
+            }
+          },
+          "netId": "net-dut-nleft",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "net-label-dut-tail-m1s-route",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "net-dut-tail"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "dut-tail-m1s-route",
+            "legId": "route-leg-ada2b726f49de050",
+            "t": 0.9,
+            "normalOffset": -14,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 0,
+              "y": 0
+            }
+          },
+          "netId": "net-dut-tail",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M1",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M1"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M1",
+            "localOffset": {
+              "x": -25,
+              "y": 35
+            },
+            "fallbackPosition": {
+              "x": 345,
+              "y": 315
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-M1",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "M1"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M1",
+            "localOffset": {
+              "x": 20,
+              "y": -5
+            },
+            "fallbackPosition": {
+              "x": 390,
+              "y": 275
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M2",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M2"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M2",
+            "localOffset": {
+              "x": 35,
+              "y": 30
+            },
+            "fallbackPosition": {
+              "x": 605,
+              "y": 310
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-M2",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "M2"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M2",
+            "localOffset": {
+              "x": -15,
+              "y": 5
+            },
+            "fallbackPosition": {
+              "x": 555,
+              "y": 285
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M3",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M3"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M3",
+            "localOffset": {
+              "x": 30,
+              "y": -25
+            },
+            "fallbackPosition": {
+              "x": 420,
+              "y": 135
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-M3",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "M3"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M3",
+            "localOffset": {
+              "x": -20,
+              "y": 5
+            },
+            "fallbackPosition": {
+              "x": 370,
+              "y": 165
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M4",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M4"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M4",
+            "localOffset": {
+              "x": -30,
+              "y": -20
+            },
+            "fallbackPosition": {
+              "x": 520,
+              "y": 140
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-M4",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "M4"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M4",
+            "localOffset": {
+              "x": 20,
+              "y": 10
+            },
+            "fallbackPosition": {
+              "x": 570,
+              "y": 170
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M5",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M5"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M5",
+            "localOffset": {
+              "x": -30,
+              "y": 25
+            },
+            "fallbackPosition": {
+              "x": 440,
+              "y": 465
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-M5",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "M5"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M5",
+            "localOffset": {
+              "x": 20,
+              "y": 10
+            },
+            "fallbackPosition": {
+              "x": 490,
+              "y": 450
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M6",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M6"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M6",
+            "localOffset": {
+              "x": 35,
+              "y": 25
+            },
+            "fallbackPosition": {
+              "x": 335,
+              "y": 465
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-value-M6",
+          "kind": "instance-value",
+          "binding": {
+            "kind": "instance-value",
+            "instanceId": "M6"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M6",
+            "localOffset": {
+              "x": -25,
+              "y": 10
+            },
+            "fallbackPosition": {
+              "x": 275,
+              "y": 450
+            }
+          },
+          "alignment": "end",
+          "rotation": 0,
+          "locked": false
+        }
+      ],
+      "presentation": {
+        "styleProfileId": "razavi-textbook-v1",
+        "grid": 10,
+        "compactness": "normal",
+        "cellSymbol": {
+          "minimumBodySize": {
+            "width": 140,
+            "height": 120
+          },
+          "pinPlacements": [
+            {
+              "terminalId": "terminal-pvdd",
+              "side": "north",
+              "offset": 30
+            },
+            {
+              "terminalId": "terminal-pvinn",
+              "side": "west",
+              "offset": 30
+            },
+            {
+              "terminalId": "terminal-pvout",
+              "side": "east",
+              "offset": 0
+            },
+            {
+              "terminalId": "terminal-pvss",
+              "side": "south",
+              "offset": 0
+            },
+            {
+              "terminalId": "terminal-pvinp",
+              "side": "west",
+              "offset": -20
+            },
+            {
+              "terminalId": "terminal-pibias",
+              "side": "north",
+              "offset": -10
+            }
+          ]
+        }
+      },
+      "mosBulkDefaults": {
+        "nmosNetId": "net-cell-pin-pvss",
+        "pmosNetId": "net-cell-pin-pvdd"
+      },
+      "layoutGroups": [],
+      "constraints": [],
+      "noConnects": [],
+      "drafting": {
+        "objects": []
+      }
+    }
+  ],
+  "externalSubcircuitDefinitions": [
+    {
+      "id": "external-subcircuit-e5ee3d17d0c7c89a",
+      "name": "sky130_fd_pr__nfet_01v8",
+      "terminals": [
+        {
+          "id": "external-subcircuit-terminal-353df4da271bcc2b",
+          "name": "D",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-353df3da271bca78",
+          "name": "G",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-353df6da271bcf91",
+          "name": "S",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-353df5da271bcdde",
+          "name": "B",
+          "direction": "passive"
+        }
+      ],
+      "formalParameters": [
+        {
+          "name": "w",
+          "defaultValue": "1"
+        },
+        {
+          "name": "l",
+          "defaultValue": "0.15"
+        },
+        {
+          "name": "nf",
+          "defaultValue": "1"
+        },
+        {
+          "name": "m",
+          "defaultValue": "1"
+        }
+      ],
+      "interfaceStatus": "declared"
+    },
+    {
+      "id": "external-subcircuit-27f716b14d59fc10",
+      "name": "sky130_fd_pr__pfet_01v8",
+      "terminals": [
+        {
+          "id": "external-subcircuit-terminal-7921a0096089118d",
+          "name": "D",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-79219f0960890fda",
+          "name": "G",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-79219e0960890e27",
+          "name": "S",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-79219d0960890c74",
+          "name": "B",
+          "direction": "passive"
+        }
+      ],
+      "formalParameters": [
+        {
+          "name": "w",
+          "defaultValue": "1"
+        },
+        {
+          "name": "l",
+          "defaultValue": "0.15"
+        },
+        {
+          "name": "nf",
+          "defaultValue": "1"
+        },
+        {
+          "name": "m",
+          "defaultValue": "1"
+        }
+      ],
+      "interfaceStatus": "declared"
+    }
+  ],
+  "simulationFolders": []
+}

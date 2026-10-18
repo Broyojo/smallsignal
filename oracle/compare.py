@@ -85,6 +85,9 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         items = (side.get("assume") or {}).get(key) or []
         if items:
             args += [flag, ",".join(f"{x['element']}:{x[field]}" for x in items)]
+    miller = (side.get("assume") or {}).get("miller") or []
+    if miller:
+        args += ["--miller", ",".join(x["element"] + (f":{x['term']}" if x.get("term") else "") for x in miller)]
     if requested(side, "distortion"):
         # ngspice is fully nonlinear, so every transistor and diode is selected.
         devices = [e.tokens[0] for e in spice.parse(cir.read_text()).elements if e.kind in "mqd"]
@@ -450,7 +453,24 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
     import indep
 
     applied = {(x["element"], x["term"]) for x in side["assume"].get("ignore", [])}
+    # Miller splits: K and the split rebuilt by indep.py, both compared.
+    mill = [(x["element"], x.get("term")) for x in side["assume"].get("miller", [])]
     cache: dict = {}
+    kfix: dict | None = None
+    if mill:
+        # K comes from the gain's model (its restored terms back) and serves
+        # every quantity, as in the solver.
+        back = {(r["element"], r["term"]) for r in ((got.get("gain") or {}).get("assumed") or {}).get("restored", [])}
+        gdrop = frozenset(applied - back)
+        ref = indep.build_and_solve(cir, want, "full", dps=30, drop=set(gdrop), miller=mill)
+        got_k = {f"{m['element'].lower()}:{m['term'] or ''}": m["k"]
+                 for m in (got.get("assumptions") or {}).get("miller", [])}
+        kfix = {}
+        for (el, term) in mill:
+            name = f"{el.lower()}:{term or ''}"
+            kfix[name] = ref[("miller", name)]
+            rep.real(f"miller.{name}.K", got_k.get(name), float(kfix[name]), "gain")
+        cache[gdrop] = ref
     equivalent = None
     if side.get("ngspiceEquivalent"):
         equivalent = json.loads((HERE / "expected" / f"{side['ngspiceEquivalent']}.json").read_text())
@@ -467,7 +487,7 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
             rep.failures.append(f"assumed.{q}.restored: got {sorted(restored)}, want {sorted(want_restored)}")
         drop = frozenset(applied - restored)
         if drop not in cache:
-            cache[drop] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop))
+            cache[drop] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), miller=mill, kvalues=kfix)
         ind = cache[drop]
         used: set[int] = set()
         for w in want[q]["values"]:
@@ -503,7 +523,8 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
         if q == "gain" and not side.get("tooLarge"):
             key = ("poles", drop)
             if key not in cache:
-                cache[key] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), want_system="poles")
+                cache[key] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), miller=mill,
+                                                kvalues=kfix, want_system="poles")
             for p in block.get("poles") or []:
                 a = p.get("assumed")
                 if a is None:

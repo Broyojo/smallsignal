@@ -133,6 +133,25 @@ class Case:
     `restored` lists the assumptions the solver must put back (per quantity,
     "M1:ro"), which the limit then leaves out."""
     restored: dict[str, list[str]] = field(default_factory=dict)
+    miller: "Miller | None" = None
+    """Miller splits passed as --miller; the gain's hand KCL is then the
+    split circuit's, in the symbol K."""
+
+
+@dataclass
+class Miller:
+    """A Miller split checked against hand analysis: the solver's K
+    definition against the hand DC ratio, and a pole of its split form
+    against the textbook one once K takes its textbook value."""
+    split: list[tuple[str, str | None]]
+    k: Callable[[], sp.Expr]
+    """Hand K = v_b/v_a at DC (exact)."""
+    pole: Callable[[], sp.Expr]
+    """A pole of the split model (rad/s), in K."""
+    k_textbook: Callable[[], sp.Expr]
+    """The textbook K (r_o → ∞), substituted into `pole`."""
+    textbook: Callable[[], sp.Expr]
+    """The textbook pole, e.g. −1/(R_S (C_gs + C_gd (1 + g_m R_D)))."""
 
 
 # --- hand derivations -------------------------------------------------------
@@ -284,6 +303,30 @@ def miller_bjt_device(ideal=False):
         vo / sym("RC") + (vo - vb) * s * cmu + ic,
     ]
     return solve(eqs, [vb, vo], vo)
+
+
+def miller_split_cs():
+    """The CS stage of miller_device with C_gd split: C_gd(1 − K) at the
+    gate, C_gd(K − 1)/K at the drain, K a symbol."""
+    vg, vo = sp.symbols("vg vo")
+    cgs, cgd, cdb, k = sym("cgs_M1"), sym("cgd_M1"), sym("cbd_M1"), sym("K_cgd_M1")
+    eqs = [
+        (vg - 1) / sym("RS") + vg * s * cgs + vg * s * cgd * (1 - k),
+        vo / sym("RD") + vo * s * cdb + vo * s * cgd * (k - 1) / k + mos("M1", vo, vg, 0),
+    ]
+    return solve(eqs, [vg, vo], vo)
+
+
+def miller_split_two_stage():
+    """Two transconductance stages with CC split: CC(1 − K) at n1,
+    CC(K − 1)/K at the output."""
+    v1, vo = sp.symbols("v1 vo")
+    cc, k = sym("CC"), sym("K_CC")
+    eqs = [
+        v1 / sym("R1") + v1 * s * sym("C1") + v1 * s * cc * (1 - k) + sym("G1"),
+        vo / sym("R2") + vo * s * sym("CL") + vo * s * cc * (k - 1) / k + sym("G2") * v1,
+    ]
+    return solve(eqs, [v1, vo], vo)
 
 
 def diffpair_mos_dm():
@@ -899,6 +942,35 @@ CASES: list[Case] = [
         "rlc\nVIN in 0\nR1 in a\nL1 a out\nC1 out 0\nRL out 0\n",
         "VIN", "out",
         gain=Quantity(rlc_gain), assume=[("L1", "short"), ("RL", "open")],
+    ),
+    # Miller splits: the CS input pole 1/(R_S (C_gs + C_gd (1 + g_m R_D))),
+    # and the two-stage dominant pole with C_C (1 + A_2).
+    Case(
+        "miller_split_cs",
+        "cs device caps\nVIN in 0\nRS in g\nVDD vdd 0\nRD vdd out\nM1 out g 0 0 nch W=10u L=1u AD=20p\n"
+        ".model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CJ=5e-4)\n",
+        "VIN", "out",
+        gain=Quantity(miller_split_cs),
+        miller=Miller(
+            split=[("M1", "cgd")],
+            k=lambda: -g * par(ro, RD),
+            pole=lambda: -1 / (RS * (sym("cgs_M1") + sym("cgd_M1") * (1 - sym("K_cgd_M1")))),
+            k_textbook=lambda: -g * RD,
+            textbook=lambda: -1 / (RS * (sym("cgs_M1") + sym("cgd_M1") * (1 + g * RD))),
+        ),
+    ),
+    Case(
+        "miller_split_2st",
+        "two stage\nVIN in 0\nG1 n1 0 in 0\nR1 n1 0\nC1 n1 0\nG2 out 0 n1 0\nR2 out 0\nCL out 0\nCC n1 out\n",
+        "VIN", "out",
+        gain=Quantity(miller_split_two_stage),
+        miller=Miller(
+            split=[("CC", None)],
+            k=lambda: -sym("G2") * sym("R2"),
+            pole=lambda: -1 / (sym("R1") * (sym("C1") + sym("CC") * (1 - sym("K_CC")))),
+            k_textbook=lambda: -sym("G2") * sym("R2"),
+            textbook=lambda: -1 / (sym("R1") * (sym("C1") + sym("CC") * (1 + sym("G2") * sym("R2")))),
+        ),
     ),
     Case(
         "assume_rlc_c_short",

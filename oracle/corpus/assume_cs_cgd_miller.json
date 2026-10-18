@@ -1,0 +1,29 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [
+  0,
+  1000,
+  1000000.0,
+  100000000.0,
+  1000000000.0,
+  10000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "assume": {
+  "miller": [
+   {
+    "element": "M1",
+    "term": "cgd"
+   }
+  ]
+ },
+ "restored": {
+  "gain": [],
+  "rin": [],
+  "rout": []
+ },
+ "description": "C_gd split into C_gd(1 - K) at g and C_gd(K - 1)/K at out, K = v(out)/v(g) at DC = -gm (ro || RD || rbd). The input pole is 1/(RS (C_gs + C_gd (1 - K))); the RHP zero gm/C_gd goes. Values stay the full model's."
+}

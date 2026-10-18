@@ -468,7 +468,7 @@ fn requests_are_validated() {
     let assumable = &v["assumable"];
     assert_eq!(
         assumable[0],
-        json!({ "element": "RD", "type": "resistor", "terms": ["open", "short"] })
+        json!({ "element": "RD", "type": "resistor", "terms": ["open", "short"], "miller": [] })
     );
     assert_eq!(assumable[1]["element"], "M1");
     assert_eq!(assumable[1]["terms"], json!(["ro", "rbd"]));

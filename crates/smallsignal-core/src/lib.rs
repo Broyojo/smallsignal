@@ -15,6 +15,7 @@ pub mod devices;
 pub mod distortion;
 pub mod gcd;
 pub mod linalg;
+pub mod miller;
 pub mod netlist;
 pub mod noise;
 pub mod pencil;

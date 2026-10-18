@@ -1,7 +1,9 @@
 import Certs.assume_bjt_ce_rpi
+import Certs.assume_cs_cgd_miller
 import Certs.assume_cs_isrc_ro
 import Certs.assume_cs_ro
 import Certs.assume_diffpair_matched
+import Certs.assume_ota_miller_cc
 import Certs.assume_ota_miller_ro
 import Certs.assume_rc_open
 import Certs.assume_rc_open_eq
