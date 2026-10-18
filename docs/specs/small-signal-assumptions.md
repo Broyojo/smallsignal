@@ -56,9 +56,10 @@ in its Assumptions section, and its Suggestions section applies
 - Certificates (`--certificate`) cover the gain's assumed element list.
 - Suggestions (`suggest`) need an operating point and are numeric only, so
   they hold over the term budget. A candidate is one unit not in effect
-  (a term of one element or matched group; not the other of open and
-  short), or one transistor type's term over all its units when it has
-  two or more (`scope: "type"`). Its `alone` is the `fullModelError`
+  (a term of one element or of a matched group the solver merged; not the
+  other of an open or short asked for, even one absent from the model),
+  or one transistor type's term over all its units when it has two or
+  more (`scope: "type"`). Its `alone` is the `fullModelError`
   metric, by LU on the model the analysis would build with it added to the
   current assumptions, restore included, on the same check grid. A
   candidate that changes what the quantity puts back is left out
@@ -68,9 +69,9 @@ in its Assumptions section, and its Suggestions section applies
   `combined` is the kept set's deviation; applied, it is the analysis's
   `assumed.maxRelError` to within the 1e-9 of a value that proven junction
   omissions allow.
-- Evaluation stops at `timeLimit` seconds (default 20) or after
-  `maxCandidates` (default 400, type-wide candidates first), and `capped`
-  says which.
+- Evaluation stops once `timeLimit` seconds (default 20; 0 evaluates
+  nothing) have passed, or after `maxCandidates` (default 400, type-wide
+  candidates first), and `capped` says which.
 
 ## Contract
 

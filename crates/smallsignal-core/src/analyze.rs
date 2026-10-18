@@ -883,6 +883,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             full: &full,
             op: op.as_ref(),
             matched: &matched,
+            accepted: accepted_groups(&symbols),
             current: req.assume.as_ref(),
             which,
             full_grid,
@@ -1162,8 +1163,11 @@ struct SuggestCtx<'a> {
     net: &'a Netlist,
     full: &'a SsCircuit,
     op: Option<&'a Op>,
-    /// The requested matched groups (before assumptions split any).
+    /// The requested matched groups (before assumptions split any), which
+    /// decide what is restored, as in `analyze`.
     matched: &'a [Vec<String>],
+    /// The groups the analysis merged into one symbol: a candidate's units.
+    accepted: Vec<Vec<String>>,
     current: Option<&'a crate::assume::AssumeRequest>,
     which: Which,
     full_grid: &'a Grid,
@@ -1233,10 +1237,17 @@ impl SuggestCtx<'_> {
         let (base_back, _) = self.model(&resolved, full_vanishes);
         let in_effect: Vec<(String, crate::assume::Term)> =
             resolved.applied.iter().map(|x| (x.element.clone(), x.term)).collect();
-        let (amatched, _) = consistent_groups(self.net, self.matched, &resolved);
+        // Asked for but absent (an open 0 F capacitor) still rules out its
+        // opposite: the request would be both open and short.
+        let taken: Vec<(String, crate::assume::Term)> = in_effect
+            .iter()
+            .cloned()
+            .chain(resolved.absent.iter().cloned())
+            .collect();
+        let (amatched, _) = consistent_groups(self.net, &self.accepted, &resolved);
         let cands = crate::suggest::candidates(
             &crate::assume::assumable_terms(self.net, self.full),
-            &in_effect,
+            &taken,
             element_groups(self.net, &amatched),
         );
         let eval = |extra: &[(String, crate::assume::Term)]| {
@@ -1260,6 +1271,18 @@ impl SuggestCtx<'_> {
         };
         crate::suggest::run(cands, threshold, limits, crate::clock::now_ms, eval)
     }
+}
+
+/// The matched groups `symbols` merged: the members of each symbol that
+/// stands for several elements, a group rejected as unlike left out.
+fn accepted_groups(symbols: &Symbols) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    for s in symbols.syms.iter().filter(|s| s.elements.len() > 1) {
+        if !out.contains(&s.elements) {
+            out.push(s.elements.clone());
+        }
+    }
+    out
 }
 
 /// "M1", "M1 and M2", "M1, M2 and M3".

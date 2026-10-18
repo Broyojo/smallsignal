@@ -137,6 +137,49 @@ fn candidates_are_matched_group_units() {
 }
 
 #[test]
+fn a_match_the_solver_rejects_gives_no_group_candidate() {
+    // M1 and M5 are both NMOS but biased apart: "differ, not matched".
+    let req = json!({
+        "input": "VIN", "output": "out", "freqs": [1e3, 1e6], "rout": true,
+        "match": [["M1", "M5"]],
+        "suggest": { "quantity": "gain" },
+    });
+    let v = check(OTA, req, "gain");
+    let w: Vec<&str> = v["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    assert!(w.iter().any(|w| w.contains("differ, not matched")), "{w:?}");
+    assert!(
+        !items(&v).iter().any(|it| it["scope"] == "group"),
+        "{}",
+        v["suggestions"]
+    );
+    // M5's r_o on its own, within 1% as without the match.
+    assert!(items(&v)
+        .iter()
+        .any(|it| it["term"] == "ro" && it["elements"] == json!(["M5"])));
+}
+
+#[test]
+fn an_absent_open_rules_out_its_short() {
+    // C0 is 0 F: open is absent from the model, short is assumable.
+    let net = "cs\nVDD vdd 0 1.8\nVIN in 0 DC 0.8 AC 1\nRD vdd out 10k\nM1 out in 0 0 nch W=10u L=1u\n\
+C0 out 0 0\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n";
+    let base = json!({ "input": "VIN", "output": "out", "freqs": [1e3], "suggest": { "quantity": "gain" } });
+    let plain = run(net, &request(base.clone()));
+    let mut req = base;
+    req["assume"] = json!({ "ignore": [{ "element": "C0", "term": "open" }] });
+    let v = run(net, &request(req));
+    assert_eq!(v["assumptions"]["absent"], json!([{ "element": "C0", "term": "open" }]));
+    let (s, p) = (&v["suggestions"], &plain["suggestions"]);
+    assert_eq!(s["unbounded"], 0, "{s}");
+    assert_eq!(s["candidates"].as_u64().unwrap() + 1, p["candidates"].as_u64().unwrap());
+}
+
+#[test]
 fn the_current_assumptions_are_the_base() {
     let assume = json!({ "ignore": [
         { "element": "M5", "term": "ro" },

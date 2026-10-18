@@ -204,7 +204,10 @@ pub fn run(
     mut eval: impl FnMut(&[(String, Term)]) -> Outcome,
 ) -> Report {
     let start = now();
-    let out_of_time = || matches!((start, now()), (Some(s), Some(t)) if t - s > limits.time_ms);
+    // Inclusive, and a zero limit stops at once: a millisecond clock (the
+    // WASM host's Date.now) often reads the same value twice.
+    let out_of_time =
+        || limits.time_ms <= 0.0 || matches!((start, now()), (Some(s), Some(t)) if t - s >= limits.time_ms);
     let base = match eval(&[]) {
         Outcome::Deviation(d) if !d.is_nan() => Some(d),
         _ => None,
@@ -430,5 +433,24 @@ mod tests {
         );
         assert_eq!((r.capped, r.evaluated), (Some("time"), 0));
         assert!(r.items.is_empty());
+    }
+
+    #[test]
+    fn a_zero_time_limit_evaluates_nothing_on_a_coarse_clock() {
+        // Date.now() in WASM: start and the first check in one millisecond.
+        let cands = candidates(&assumable(), &[], |e: &str| e.to_string());
+        for clock in [Some(1000.0), None] {
+            let r = run(
+                cands.clone(),
+                0.01,
+                Limits {
+                    time_ms: 0.0,
+                    candidates: 100,
+                },
+                || clock,
+                additive(&[]),
+            );
+            assert_eq!((r.capped, r.evaluated), (Some("time"), 0), "{clock:?}");
+        }
     }
 }
