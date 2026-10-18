@@ -473,10 +473,14 @@ AGREEMENT_RTOL = 1e-6
 
 def sweep_freqs(spec: list[float]) -> list[float]:
     """Sidecar `sweep` [fLow, fHigh, perDecade]: the solver's swept
-    frequencies, fLow·10^(k/perDecade) for k = 0..n."""
+    frequencies (sweep.rs `grid`), fLow·10^(k/perDecade) up to fHigh, then
+    fHigh itself when those end short of it."""
     lo, hi, per = float(spec[0]), float(spec[1]), int(spec[2])
-    n = max(1, round(math.log10(hi / lo) * per))
-    return [lo * 10 ** (k / per) for k in range(n + 1)]
+    steps = math.floor(math.log10(hi / lo) * per + 1e-9)
+    freqs = [lo * 10 ** (k / per) for k in range(steps + 1)]
+    if freqs[-1] < hi * (1 - 1e-9):
+        freqs.append(hi)
+    return freqs
 
 
 def cval(f: float, z: complex | None) -> dict:

@@ -135,8 +135,9 @@ is JSON, or `{"error": "..."}` on failure.
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
 - `rout`: the impedance at out/ref with every independent source zeroed.
 - `sweep` (`{fLow?, fHigh?, perDecade?}`, `sweep.rs`): the frequencies
-  fLow·10^(k/perDecade) up to fHigh (perDecade 1 to 100, default 20, at
-  most 20 decades). Without fLow and fHigh, whole decades from one below
+  fLow·10^(k/perDecade) up to fHigh, then fHigh itself when they end short
+  of it, never past it (perDecade 1 to 100, default 20, at most 20
+  decades). Without fLow and fHigh, whole decades from one below
   the lowest to one above the highest of the full model's natural
   frequencies (|root| of det A, every source zeroed) and the requested
   `freqs`, or 1 Hz to 100 GHz when it has none. The response's `sweep`

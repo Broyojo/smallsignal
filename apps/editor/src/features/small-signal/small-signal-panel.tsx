@@ -1069,6 +1069,21 @@ function MillerNote({ splits }: { splits: readonly MillerReport[] }) {
   );
 }
 
+/**
+ * Whether a card shows the ≈ form: as its own row, or as the lead itself
+ * when that is the leakage-free display form written "≈" and the
+ * simplified form is the same one. Its curve is plotted whenever it is.
+ */
+export function approxShown(quantity: SmallSignalQuantity): boolean {
+  const { display, simplified, exact } = quantity;
+  if (!simplified || simplified.same || simplified.latex === null) return false;
+  const shown =
+    display && !display.same && display.latex !== null ? display : null;
+  const lead = shown?.latex ?? exact?.latex;
+  if (simplified.latex !== lead) return true;
+  return shown !== null && (shown.maxRelError ?? 0) >= INVISIBLE_ERROR;
+}
+
 /** Shown once, on the first result whose formula is over the budget. */
 const NO_FORMULA_NOTE = "Formula too large to derive. Try a smaller block.";
 
@@ -1199,7 +1214,7 @@ function QuantityCard({
           curves={{
             full: quantity.sweep?.full,
             assumed: assumed ? quantity.sweep?.assumed : null,
-            approx: simpler ? quantity.sweep?.approx : null,
+            approx: approxShown(quantity) ? quantity.sweep?.approx : null,
           }}
           ohms={unit === "Ω"}
           poles={quantity.poles}
@@ -2076,7 +2091,10 @@ function BiasTable({
               {row.name}
               {showRegion ? (
                 // At phone width the region sits under the name instead.
-                <span className="small-signal-bias-inline" aria-hidden="true">
+                // Only one of the two copies is displayed at a time, and the
+                // other is display: none, so each width has one for
+                // assistive technology.
+                <span className="small-signal-bias-inline">
                   {regionPill(row)}
                 </span>
               ) : null}
@@ -3223,7 +3241,8 @@ export function operatingPointLabels(
           netlist.terminals[terminal.instanceId]?.[terminal.pinName],
       )
       .find(Boolean);
-    if (!node || node === "0" || netlist.supplies.includes(node)) continue;
+    // Every rail the drawing marks, whatever drives it.
+    if (!node || node === "0" || netlist.rails.includes(node)) continue;
     const wires = (document?.routes ?? [])
       .filter((route) => route.netId === net.id)
       .map((route) => route.id);

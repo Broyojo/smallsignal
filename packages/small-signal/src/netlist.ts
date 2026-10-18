@@ -198,6 +198,9 @@ export interface SmallSignalNetlist {
   notes: string[];
   /** Supply nets drawn with a VDD symbol and driven by an added DC source. */
   supplies: string[];
+  /** Every supply rail the drawing marks (VDD symbols, supply and ground
+   * rail nets), driven by an added source or a drawn one. */
+  rails: string[];
   /**
    * Pins the drawing leaves unconnected, as `R1.1`. Touching parts are not
    * connected in Analog Canvas (only wires connect), and an open pin makes
@@ -762,6 +765,7 @@ function translate(
     missing,
     notes,
     supplies,
+    rails: [...supplyNets].filter((net) => nets.has(net)).sort(),
     unconnected,
     unknownBias,
     models: [...usedModels],

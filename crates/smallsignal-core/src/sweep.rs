@@ -28,8 +28,9 @@ pub struct SweepRequest {
     pub per_decade: Option<u32>,
 }
 
-/// The swept frequencies: f_k = fLow·10^(k/perDecade), k = 0…n, n the
-/// decades times perDecade rounded.
+/// The swept frequencies: f_k = fLow·10^(k/perDecade) for every k whose
+/// f_k is within fHigh, then fHigh itself when the last of those falls
+/// short of it (a band that is not whole steps). Never past fHigh.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sweep {
     pub f_low: f64,
@@ -69,10 +70,7 @@ impl SweepRequest {
             (Some(lo), Some(hi)) => (lo, hi),
             _ => auto_band(roots_hz, freqs),
         };
-        let n = ((f_high / f_low).log10() * per_decade as f64).round().max(1.0) as u32;
-        let freqs = (0..=n)
-            .map(|k| f_low * 10f64.powf(k as f64 / per_decade as f64))
-            .collect();
+        let freqs = grid(f_low, f_high, per_decade);
         Sweep {
             f_low,
             f_high,
@@ -80,6 +78,18 @@ impl SweepRequest {
             freqs,
         }
     }
+}
+
+/// Whole steps up to fHigh (a step a rounding error short of it counts),
+/// then fHigh when they end short of it.
+fn grid(f_low: f64, f_high: f64, per_decade: u32) -> Vec<f64> {
+    let per = per_decade as f64;
+    let steps = ((f_high / f_low).log10() * per + 1e-9).floor() as u32;
+    let mut freqs: Vec<f64> = (0..=steps).map(|k| f_low * 10f64.powf(k as f64 / per)).collect();
+    if freqs.last().is_some_and(|&last| last < f_high * (1.0 - 1e-9)) {
+        freqs.push(f_high);
+    }
+    freqs
 }
 
 fn auto_band(roots_hz: &[f64], freqs: &[f64]) -> (f64, f64) {
@@ -153,6 +163,31 @@ mod tests {
         assert_eq!(s.freqs[0], 10.0);
         assert!((s.freqs[12] / 1e4 - 1.0).abs() < 1e-12);
         assert!((s.freqs[1] / (10.0 * 10f64.powf(0.25)) - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn a_band_of_part_steps_ends_at_fhigh_not_past_it() {
+        let at = |lo, hi, per| {
+            SweepRequest {
+                f_low: Some(lo),
+                f_high: Some(hi),
+                per_decade: Some(per),
+            }
+            .resolve(&[], &[])
+            .freqs
+        };
+        assert_eq!(at(10.0, 15.0, 1), vec![10.0, 15.0]);
+        let f = at(1.0, 50.0, 2);
+        assert_eq!(f.len(), 5);
+        assert!((f[3] / 10f64.powf(1.5) - 1.0).abs() < 1e-15);
+        assert_eq!(f[4], 50.0);
+        // Whole steps keep their own last point, fHigh to rounding.
+        let f = at(100.0, 1e10, 10);
+        assert_eq!(f.len(), 81);
+        assert!((f[80] / 1e10 - 1.0).abs() < 1e-12);
+        for (lo, hi, per) in [(10.0, 15.0, 1), (1.0, 50.0, 2), (3.0, 7e5, 7)] {
+            assert!(at(lo, hi, per).iter().all(|&x| x >= lo && x <= hi * (1.0 + 1e-12)));
+        }
     }
 
     #[test]

@@ -1661,9 +1661,13 @@ test("bias table: at phone width it fits its card", async ({ page }) => {
     (element) => element.scrollWidth <= element.parentElement!.clientWidth,
   );
   expect(fits).toBe(true);
-  // A device off its amplifying region still says so, under its name.
+  // A device off its amplifying region still says so, under its name, and
+  // to a screen reader too.
   await expect(
     table.locator('tr[data-device="Q15"] th .small-signal-region'),
+  ).toBeVisible();
+  await expect(
+    table.getByRole("rowheader", { name: "Q15 cutoff", exact: true }),
   ).toBeVisible();
 });
 
