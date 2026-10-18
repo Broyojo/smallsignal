@@ -61,7 +61,12 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   operating point (C removed, L as a 0 V source); its ngspice values must
   equal the assumed ones. Assumption limits in symbolic form:
   `textbook_cases.py` cases with `assume`, checked against `sp.limit` of
-  the hand KCL.
+  the hand KCL. A MOSFET region (`assume.regions`) is rebuilt by
+  `indep.forced_mos`: ngspice's level-1 equations of that region at
+  ngspice's own bias, with its Meyer capacitances. The solver's `effect`
+  must be its verdict (`"regionEffect": {"M1": "refused"}` pins it) and
+  its `linearized` g_m, g_ds, g_mb its values. ngspice cannot impose a
+  region, so no ngspice equivalent exists.
 - Sidecar `"suggest": {"quantity", "threshold"}`: the CLI gets `--suggest`.
   Every item must be within the threshold, and the greedy set applied on
   top of the sidecar's `assume` must solve to an `assumed.maxRelError`

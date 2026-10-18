@@ -136,6 +136,13 @@ class Case:
     `restored` lists the assumptions the solver must put back (per quantity,
     "M1:ro"), which the limit then leaves out."""
     restored: dict[str, list[str]] = field(default_factory=dict)
+    regions: list[tuple[str, str]] = field(default_factory=list)
+    """Regions passed as --region (symbolic and numeric runs). In numeric
+    mode the assumed values must equal the hand form at the parameters the
+    solver reports, and those must be `linearized`'s."""
+    linearized: dict[str, Callable[[dict], dict[str, float]]] = field(default_factory=dict)
+    """Per imposed device, its {gm_M1: …, ro_M1: …} by hand from its op
+    entry (vgs, vds): the imposed region's level-1 equations."""
     miller: "Miller | None" = None
     """Miller splits passed as --miller; the gain's hand KCL is then the
     split circuit's, in the symbol K."""
@@ -638,7 +645,44 @@ def assume_limit(e: sp.Expr, assume: list[tuple[str, str]]) -> sp.Expr:
     return sp.simplify(e)
 
 
+def inverter_kcl(which: str) -> sp.Expr:
+    """CMOS inverter, both gates driven, each source on a rail (AC ground):
+    KCL at out, gm1·v_in + v_out/ro1 + gm2·v_in + v_out/ro2 = i_test."""
+    vout, vin, itest = sp.symbols("vout vin itest")
+    eq = sp.Eq(g * vin + vout / ro1 + g2 * vin + vout / ro2, itest)
+    if which == "gain":
+        return sp.solve(eq.subs({vin: 1, itest: 0}), vout)[0]
+    return sp.solve(eq.subs({vin: 0, itest: 1}), vout)[0]
+
+
+def saturated_nmos(kp_wl: float, vto: float, lam: float, name: str):
+    """Level-1 saturation at a device's bias, whatever region it is in:
+    gm = β(1 + λ·V_DS)(V_GS − V_TO), ro = 2/(λβ(V_GS − V_TO)²)."""
+    def at(d: dict) -> dict[str, float]:
+        vov = d["vgs"] - vto
+        return {f"gm_{name}": kp_wl * (1 + lam * d["vds"]) * vov, f"ro_{name}": 2 / (lam * kp_wl * vov**2)}
+    return at
+
+
 CASES: list[Case] = [
+    Case(
+        "inverter_forced_saturation",
+        "inverter\nVDD vdd 0\nVIN in 0\nM1 out in 0 0\nM2 out in vdd vdd\n",
+        "VIN", "out",
+        gain=Quantity(lambda: inverter_kcl("gain"), closed=lambda: -(g + g2) * par(ro1, ro2),
+                      lead=lambda: -(g + g2) * par(ro1, ro2)),
+        rout=Quantity(lambda: inverter_kcl("rout"), closed=lambda: par(ro1, ro2), lead=lambda: par(ro1, ro2)),
+        parallel=["rout"],
+        # M1 is in triode at V_IN = 1.1 V; saturation imposed gives the
+        # saturated inverter's hand form at that bias.
+        regions=[("M1", "saturation")],
+        numeric_netlist="inverter\n.options gmin=1e-18\nVDD vdd 0 1.8\nVIN in 0 DC 1.1 AC 1\n"
+        "M1 out in 0 0 nm W=10u L=1u\nM2 out in vdd vdd pm W=20u L=1u\n"
+        # IS tiny: M1's drain junction, 40 mV reverse biased, would leak.
+        ".model nm nmos (level=1 kp=200u vto=0.5 lambda=0.1 is=1e-24)\n"
+        ".model pm pmos (level=1 kp=100u vto=-0.5 lambda=0.1 is=1e-24)\n",
+        linearized={"M1": saturated_nmos(200e-6 * 10, 0.5, 0.1, "M1")},
+    ),
     Case(
         "cs_rd",
         "cs\nVIN in 0\nVDD vdd 0\nRD vdd out\nM1 out in 0 0\n",

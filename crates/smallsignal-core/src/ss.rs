@@ -400,7 +400,15 @@ pub fn device_caps(e: &crate::netlist::Element, op: &Op, ei: usize) -> Vec<DevCa
         ) => {
             let (d, g, s, b) = (n[0], n[1], n[2], n[3]);
             let ty = model.ty;
-            let c = crate::caps::mos_caps(model, *w, *l, *mult, geom, (ty * m.vgs, ty * m.vds, ty * m.vbs));
+            let c = crate::caps::mos_caps_in(
+                model,
+                *w,
+                *l,
+                *mult,
+                geom,
+                (ty * m.vgs, ty * m.vds, ty * m.vbs),
+                m.imposed,
+            );
             vec![
                 cap("cgs", g, s, c.cgs),
                 cap("cgd", g, d, c.cgd),

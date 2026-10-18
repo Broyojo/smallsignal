@@ -79,8 +79,10 @@ pub fn certificate(text: &str, req: &Request) -> Result<Value, String> {
     // Under assumptions, the element list the gain's forms are built on.
     let ssc = match &req.assume {
         Some(r) => {
-            let a = crate::assume::resolve(&net, &full, op.as_ref(), r)?;
-            crate::analyze::gain_model(&net, &full, &a, &Excite::Source(input), &req.matched)
+            let imposed = crate::analyze::region_model(&net, op.as_ref(), &linear, Some(r))?;
+            let base = imposed.as_ref().map_or(&full, |(_, m)| m);
+            let a = crate::assume::resolve(&net, base, op.as_ref(), r)?;
+            crate::analyze::gain_model(&net, base, &a, &Excite::Source(input), &req.matched)
         }
         None => full,
     };

@@ -1081,6 +1081,9 @@ pub fn spectrum(points: &[(f64, Option<f64>)]) -> Value {
 pub struct Ctx<'a> {
     pub net: &'a Netlist,
     pub op: Option<&'a Op>,
+    /// The operating point `model` is linearized at when it imposes a
+    /// region (`assume::region_op`): its sources' values. None: `op`.
+    pub model_op: Option<&'a Op>,
     /// Every junction kept, no assumption: the numeric spectra always use it.
     pub full: &'a SsCircuit,
     /// The model the closed form describes, every junction kept: `full`
@@ -1205,8 +1208,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             v
         })
         .collect();
-    // The closed form's sources: those the assumptions keep.
-    let kept: Vec<Source> = srcs.iter().filter(|s| !is_ignored(s)).cloned().collect();
+    // The closed form's sources: those the assumptions keep, at the model's
+    // linearization (an imposed region's g_m).
+    let msrcs = match c.model_op {
+        Some(mop) => sources(c.net, Some(mop)),
+        None => srcs.clone(),
+    };
+    let kept: Vec<Source> = msrcs.iter().filter(|s| !is_ignored(s)).cloned().collect();
     let symbolic = c.op.is_none();
 
     // Closed form at s → 0.

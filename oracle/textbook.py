@@ -60,6 +60,8 @@ def run(netlist: str, case: Case, extra: list[str]) -> dict:
         for q in ("rin", "rout"):
             if getattr(case, q):
                 args.append(f"--{q}")
+        if case.regions:
+            args += ["--region", ",".join(f"{e}:{r}" for e, r in case.regions)]
         proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
     finally:
         os.unlink(path)
@@ -225,6 +227,17 @@ def check_case(case: Case, verbose: bool) -> list[str]:
     if case.numeric_netlist:
         nd = run(case.numeric_netlist, case, ["--freq", "1e3,1e6"])
         values = {sp.Symbol(p["name"]): p["value"] for p in nd["params"]}
+        # An imposed region: the forms' parameters are that region's level-1
+        # values at the bias, and the forms' (assumed) values are compared.
+        for el, at in case.linearized.items():
+            for name, want in at(nd["op"]["devices"][el]).items():
+                got = values.get(sp.Symbol(name))
+                if got is None or abs(got - want) > 1e-12 * abs(want):
+                    fails.append(f"numeric {name}: solver {got} vs hand {want}")
+        for el, region in case.regions:
+            r = next((x for x in nd["assumptions"]["regions"] if x["element"] == el), None)
+            if r is None or r["effect"] != "imposed" or r["assumed"] != region:
+                fails.append(f"numeric {el}: region {r}, want {region} imposed")
         for qname in case.parallel:
             latex = nd[qname]["exact"]["latex"]
             if "\\parallel" not in latex:
@@ -234,7 +247,8 @@ def check_case(case: Case, verbose: bool) -> list[str]:
             if q is None or nd[qname].get("infinite"):
                 continue
             hand = sp.sympify(q.hand())
-            for v in nd[qname]["values"]:
+            shown = nd[qname]["assumed"]["values"] if case.regions else nd[qname]["values"]
+            for v in shown:
                 h = complex(hand.subs(values).subs(s, 2j * sp.pi * v["f"]).evalf())
                 g = complex(v["re"], v["im"])
                 if abs(h - g) > 1e-9 * max(abs(h), 1e-30):

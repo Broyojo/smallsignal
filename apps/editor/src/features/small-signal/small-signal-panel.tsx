@@ -18,7 +18,6 @@ import {
 } from "@icm/math-typesetting/cache";
 import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
-  ASSUMPTION_REGIONS,
   ASSUMPTION_TERMS,
   CAPACITANCE_PARAMETERS,
   createSmallSignalClient,
@@ -48,6 +47,7 @@ import {
   type AssumptionTerm,
   type MillerReport,
   type RootPair,
+  type RegionReport,
   type SmallSignalAssumptionReport,
   type SmallSignalElement,
   type SmallSignalApprox,
@@ -70,6 +70,7 @@ import {
   saveDefaults,
   sameChoices,
   storeCircuit,
+  takesRegion,
   touchCircuit,
   TRANSISTOR_TYPES,
   withDefault,
@@ -80,7 +81,21 @@ import {
   type AssumptionDefaults,
   type CircuitAssumptions,
   type MillerTerm,
+  type RegionChoice,
 } from "./small-signal-assumption-store";
+import {
+  CanvasBadges,
+  DeviceMenu,
+  instanceHit,
+  termText,
+  useInstanceRects,
+  type CanvasBadge,
+  type DeviceMenuActions,
+  type DeviceMenuModel,
+  type DeviceMenuStatus,
+  type MenuToggle,
+  type PassiveChoice,
+} from "./small-signal-device-menu";
 import {
   browserStaleBuildRecovery,
   diagnoseModuleLoadFailure,
@@ -874,11 +889,21 @@ function AssumedTable({
   );
 }
 
-/** Whether the forms are the assumed model's: anything neglected or split. */
+/**
+ * Whether the forms are the assumed model's: anything neglected, split or
+ * linearized in a region imposed on the bias. Without a bias a declared
+ * region already shapes the full model's forms.
+ */
 export function anyAssumed(
   report: SmallSignalAssumptionReport | undefined,
 ): boolean {
-  return Boolean(report?.applied.length || report?.miller?.length);
+  return Boolean(
+    report?.applied.length ||
+    report?.miller?.length ||
+    report?.regions?.some(
+      (region) => region.effect === "imposed" && region.actual !== null,
+    ),
+  );
 }
 
 /** C_C for capacitor CC, C_gd2 for C_gd of M2: as the equations write it. */
@@ -939,6 +964,7 @@ function QuantityCard({
   noFormulaNote = false,
   assumed,
   miller,
+  regions,
 }: {
   title: string;
   symbol: string;
@@ -950,7 +976,10 @@ function QuantityCard({
   assumed?: AssumedQuantity | undefined;
   /** The Miller splits the assumed forms are exact for. */
   miller?: readonly MillerReport[] | undefined;
+  /** The regions the forms impose ("M1 assumed saturated"). */
+  regions?: readonly RegionReport[] | undefined;
 }) {
+  const imposed = assumed ? regionNote(regions) : null;
   // The simpler form appears only when it actually dropped terms, and never
   // repeats the form above it (an assumption can leave nothing to drop).
   const display = quantity.display;
@@ -1037,6 +1066,11 @@ function QuantityCard({
           {none}
         </>
       )}
+      {imposed ? (
+        <small className="small-signal-region-note" data-region-note>
+          {imposed}
+        </small>
+      ) : null}
       {assumed && miller?.length ? <MillerNote splits={miller} /> : null}
       {assumed && quantity.values?.length ? (
         <AssumedTable values={quantity.values} assumed={assumed} unit={unit} />
@@ -1783,16 +1817,21 @@ function NoiseDetails({
 /**
  * The bias point as a table: per transistor its region and the three numbers
  * the equations use (current, g_m, r_o, a triode channel's R_on in its
- * place; r_π too when there are BJTs).
+ * place; r_π too when there are BJTs). A MOSFET with a region imposed shows
+ * that region's g_m and r_o, marked assumed, with the bias's region.
  */
 function BiasTable({
   devices,
+  regions,
 }: {
   devices: Array<[string, DeviceOperatingPoint]>;
+  regions?: readonly RegionReport[] | undefined;
 }) {
   interface Row {
     name: string;
     region: string;
+    /** Imposed: the bias's own region, which `region` replaces. */
+    bias?: string;
     current: number;
     gm: number;
     ro: number;
@@ -1804,6 +1843,23 @@ function BiasTable({
   const rows = devices.flatMap(([name, device]): Row[] => {
     if (device.type === "nmos" || device.type === "pmos") {
       const m = device as MosOperatingPoint;
+      const imposed = regions?.find(
+        (r) => r.element === name && r.effect === "imposed",
+      )?.linearized;
+      const assumed = regions?.find((r) => r.element === name)?.assumed;
+      if (imposed && assumed)
+        return [
+          {
+            name,
+            region: assumed,
+            bias: m.region,
+            current: Math.abs(m.id),
+            gm: imposed.gm,
+            ro: imposed.gds > 0 ? 1 / imposed.gds : Infinity,
+            ron: assumed === "triode",
+            rpi: null,
+          },
+        ];
       return [
         {
           name,
@@ -1835,7 +1891,9 @@ function BiasTable({
   // The status line already says when every transistor is saturated
   // (BJTs active); the column only appears when one is not.
   const showRegion = rows.some(
-    (row) => row.region !== "saturation" && row.region !== "active",
+    (row) =>
+      row.bias !== undefined ||
+      (row.region !== "saturation" && row.region !== "active"),
   );
   const ohms = (value: number) =>
     Number.isFinite(value) ? formatEngineering(value, "Ω") : "∞";
@@ -1869,10 +1927,17 @@ function BiasTable({
           <tr key={row.name} data-device={row.name}>
             <th scope="row">{row.name}</th>
             {showRegion ? (
-              <td>
-                <span className={`small-signal-region is-${row.region}`}>
+              <td data-quantity="region">
+                <span
+                  className={`small-signal-region is-${row.region}${row.bias === undefined ? "" : " is-assumed"}`}
+                >
                   {row.region}
                 </span>
+                {row.bias === undefined ? null : (
+                  <small className="small-signal-bias-region">
+                    assumed, bias {row.bias}
+                  </small>
+                )}
               </td>
             ) : null}
             <td data-quantity="id">{formatEngineering(row.current, "A")}</td>
@@ -1985,11 +2050,6 @@ function ColumnSymbol({ column }: { column: string }) {
     </>
   );
 }
-
-const REGION_LABEL: Record<string, string> = {
-  "forward-active": "active",
-  "reverse-active": "reverse",
-};
 
 interface AssumptionMember {
   name: string;
@@ -2169,6 +2229,232 @@ export function assumptionColumnChange(
   return { parts: next };
 }
 
+/**
+ * A passive's open, short or Miller choice (none: ""), replacing the
+ * others; as the table's select and the device menu set it.
+ */
+export function passiveChange(
+  parts: CircuitAssumptions,
+  path: string,
+  type: AssumableType,
+  choice: PassiveChoice,
+  defaults: AssumptionDefaults,
+): CircuitAssumptions {
+  const cleared = withMiller(
+    withTerms(parts, path, type, ["open", "short"], false, defaults),
+    path,
+    null,
+    false,
+  );
+  if (choice === "miller") return withMiller(cleared, path, null, true);
+  return choice
+    ? withTerms(cleared, path, type, [choice], true, defaults)
+    : cleared;
+}
+
+/** A passive's current choice: Miller, open, short or none. */
+function passiveValue(
+  member: AssumptionMember,
+  { defaults, parts }: AssumptionChoices,
+): PassiveChoice {
+  const part = parts[member.path];
+  if (member.miller.includes(null) && isMiller(null, part)) return "miller";
+  if (isIgnored(member.type, "open", part, defaults)) return "open";
+  if (isIgnored(member.type, "short", part, defaults)) return "short";
+  return "";
+}
+
+/** Device menus: transistors, capacitors and diodes. */
+export function hasDeviceMenu(type: string): boolean {
+  return isTransistor(type) || type === "capacitor" || type === "diode";
+}
+
+/**
+ * The device menu of a table row (a part, or a matched group with its
+ * shared choices): every term the solver lists for it, leakage as one, a
+ * Miller split where offered, a passive's open or short, a MOSFET's region.
+ */
+export function deviceMenuModel(
+  row: AssumptionRow,
+  clicked: string,
+  choices: AssumptionChoices,
+): DeviceMenuModel {
+  const { defaults, parts } = choices;
+  const members = row.members;
+  const tally = (flags: boolean[]) => {
+    const on = flags.filter(Boolean).length;
+    return {
+      on: on > 0 && on === flags.length,
+      mixed: on > 0 && on < flags.length,
+    };
+  };
+  const defaulted = (term: AssumptionTerm) =>
+    isTransistor(row.type) &&
+    (defaults[row.type]?.includes(term) ?? false) &&
+    members.every((member) => parts[member.path]?.ignore?.[term] === undefined);
+  const neglect: MenuToggle[] = [];
+  const passive = !isTransistor(row.type);
+  for (const term of ASSUMPTION_TERMS[row.type]) {
+    if (term === "open" || term === "short") continue;
+    const having = members.filter((member) => member.terms.includes(term));
+    if (!having.length) continue;
+    const id = LEAKAGE_TERMS.has(term) ? "leakage" : term;
+    if (neglect.some((item) => item.id === id)) continue;
+    const terms =
+      id === "leakage"
+        ? ASSUMPTION_TERMS[row.type].filter((t) => LEAKAGE_TERMS.has(t))
+        : [term];
+    const flags = members.flatMap((member) =>
+      member.terms
+        .filter((t) => terms.includes(t))
+        .map((t) => isIgnored(row.type, t, parts[member.path], defaults)),
+    );
+    neglect.push({
+      id,
+      ...tally(flags),
+      inherited: terms.every(defaulted) && flags.every(Boolean),
+    });
+  }
+  const order = (id: string) => {
+    const at = MENU_ORDER.indexOf(id);
+    return at < 0 ? MENU_ORDER.length : at;
+  };
+  neglect.sort((a, b) => order(a.id) - order(b.id));
+  const miller = isTransistor(row.type)
+    ? MILLER_TERMS.filter((term) =>
+        members.every((member) => member.miller.includes(term)),
+      ).map((term) => ({
+        term,
+        ...tally(members.map((member) => isMiller(term, parts[member.path]))),
+      }))
+    : [];
+  const first = members[0];
+  const regions = members.map((member) => parts[member.path]?.region ?? "");
+  return {
+    label: row.label,
+    typeLabel: TYPE_LABEL[row.type] ?? row.type,
+    matchedWith: members
+      .map((member) => member.name)
+      .filter((name) => name !== clicked && members.length > 1),
+    defaultsLabel: isTransistor(row.type)
+      ? `All ${MODEL_TITLE[row.type]}`
+      : null,
+    neglect,
+    miller,
+    passive:
+      passive && first
+        ? {
+            value: passiveValue(first, choices),
+            options: [
+              "",
+              "open",
+              "short",
+              ...(first.miller.includes(null) ? (["miller"] as const) : []),
+            ],
+          }
+        : null,
+    region: takesRegion(row.type)
+      ? regions.every((region) => region === regions[0])
+        ? (regions[0] ?? "")
+        : ""
+      : null,
+  };
+}
+
+/** Terms in hand-analysis order in the device menu. */
+const MENU_ORDER = [
+  "ro",
+  "gmb",
+  "rpi",
+  "leakage",
+  "cgs",
+  "cgd",
+  "cgb",
+  "cbd",
+  "cbs",
+  "cpi",
+  "cmu",
+  "ccs",
+  "cj",
+];
+
+const TYPE_LABEL: Record<string, string> = {
+  ...MODEL_TITLE,
+  capacitor: "Capacitor",
+  resistor: "Resistor",
+  inductor: "Inductor",
+};
+
+/** "assumed saturated" / "assumed in triode": a card's region note. */
+export function regionNote(
+  regions: readonly RegionReport[] | undefined,
+): string | null {
+  const imposed = (regions ?? []).filter(
+    (r) => r.effect === "imposed" && r.actual !== null,
+  );
+  const group = (region: string, text: string) => {
+    const names = imposed
+      .filter((r) => r.assumed === region)
+      .map((r) => r.element);
+    return names.length ? `${names.join(", ")} assumed ${text}` : null;
+  };
+  const notes = [
+    group("saturation", "saturated"),
+    group("triode", "in triode"),
+  ].filter(Boolean);
+  return notes.length ? notes.join(". ") : null;
+}
+
+/**
+ * A part's canvas badge, when anything is assumed for it: its region,
+ * else its passive choice, else "≈"; null with nothing in effect.
+ */
+export function deviceBadge(
+  member: AssumptionMember,
+  choices: AssumptionChoices,
+  report: RegionReport | undefined,
+): CanvasBadge | null {
+  if (member.instanceId === null || !hasDeviceMenu(member.type)) return null;
+  const { defaults, parts } = choices;
+  const part = parts[member.path];
+  const neglected = member.terms.filter(
+    (term) =>
+      term !== "open" &&
+      term !== "short" &&
+      isIgnored(member.type, term, part, defaults),
+  );
+  const splits = member.miller.filter(
+    (term) => term !== null && isMiller(term, part),
+  );
+  const passive = isTransistor(member.type)
+    ? ""
+    : passiveValue(member, choices);
+  const region = takesRegion(member.type) ? (part?.region ?? "") : "";
+  if (!neglected.length && !splits.length && !passive && !region) return null;
+  const said: string[] = [];
+  if (region) said.push(`${region} assumed`);
+  if (passive === "miller") said.push("Miller split");
+  else if (passive) said.push(passive);
+  if (neglected.length)
+    said.push(`${neglected.map(termText).join(", ")} neglected`);
+  for (const term of splits) said.push(`Miller ${termText(term ?? "")}`);
+  return {
+    instanceId: member.instanceId,
+    element: member.name,
+    text: region
+      ? region === "saturation"
+        ? "sat"
+        : "triode"
+      : passive === "miller"
+        ? "Miller"
+        : passive || "≈",
+    description: `${member.name}: ${said.join(", ")}`,
+    warn:
+      report?.effect === "refused" ||
+      (report?.effect === "imposed" && report.actual !== null),
+  };
+}
+
 /** The last answer, only for the circuit (Cell) it answered. */
 export function resultForCircuit<T>(
   last: { circuit: string; result: T } | null,
@@ -2179,9 +2465,9 @@ export function resultForCircuit<T>(
 
 /**
  * Per-device assumptions: checked terms are neglected, a passive is taken
- * open or shorted, and a region is checked against the bias, never imposed.
- * A type row sets the default for every circuit; a matched group's members
- * share one setting.
+ * open or shorted, and a MOSFET's region is imposed on its bias. A type row
+ * sets the default for every circuit; a matched group's members share one
+ * setting. The overview of what each part's device menu sets.
  */
 function AssumptionTable({
   rows,
@@ -2190,7 +2476,11 @@ function AssumptionTable({
   selected,
   onChange,
   onSelect,
+  onOpenMenu,
 }: {
+  /** A row's name pressed: its part's device menu (keyboard: focused). */
+  onOpenMenu?:
+    ((row: AssumptionRow, fromKeyboard: boolean) => void) | undefined;
   rows: readonly AssumptionRow[];
   defaults: AssumptionDefaults;
   parts: CircuitAssumptions;
@@ -2202,6 +2492,7 @@ function AssumptionTable({
   const tableRef = useRef<HTMLTableElement>(null);
   const columns = assumptionColumns(rows);
   const transistors = rows.some((row) => isTransistor(row.type));
+  const regionColumn = rows.some((row) => takesRegion(row.type));
   const isSelected = (row: AssumptionRow) =>
     row.scope !== "type" &&
     row.members.some(
@@ -2364,7 +2655,7 @@ function AssumptionTable({
   };
 
   const regionCell = (row: AssumptionRow) => {
-    if (row.scope === "type" || !isTransistor(row.type)) return <td />;
+    if (row.scope === "type" || !takesRegion(row.type)) return <td />;
     const regions = row.members.map(
       (member) => parts[member.path]?.region ?? "",
     );
@@ -2381,17 +2672,14 @@ function AssumptionTable({
               parts: withRegion(
                 parts,
                 row.members.map((member) => member.path),
-                event.currentTarget.value || null,
+                (event.currentTarget.value || null) as RegionChoice | null,
               ),
             })
           }
         >
-          <option value="" />
-          {ASSUMPTION_REGIONS[row.type].map((region) => (
-            <option key={region} value={region}>
-              {REGION_LABEL[region] ?? region}
-            </option>
-          ))}
+          <option value="">auto</option>
+          <option value="saturation">saturation</option>
+          <option value="triode">triode</option>
         </select>
       </td>
     );
@@ -2400,53 +2688,25 @@ function AssumptionTable({
   const passiveCell = (row: AssumptionRow) => {
     const member = row.members[0];
     if (!member) return null;
-    const part = parts[member.path];
     // A capacitor between two signal nodes can be split by Miller instead.
     const splittable = row.type === "capacitor" && member.miller.includes(null);
-    const value =
-      splittable && isMiller(null, part)
-        ? "miller"
-        : isIgnored(row.type, "open", part, defaults)
-          ? "open"
-          : isIgnored(row.type, "short", part, defaults)
-            ? "short"
-            : "";
+    const value = passiveValue(member, { defaults, parts });
     return (
       <td colSpan={Math.max(columns.length, 1)}>
         <select
           aria-label={`${row.label} open or short`}
           value={value}
-          onChange={(event) => {
-            const choice = event.currentTarget.value;
-            const cleared = withMiller(
-              withTerms(
+          onChange={(event) =>
+            onChange({
+              parts: passiveChange(
                 parts,
                 member.path,
                 row.type,
-                ["open", "short"],
-                false,
+                event.currentTarget.value as PassiveChoice,
                 defaults,
               ),
-              member.path,
-              null,
-              false,
-            );
-            onChange({
-              parts:
-                choice === "miller"
-                  ? withMiller(cleared, member.path, null, true)
-                  : choice
-                    ? withTerms(
-                        cleared,
-                        member.path,
-                        row.type,
-                        [choice as AssumptionTerm],
-                        true,
-                        defaults,
-                      )
-                    : cleared,
-            });
-          }}
+            })
+          }
         >
           <option value="" />
           {member.terms
@@ -2473,7 +2733,7 @@ function AssumptionTable({
                 <ColumnSymbol column={column} />
               </th>
             ))}
-            <th scope="col">Region</th>
+            {regionColumn ? <th scope="col">Region</th> : null}
           </tr>
         </thead>
       ) : null}
@@ -2500,7 +2760,16 @@ function AssumptionTable({
                   <button
                     type="button"
                     title="Select in the drawing"
-                    onClick={() => onSelect(ids as string[])}
+                    aria-haspopup={
+                      onOpenMenu && hasDeviceMenu(row.type)
+                        ? "dialog"
+                        : undefined
+                    }
+                    onClick={(event) => {
+                      onSelect(ids as string[]);
+                      if (hasDeviceMenu(row.type))
+                        onOpenMenu?.(row, event.detail === 0);
+                    }}
                   >
                     {row.label}
                   </button>
@@ -2511,12 +2780,12 @@ function AssumptionTable({
               {isTransistor(row.type) ? (
                 <>
                   {columns.map((column) => termCell(row, column))}
-                  {regionCell(row)}
+                  {regionColumn ? regionCell(row) : null}
                 </>
               ) : (
                 <>
                   {passiveCell(row)}
-                  {transistors ? <td /> : null}
+                  {transistors && regionColumn ? <td /> : null}
                 </>
               )}
             </tr>
@@ -2748,6 +3017,7 @@ export function SmallSignalPanel({
   rootDocumentId,
   selectedInstanceIds,
   onSelectInstances,
+  instanceClick,
 }: {
   project: CircuitProject;
   rootDocumentId?: string;
@@ -2755,6 +3025,8 @@ export function SmallSignalPanel({
   selectedInstanceIds?: readonly string[];
   /** Select instances of the open Cell on the canvas. */
   onSelectInstances?: (instanceIds: string[]) => void;
+  /** The last plain click on a part of the open Cell: opens its menu. */
+  instanceClick?: { instanceId: string; nonce: number } | null;
 }) {
   const [supply, setSupply] = useState(String(DEFAULT_SUPPLY_VOLTAGE));
   const supplyVoltage = parseFrequencies(supply)[0] ?? DEFAULT_SUPPLY_VOLTAGE;
@@ -3275,6 +3547,146 @@ export function SmallSignalPanel({
   const assumedOn = anyAssumed(result?.assumptions);
   const assumedOf = (quantity: SmallSignalQuantity) =>
     assumedOn ? quantity.assumed : undefined;
+  const assumptionChoices = {
+    defaults: assumptionDefaults,
+    parts: assumptionParts,
+  };
+
+  // The device menu: a plain click on a part, its badge, or its name in the
+  // table opens it. It reads and writes the table's own choices.
+  const [menu, setMenu] = useState<{
+    instanceId: string;
+    element: string;
+    keyboard: boolean;
+  } | null>(null);
+  const menuRows = useRef(assumptionTableRows);
+  menuRows.current = assumptionTableRows;
+  const menuOpener = useRef<HTMLElement | null>(null);
+  const openMenu = useCallback((instanceId: string, keyboard: boolean) => {
+    const member = menuRows.current
+      .filter((row) => row.scope !== "type" && hasDeviceMenu(row.type))
+      .flatMap((row) => row.members)
+      .find((candidate) => candidate.instanceId === instanceId);
+    menuOpener.current = keyboard
+      ? (document.activeElement as HTMLElement | null)
+      : null;
+    setMenu(member ? { instanceId, element: member.name, keyboard } : null);
+  }, []);
+  const seenClick = useRef(instanceClick?.nonce ?? 0);
+  useEffect(() => {
+    if (!instanceClick || instanceClick.nonce === seenClick.current) return;
+    seenClick.current = instanceClick.nonce;
+    openMenu(instanceClick.instanceId, false);
+  }, [instanceClick, openMenu]);
+  const menuId = useRef<string | null>(null);
+  menuId.current = menu?.instanceId ?? null;
+  const menuAnchor = useCallback(() => {
+    const id = menuId.current;
+    return id ? (instanceHit(id)?.getBoundingClientRect() ?? null) : null;
+  }, []);
+  const canvasBounds = useCallback(
+    () =>
+      document
+        .querySelector('[data-testid="schematic-canvas"]')
+        ?.getBoundingClientRect() ?? null,
+    [],
+  );
+  const closeMenu = useCallback((restoreFocus: boolean) => {
+    setMenu(null);
+    if (restoreFocus) menuOpener.current?.focus();
+    menuOpener.current = null;
+  }, []);
+  const menuRow = menu
+    ? assumptionTableRows.find(
+        (row) =>
+          row.scope !== "type" &&
+          row.members.some((member) => member.name === menu.element),
+      )
+    : undefined;
+  const regionReports = result?.assumptions?.regions;
+  const deviceStatus = (row: AssumptionRow): DeviceMenuStatus => {
+    const names = row.members.map((member) => member.name);
+    const device = result?.op?.devices?.[names[0] ?? ""];
+    const bias =
+      device && "region" in device
+        ? device.region === "forward-active"
+          ? "active"
+          : device.region
+        : null;
+    const gainCost = assumedOn
+      ? fullModelText(
+          result?.gain?.exact?.fullModelError ??
+            result?.gain?.assumed?.maxRelError,
+        )
+      : null;
+    return {
+      bias,
+      notes: (result?.warnings ?? []).filter(
+        (warning) =>
+          names.some((name) => warning.startsWith(`${name} `)) &&
+          !names.some((name) => warning === `${name} is in ${bias ?? ""}`),
+      ),
+      cost: gainCost ? `Gain ${gainCost}` : null,
+    };
+  };
+  const menuActions = (row: AssumptionRow): DeviceMenuActions => ({
+    toggle: (item) => {
+      const column = item.id === "leakage" ? "leakage" : termColumn(item.id);
+      updateAssumptions(
+        assumptionColumnChange(
+          row,
+          column,
+          item.mixed || !item.on,
+          assumptionChoices,
+          column === "caps" ? (item.id as AssumptionTerm) : undefined,
+        ),
+      );
+    },
+    miller: (term, on) =>
+      updateAssumptions({
+        parts: row.members.reduce(
+          (next, member) => withMiller(next, member.path, term, on),
+          assumptionParts,
+        ),
+      }),
+    passive: (choice) => {
+      const member = row.members[0];
+      if (member)
+        updateAssumptions({
+          parts: passiveChange(
+            assumptionParts,
+            member.path,
+            row.type,
+            choice,
+            assumptionDefaults,
+          ),
+        });
+    },
+    region: (region) =>
+      updateAssumptions({
+        parts: withRegion(
+          assumptionParts,
+          row.members.map((member) => member.path),
+          region || null,
+        ),
+      }),
+  });
+  // A badge on every drawn part with something assumed.
+  const badges: CanvasBadge[] = assumptionTableRows
+    .filter((row) => row.scope !== "type")
+    .flatMap((row) => row.members)
+    .flatMap((member) => {
+      const badge = deviceBadge(
+        member,
+        assumptionChoices,
+        regionReports?.find((r) => r.element === member.name),
+      );
+      return badge ? [badge] : [];
+    });
+  const tracked = useInstanceRects(
+    badges.map((badge) => badge.instanceId),
+    Boolean(netlist),
+  );
 
   return (
     <StaleBuildContext.Provider value={markStale}>
@@ -3462,6 +3874,7 @@ export function SmallSignalPanel({
                 noFormulaNote={firstWithoutFormula === "gain"}
                 assumed={assumedOf(result.gain)}
                 miller={result.assumptions?.miller}
+                regions={regionReports}
               />
             ) : null}
             {result?.rin ? (
@@ -3473,6 +3886,7 @@ export function SmallSignalPanel({
                 noFormulaNote={firstWithoutFormula === "rin"}
                 assumed={assumedOf(result.rin)}
                 miller={result.assumptions?.miller}
+                regions={regionReports}
               />
             ) : null}
             {result?.rout ? (
@@ -3484,6 +3898,7 @@ export function SmallSignalPanel({
                 noFormulaNote={firstWithoutFormula === "rout"}
                 assumed={assumedOf(result.rout)}
                 miller={result.assumptions?.miller}
+                regions={regionReports}
               />
             ) : null}
 
@@ -3492,7 +3907,7 @@ export function SmallSignalPanel({
                 <header>
                   <span>Bias point</span>
                 </header>
-                <BiasTable devices={devices} />
+                <BiasTable devices={devices} regions={regionReports} />
               </section>
             ) : null}
 
@@ -3507,6 +3922,10 @@ export function SmallSignalPanel({
                     selected={new Set(selectedInstanceIds)}
                     onChange={updateAssumptions}
                     onSelect={onSelectInstances}
+                    onOpenMenu={(row, keyboard) => {
+                      const id = row.members[0]?.instanceId;
+                      if (id) openMenu(id, keyboard);
+                    }}
                   />
                   {assumptionsStored ? (
                     <button
@@ -3825,6 +4244,28 @@ export function SmallSignalPanel({
           </>
         )}
       </section>
+      <CanvasBadges
+        badges={badges}
+        rects={tracked.rects}
+        container={tracked.container}
+        open={menu?.instanceId ?? null}
+        onOpen={(badge, keyboard) => {
+          onSelectInstances?.([badge.instanceId]);
+          openMenu(badge.instanceId, keyboard);
+        }}
+      />
+      {menu && menuRow ? (
+        <DeviceMenu
+          key={menu.instanceId}
+          model={deviceMenuModel(menuRow, menu.element, assumptionChoices)}
+          status={deviceStatus(menuRow)}
+          actions={menuActions(menuRow)}
+          anchor={menuAnchor}
+          bounds={canvasBounds}
+          focusOnOpen={menu.keyboard}
+          onClose={closeMenu}
+        />
+      ) : null}
     </StaleBuildContext.Provider>
   );
 }

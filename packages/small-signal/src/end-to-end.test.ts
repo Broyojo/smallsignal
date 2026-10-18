@@ -9,6 +9,7 @@ import type {
   MillerReport,
   MosCapacitances,
   MosOperatingPoint,
+  RegionReport,
   Root,
   AssumedQuantity,
   DistortionForm,
@@ -761,6 +762,13 @@ const REPORT_KEYS = allKeys<SmallSignalAssumptionReport>()([
   "regions",
   "miller",
 ] as const);
+const REGION_KEYS = allKeys<RegionReport>()([
+  "element",
+  "assumed",
+  "actual",
+  "effect",
+  "linearized",
+] as const);
 const MILLER_KEYS = allKeys<MillerReport>()([
   "element",
   "term",
@@ -835,8 +843,27 @@ describe.skipIf(!built)("assumptions match the TypeScript contract", () => {
     ]);
     expect(result.assumptions.absent).toEqual([{ element: "M1", term: "gmb" }]);
     expect(result.assumptions.regions).toEqual([
-      { element: "M1", assumed: "saturation", actual: "saturation" },
+      {
+        element: "M1",
+        assumed: "saturation",
+        actual: "saturation",
+        effect: "same",
+      },
     ]);
+    // Triode cannot hold at a saturated bias: refused, the bias's model
+    // kept, with every field declared.
+    const triode = JSON.parse(
+      wasm.analyze(
+        netlist.text,
+        JSON.stringify({
+          ...plain,
+          assume: { regions: [{ element: "M1", region: "triode" }] },
+        }),
+      ),
+    );
+    for (const region of triode.assumptions.regions)
+      declared(region, REGION_KEYS);
+    expect(triode.assumptions.regions[0].effect).toBe("refused");
     for (const element of result.assumable) {
       keys(element, ASSUMABLE_KEYS);
       // The panel only sends terms its type accepts.

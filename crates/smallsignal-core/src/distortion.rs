@@ -31,7 +31,7 @@
 use crate::analyze::{cancel, jw, matrix_at};
 use crate::assume::Term as ATerm;
 use crate::dc::{DevOp, Op};
-use crate::devices::{mos_gmbs_dc, pn, vt, BjtModel, MosModel};
+use crate::devices::{mos_gmbs_dc, pn, vt, BjtModel, MosModel, MosRegion};
 use crate::linalg::LuComplex;
 use crate::netlist::{Kind, Netlist};
 use crate::poly::Poly;
@@ -143,8 +143,9 @@ impl Jet {
 }
 
 /// Level-1 channel current into the effective drain, effective frame
-/// (vds ≥ 0), as `devices::mos_eval`.
-fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet) -> Jet {
+/// (vds ≥ 0), as `devices::mos_eval`, or with `imposed` that region's
+/// equations, as `devices::mos_eval_in`.
+fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet, imposed: Option<MosRegion>) -> Jet {
     let sqphi = m.phi.sqrt();
     let sarg = if vbs.v() <= 0.0 {
         Jet::cst(m.phi).sub(&vbs).sqrt()
@@ -162,7 +163,11 @@ fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet) -> Jet {
         return Jet::cst(0.0);
     }
     let betap = Jet::cst(1.0).add(&vds.scale(m.lambda)).scale(beta);
-    if vgst.v() <= vds.v() {
+    let saturated = match imposed {
+        Some(r) => r == MosRegion::Saturation,
+        None => vgst.v() <= vds.v(),
+    };
+    if saturated {
         betap.mul(&vgst).mul(&vgst).scale(0.5)
     } else {
         betap.mul(&vds).mul(&vgst.sub(&vds.scale(0.5)))
@@ -306,7 +311,7 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                 };
                 let beta = model.kp * w / l * mult;
                 let (jg, jd, jb) = (Jet::var(vgs, 0, ty), Jet::var(vds, 1, ty), Jet::var(vbs, 2, ty));
-                let f = mos_jet(model, beta, jg, jd, jb).scale(ty);
+                let f = mos_jet(model, beta, jg, jd, jb, m.imposed).scale(ty);
                 let mut outs = vec![NlOut {
                     a: ed,
                     b: es,
@@ -1411,6 +1416,10 @@ fn sym_values(m: &SsCircuit, s: &Symbols, values: &[(String, f64)]) -> (Symbols,
 pub struct Ctx<'a> {
     pub net: &'a Netlist,
     pub op: Option<&'a Op>,
+    /// The operating point `model` is linearized at when it imposes a
+    /// region (`assume::region_op`): the closed forms' Taylor coefficients
+    /// expand that region's equations. None: `op`.
+    pub model_op: Option<&'a Op>,
     /// Every junction kept, no assumption: numeric a_n and vsFreq.
     pub full: &'a SsCircuit,
     /// The model the closed forms describe, every junction kept: `full`
@@ -1783,6 +1792,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // The linear part must be the derivative of the expanded DC currents:
     // forward-body-biased MOSFETs get their DC-slope g_mb.
     let slopes = body_slopes(c.net, op);
+    // The closed forms' model may impose a region: its devices expand that
+    // region's equations, and its g_mb slopes are that region's.
+    let model_devs_owned;
+    let (model_devs, mslopes) = match c.model_op {
+        Some(mop) => {
+            model_devs_owned = devices(c.net, mop, c.names)?;
+            (&model_devs_owned, body_slopes(c.net, mop))
+        }
+        None => (&devs, slopes.clone()),
+    };
     for (p, _) in slopes
         .iter()
         .filter(|(p, _)| c.full.params.iter().any(|q| q.name == *p))
@@ -1796,14 +1815,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     // here is the model the closed forms describe, every junction kept:
     // the full one under the assumptions in effect.
     let (phys_owned, full_owned, ss_owned, symbols_owned);
-    let (phys, full, ss, symbols) = if slopes.is_empty() {
+    let (phys, full, ss, symbols) = if slopes.is_empty() && mslopes.is_empty() {
         (c.full, c.model, c.ss, c.symbols)
     } else {
         phys_owned = with_values(c.full, &slopes);
-        full_owned = with_values(c.model, &slopes);
-        ss_owned = with_values(c.ss, &slopes);
+        full_owned = with_values(c.model, &mslopes);
+        ss_owned = with_values(c.ss, &mslopes);
         let split;
-        (symbols_owned, split) = sym_values(&ss_owned, c.symbols, &slopes);
+        (symbols_owned, split) = sym_values(&ss_owned, c.symbols, &mslopes);
         for els in split {
             warnings.push(format!(
                 "{} have different gmb slopes under forward body bias: their gmb is not matched.",
@@ -1815,7 +1834,10 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let phys_coefs = coefficients(&devs, c.order);
     // The coefficients under the assumptions (the full ones without).
     let coefs: Vec<Coef> = match c.assumed {
-        Some(a) => phys_coefs.iter().map(|cf| assumed_coef(cf, &devs, a)).collect(),
+        Some(a) => coefficients(model_devs, c.order)
+            .iter()
+            .map(|cf| assumed_coef(cf, &devs, a))
+            .collect(),
         None => phys_coefs.clone(),
     };
     let fsys = crate::ss::system(c.net, full, c.excite);
@@ -1859,7 +1881,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .zip(&coefs)
         .zip(&keep)
         .filter(|((cf, _), _)| cf.value != 0.0)
-        .map(|((cf, ca), &k)| {
+        .map(|((cf, _), &k)| {
             let d = &devs[cf.dev];
             let o = &d.outs[cf.out];
             let (sub, _) = mono_sub(&cf.mono, d.vars);
@@ -1867,7 +1889,9 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                 "element": d.element, "current": if o.label.is_empty() { "D" } else { o.label },
                 "monomial": sub, "order": cf.order(), "value": cf.value, "kept": k,
             });
-            if ca.value == 0.0 {
+            // Left out by an assumption (an imposed region can make a model
+            // coefficient 0 that no assumption leaves out).
+            if c.assumed.is_some_and(|a| assumed_coef(cf, &devs, a).value == 0.0) {
                 v["ignored"] = json!(true);
             }
             v
@@ -2351,14 +2375,27 @@ VIP inp 0 DC 1.2 AC 1\nVINN inn 0 1.2\n.model nm nmos (level=1 kp=200u vto=0.5 l
         for (vgs, vds, vbs) in [(1.2, 2.0, -0.5), (1.5, 0.3, -1.0), (0.9, 1.0, 0.0), (1.0, 1.5, 0.3)] {
             let m = mos(0.4, 0.1, 1.0);
             let ev = mos_eval(&m, 2e-3, vgs, vds, vbs);
-            let j = mos_jet(
-                &m,
-                2e-3,
-                Jet::var(vgs, 0, 1.0),
-                Jet::var(vds, 1, 1.0),
-                Jet::var(vbs, 2, 1.0),
-            );
+            let jet = |imposed| {
+                mos_jet(
+                    &m,
+                    2e-3,
+                    Jet::var(vgs, 0, 1.0),
+                    Jet::var(vds, 1, 1.0),
+                    Jet::var(vbs, 2, 1.0),
+                    imposed,
+                )
+            };
+            let j = jet(None);
             let rel = |a: f64, b: f64| (a - b).abs() / a.abs().max(b.abs()).max(1e-300);
+            // An imposed region expands that region's equations.
+            for region in [MosRegion::Saturation, MosRegion::Triode] {
+                if let Ok(ev) = crate::devices::mos_eval_in(&m, 2e-3, vgs, vds, vbs, region) {
+                    let ji = jet(Some(region));
+                    assert!(rel(ji.0[0], ev.cdrain) < 1e-14);
+                    assert!(rel(ji.0[1], ev.gm) < 1e-13);
+                    assert!(rel(ji.0[2], ev.gds) < 1e-13);
+                }
+            }
             assert!(rel(j.0[0], ev.cdrain) < 1e-14);
             assert!(rel(j.0[1], ev.gm) < 1e-13);
             assert!(rel(j.0[2], ev.gds) < 1e-13);

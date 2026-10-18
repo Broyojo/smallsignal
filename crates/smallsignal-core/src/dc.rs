@@ -24,6 +24,10 @@ pub struct MosOp {
     pub gmb: f64,
     pub gbs: f64,
     pub gbd: f64,
+    /// A region imposed by an assumption (`assume::region_op`): `region`,
+    /// gm, gds, gmb and the Meyer capacitances are that region's at these
+    /// voltages. None at the operating point itself.
+    pub imposed: Option<MosRegion>,
 }
 
 #[derive(Clone, Debug)]
@@ -686,6 +690,7 @@ fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterat
                         gmb: ev.gmbs,
                         gbs,
                         gbd,
+                        imposed: None,
                     }))
                 }
                 Kind::Q { model, area, mult, .. } => {

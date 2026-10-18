@@ -85,6 +85,9 @@ describe("readCircuits", () => {
         parts: {
           m1: { ignore: { ro: true, cgx: true, gmb: "yes" }, region: "triode" },
           m2: { region: "linear" },
+          // Only checked by the solver: no longer offered, so dropped.
+          m3: { region: "cutoff" },
+          q1: { region: "forward-active" },
           r1: { ignore: { open: true, short: true } },
         },
       },
@@ -234,7 +237,7 @@ describe("choices against the defaults", () => {
     ).toEqual({ ignore: {}, miller: ["cgd"] });
   });
 
-  it("sets and clears an expected region", () => {
+  it("sets and clears an assumed region", () => {
     const set = withRegion(
       { m1: { ignore: { ro: true } } },
       ["m1", "m2"],
@@ -262,7 +265,7 @@ describe("assumptionRequest", () => {
           ignore: { ro: false, gmb: true },
           region: "triode",
         },
-        [partKey(["x1", "m2"])]: { region: "forward-active" },
+        [partKey(["q1"])]: { region: "saturation" },
         [partKey(["r1"])]: { ignore: { short: true } },
         [partKey(["v1"])]: { ignore: { open: true } },
       },
@@ -274,7 +277,7 @@ describe("assumptionRequest", () => {
         { element: "Q1", term: "rpi" },
         { element: "R1", term: "short" },
       ],
-      // A BJT region on a MOSFET is never sent.
+      // Only a MOSFET's region is sent: the solver imposes no other.
       regions: [{ element: "M1", region: "triode" }],
     });
   });

@@ -142,6 +142,21 @@ fn grading(arg: f64, m: f64) -> f64 {
 /// the caller in reverse mode), the threshold, V_DSAT, φ and the total
 /// oxide capacitance Cox·W·L.
 pub fn qmeyer(vgs: f64, vgd: f64, von: f64, vdsat: f64, phi: f64, cox: f64) -> (f64, f64, f64) {
+    qmeyer_in(vgs, vgd, von, vdsat, phi, cox, None)
+}
+
+/// `qmeyer` with the conducting branch chosen: `Some(true)` saturation,
+/// `Some(false)` triode, None as V_DS and V_DSAT say. The off branches
+/// (V_GS ≤ V_TH) do not depend on it.
+pub fn qmeyer_in(
+    vgs: f64,
+    vgd: f64,
+    von: f64,
+    vdsat: f64,
+    phi: f64,
+    cox: f64,
+    saturated: Option<bool>,
+) -> (f64, f64, f64) {
     const MAGIC_VDS: f64 = 0.025;
     let vgst = vgs - von;
     let vdsat = vdsat.max(MAGIC_VDS);
@@ -164,7 +179,7 @@ pub fn qmeyer(vgs: f64, vgd: f64, von: f64, vdsat: f64, phi: f64, cox: f64) -> (
         }
     } else {
         let vds = vgs - vgd;
-        if vdsat <= vds {
+        if saturated.unwrap_or(vdsat <= vds) {
             (cox / 3.0, 0.0, 0.0)
         } else {
             let vddif = 2.0 * vdsat - vds;
@@ -224,15 +239,31 @@ pub fn mos_zero_bias(c: &MosCapModel, mult: f64, g: &MosGeom) -> (f64, f64, f64,
 /// Capacitances of a level-1 MOSFET at (vgs, vds, vbs), normalized frame:
 /// Cgs = 2·qmeyer_gs + CGSO·M·W, Cgd = 2·qmeyer_gd + CGDO·M·W, Cgb =
 /// 2·qmeyer_gb + CGBO·M·L (mos1acld), and the bulk junctions.
-pub fn mos_caps(m: &MosModel, w: f64, l: f64, mult: f64, g: &MosGeom, (vgs, vds, vbs): (f64, f64, f64)) -> MosCaps {
+pub fn mos_caps(m: &MosModel, w: f64, l: f64, mult: f64, g: &MosGeom, v: (f64, f64, f64)) -> MosCaps {
+    mos_caps_in(m, w, l, mult, g, v, None)
+}
+
+/// `mos_caps` with the Meyer branch of an imposed region (saturation:
+/// C_gs = (2/3)·Cox·W·L, C_gd = C_gb = 0 before overlap; triode: Meyer's
+/// triode branch at the same V_DS), None as the bias says.
+pub fn mos_caps_in(
+    m: &MosModel,
+    w: f64,
+    l: f64,
+    mult: f64,
+    g: &MosGeom,
+    (vgs, vds, vbs): (f64, f64, f64),
+    imposed: Option<crate::devices::MosRegion>,
+) -> MosCaps {
     let c = &m.caps;
     let ev = crate::devices::mos_eval(m, 1.0, vgs, vds, vbs);
     let vgd = vgs - vds;
     let oxide = c.cox * l * mult * w;
+    let saturated = imposed.map(|r| r == crate::devices::MosRegion::Saturation);
     let (hs, hd, hb) = if ev.mode > 0 {
-        qmeyer(vgs, vgd, ev.von, ev.vdsat, m.phi, oxide)
+        qmeyer_in(vgs, vgd, ev.von, ev.vdsat, m.phi, oxide, saturated)
     } else {
-        let (d, s, b) = qmeyer(vgd, vgs, ev.von, ev.vdsat, m.phi, oxide);
+        let (d, s, b) = qmeyer_in(vgd, vgs, ev.von, ev.vdsat, m.phi, oxide, saturated);
         (s, d, b)
     };
     let (czbd, czbdsw, czbs, czbssw) = mos_zero_bias(c, mult, g);
@@ -441,6 +472,30 @@ mod tests {
         let c = mos_caps(&m, w, l, 2.0, &MosGeom::default(), (-2.0, 1.0, 0.0));
         assert!(close(c.cgb, 2.0 * ox + 3e-10 * 2.0 * l));
         assert!(close(c.cgs, 1e-10 * 2.0 * w));
+    }
+
+    #[test]
+    fn an_imposed_region_takes_its_meyer_branch() {
+        use crate::devices::MosRegion;
+        let m = mos(1.0);
+        let (w, l) = (10e-6, 1e-6);
+        let ox = m.caps.cox * l * w;
+        let g = MosGeom::default();
+        // Triode at the bias (vgst = 1, vds = 0.2); saturation imposed gives
+        // the saturated split at the same voltages, in either mode.
+        let triode = mos_caps(&m, w, l, 1.0, &g, (1.0, 0.2, 0.0));
+        assert!(triode.cgd > 2e-10 * w * 1.5);
+        let sat = mos_caps_in(&m, w, l, 1.0, &g, (1.0, 0.2, 0.0), Some(MosRegion::Saturation));
+        assert!(close(sat.cgs, 2.0 / 3.0 * ox + 1e-10 * w));
+        assert!(close(sat.cgd, 2e-10 * w));
+        assert!(close(sat.cgb, 3e-10 * l));
+        assert_eq!((sat.cbd, sat.cbs), (triode.cbd, triode.cbs));
+        let rev = mos_caps_in(&m, w, l, 1.0, &g, (0.8, -0.2, 0.0), Some(MosRegion::Saturation));
+        assert!(close(rev.cgd, 2.0 / 3.0 * ox + 2e-10 * w));
+        assert!(close(rev.cgs, 1e-10 * w));
+        // The bias's own region changes nothing.
+        let same = mos_caps_in(&m, w, l, 1.0, &g, (1.0, 0.2, 0.0), Some(MosRegion::Triode));
+        assert_eq!(same, triode);
     }
 
     #[test]

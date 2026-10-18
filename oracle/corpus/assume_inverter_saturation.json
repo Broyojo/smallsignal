@@ -1,0 +1,13 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "ref": null,
+ "freqs": [0, 1000, 10000000.0, 1000000000.0],
+ "rin": true,
+ "rout": true,
+ "assume": {"regions": [{"element": "M1", "region": "saturation"}]},
+ "regionEffect": {"M1": "imposed"},
+ "restored": {"gain": [], "rin": [], "rout": []},
+ "description": "M1 is in triode at this bias; saturation imposed linearizes it with level-1 saturation equations (gm, gds and Meyer caps) at ngspice's V_GS, V_DS. Assumed values against indep.py's forced rebuild; the values stay ngspice's.",
+ "hand": {"gain": "-(gm1 + gm2) (ro1 || ro2) at DC, gm1 = beta1 (1 + lambda V_DS1) V_ov1, ro1 = 2/(lambda beta1 V_ov1^2)"}
+}

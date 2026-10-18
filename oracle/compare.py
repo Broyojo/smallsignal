@@ -455,6 +455,20 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
     import indep
 
     applied = {(x["element"], x["term"]) for x in side["assume"].get("ignore", [])}
+    # Imposed regions: each MOSFET's verdict and linearization against
+    # indep.py's own level-1 equations at ngspice's bias.
+    regions = {x["element"]: x["region"] for x in side["assume"].get("regions", [])}
+    got_regions = {r["element"].lower(): r for r in (got.get("assumptions") or {}).get("regions", [])}
+    for el, (verdict, vals) in indep.region_verdicts(cir, want, regions).items():
+        r = got_regions.get(el)
+        if r is None or r.get("effect") != verdict:
+            rep.failures.append(f"region {el}: effect {r and r.get('effect')}, want {verdict}")
+            continue
+        if want_effect := (side.get("regionEffect") or {}).get(el.upper()):
+            if want_effect != verdict:
+                rep.failures.append(f"region {el}: {verdict}, the sidecar expects {want_effect}")
+        for key in ("gm", "gds", "gmb") if vals else ():
+            rep.real(f"region {el}.{key}", (r.get("linearized") or {}).get(key), float(vals[key]), "gain")
     # Miller splits: K and the split rebuilt by indep.py, both compared.
     mill = [(x["element"], x.get("term")) for x in side["assume"].get("miller", [])]
     cache: dict = {}
@@ -464,7 +478,7 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
         # every quantity, as in the solver.
         back = {(r["element"], r["term"]) for r in ((got.get("gain") or {}).get("assumed") or {}).get("restored", [])}
         gdrop = frozenset(applied - back)
-        ref = indep.build_and_solve(cir, want, "full", dps=30, drop=set(gdrop), miller=mill)
+        ref = indep.build_and_solve(cir, want, "full", dps=30, drop=set(gdrop), miller=mill, regions=regions)
         got_k = {f"{m['element'].lower()}:{m['term'] or ''}": m["k"]
                  for m in (got.get("assumptions") or {}).get("miller", [])}
         kfix = {}
@@ -489,7 +503,7 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
             rep.failures.append(f"assumed.{q}.restored: got {sorted(restored)}, want {sorted(want_restored)}")
         drop = frozenset(applied - restored)
         if drop not in cache:
-            cache[drop] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), miller=mill, kvalues=kfix)
+            cache[drop] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), miller=mill, kvalues=kfix, regions=regions)
         ind = cache[drop]
         used: set[int] = set()
         for w in want[q]["values"]:
@@ -525,7 +539,7 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
         if q == "gain" and not side.get("tooLarge"):
             key = ("poles", drop)
             if key not in cache:
-                cache[key] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), miller=mill,
+                cache[key] = indep.build_and_solve(cir, want, "full", dps=30, drop=set(drop), miller=mill, regions=regions,
                                                 kvalues=kfix, want_system="poles")
             for p in block.get("poles") or []:
                 a = p.get("assumed")

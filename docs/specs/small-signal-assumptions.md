@@ -6,13 +6,14 @@ Primary owner: `crates/smallsignal-core` (`assume.rs`)
 
 Per-device assumptions an engineer makes in hand analysis (neglect r_o, g_mb,
 r_π, r_μ, bulk junctions; take a passive open or shorted; split a feedback
-capacitance by the Miller approximation; expect a region),
+capacitance by the Miller approximation; impose a MOSFET's region),
 applied by the solver to the formulas it shows while every number stays the
 full model's, and chosen by the numbers for the numeric ≈ forms. The
 solver's general contract is in
 [crates/README.md](../../crates/README.md#contract). The panel sets them
-in its Assumptions section, its Suggestions section applies `suggestions`
-items to the same store, and its Options choose how ≈ forms are made.
+in its Assumptions section and a device menu on the drawing, its
+Suggestions section applies `suggestions` items to the same store, and its
+Options choose how ≈ forms are made.
 
 ## Rules
 
@@ -23,11 +24,31 @@ items to the same store, and its Options choose how ≈ forms are made.
   R, L or r_d → 0) is the coefficient of that parameter, which merges its
   nodes, and an open (C → 0, R, L or r_d → ∞) leaves the element out.
   g_m cannot be neglected.
-- The operating point always comes from the full netlist. A region is
-  checked against it and never imposed: a match drops the generic region
-  warning, a mismatch warns `M2 is in saturation, assumed triode`. Without
-  an operating point a declared region only decides which r_o the
-  hand-analysis form keeps finite (MOS triode, BJT saturation).
+- The operating point always comes from the full netlist. A MOSFET's
+  `saturation` or `triode` is imposed on it: the device is linearized with
+  that region's ngspice-47 level-1 equations at the same V_GS, V_DS, V_BS,
+  in the same effective frame (drain and source swapped when V_DS < 0).
+  Saturation: g_m = β(1 + λV_DS)V_ov, g_ds = λβV_ov²/2, Meyer C_gs =
+  ⅔C_ox·W·L and C_gd = C_gb = 0 before overlap. Triode: g_m = β(1 +
+  λV_DS)V_DS, g_ds = β(1 + λV_DS)(V_ov − V_DS) + λβV_DS(V_ov − V_DS/2),
+  Meyer's triode split. Both: g_mb = g_m·γ/(2·sarg), V_ov = V_GS − V_TH,
+  β = KP·W/L·M, the output conductance r_o (saturation) or R_on (triode).
+  Every other assumption applies to that model, and `fullModelError`
+  shows the cost. Warning: `M1 bias says triode`.
+- A region is refused, keeping the bias's linearization, when the channel
+  is off (`M1 is off, cannot assume saturation`), and triode when V_DS ≥
+  V_ov, where the triode current falls with V_DS (`M1 is saturated,
+  cannot assume triode`). So in numeric mode triode is either the bias's
+  region or refused. The bias's own region changes nothing and drops the
+  generic region warning.
+- Without an operating point a declared MOS region decides r_o or R_on
+  and the capacitances (Meyer C_gd in triode), over the wiring's
+  inference. BJT regions and MOS `cutoff` are only checked: a mismatch
+  warns `Q2 is in saturation, assumed forward-active`; without an
+  operating point a BJT's saturation keeps its r_o finite.
+- The noise and distortion closed forms of an imposed region use its
+  linearization (the thermal source's g_m, that region's Taylor
+  coefficients). Their spectra and numeric values stay the full model's.
 - `values`, `poles`, `zeros`, `poleCount`, `zeroCount`, the noise spectra
   and contributors, distortion `numeric` and `vsFreq` stay the full
   model's, computed exactly as without assumptions. `exact`, `display`,
@@ -116,6 +137,32 @@ items to the same store, and its Options choose how ≈ forms are made.
   table. It has no `ro` term: `assumable` leaves it out, a request for it
   (a type default too) is `absent`, and it is never a suggestion or named
   candidate. R_on → ∞ opens the switch, which is no hand-analysis limit.
+
+## Panel
+
+- While the panel is open, a plain click (no drag) on a transistor,
+  capacitor or diode drawn in the open Cell, its canvas badge, or its row's
+  name in the Assumptions table opens its device menu beside it (a sheet
+  along the bottom below 600 px). It offers the part's `assumable` terms
+  (leakage as one), C_gd or C_μ Miller where offered, a capacitor's or
+  diode's open, short or Miller, and a MOSFET's region (Auto, Saturation,
+  Triode), with its bias region, the solver's sentences about it and the
+  gain's distance from the full model. Choices apply at once. Esc, Close
+  or a press elsewhere closes it; from the keyboard focus moves in and
+  back.
+- The menu and the table write one store: a matched group's row applies
+  to every member and the menu says so; a type default shows dashed, from
+  "All NMOS". Regions are per part only: a type default would impose one
+  circuit's region on every circuit.
+- A part with any choice in effect has a badge at its top right: its
+  region, else open, short or Miller, else ≈; amber when the bias
+  disagrees with the region or refuses it.
+- The table keeps every choice in one overview, collapsed by default. Its
+  Region column is the MOSFETs' (auto, saturation, triode). The panel sends
+  no BJT or cutoff region, which the solver would only check.
+- A card with an imposed region notes it (`M1 assumed saturated`); the
+  bias table shows that region's g_m and r_o, marked assumed, with the
+  bias's region.
 
 ## Named simplified forms
 
@@ -208,7 +255,9 @@ Response:
 - `assumptions` (with `assume`): `applied` `[{element, term, latex}]`
   (latex such as `r_{o1,2} \to \infty`, `g_{mb1} = 0`, `C_{1} \to \infty`),
   `absent` `[{element, term}]` (asked for, not in the model), `regions`
-  `[{element, assumed, actual}]` (`actual` null without an operating point),
+  `[{element, assumed, actual, effect, linearized?}]` (`actual` null without
+  an operating point; `effect` `imposed`, `same`, `refused` or `checked`;
+  `linearized` `{gm, gds, gmb}` of a region imposed on a bias),
   `miller` `[{element, term, latex, symbol, k, definition}]`, the splits
   made: `latex` the capacitance (`C_{C}`, `C_{gd2}`), `symbol` its K
   (`K_{CC}`, `K_{gd2}`; in `params` as `K_CC`, `K_cgd_M2` with K's value),
@@ -275,6 +324,21 @@ writes one by one.
   their poles with the textbook K against −1/(R_S(C_gs + C_gd(1 + g_m R_D)))
   and the dominant pole with C_C(1 + A_2): `oracle/textbook.py`
   (`miller_split_*`).
+- Imposed regions: the saturated linearization at a triode bias and its
+  hand form, refusals, the source/drain swap, noise and distortion on the
+  imposed model, symbolic override of the wiring:
+  `crates/smallsignal-core/tests/assumptions.rs`, Meyer's branch in
+  `caps.rs`; the linearization, its capacitances and the assumed values
+  against `oracle/indep.py`'s own level-1 equations at ngspice's bias:
+  `oracle/compare.py` (`assume_inverter_saturation`,
+  `assume_cs_triode_refused`); the inverter's −(g_m1 + g_m2)(r_o1 ∥ r_o2)
+  with the level-1 saturation values: `oracle/textbook.py`
+  (`inverter_forced_saturation`).
+- Device menu: its model, badges, labels and placement:
+  `apps/editor/src/features/small-signal/small-signal-device-menu.test.ts`;
+  a click on M1 that neglects r_o with the card and table agreeing,
+  saturation on the triode inverter, dragging and selection unchanged, the
+  narrow sheet: `apps/editor/e2e/small-signal.spec.ts` (`device menu: …`).
 - Lean certificates for an assumed element list: `lean/check_all.sh`.
 - Suggestions within the threshold, equal to a direct solve of the applied
   set, in matched-group units, never restoring, capped:
