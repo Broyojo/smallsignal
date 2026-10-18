@@ -1616,8 +1616,13 @@ impl SuggestCtx<'_> {
         .filter(|c| keep(c))
         .collect();
         let eval = |extra: &[(String, crate::assume::Term)]| {
-            if extra.is_empty() && in_effect.is_empty() && resolved.miller.is_empty() {
-                // The full model itself: 0, or nothing to compare.
+            if extra.is_empty()
+                && in_effect.is_empty()
+                && resolved.miller.is_empty()
+                && resolved.regions.iter().all(|r| r.linearized.is_none())
+            {
+                // The full model itself: 0, or nothing to compare. An
+                // imposed region is not: it moves the model on its own.
                 return Outcome::Deviation(deviation(&self.reference.vals, self.reference));
             }
             let Ok(a) = self.with_extra(extra) else {

@@ -891,7 +891,8 @@ function AssumedTable({
 
 /**
  * Whether the forms are the assumed model's: anything neglected, split or
- * linearized in an imposed region.
+ * linearized in a region imposed on the bias. Without a bias a declared
+ * region already shapes the full model's forms.
  */
 export function anyAssumed(
   report: SmallSignalAssumptionReport | undefined,
@@ -899,7 +900,9 @@ export function anyAssumed(
   return Boolean(
     report?.applied.length ||
     report?.miller?.length ||
-    report?.regions?.some((region) => region.effect === "imposed"),
+    report?.regions?.some(
+      (region) => region.effect === "imposed" && region.actual !== null,
+    ),
   );
 }
 

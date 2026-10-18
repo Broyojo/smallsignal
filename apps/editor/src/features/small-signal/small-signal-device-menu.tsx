@@ -303,13 +303,15 @@ export function DeviceMenu({
     if (!focusOnOpen) return;
     // After the selection it came with has settled (the canvas may take
     // focus for it).
-    const frame = requestAnimationFrame(() =>
-      ref.current
-        ?.querySelector<HTMLElement>(
-          'button[aria-pressed], [role="radio"][tabindex="0"], button',
-        )
-        ?.focus(),
-    );
+    // The first choice, not Close: a toggle, else the checked option.
+    const frame = requestAnimationFrame(() => {
+      const menu = ref.current;
+      (
+        menu?.querySelector<HTMLElement>("button[aria-pressed]") ??
+        menu?.querySelector<HTMLElement>('[role="radio"][tabindex="0"]') ??
+        menu?.querySelector<HTMLElement>("button")
+      )?.focus();
+    });
     return () => cancelAnimationFrame(frame);
   }, [focusOnOpen]);
 

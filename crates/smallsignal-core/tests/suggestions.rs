@@ -348,3 +348,20 @@ fn a_miller_split_in_effect_is_kept_and_never_a_candidate() {
         assert_eq!(s["unbounded"], p["unbounded"], "{s}");
     }
 }
+
+#[test]
+fn an_imposed_region_alone_is_the_base_deviation() {
+    // M1 in triode with saturation imposed: that alone moves the gain, so
+    // the base is the gain's distance from the full model, not 0.
+    let net = "triode\nVDD vdd 0 1.8\nVIN in 0 DC 1.5 AC 1\nRD vdd out 50k\nM1 out in 0 0 nch W=10u L=1u\n\
+CL out 0 1p\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n";
+    let req = json!({
+        "input": "VIN", "output": "out", "freqs": [1e3],
+        "assume": { "regions": [{ "element": "M1", "region": "saturation" }] },
+        "suggest": { "quantity": "gain", "threshold": 50.0 },
+    });
+    let v = run(net, &request(req));
+    let base = v["suggestions"]["base"].as_f64().unwrap();
+    let cost = v["gain"]["exact"]["fullModelError"].as_f64().unwrap();
+    assert!(base > 0.1 && agree(base, cost), "{base} {cost}");
+}

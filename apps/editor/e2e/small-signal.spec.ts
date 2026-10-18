@@ -1079,7 +1079,10 @@ test("device menu: a click on M1 neglects r_o there, and the card and the table 
   await name.focus();
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
-  await expect(menu.locator(":focus")).toHaveCount(1);
+  // Focus lands on the first choice, not on Close.
+  await expect(
+    menu.getByRole("button", { name: "Neglect r_o", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(name).toBeFocused();
 });

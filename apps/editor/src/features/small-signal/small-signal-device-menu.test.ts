@@ -194,6 +194,13 @@ describe("region labels", () => {
         regions: [{ ...imposed("M1", "triode"), effect: "refused" }],
       }),
     ).toBe(false);
+    // Without a bias the region already shaped the full model's forms.
+    expect(
+      anyAssumed({
+        ...report,
+        regions: [{ ...imposed("M1", "triode"), actual: null }],
+      }),
+    ).toBe(false);
   });
 
   it("writes terms as the equations do", () => {
