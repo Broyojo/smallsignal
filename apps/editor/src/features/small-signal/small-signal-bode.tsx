@@ -196,9 +196,10 @@ export function BodePlot({
   const magTicks = magnitudeTicks(magSpan.low, magSpan.high, decibels);
   const degTicks = phaseTicks(phaseSpan.low, phaseSpan.high);
   const fTicks = frequencyTicks(fLow, fHigh);
+  // Zeros first: a pole-zero doublet draws × over ○.
   const marks = [
-    ...rootFrequencies(poles).map((item) => ({ ...item, kind: "pole" })),
     ...rootFrequencies(zeros).map((item) => ({ ...item, kind: "zero" })),
+    ...rootFrequencies(poles).map((item) => ({ ...item, kind: "pole" })),
   ].filter(({ f }) => f >= fLow && f <= fHigh);
 
   const onPointer = (event: ReactPointerEvent<SVGSVGElement>) => {
