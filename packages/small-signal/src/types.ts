@@ -91,6 +91,43 @@ export interface SmallSignalRequest {
   assume?: SmallSignalAssumptions;
   /** Further assumptions within `threshold` of the full model. */
   suggest?: SmallSignalSuggestRequest;
+  /** A dense log-spaced sweep of gain, Zin and Zout for a Bode plot. */
+  sweep?: SmallSignalSweepRequest;
+}
+
+/**
+ * The band of a sweep: fLow·10^(k/perDecade) up to fHigh. Without fLow and
+ * fHigh, whole decades from one below the circuit's lowest natural
+ * frequency (or requested frequency) to one above its highest.
+ */
+export interface SmallSignalSweepRequest {
+  fLow?: number;
+  fHigh?: number;
+  /** Default 20, at most 100. */
+  perDecade?: number;
+}
+
+/** The swept frequencies (Hz). */
+export interface SmallSignalSweep {
+  fLow: number;
+  fHigh: number;
+  perDecade: number;
+  f: number[];
+}
+
+/** One swept value, [re, im]; null where it is not finite. */
+export type SweepPoint = [number, number] | null;
+
+/** A quantity at the swept frequencies, one point per `SmallSignalSweep.f`. */
+export interface QuantitySweep {
+  /** The full model: `values` at these frequencies. */
+  full: SweepPoint[];
+  /** The simplified form shown (of the assumed model under assumptions);
+   * null when it is the exact form. */
+  approx: SweepPoint[] | null;
+  /** Under assumptions: the assumed model, `assumed.values` at these
+   * frequencies; null when it is unbounded. */
+  assumed?: SweepPoint[] | null;
 }
 
 export type SmallSignalApprox = "named" | "terms";
@@ -346,6 +383,9 @@ export interface SmallSignalQuantity {
   /** Symbolic against direct numeric solve (numeric mode); null when the
    * exact form is over budget. */
   check?: { ok: boolean; maxRelDiff: number } | null;
+  /** With `sweep` in the request, at `SmallSignalResult.sweep.f`; absent
+   * when the quantity is unbounded at every frequency. */
+  sweep?: QuantitySweep;
   /** Under assumptions: values, poles and zeros above stay the full
    * model's; exact, display and simplified are the assumed model's. */
   assumed?: AssumedQuantity;
@@ -651,6 +691,8 @@ export interface SmallSignalResult {
   assumptions?: SmallSignalAssumptionReport;
   /** Present when the request has `suggest`. */
   suggestions?: SmallSignalSuggestions;
+  /** With `sweep` in the request; null without numbers or any C or L. */
+  sweep?: SmallSignalSweep | null;
 }
 
 /** One further assumption: a term of one part, a matched group or a type. */

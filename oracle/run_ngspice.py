@@ -471,6 +471,14 @@ def noise_band(net: spice.Netlist, side: dict, band: list[float], keep: Path | N
 AGREEMENT_RTOL = 1e-6
 
 
+def sweep_freqs(spec: list[float]) -> list[float]:
+    """Sidecar `sweep` [fLow, fHigh, perDecade]: the solver's swept
+    frequencies, fLow·10^(k/perDecade) for k = 0..n."""
+    lo, hi, per = float(spec[0]), float(spec[1]), int(spec[2])
+    n = max(1, round(math.log10(hi / lo) * per))
+    return [lo * 10 ** (k / per) for k in range(n + 1)]
+
+
 def cval(f: float, z: complex | None) -> dict:
     if z is None or not (math.isfinite(z.real) and math.isfinite(z.imag)):
         return {"f": f, "re": None, "im": None, "inf": True}
@@ -534,6 +542,15 @@ def _process(cir: Path, side: dict, out_dir: Path, keep: Path | None) -> dict:
         result["distortion"] = distortion.analyze(cir, net, side, keep)
     if side.get("pz"):
         result["gain"].update(pz_reference(cir, net, side, keep, name, result))
+    if side.get("sweep"):
+        # The Bode sweep: the same .ac at every swept frequency.
+        swept = {**side, "freqs": sweep_freqs(side["sweep"])}
+        _, sgain, szin = op_and_ac(net, swept, keep, f"{name}.sweep")
+        result["sweep"] = {"f": swept["freqs"], "gain": sgain}
+        if side.get("rin") and not side.get("inputNeg"):
+            result["sweep"]["rin"] = szin
+        if side.get("rout"):
+            result["sweep"]["rout"] = zout(net, swept, keep, f"{name}.sweep")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     return result

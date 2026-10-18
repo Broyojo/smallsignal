@@ -26,6 +26,8 @@ import type {
   SmallSignalQuantity,
   SmallSignalSuggestion,
   SmallSignalSuggestions,
+  SmallSignalSweep,
+  QuantitySweep,
 } from "./types.js";
 
 // Runs the real solver when the WASM has been built (wasm-pack, see
@@ -409,6 +411,19 @@ const GAIN_KEYS = allKeys<SmallSignalQuantity>()([
   "check",
   "skipped",
   "assumed",
+  "sweep",
+] as const);
+
+const SWEEP_KEYS = allKeys<SmallSignalSweep>()([
+  "fLow",
+  "fHigh",
+  "perDecade",
+  "f",
+] as const);
+const QUANTITY_SWEEP_KEYS = allKeys<QuantitySweep>()([
+  "full",
+  "approx",
+  "assumed",
 ] as const);
 
 describe.skipIf(!built)("the gain JSON matches the TypeScript contract", () => {
@@ -603,6 +618,45 @@ describe.skipIf(!built)(
       });
       expect(result.error).toBeUndefined();
       for (const name of ["gain", "rin", "rout"]) declared(result[name]);
+    });
+
+    it("the sweep: every field declared, one point per swept frequency", async () => {
+      const result = await solve("two-stage-miller-ota", {
+        input: "VINP",
+        inputNeg: "VINN",
+        output: "vout",
+        rin: true,
+        rout: true,
+        sweep: {},
+        assume: { miller: [{ element: "CC" }] },
+      });
+      expect(result.error).toBeUndefined();
+      expect(Object.keys(result.sweep).sort()).toEqual([...SWEEP_KEYS].sort());
+      const n = result.sweep.f.length;
+      // Whole decades around the poles (1.1 kHz to 132 MHz) and 1 kHz.
+      expect(result.sweep.fLow).toBe(100);
+      expect(result.sweep.fHigh).toBe(1e10);
+      expect(n).toBe(8 * 20 + 1);
+      for (const name of ["gain", "rout"]) {
+        const q = result[name];
+        declared(q);
+        expect(Object.keys(q.sweep).sort()).toEqual(
+          [...QUANTITY_SWEEP_KEYS].sort(),
+        );
+        for (const key of QUANTITY_SWEEP_KEYS)
+          if (q.sweep[key]) expect(q.sweep[key]).toHaveLength(n);
+      }
+      // Zin looks into a gate: unbounded at every frequency, nothing swept.
+      expect(result.rin.infinite).toBe(true);
+      expect(result.rin.sweep).toBeUndefined();
+      // Nothing reactive: no sweep at all.
+      const flat = await solve("cmos-inverter-triode", {
+        input: "VIN",
+        output: "out",
+        sweep: {},
+      });
+      expect(flat.sweep).toBeNull();
+      expect(flat.gain.sweep).toBeUndefined();
     });
 
     it("a 25-BJT op-amp: numbers without formulas, fast", async () => {

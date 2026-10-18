@@ -25,5 +25,10 @@
   "gain": [],
   "rout": []
  },
+ "sweep": [
+  10,
+  1000000000.0,
+  10
+ ],
  "description": "CC split into CC(1 - K) at o1 and CC(K - 1)/K at out, K = v(out)/v(o1) at DC = -gm6 (ro6 || ro7). The dominant pole moves little; the split loses pole splitting and the RHP zero gm6/CC. Values stay the full model's."
 }

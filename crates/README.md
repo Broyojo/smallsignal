@@ -77,13 +77,14 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
 [--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--ignore M1:ro,C1:short]
-[--region M3:triode] [--miller CC,M2:cgd] [--suggest gain:0.01] [--tol 0.05]
+[--region M3:triode] [--miller CC,M2:cgd] [--suggest gain:0.01]
+[--sweep auto|fLow,fHigh[,perDecade]] [--tol 0.05]
 [--approx named|terms] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `approx`,
-`verify`, `symbolic`, `maxTerms`, `assume`, `suggest`). The response is JSON,
-or `{"error": "..."}` on failure.
+`verify`, `symbolic`, `maxTerms`, `assume`, `suggest`, `sweep`). The response
+is JSON, or `{"error": "..."}` on failure.
 
 - Over budget: when an exact polynomial of gain, rin or rout (a
   determinant, or the sum or difference of two) would exceed `maxTerms`
@@ -133,6 +134,20 @@ or `{"error": "..."}` on failure.
 - Common factors of numerator and denominator cancel (exact multivariate GCD),
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
 - `rout`: the impedance at out/ref with every independent source zeroed.
+- `sweep` (`{fLow?, fHigh?, perDecade?}`, `sweep.rs`): the frequencies
+  fLow·10^(k/perDecade) up to fHigh (perDecade 1 to 100, default 20, at
+  most 20 decades). Without fLow and fHigh, whole decades from one below
+  the lowest to one above the highest of the full model's natural
+  frequencies (|root| of det A, every source zeroed) and the requested
+  `freqs`, or 1 Hz to 100 GHz when it has none. The response's `sweep`
+  is `{fLow, fHigh, perDecade, f}`, null in symbolic mode or without a C
+  or L. Each of `gain`, `rin`, `rout` then has `sweep` `{full, approx,
+  assumed}`, one `[re, im]` (null where not finite) per frequency:
+  `full` exactly as `values` at those frequencies, `approx` the
+  `simplified` form (null when it is the exact one), `assumed` (under
+  `assume`) exactly as `assumed.values`; absent for a quantity infinite
+  throughout. ngspice's .ac at the swept frequencies: `oracle/compare.py`
+  (sidecar `sweep`).
 - Each quantity also carries `display`: the exact expression with junction
   leakage (r_bs, r_bd, r_μ) taken to zero conductance (their monomials dropped,
   then cancelled and normalized as usual), with `maxRelError` against the full

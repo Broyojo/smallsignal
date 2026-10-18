@@ -67,6 +67,11 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   must be its verdict (`"regionEffect": {"M1": "refused"}` pins it) and
   its `linearized` g_m, g_ds, g_mb its values. ngspice cannot impose a
   region, so no ngspice equivalent exists.
+- Sidecar `"sweep": [fLow, fHigh, perDecade]`: generation runs `.ac` at
+  each swept frequency (`run_ngspice.sweep_freqs`, the solver's formula)
+  into `sweep`, the CLI gets `--sweep`, and every `full` point of gain,
+  Zin and Zout must equal ngspice's; under `assume` every `assumed`
+  point equals `indep.py`'s rebuild of the assumed circuit.
 - Sidecar `"suggest": {"quantity", "threshold"}`: the CLI gets `--suggest`.
   Every item must be within the threshold, and the greedy set applied on
   top of the sidecar's `assume` must solve to an `assumed.maxRelError`
