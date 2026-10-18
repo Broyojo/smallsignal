@@ -390,20 +390,21 @@ pub fn latex_of(net: &Netlist, x: &Applied, symbol: Option<&str>) -> String {
     }
 }
 
-/// Every element that can take an assumption, with the terms its full
-/// model has (a short always applies).
-pub fn assumable(net: &Netlist, full: &SsCircuit) -> Value {
+/// Every element that can take an assumption: its name, type (`nmos`,
+/// `resistor`, ...) and the terms its full model has (a short always
+/// applies), in netlist order.
+pub fn assumable_terms(net: &Netlist, full: &SsCircuit) -> Vec<(String, &'static str, Vec<Term>)> {
     let mut out = Vec::new();
     for e in &net.elements {
-        let terms: Vec<&str> = terms_for(&e.kind)
+        let terms: Vec<Term> = terms_for(&e.kind)
             .iter()
-            .filter(|&&t| {
+            .copied()
+            .filter(|&t| {
                 t == Term::Short || {
                     let name = param_name(&e.kind, t, &e.name);
                     full.params.iter().any(|p| p.name == name && p.element == e.name)
                 }
             })
-            .map(|t| t.as_str())
             .collect();
         if terms.is_empty() {
             continue;
@@ -418,9 +419,22 @@ pub fn assumable(net: &Netlist, full: &SsCircuit) -> Value {
             Kind::C { .. } => "capacitor",
             _ => "inductor",
         };
-        out.push(json!({ "element": e.name, "type": ty, "terms": terms }));
+        out.push((e.name.clone(), ty, terms));
     }
-    Value::Array(out)
+    out
+}
+
+/// `assumable_terms` as the response's `assumable`.
+pub fn assumable(net: &Netlist, full: &SsCircuit) -> Value {
+    Value::Array(
+        assumable_terms(net, full)
+            .into_iter()
+            .map(|(element, ty, terms)| {
+                let terms: Vec<&str> = terms.iter().map(|t| t.as_str()).collect();
+                json!({ "element": element, "type": ty, "terms": terms })
+            })
+            .collect(),
+    )
 }
 
 /// Relative distance of a value from the full model's: |h − f| over |f|,

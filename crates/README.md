@@ -72,11 +72,12 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4]
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
 [--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--ignore M1:ro,C1:short]
-[--region M3:triode] [--miller CC,M2:cgd] [--tol 0.05] [--verify] [--symbolic]`, or
+[--region M3:triode] [--miller CC,M2:cgd] [--suggest gain:0.01] [--tol 0.05]
+[--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
 `noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
-`symbolic`, `maxTerms`, `assume`). The response is JSON, or
+`symbolic`, `maxTerms`, `assume`, `suggest`). The response is JSON, or
 `{"error": "..."}` on failure.
 
 - Over budget: when an exact polynomial of gain, rin or rout (a
@@ -223,6 +224,14 @@ independent parameters, K from an LU solve at s = 0, and maps each expanded
 form onto C and the symbol K exactly.
 `cargo run --release -p smallsignal-core --example bench_assume` times the
 µA741 (`oracle/corpus/ua741.cir`) under them.
+
+`suggest` (`suggest.rs`) proposes further assumptions within a threshold
+of the full model for one quantity: each candidate unit's deviation by LU
+on the model the analysis would build, then a greedy set that stays
+within it, never one that would be restored; capped in time (the WASM
+build registers the host's `Date.now`, wasm32 has no clock) and in
+candidates. Rules and fields:
+[docs/specs/small-signal-assumptions.md](../docs/specs/small-signal-assumptions.md).
 
 ## Noise (`noise: true`, optional `noiseBand: [fLow, fHigh]`)
 

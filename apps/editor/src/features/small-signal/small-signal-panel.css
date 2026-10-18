@@ -523,3 +523,43 @@
   min-height: var(--icm-control-h);
   padding: 0.1rem 0.3rem;
 }
+
+/* Suggestions: a quantity, a threshold, then the terms within it. */
+.small-signal-suggestions-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.small-signal-panel .small-signal-suggestions-controls input {
+  width: 5em;
+}
+
+.small-signal-suggestions-scroll {
+  overflow-y: auto;
+  max-height: 16em;
+}
+
+.small-signal-suggestion-table {
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-suggestion-table tbody th {
+  font-weight: 400;
+}
+
+.small-signal-suggestion-table tbody tr:not(.is-kept) > * {
+  color: var(--icm-text-muted);
+}
+
+.small-signal-suggestion-table .small-signal-reset {
+  padding: 0 6px;
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-suggestions-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

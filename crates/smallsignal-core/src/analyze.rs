@@ -75,6 +75,10 @@ pub struct Request {
     /// Input amplitude for HD2/HD3 (default 10 mV, or 1 µA for a current input).
     #[serde(default)]
     pub amplitude: Option<f64>,
+    /// Further assumptions that keep one quantity within a threshold of
+    /// the full model (see `suggestions`).
+    #[serde(default)]
+    pub suggest: Option<crate::suggest::SuggestRequest>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -197,6 +201,23 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
 
     let symbolic = req.symbolic || !net.missing.is_empty();
+    let suggest = match &req.suggest {
+        None => None,
+        Some(sg) => {
+            let which = match sg.quantity.trim() {
+                "gain" => Which::Gain,
+                "rin" if req.rin => Which::Rin,
+                "rout" if req.rout => Which::Rout,
+                q @ ("rin" | "rout") => return Err(format!("suggest: {q} needs {q} in the request")),
+                q => return Err(format!("suggest: no quantity '{q}' (use gain, rin or rout)")),
+            };
+            let (threshold, limits) = (sg.threshold()?, sg.limits()?);
+            if symbolic {
+                return Err("suggest: needs a bias point".to_string());
+            }
+            Some((which, threshold, limits))
+        }
+    };
     let op = if symbolic {
         None
     } else {
@@ -937,6 +958,33 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         );
     }
 
+    if let Some((which, threshold, limits)) = suggest {
+        let name = match which {
+            Which::Gain => "gain",
+            Which::Rin => "rin",
+            Which::Rout => "rout",
+        };
+        let Some((_, full_grid)) = full_grids.iter().find(|(n, _)| *n == name) else {
+            return Err(format!("suggest: no {name} here"));
+        };
+        let ctx = SuggestCtx {
+            probe: &probe,
+            net: &net,
+            full: &full,
+            op: op.as_ref(),
+            matched: &matched,
+            accepted: accepted_groups(&symbols),
+            current: req.assume.as_ref(),
+            which,
+            full_grid,
+            grid: &grid,
+        };
+        resp.insert(
+            "suggestions".into(),
+            ctx.report(threshold, limits).json(name, threshold),
+        );
+    }
+
     if req.verify {
         // One determinant per unknown: skip (and say so) when that would take
         // far longer than the analysis itself, or when there is no exact
@@ -1279,6 +1327,167 @@ fn k_definition(
         .map(|k| shown.syms[k].clone())
         .collect();
     Some((json!({ "latex": latex, "num": n, "den": d }), used))
+}
+
+/// What `suggest` needs of the analysis: the quantity's full-model values
+/// on the check grid and how to build an assumed model as `analyze` does.
+struct SuggestCtx<'a> {
+    probe: &'a Probe<'a>,
+    net: &'a Netlist,
+    full: &'a SsCircuit,
+    op: Option<&'a Op>,
+    /// The requested matched groups (before assumptions split any), which
+    /// decide what is restored, as in `analyze`.
+    matched: &'a [Vec<String>],
+    /// The groups the analysis merged into one symbol: a candidate's units.
+    accepted: Vec<Vec<String>>,
+    current: Option<&'a crate::assume::AssumeRequest>,
+    which: Which,
+    full_grid: &'a Grid,
+    grid: &'a [f64],
+}
+
+impl SuggestCtx<'_> {
+    /// `which` unbounded at s = 0 without junction leakage (as `analyze`
+    /// decides what to restore).
+    fn vanishes(&self, which: Which, m: &SsCircuit) -> bool {
+        let m = m.omit(&m.optional);
+        let (sys, border) = self.probe.den_system(which, &m);
+        crate::pencil::vanishes(&sys, &m, border.as_deref(), true)
+    }
+
+    /// The assumptions `analyze` puts back for `which` under `a`.
+    fn restored(&self, which: Which, a: &crate::assume::Assume, units: &[Vec<usize>]) -> Vec<usize> {
+        if self.vanishes(which, self.full) {
+            Vec::new()
+        } else {
+            crate::assume::restore(units, |r| self.vanishes(which, &crate::assume::apply(self.full, a, r)))
+        }
+    }
+
+    /// The assumptions put back for the quantity under `a`, by element and
+    /// term (sorted), and the model it is analyzed on, Miller splits
+    /// included with K from the gain's model: as `analyze` does.
+    fn model(&self, a: &crate::assume::Assume) -> (Vec<(String, &'static str)>, SsCircuit) {
+        let (amatched, _) = consistent_groups(self.net, self.matched, a);
+        let units = crate::assume::units(a, element_groups(self.net, &amatched));
+        let restored = self.restored(self.which, a, &units);
+        let mut back: Vec<(String, &'static str)> = restored
+            .iter()
+            .map(|&i| (a.applied[i].element.clone(), a.applied[i].term.as_str()))
+            .collect();
+        back.sort();
+        let base = crate::assume::apply(self.full, a, &restored);
+        if a.miller.is_empty() {
+            return (back, base);
+        }
+        let gain_base = match self.which {
+            Which::Gain => base.clone(),
+            _ => crate::assume::apply(self.full, a, &self.restored(Which::Gain, a, &units)),
+        };
+        let splits = crate::miller::gains(
+            self.net,
+            self.full,
+            &gain_base,
+            &self.probe.excite,
+            &a.miller,
+            &mut Vec::new(),
+        );
+        (back, crate::miller::split(&base, &splits, &a.miller))
+    }
+
+    /// The quantity on `m` over the check grid by LU, as the numeric path
+    /// gives it (None at DC where its denominator vanishes there).
+    fn values(&self, m: &SsCircuit) -> Vec<Option<Complex64>> {
+        let (dsys, border) = self.probe.den_system(self.which, m);
+        let dc_zero = crate::pencil::vanishes(&dsys, m, border.as_deref(), true);
+        if dc_zero && crate::pencil::vanishes(&dsys, m, border.as_deref(), false) {
+            return vec![None; self.grid.len()];
+        }
+        let sy = self.probe.systems(m);
+        let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+        self.grid
+            .iter()
+            .map(|&f| {
+                if f == 0.0 && dc_zero {
+                    return None;
+                }
+                let s = jw(f);
+                let v = match self.which {
+                    Which::Gain => self.probe.gain_at(&sy, m, s),
+                    Which::Rin => self.probe.rin_at(&sy, m, s),
+                    Which::Rout => self.probe.rout_at(&sy, m, s),
+                };
+                v.map(|v| v.0).filter(finite)
+            })
+            .collect()
+    }
+
+    fn report(&self, threshold: f64, limits: crate::suggest::Limits) -> crate::suggest::Report {
+        use crate::assume::{resolve, AssumeRequest, IgnoreRequest};
+        use crate::suggest::Outcome;
+        let current = self.current.cloned().unwrap_or_default();
+        let resolved = resolve(self.net, self.full, self.op, &current).unwrap_or_default();
+        let (base_back, _) = self.model(&resolved);
+        let in_effect: Vec<(String, crate::assume::Term)> =
+            resolved.applied.iter().map(|x| (x.element.clone(), x.term)).collect();
+        // Asked for but absent (an open 0 F capacitor) still rules out its
+        // opposite: the request would be both open and short.
+        let mut taken: Vec<(String, crate::assume::Term)> = in_effect
+            .iter()
+            .cloned()
+            .chain(resolved.absent.iter().cloned())
+            .collect();
+        // A Miller split keeps its capacitance: neither neglected nor (a
+        // capacitor's, a diode's) open or shorted. Splits are no candidates.
+        for t in &resolved.miller {
+            use crate::assume::Term;
+            taken.extend(
+                t.term
+                    .into_iter()
+                    .chain([Term::Open, Term::Short])
+                    .map(|x| (t.element.clone(), x)),
+            );
+        }
+        let (amatched, _) = consistent_groups(self.net, &self.accepted, &resolved);
+        let cands = crate::suggest::candidates(
+            &crate::assume::assumable_terms(self.net, self.full),
+            &taken,
+            element_groups(self.net, &amatched),
+        );
+        let eval = |extra: &[(String, crate::assume::Term)]| {
+            if extra.is_empty() && in_effect.is_empty() && resolved.miller.is_empty() {
+                // The full model itself: 0, or nothing to compare.
+                return Outcome::Deviation(deviation(&self.full_grid.vals, self.full_grid));
+            }
+            let mut req: AssumeRequest = current.clone();
+            req.ignore.extend(extra.iter().map(|(e, t)| IgnoreRequest {
+                element: e.clone(),
+                term: t.as_str().to_string(),
+            }));
+            let Ok(a) = resolve(self.net, self.full, self.op, &req) else {
+                return Outcome::Unbounded;
+            };
+            let (back, model) = self.model(&a);
+            if back != base_back {
+                return Outcome::Unbounded;
+            }
+            Outcome::Deviation(deviation(&self.values(&model), self.full_grid))
+        };
+        crate::suggest::run(cands, threshold, limits, crate::clock::now_ms, eval)
+    }
+}
+
+/// The matched groups `symbols` merged: the members of each symbol that
+/// stands for several elements, a group rejected as unlike left out.
+fn accepted_groups(symbols: &Symbols) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    for s in symbols.syms.iter().filter(|s| s.elements.len() > 1) {
+        if !out.contains(&s.elements) {
+            out.push(s.elements.clone());
+        }
+    }
+    out
 }
 
 /// "M1", "M1 and M2", "M1, M2 and M3".

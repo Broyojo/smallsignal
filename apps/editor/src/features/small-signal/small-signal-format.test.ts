@@ -1,14 +1,26 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { SmallSignalSource } from "@icm/small-signal";
-import { partKey } from "./small-signal-assumption-store";
+import type {
+  AssumptionTerm,
+  SmallSignalElement,
+  SmallSignalSource,
+  SmallSignalSuggestion,
+} from "@icm/small-signal";
+import {
+  partKey,
+  type CircuitAssumptions,
+} from "./small-signal-assumption-store";
 import {
   assumptionColumnChange,
   assumptionColumns,
   assumptionRows,
+  formatDeviation,
   resultForCircuit,
   kText,
   formatPercent,
+  suggestionText,
+  suggestionThreshold,
+  withSuggestions,
   countText,
   differentialPairs,
   formatDensity,
@@ -553,5 +565,105 @@ describe("assumption table", () => {
       "leakage",
       "caps",
     ]);
+  });
+});
+
+describe("suggestions", () => {
+  const item = (
+    elements: string[],
+    term: AssumptionTerm,
+    type: SmallSignalSuggestion["type"],
+    scope: SmallSignalSuggestion["scope"],
+  ): SmallSignalSuggestion => ({
+    elements,
+    term,
+    type,
+    scope,
+    alone: 0.001,
+    cumulative: null,
+  });
+
+  it("writes small deviations with a digit, never an exponent", () => {
+    expect(formatDeviation(0)).toBe("0%");
+    expect(formatDeviation(4e-17)).toBe("<0.001%");
+    expect(formatDeviation(4.2e-5)).toBe("0.004%");
+    expect(formatDeviation(0.0123)).toBe("1.2%");
+  });
+
+  it("names a part, a matched group or a whole type", () => {
+    expect(suggestionText(item(["M5"], "ro", "nmos", "part"))).toBe("ro M5");
+    expect(suggestionText(item(["M3", "M4"], "ro", "pmos", "group"))).toBe(
+      "ro M3 = M4",
+    );
+    expect(suggestionText(item(["M3", "M4", "M6"], "ro", "pmos", "type"))).toBe(
+      "ro all PMOS",
+    );
+    expect(suggestionText(item(["R5"], "open", "resistor", "part"))).toBe(
+      "R5 open",
+    );
+  });
+
+  it("reads the threshold in percent, blank as 1%", () => {
+    expect(suggestionThreshold("")).toBe(0.01);
+    expect(suggestionThreshold("5")).toBe(0.05);
+    expect(suggestionThreshold("0")).toBeNull();
+    expect(suggestionThreshold("x")).toBeNull();
+  });
+
+  it("applies each member's term where the Assumptions table stores it", () => {
+    const elements = [
+      { name: "M3", kind: "pmos", instancePath: ["a"] },
+      { name: "M4", kind: "pmos", instancePath: ["b"] },
+      { name: "C1", kind: "capacitor", instancePath: ["c"] },
+    ] as SmallSignalElement[];
+    const parts = withSuggestions(
+      { [partKey(["c"])]: { ignore: { open: true } } },
+      [
+        item(["M3", "M4"], "ro", "pmos", "group"),
+        item(["C1"], "short", "capacitor", "part"),
+      ],
+      elements,
+      {},
+    );
+    expect(parts).toEqual({
+      [partKey(["a"])]: { ignore: { ro: true } },
+      [partKey(["b"])]: { ignore: { ro: true } },
+      [partKey(["c"])]: { ignore: { short: true } },
+    });
+    // A default already neglecting it stores nothing.
+    expect(
+      withSuggestions({}, [item(["M3"], "ro", "pmos", "part")], elements, {
+        pmos: ["ro"],
+      }),
+    ).toEqual({ [partKey(["a"])]: { ignore: {} } });
+  });
+
+  it("keeps Miller splits, and a neglected capacitance ends its own", () => {
+    const elements = [
+      { name: "M1", kind: "nmos", instancePath: ["m1"] },
+    ] as SmallSignalElement[];
+    const split = { [partKey(["m1"])]: { miller: ["cgd", "cgs"] } };
+    // r_o neglected: both splits stay.
+    expect(
+      withSuggestions(
+        split as CircuitAssumptions,
+        [item(["M1"], "ro", "nmos", "part")],
+        elements,
+        {},
+      ),
+    ).toEqual({
+      [partKey(["m1"])]: { ignore: { ro: true }, miller: ["cgd", "cgs"] },
+    });
+    // C_gs neglected: its split ends, C_gd's stays.
+    expect(
+      withSuggestions(
+        split as CircuitAssumptions,
+        [item(["M1"], "cgs", "nmos", "part")],
+        elements,
+        {},
+      ),
+    ).toEqual({
+      [partKey(["m1"])]: { ignore: { cgs: true }, miller: ["cgd"] },
+    });
   });
 });

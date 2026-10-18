@@ -9,6 +9,7 @@ pub mod analyze;
 pub mod assume;
 pub mod caps;
 pub mod certificate;
+pub mod clock;
 pub mod dc;
 pub mod det;
 pub mod devices;
@@ -24,8 +25,10 @@ pub mod render;
 pub mod roots;
 pub mod ss;
 pub mod structure;
+pub mod suggest;
 pub mod sym;
 pub mod units;
 pub mod verify;
 
 pub use analyze::{analyze, analyze_json, Request};
+pub use clock::set_clock;

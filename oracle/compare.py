@@ -85,6 +85,8 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         items = (side.get("assume") or {}).get(key) or []
         if items:
             args += [flag, ",".join(f"{x['element']}:{x[field]}" for x in items)]
+    if side.get("suggest"):
+        args += ["--suggest", f"{side['suggest']['quantity']}:{side['suggest']['threshold']!r}"]
     miller = (side.get("assume") or {}).get("miller") or []
     if miller:
         args += ["--miller", ",".join(x["element"] + (f":{x['term']}" if x.get("term") else "") for x in miller)]
@@ -535,7 +537,47 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
                     rep.failures.append(f"assumed.gain pole {z:.8g}: no root of the assumed circuit within 1e-6")
 
 
-def compare(got: dict, want: dict, rep: Report, side: dict | None = None, cir: Path | None = None):
+def compare_suggest(got: dict, want: dict, side: dict, cir: Path, rep: Report, cmd: list[str]):
+    """Sidecar `suggest`: every item within the threshold, and the greedy
+    set applied on top of the sidecar's own assumptions solves to an
+    `assumed.maxRelError` equal to the reported `combined` (to the 1e-9 of
+    a value that proven junction omissions allow). That solve's assumed
+    values are then held to the independent rebuild (compare_assume)."""
+    spec = side["suggest"]
+    s = got.get("suggestions")
+    if s is None:
+        rep.failures.append("suggestions: missing")
+        return
+    q, threshold = spec["quantity"], float(spec["threshold"])
+    if s["quantity"] != q or s["threshold"] != threshold:
+        rep.failures.append(f"suggestions: for {s['quantity']} at {s['threshold']}, want {q} at {threshold}")
+    kept: list[dict] = []
+    for it in s["items"]:
+        if it["alone"] > threshold or (it["cumulative"] is not None and it["cumulative"] > threshold):
+            rep.failures.append(f"suggestions: {it['term']} {it['elements']} above the threshold")
+        if it["cumulative"] is None:
+            continue
+        for e in it["elements"]:
+            x = {"element": e, "term": it["term"]}
+            if x not in kept:
+                kept.append(x)
+    if not kept:
+        rep.failures.append("suggestions: nothing kept, so nothing to check")
+        return
+    current = (side.get("assume") or {}).get("ignore") or []
+    applied = {k: v for k, v in side.items() if k != "suggest"}
+    applied["assume"] = {**(side.get("assume") or {}), "ignore": [*current, *kept]}
+    again = run_cli(cmd, cir, applied)
+    mx = again[q]["assumed"]["maxRelError"]
+    if mx is None or s["combined"] is None or abs(mx - s["combined"]) > 1e-8:
+        rep.failures.append(f"suggestions: combined {s['combined']}, the applied set solves to {mx}")
+    if again[q]["assumed"]["restored"] != got[q].get("assumed", {}).get("restored", []):
+        rep.failures.append("suggestions: the applied set restores more than the current assumptions")
+    compare_assume(again, want, applied, cir, rep)
+
+
+def compare(got: dict, want: dict, rep: Report, side: dict | None = None, cir: Path | None = None,
+            cmd: list[str] | None = None):
     """got against want; with the sidecar, a requested noise or distortion
     analysis whose expected block is missing fails."""
     for q in ("noise", "distortion"):
@@ -577,6 +619,8 @@ def compare(got: dict, want: dict, rep: Report, side: dict | None = None, cir: P
         compare_distortion(got, want, rep)
     if side and side.get("assume") and cir is not None:
         compare_assume(got, want, side, cir, rep)
+    if side and side.get("suggest") and cir is not None and cmd is not None:
+        compare_suggest(got, want, side, cir, rep, cmd)
 
 
 def main() -> int:
@@ -600,7 +644,7 @@ def main() -> int:
         side = json.loads(cir.with_suffix(".json").read_text())
         rep = Report(args.rtol, side.get("reference_limits"))
         try:
-            compare(run_cli(cmd, cir, side), want, rep, side, cir)
+            compare(run_cli(cmd, cir, side), want, rep, side, cir, cmd)
         except (RuntimeError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as exc:
             print(f"{wpath.stem:28s} {'ERROR':6s} {'':>13s}  {str(exc)[:100]}")
             continue

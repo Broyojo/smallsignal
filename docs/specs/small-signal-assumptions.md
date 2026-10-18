@@ -9,8 +9,9 @@ r_π, r_μ, bulk junctions; take a passive open or shorted; split a feedback
 capacitance by the Miller approximation; expect a region),
 applied by the solver to the formulas it shows while every number stays the
 full model's. The solver's general contract is in
-[crates/README.md](../../crates/README.md#contract); the panel that sets
-assumptions is a later change.
+[crates/README.md](../../crates/README.md#contract). The panel sets them
+in its Assumptions section, and its Suggestions section applies
+`suggestions` items to the same store.
 
 ## Rules
 
@@ -85,6 +86,27 @@ assumptions is a later change.
   terms, r_bs and r_bd the bulk junction currents; BJT r_o the v_CE terms of
   I_C without leakage, r_π I_B without leakage, r_μ the collector–base
   branch; an open or shorted diode all of its terms.
+- Suggestions (`suggest`) need an operating point and are numeric only, so
+  they hold over the term budget. A candidate is one unit not in effect
+  (a term of one element or of a matched group the solver merged; not the
+  other of an open or short asked for, even one absent from the model),
+  or one transistor type's term over all its units when it has two or
+  more (`scope: "type"`). A Miller split is never a candidate, and what a
+  split in effect keeps (its capacitance, a capacitor's or diode's open
+  and short) is none either. Its `alone` is the `fullModelError`
+  metric, by LU on the model the analysis would build (splits included)
+  with it added to the
+  current assumptions, restore included, on the same check grid. A
+  candidate that changes what the quantity puts back is left out
+  (`unbounded`). Those with `alone` ≤ the threshold are sorted ascending
+  and taken greedily: each is kept when the deviation of everything kept
+  with it is still ≤ the threshold (`cumulative`), else skipped (null).
+  `combined` is the kept set's deviation; applied, it is the analysis's
+  `assumed.maxRelError` to within the 1e-9 of a value that proven junction
+  omissions allow.
+- Evaluation stops once `timeLimit` seconds (default 20; 0 evaluates
+  nothing) have passed, or after `maxCandidates` (default 400, type-wide
+  candidates first), and `capped` says which.
 - Certificates (`--certificate`) cover the gain's assumed element list, a
   Miller split's C_in and C_out as two parameters.
 
@@ -149,6 +171,20 @@ poles, zeros}`, the root lists as pairs `{assumed, full, relError}`
   on noise `sources` and distortion `taylor` entries left out.
 - `params`, `omittedJunctions` and `omissionError` describe the assumed
   models; `verify` checks the gain's.
+
+Request `suggest` (CLI `--suggest gain:0.01`): `{quantity: "gain" | "rin"
+| "rout", threshold?: 0.01, timeLimit?: 20, maxCandidates?: 400}`; rin
+and rout need `rin` and `rout`. Errors: `suggest: needs a bias point`,
+`suggest: no quantity 'zin' (use gain, rin or rout)`, `suggest: rout needs
+rout in the request`, `suggest: threshold must be above 0`.
+
+Response `suggestions`: `{quantity, threshold, base, items, combined,
+candidates, evaluated, unbounded, capped}`, `base` the current
+assumptions' deviation (null when the quantity is unbounded throughout),
+`capped` null, `"time"` or `"candidates"`. `items`
+`[{elements, term, type, scope, alone, cumulative}]`, `scope` `part`,
+`group` or `type`: one item can cover several elements, which Apply
+writes one by one.
 - Types: [`packages/small-signal/src/types.ts`](../../packages/small-signal/src/types.ts).
   The editor netlist names each part's `instancePath` (instance ids from the
   top Cell down) so stored assumptions follow a part across renames.
@@ -172,5 +208,9 @@ poles, zeros}`, the root lists as pairs `{assumed, full, relError}`
   and the dominant pole with C_C(1 + A_2): `oracle/textbook.py`
   (`miller_split_*`).
 - Lean certificates for an assumed element list: `lean/check_all.sh`.
+- Suggestions within the threshold, equal to a direct solve of the applied
+  set, in matched-group units, never restoring, capped:
+  `crates/smallsignal-core/tests/suggestions.rs`; applied sets against the
+  rebuild: `oracle/compare.py` (sidecar `suggest`).
 - Every emitted field is declared:
   `packages/small-signal/src/end-to-end.test.ts`.

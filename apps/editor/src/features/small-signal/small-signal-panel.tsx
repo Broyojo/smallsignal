@@ -50,6 +50,9 @@ import {
   type RootPair,
   type SmallSignalAssumptionReport,
   type SmallSignalElement,
+  type SmallSignalSuggestion,
+  type SmallSignalSuggestions,
+  type SuggestQuantity,
 } from "@icm/small-signal";
 import {
   assumptionRequest,
@@ -2405,6 +2408,158 @@ function AssumptionTable({
   );
 }
 
+/** A deviation as a percentage, with a digit for small ones: "0.004%". */
+export function formatDeviation(fraction: number): string {
+  const percent = fraction * 100;
+  if (percent === 0) return "0%";
+  if (percent < 0.001) return "<0.001%";
+  if (percent < 0.1) return `${percent.toPrecision(1)}%`;
+  return formatPercent(fraction);
+}
+
+/** Who a suggestion covers: "M5", "M1 = M2", "all PMOS". */
+export function suggestionTarget(item: SmallSignalSuggestion): string {
+  if (item.scope === "type")
+    return `all ${isTransistor(item.type) ? MODEL_TITLE[item.type] : item.type}`;
+  return item.elements.join(" = ");
+}
+
+/** Plain text of a suggestion, for labels: "ro M5", "R5 open". */
+export function suggestionText(item: SmallSignalSuggestion): string {
+  return isTransistor(item.type)
+    ? `${item.term} ${suggestionTarget(item)}`
+    : `${suggestionTarget(item)} ${item.term}`;
+}
+
+/** `parts` with every suggestion's term neglected on each of its parts. */
+export function withSuggestions(
+  parts: CircuitAssumptions,
+  items: readonly SmallSignalSuggestion[],
+  elements: readonly SmallSignalElement[],
+  defaults: AssumptionDefaults,
+): CircuitAssumptions {
+  const paths = new Map(
+    elements.map((element) => [element.name, partKey(element.instancePath)]),
+  );
+  let next = parts;
+  for (const item of items)
+    for (const name of item.elements) {
+      const path = paths.get(name);
+      if (path)
+        next = withTerms(next, path, item.type, [item.term], true, defaults);
+    }
+  return next;
+}
+
+/** A suggestions threshold typed in percent; null unless above 0. */
+export function suggestionThreshold(text: string): number | null {
+  const percent = parseSpiceNumber(text.trim() ? text : "1");
+  return percent !== null && percent > 0 ? percent / 100 : null;
+}
+
+const SUGGEST_LABEL: Record<SuggestQuantity, string> = {
+  gain: "Gain",
+  rin: "Zin",
+  rout: "Zout",
+};
+
+/**
+ * Further assumptions within the threshold of the full model, smallest
+ * first: Alone with the current assumptions, Together with every kept row
+ * above it.
+ */
+function SuggestionTable({
+  suggestions,
+  onApply,
+}: {
+  suggestions: SmallSignalSuggestions;
+  onApply(items: SmallSignalSuggestion[]): void;
+}) {
+  const kept = suggestions.items.filter((item) => item.cumulative !== null);
+  const capped =
+    suggestions.capped === null
+      ? null
+      : `Checked ${suggestions.evaluated} of ${suggestions.candidates}.`;
+  if (!suggestions.items.length)
+    return (
+      <p className="small-signal-muted">
+        Nothing within {formatDeviation(suggestions.threshold)}.
+        {capped ? ` ${capped}` : ""}
+      </p>
+    );
+  return (
+    <>
+      <div className="small-signal-suggestions-scroll">
+        <table className="small-signal-assumptions small-signal-suggestion-table">
+          <thead>
+            <tr>
+              <th scope="col">Term</th>
+              <th scope="col">Alone</th>
+              <th scope="col">Together</th>
+              <td />
+            </tr>
+          </thead>
+          <tbody>
+            {suggestions.items.map((item) => {
+              const text = suggestionText(item);
+              return (
+                <tr
+                  key={`${item.scope}:${item.term}:${item.elements.join()}`}
+                  className={item.cumulative === null ? undefined : "is-kept"}
+                >
+                  <th scope="row">
+                    {isTransistor(item.type) ? (
+                      <>
+                        <ColumnSymbol column={item.term} />{" "}
+                        {suggestionTarget(item)}
+                      </>
+                    ) : (
+                      text
+                    )}
+                  </th>
+                  <td>{formatDeviation(item.alone)}</td>
+                  <td>
+                    {item.cumulative === null
+                      ? "—"
+                      : formatDeviation(item.cumulative)}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="small-signal-reset"
+                      aria-label={`Apply ${text}`}
+                      onClick={() => onApply([item])}
+                    >
+                      Apply
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="small-signal-suggestions-footer">
+        {kept.length ? (
+          <button
+            type="button"
+            className="small-signal-reset"
+            onClick={() => onApply(kept)}
+          >
+            Apply all
+          </button>
+        ) : null}
+        {suggestions.combined !== null && kept.length ? (
+          <small className="small-signal-muted">
+            {formatDeviation(suggestions.combined)} from full model
+          </small>
+        ) : null}
+        {capped ? <small className="small-signal-muted">{capped}</small> : null}
+      </div>
+    </>
+  );
+}
+
 /** `v_{out}` for a net named Vout or out, `i_{1}` for a source named I1. */
 export function signalLabel(letter: "v" | "i", name: string): string {
   const body = new RegExp(`^${letter}(?=.)`, "iu").test(name)
@@ -2625,6 +2780,19 @@ export function SmallSignalPanel({
     string | null
   >(null);
   const distortionGeneration = useRef(0);
+  // Suggestions likewise have their own worker, only while open.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestQuantity, setSuggestQuantity] =
+    useState<SuggestQuantity>("gain");
+  const [suggestThresholdText, setSuggestThresholdText] = useState("");
+  const [suggestResponse, setSuggestResponse] =
+    useState<SmallSignalResponse | null>(null);
+  const [suggestResponseKey, setSuggestResponseKey] = useState<string | null>(
+    null,
+  );
+  const suggestClientRef = useRef<SmallSignalClient | null>(null);
+  const suggestBusy = useRef(false);
+  const suggestGeneration = useRef(0);
 
   useEffect(() => {
     // Start loading the typesetter now, before the first result arrives.
@@ -2643,6 +2811,8 @@ export function SmallSignalPanel({
       noiseClientRef.current = null;
       distortionClientRef.current?.dispose();
       distortionClientRef.current = null;
+      suggestClientRef.current?.dispose();
+      suggestClientRef.current = null;
     };
   }, []);
 
@@ -2873,6 +3043,50 @@ export function SmallSignalPanel({
       }
     };
   }, [distortionKey]);
+
+  // Suggestions need numbers only: the solve skips the exact forms.
+  const suggestThreshold = suggestionThreshold(suggestThresholdText);
+  const suggestKey =
+    suggestOpen && requestKey && !handAnalysis && suggestThreshold !== null
+      ? JSON.stringify([requestKey, suggestQuantity, suggestThreshold])
+      : null;
+  useEffect(() => {
+    // A new job, or none: drop the old result and any solve in flight.
+    const current = ++suggestGeneration.current;
+    setSuggestResponse(null);
+    if (!suggestKey) return;
+    const [key, quantity, threshold] = JSON.parse(suggestKey) as [
+      string,
+      SuggestQuantity,
+      number,
+    ];
+    const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
+    const timer = setTimeout(() => {
+      suggestClientRef.current ??= createSmallSignalClient();
+      suggestBusy.current = true;
+      void suggestClientRef.current
+        .analyze(text, {
+          ...job,
+          suggest: { quantity, threshold },
+          maxTerms: 1,
+        })
+        .then((next) => {
+          if (current !== suggestGeneration.current) return;
+          suggestBusy.current = false;
+          setSuggestResponse(next);
+          setSuggestResponseKey(suggestKey);
+        });
+    }, SOLVE_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      // As for Noise: stop a solve whose job is no longer wanted.
+      if (suggestBusy.current) {
+        suggestClientRef.current?.dispose();
+        suggestClientRef.current = null;
+        suggestBusy.current = false;
+      }
+    };
+  }, [suggestKey]);
 
   const blocked = unconnected.length > 0 || noDcPath.length > 0 || noOutput;
   const result =
@@ -3179,6 +3393,89 @@ export function SmallSignalPanel({
                       Reset
                     </button>
                   ) : null}
+                </div>
+              </details>
+            ) : null}
+
+            {result && assumptionTableRows.length ? (
+              <details
+                className="small-signal-options small-signal-suggestions"
+                open={suggestOpen}
+                onToggle={(event) => setSuggestOpen(event.currentTarget.open)}
+              >
+                <summary>Suggestions</summary>
+                <div>
+                  {handAnalysis ? (
+                    <p className="small-signal-muted">
+                      Suggestions need a bias point.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="small-signal-suggestions-controls">
+                        <label>
+                          For
+                          <select
+                            aria-label="Suggestions for"
+                            value={suggestQuantity}
+                            onChange={(event) =>
+                              setSuggestQuantity(
+                                event.currentTarget.value as SuggestQuantity,
+                              )
+                            }
+                          >
+                            {(["gain", "rin", "rout"] as const)
+                              .filter((key) => key === "gain" || result[key])
+                              .map((key) => (
+                                <option key={key} value={key}>
+                                  {SUGGEST_LABEL[key]}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <label>
+                          Within (%)
+                          <input
+                            aria-label="Suggestion threshold"
+                            aria-invalid={
+                              suggestThreshold === null ? true : undefined
+                            }
+                            placeholder="1"
+                            inputMode="decimal"
+                            value={suggestThresholdText}
+                            onChange={(event) =>
+                              setSuggestThresholdText(event.currentTarget.value)
+                            }
+                          />
+                        </label>
+                      </div>
+                      {suggestThreshold === null ? (
+                        <p className="small-signal-muted">
+                          Enter a threshold above 0.
+                        </p>
+                      ) : !suggestResponse ||
+                        suggestResponseKey !== suggestKey ? (
+                        <span className="small-signal-formula-pending" />
+                      ) : isSmallSignalError(suggestResponse) ? (
+                        <p className="small-signal-muted">
+                          {suggestResponse.error}
+                        </p>
+                      ) : suggestResponse.suggestions ? (
+                        <SuggestionTable
+                          suggestions={suggestResponse.suggestions}
+                          onApply={(items) =>
+                            updateAssumptions({
+                              parts: withSuggestions(
+                                assumptionParts,
+                                items,
+                                netlist.elements,
+                                assumptionDefaults,
+                              ),
+                            })
+                          }
+                        />
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </details>
             ) : null}

@@ -62,6 +62,11 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
   equal the assumed ones. Assumption limits in symbolic form:
   `textbook_cases.py` cases with `assume`, checked against `sp.limit` of
   the hand KCL.
+- Sidecar `"suggest": {"quantity", "threshold"}`: the CLI gets `--suggest`.
+  Every item must be within the threshold, and the greedy set applied on
+  top of the sidecar's `assume` must solve to an `assumed.maxRelError`
+  equal to `combined` (within 1e-8), restore nothing more, and pass the
+  `assume` checks above.
 - Evidence tools (all take the solver binary first):
   - `triage.py`: a verdict for every fuzz failure, each from a check that can
     fail. It calls:
