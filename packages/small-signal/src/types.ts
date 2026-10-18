@@ -56,6 +56,12 @@ export interface SmallSignalRequest {
   rout?: boolean;
   /** Target max relative error of the simplified expressions (default 0.05). */
   tolerance?: number;
+  /**
+   * How numeric mode simplifies gain, Zin and Zout: the exact form under
+   * named assumptions the numbers choose (default), or the smallest terms
+   * dropped.
+   */
+  approx?: SmallSignalApprox;
   /** Symbolic only: no operating point or numbers. */
   symbolic?: boolean;
   /** Second input for a differential drive: input +½, inputNeg −½. */
@@ -84,6 +90,17 @@ export interface SmallSignalRequest {
   assume?: SmallSignalAssumptions;
   /** Further assumptions within `threshold` of the full model. */
   suggest?: SmallSignalSuggestRequest;
+}
+
+export type SmallSignalApprox = "named" | "terms";
+
+/** An assumption a named simplified form makes, on one element or a
+ * matched group. */
+export interface NamedAssumption {
+  elements: string[];
+  term: AssumptionTerm;
+  /** e.g. r_{o2} \to \infty; null without a symbol. */
+  latex: string | null;
 }
 
 export type SuggestQuantity = "gain" | "rin" | "rout";
@@ -124,8 +141,22 @@ export interface SmallSignalExpression {
   maxRelError?: number;
   /** Simplified forms only: nothing was dropped, so it is exact. */
   same?: boolean;
-  /** Hand analysis: the approximation the simplified form makes. */
+  /** The approximation the simplified form makes: hand analysis
+   * ("ro ≫ R, 1/gm"), or a named form's label ("r_o2 → ∞", "r_o → ∞ for
+   * M2, M4 and g_mb → 0"; "_" starts a subscript). */
   assumption?: string;
+  /** Numeric simplified forms only: how they were made (`approx`). */
+  method?: SmallSignalApprox;
+  /** Named forms: the element limits taken on top of the request's. */
+  named?: NamedAssumption[];
+  /** Named forms: the hand limit r_o ≫ R, 1/g_m, when taken, on the
+   * output resistances of `elements` (`all`: every one in the form). */
+  leadingOrder?: { elements: string[]; all: boolean };
+  /** Named forms: named assumptions appear in the form, but no set within
+   * the tolerance makes it simpler; the form is the exact one. */
+  none?: boolean;
+  /** Simplified forms only: the tolerance they were made within. */
+  tolerance?: number;
   /** The plain sum-of-products form when `latex` uses ∥ notation. */
   latexExpanded?: string | null;
   /** Under assumptions: the worst relative distance of this form from the

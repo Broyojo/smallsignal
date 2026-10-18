@@ -13,7 +13,9 @@ Small-signal conventions (the same as hand analysis):
 - BJT: ic = gm·vbe + vce/ro, ib = vbe/rpi.
 - The input source gives a unit excitation (1 V, or 1 A for an I source).
 - Solver symbol names: gm_M1, ro_M1, gmb_M1, gm_Q1, rpi_Q1, ro_Q1, and
-  element names for R/C/L/E/G/F/H; s is the Laplace variable.
+  element names for R/C/L/E/G/F/H; s is the Laplace variable. A MOSFET the
+  solver knows is in triode has its channel resistance ron_M1 (R_on) in
+  place of ro_M1.
 """
 
 from __future__ import annotations
@@ -30,10 +32,11 @@ def sym(name: str) -> sp.Symbol:
     return sp.Symbol(name)
 
 
-def mos(name: str, vd, vg, vs, vb=None, ideal=False):
+def mos(name: str, vd, vg, vs, vb=None, ideal=False, triode=False):
     """Drain current (into d, out of s). vb=None means body tied to source.
-    ideal: r_o = ∞ (the hand-analysis limit)."""
-    gm, ro = sym(f"gm_{name}"), sym(f"ro_{name}")
+    ideal: r_o = ∞ (the hand-analysis limit). triode: the channel's R_on in
+    place of r_o."""
+    gm, ro = sym(f"gm_{name}"), sym(f"{'ron' if triode else 'ro'}_{name}")
     i = gm * (vg - vs) + (0 if ideal else (vd - vs) / ro)
     if vb is not None:
         i += sym(f"gmb_{name}") * (vb - vs)
@@ -205,9 +208,10 @@ def sf_isrc(vin, inject):
 
 
 def stack(vin, inject):
-    """Two NMOS on one gate: M2 (outer) on M1, whose drain is M2's source."""
+    """Two NMOS on one gate: M2 (outer) on M1, whose drain is M2's source.
+    M1 is in triode whenever M2 conducts: its channel is R_on."""
     vx, vo = sp.symbols("vx vo")
-    i1 = mos("M1", vx, vin, 0)
+    i1 = mos("M1", vx, vin, 0, triode=True)
     i2 = mos("M2", vo, vin, vx, 0)
     return solve([i1 - i2, vo / RD + i2 - inject], [vx, vo], vo)
 
@@ -714,8 +718,9 @@ CASES: list[Case] = [
         "stack_shared_gate",
         "stacked nmos\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 0\n",
         "VIN", "out",
-        # M1 is in triode whenever M2 conducts: its r_o stays.
-        gain=Quantity(lambda: stack(1, 0), lead=lambda: -g2 * RD * (1 + g * ro1) / (1 + g2 * ro1)),
+        # M1 is in triode whenever M2 conducts: its channel's R_on stays.
+        gain=Quantity(lambda: stack(1, 0),
+                      lead=lambda: -g2 * RD * (1 + g * sym("ron_M1")) / (1 + g2 * sym("ron_M1"))),
         rout=Quantity(lambda: stack(0, 1), lead=lambda: RD),
     ),
     Case(

@@ -24,6 +24,7 @@ import Certs.caps_diode
 import Certs.caps_ota5t
 import Certs.caps_sf
 import Certs.caps_triode
+import Certs.cascode_isrc
 import Certs.cccs
 import Certs.ccvs
 import Certs.cs_pmos_load
@@ -43,6 +44,7 @@ import Certs.dist_sf
 import Certs.divider
 import Certs.floating_input
 import Certs.floating_vsource
+import Certs.inverter_triode
 import Certs.nmos_cascode
 import Certs.nmos_cg
 import Certs.nmos_cs

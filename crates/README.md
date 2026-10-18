@@ -22,7 +22,8 @@ with numeric values, poles and zeros, and the operating point.
    Multiplicity `M=` as ngspice: on a BJT, M devices in parallel (every
    current and conductance times M, gmin's too); on a diode, the junction
    scales with AREA·M and gmin does not; on a MOSFET, β and the bulk IS.
-3. **Linearize**: MOSFETs get gm, ro and gmb (gmb only when body ≠ source);
+3. **Linearize**: MOSFETs get gm, ro (in triode the channel's R_on, the
+   same 1/g_ds) and gmb (gmb only when body ≠ source);
    BJTs get gm, rπ, ro; diodes get rd. Junction conductances (MOS bulk
    gbs/gbd, BJT gμ) are all in the model; a set of them is left out of the
    exact expression only when the full numeric system proves no reported
@@ -40,13 +41,17 @@ with numeric values, poles and zeros, and the operating point.
    touch more than 2×`maxTerms` monomials before cancellation, or it takes
    more than 5·10⁷ term products.
 5. **Display**: conductances become resistances, common factors cancel, and
-   terms are sorted by magnitude. The simplified form drops the smallest terms
-   within each power of s, up to the coarsest pruning whose error over
-   1 Hz–100 GHz stays within `tolerance`. Magnitude pruning (here, in noise
-   and in distortion) moves no coefficient of a numerator or denominator by
-   more than 2·`tolerance` of itself (at most all of it), with the overall
-   error still within `tolerance`, drops terms of equal size together, and
-   cancels the common factors left.
+   terms are sorted by magnitude. The numeric simplified form of gain, Zin
+   and Zout is the shortest named limit within `tolerance`: element limits
+   (r_o → ∞, g_mb → 0, …) and the hand limit r_o ≫ R, 1/g_m, chosen by the
+   numbers ([rules](../docs/specs/small-signal-assumptions.md#named-simplified-forms)).
+   With `approx: "terms"` it drops the smallest terms within each power of
+   s instead, up to the coarsest pruning whose error over 1 Hz–100 GHz stays
+   within `tolerance`. Magnitude pruning (there, in noise and in distortion)
+   moves no coefficient of a numerator or denominator by more than
+   2·`tolerance` of itself (at most all of it), with the overall error still
+   within `tolerance`, drops terms of equal size together, and cancels the
+   common factors left.
 
 ## Correctness checks
 
@@ -73,12 +78,12 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
 [--freq f1,f2] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh]
 [--nonlinear M1,Q2] [--order 2|3] [--amplitude A] [--ignore M1:ro,C1:short]
 [--region M3:triode] [--miller CC,M2:cgd] [--suggest gain:0.01] [--tol 0.05]
-[--verify] [--symbolic]`, or
+[--approx named|terms] [--verify] [--symbolic]`, or
 `analyze(netlist, request)` in WASM, where `request` holds the same fields
 (`input`, `inputNeg`, `mode`, `match`, `output`, `ref`, `freqs`, `rin`, `rout`,
-`noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `verify`,
-`symbolic`, `maxTerms`, `assume`, `suggest`). The response is JSON, or
-`{"error": "..."}` on failure.
+`noise`, `noiseBand`, `nonlinear`, `order`, `amplitude`, `tolerance`, `approx`,
+`verify`, `symbolic`, `maxTerms`, `assume`, `suggest`). The response is JSON,
+or `{"error": "..."}` on failure.
 
 - Over budget: when an exact polynomial of gain, rin or rout (a
   determinant, or the sum or difference of two) would exceed `maxTerms`
@@ -120,8 +125,8 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   r_{o1,2}, R_{D1,2}). Exact: merging happens after the multilinear solve, by
   mapping parameters onto symbols with exponents. In numeric mode a group
   merges only if its values agree to 1e-9 (else a warning says what differs);
-  symbolic mode assumes equality. Devices in different regions (a triode r_o
-  against a saturated one) never merge ("M1 and M2 are in different regions,
+  symbolic mode assumes equality. Devices in different regions (a triode R_on
+  against a saturated r_o) never merge ("M1 and M2 are in different regions,
   not matched"). `matchCandidates` lists pairs with the same type, model,
   geometry and region (and, in numeric mode, small-signal values), plus
   passives with equal values (`kind: "passive"`).
@@ -137,15 +142,19 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   not matter; `values` always come from the full model.
 - Each quantity carries `exact` and `simplified` (`latex`, `latexExpanded`,
   `num`, `den`, `terms`; `same` when nothing was dropped). In numeric mode
-  `simplified` drops numerically small terms within `maxRelError`; in symbolic
-  mode it is the hand-analysis limit r_o → ∞ (every device output resistance
+  `simplified` is the named-assumption form, `method: "named"` (fields:
+  [named simplified forms](../docs/specs/small-signal-assumptions.md#named-simplified-forms)),
+  or with `approx: "terms"` (`method: "terms"`) drops numerically small terms
+  within `tolerance`, its error `maxRelError`. In symbolic mode, whatever
+  `approx` says, it is the hand-analysis limit r_o → ∞ (every device output resistance
   r_o, r_μ, bulk junction scaled as r/ε, the lowest order in ε kept for each
   power of s), labelled `assumption: "ro ≫ R, 1/gm"`, then the same limit
   g_mb → 0 (labelled `"ro ≫ R, 1/gm and gmb ≪ gm"` when that drops a term),
   except where it leaves a pure number (a follower into an ideal current
-  source keeps g_m/(g_m + g_mb)). The r_o of a device
-  outside saturation (MOS triode, BJT saturation) stays finite in every
-  leading-order form, with the region warning. Symbolic mode, which has no
+  source keeps g_m/(g_m + g_mb)). A device outside saturation keeps its
+  output resistance finite in every leading-order form (a MOS triode
+  channel's R_on, a saturated BJT's r_o), with the region warning. Symbolic
+  mode, which has no
   operating point, knows one such case: two MOSFETs of one type and model
   on a shared gate, one's drain on the other's source, with both bulks on
   one node or each on its own source; that one is in triode. Then `values`
@@ -172,7 +181,8 @@ cd oracle && SMALLSIGNAL_BIN=$PWD/../target/release/smallsignal uv run compare.p
   error), else from its MNA matrix as for a numeric quantity ("Stability not
   checked. Its poles were not found." when that fails), and so on.
 
-Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}; BJT
+Parameter symbols: `R1` → R_{1}; MOSFET `M1` → g_{m1}, r_{o1}, g_{mb1}
+(`ron_M1` → R_{on1} in place of r_{o1} when it is in triode); BJT
 `Q1` → g_{m1}, r_{π1}, r_{o1}; C/L by name; the s variable stays as `s`.
 Device capacitances: `cgs_M1` → C_{gs1}, `cgd_M1` → C_{gd1}, `cgb_M1` →
 C_{gb1}, `cbd_M1` → C_{db1}, `cbs_M1` → C_{sb1}; `cpi_Q1` → C_{π1}, `cmu_Q1`

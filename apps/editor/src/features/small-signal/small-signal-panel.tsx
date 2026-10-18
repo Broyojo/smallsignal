@@ -50,6 +50,8 @@ import {
   type RootPair,
   type SmallSignalAssumptionReport,
   type SmallSignalElement,
+  type SmallSignalApprox,
+  type SmallSignalExpression,
   type SmallSignalSuggestion,
   type SmallSignalSuggestions,
   type SuggestQuantity,
@@ -283,6 +285,35 @@ function saveModelText(text: ModelText) {
     window.localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(text));
   } catch {
     // Private windows: the values still apply until the page closes.
+  }
+}
+
+export const APPROX_STORAGE_KEY = "smallsignal.approx";
+
+/** How the ≈ forms are made, as the Options section offers it. */
+export const APPROX_LABEL: Record<SmallSignalApprox, string> = {
+  named: "Named assumptions",
+  terms: "Smallest terms",
+};
+
+/** The stored ≈ method: named assumptions unless "terms" is stored. */
+export function readApprox(stored: string | null): SmallSignalApprox {
+  return stored === "terms" ? "terms" : "named";
+}
+
+function loadApprox(): SmallSignalApprox {
+  try {
+    return readApprox(window.localStorage.getItem(APPROX_STORAGE_KEY));
+  } catch {
+    return "named";
+  }
+}
+
+function saveApprox(approx: SmallSignalApprox) {
+  try {
+    window.localStorage.setItem(APPROX_STORAGE_KEY, approx);
+  } catch {
+    // As for the models.
   }
 }
 
@@ -676,6 +707,72 @@ function FullModelNote({ error }: { error: number | null | undefined }) {
 }
 
 /**
+ * A solver label split at its subscripts, "_" to the next space (a
+ * trailing comma excepted): "r_o2 → ∞" is r, o2, " → ∞".
+ */
+export function subscriptParts(
+  text: string,
+): (string | { base: string; sub: string })[] {
+  const parts: (string | { base: string; sub: string })[] = [];
+  for (const token of text.split(/(\s+)/u)) {
+    const [, base, sub, comma] = /^([^_\s]+)_(\S+?)(,?)$/u.exec(token) ?? [];
+    if (base === undefined || sub === undefined) {
+      if (token) parts.push(token);
+      continue;
+    }
+    parts.push({ base, sub });
+    if (comma) parts.push(comma);
+  }
+  return parts;
+}
+
+function SubscriptText({ text }: { text: string }) {
+  return (
+    <>
+      {subscriptParts(text).map((part, index) =>
+        typeof part === "string" ? (
+          part
+        ) : (
+          <span key={index}>
+            {part.base}
+            <sub>{part.sub}</sub>
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * A named form's note: what it assumes and its error, "r_o2 → ∞, within
+ * 0.25%"; under assumptions its distance from the full model instead, as
+ * every assumed form says it.
+ */
+function NamedNote({
+  form,
+  assumed,
+}: {
+  form: SmallSignalExpression;
+  assumed: boolean;
+}) {
+  const error = assumed
+    ? fullModelText(form.fullModelError)
+    : `within ${formatPercent(form.maxRelError ?? 0)}`;
+  return (
+    <span data-approx="named">
+      {form.assumption ? <SubscriptText text={form.assumption} /> : null}
+      {form.assumption && error ? ", " : null}
+      {error}
+    </span>
+  );
+}
+
+/** "No simple form within 5.0%." */
+export function noneText(form: SmallSignalExpression): string {
+  return `No simple form within ${formatPercent(form.tolerance ?? 0.05)}.`;
+}
+
+/**
  * The assumed model's poles and zeros beside the full model's, one row per
  * conjugate pair.
  */
@@ -876,6 +973,16 @@ function QuantityCard({
   const simplerNote = simpler?.assumption
     ? `assuming ${simpler.assumption}`
     : `within ${formatPercent(simpler?.maxRelError ?? 0)} of exact`;
+  // A named form says what it assumes and its distance from the full model.
+  const note =
+    simpler?.method === "named" ? (
+      <NamedNote form={simpler} assumed={Boolean(assumed)} />
+    ) : null;
+  const none = quantity.simplified?.none ? (
+    <small className="small-signal-muted" data-approx="none">
+      {noneText(quantity.simplified)}
+    </small>
+  ) : null;
   const poleCount = quantity.poles?.length ?? 0;
   const poles = (quantity.poles ?? []).map(rootText).filter(Boolean);
   // Symbolic mode has no root values, only their number.
@@ -908,9 +1015,10 @@ function QuantityCard({
               readable one and keep the exact form a click away. */}
           <Formula latex={`${symbol} \\approx ${simpler.latex}`} />
           <small className="small-signal-muted">
-            {assumed
-              ? leadNote(simplerNote, simpler.fullModelError)
-              : simplerNote}
+            {note ??
+              (assumed
+                ? leadNote(simplerNote, simpler.fullModelError)
+                : simplerNote)}
           </small>
           <details className="small-signal-exact">
             <summary>{assumed ? EXACT_ASSUMED : "Exact"}</summary>
@@ -923,9 +1031,10 @@ function QuantityCard({
           {simpler ? (
             <div className="small-signal-simpler">
               <Formula latex={`\\approx ${simpler.latex}`} />
-              <small>{simplerNote}</small>
+              <small>{note ?? simplerNote}</small>
             </div>
           ) : null}
+          {none}
         </>
       )}
       {assumed && miller?.length ? <MillerNote splits={miller} /> : null}
@@ -1673,7 +1782,8 @@ function NoiseDetails({
 
 /**
  * The bias point as a table: per transistor its region and the three numbers
- * the equations use (current, g_m, r_o; r_π too when there are BJTs).
+ * the equations use (current, g_m, r_o, a triode channel's R_on in its
+ * place; r_π too when there are BJTs).
  */
 function BiasTable({
   devices,
@@ -1686,6 +1796,9 @@ function BiasTable({
     current: number;
     gm: number;
     ro: number;
+    /** A MOSFET in triode: its r_o is the channel's R_on, which the column
+     * header names and the region says. */
+    ron?: boolean;
     rpi: number | null;
   }
   const rows = devices.flatMap(([name, device]): Row[] => {
@@ -1698,6 +1811,7 @@ function BiasTable({
           current: Math.abs(m.id),
           gm: m.gm,
           ro: m.gds > 0 ? 1 / m.gds : Infinity,
+          ron: m.region === "triode",
           rpi: null,
         },
       ];
@@ -1737,6 +1851,11 @@ function BiasTable({
           </th>
           <th scope="col">
             r<sub>o</sub>
+            {rows.some((row) => row.ron) ? (
+              <>
+                , R<sub>on</sub>
+              </>
+            ) : null}
           </th>
           {hasBjt ? (
             <th scope="col">
@@ -1758,7 +1877,7 @@ function BiasTable({
             ) : null}
             <td data-quantity="id">{formatEngineering(row.current, "A")}</td>
             <td data-quantity="gm">{formatEngineering(row.gm, "S")}</td>
-            <td data-quantity="ro">{ohms(row.ro)}</td>
+            <td data-quantity={row.ron ? "ron" : "ro"}>{ohms(row.ro)}</td>
             {hasBjt ? <td>{row.rpi === null ? "" : ohms(row.rpi)}</td> : null}
           </tr>
         ))}
@@ -2656,6 +2775,9 @@ export function SmallSignalPanel({
     saveModelText(text);
   }, []);
   const models = useMemo(() => modelOverrides(modelText), [modelText]);
+  // How the ≈ forms are made, kept across sessions.
+  const [approx, setApprox] = useState<SmallSignalApprox>(loadApprox);
+  useEffect(() => saveApprox(approx), [approx]);
   // Assumptions: defaults per transistor type for every circuit, and each
   // circuit's own choices, both kept across sessions.
   const [assumptionDefaults, setAssumptionDefaults] =
@@ -2873,6 +2995,10 @@ export function SmallSignalPanel({
           rin: true,
           rout: true,
           ...(handAnalysis ? { symbolic: true } : {}),
+          // Named assumptions are the solver's default.
+          ...(approx === "terms" && !handAnalysis
+            ? { approx: "terms" as const }
+            : {}),
           // In the key, so Noise and Distortion send it and a response to
           // other assumptions is never taken for this one.
           ...(assume ? { assume } : {}),
@@ -3645,6 +3771,22 @@ export function SmallSignalPanel({
                     />
                   </label>
                 ) : null}
+                <label>
+                  ≈ form
+                  <select
+                    aria-label="Approximation"
+                    value={approx}
+                    onChange={(event) =>
+                      setApprox(event.currentTarget.value as SmallSignalApprox)
+                    }
+                  >
+                    {(["named", "terms"] as const).map((method) => (
+                      <option key={method} value={method}>
+                        {APPROX_LABEL[method]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="small-signal-check">
                   <input
                     type="checkbox"

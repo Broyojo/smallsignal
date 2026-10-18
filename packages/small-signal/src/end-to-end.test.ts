@@ -20,6 +20,7 @@ import type {
   RootPair,
   SmallSignalAssumptionReport,
   SmallSignalDistortion,
+  SmallSignalExpression,
   SmallSignalNoise,
   SmallSignalQuantity,
   SmallSignalSuggestion,
@@ -73,6 +74,91 @@ describe.skipIf(!built)("drawing → netlist → solver", () => {
     const m1 = result.op.devices.M1;
     const hand = -m1.gm / (m1.gds + 1 / 10e3);
     expect(Math.abs(result.gain.values[0].re / hand - 1)).toBeLessThan(1e-6);
+  });
+});
+
+const SIMPLIFIED_KEYS = allKeys<SmallSignalExpression>()([
+  "num",
+  "den",
+  "latex",
+  "terms",
+  "maxRelError",
+  "same",
+  "assumption",
+  "latexExpanded",
+  "fullModelError",
+  "method",
+  "named",
+  "leadingOrder",
+  "none",
+  "tolerance",
+] as const);
+
+describe.skipIf(!built)("a CMOS inverter with M1 in triode", () => {
+  it("names M1's channel R_on and assumes r_o2 → ∞ for its ≈ forms", async () => {
+    const wasm = await import(
+      /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+    );
+    wasm.initSync({
+      module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+    });
+    const project = parseProject(
+      readFileSync(
+        new URL(
+          "../test-fixtures/cmos-inverter-triode.icproj.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    const netlist = smallSignalNetlist(project)!;
+    const solve = (approx?: string) =>
+      JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({
+            input: "VIN",
+            output: "out",
+            rout: true,
+            ...(approx ? { approx } : {}),
+          }),
+        ),
+      );
+    const result = solve();
+    expect(result.error).toBeUndefined();
+    expect(result.op.devices.M1.region).toBe("triode");
+    expect(result.op.devices.M2.region).toBe("saturation");
+    expect(
+      result.params.find((p: { name: string }) => p.name === "ron_M1").latex,
+    ).toBe("R_{on1}");
+    for (const [quantity, form] of [
+      ["gain", "-R_{on1} \\left(g_{m2} + g_{m1}\\right)"],
+      ["rout", "R_{on1}"],
+    ] as const) {
+      const simplified = result[quantity].simplified;
+      expect(simplified.latex).toBe(form);
+      expect(simplified.method).toBe("named");
+      expect(simplified.assumption).toBe("r_o2 → ∞");
+      expect(simplified.named).toEqual([
+        { elements: ["M2"], term: "ro", latex: "r_{o2} \\to \\infty" },
+      ]);
+      expect(simplified.maxRelError).toBeLessThan(0.005);
+      expect(
+        Object.keys(simplified).filter(
+          (key) => !(SIMPLIFIED_KEYS as readonly string[]).includes(key),
+        ),
+      ).toEqual([]);
+    }
+    // No r_o to neglect on a triode device.
+    const m1 = (result.assumable as AssumableElement[]).find(
+      (entry) => entry.element === "M1",
+    )!;
+    expect(m1.terms).not.toContain("ro");
+    // Smallest terms: the earlier form, the same here, with no label.
+    const terms = solve("terms");
+    expect(terms.gain.simplified.method).toBe("terms");
+    expect(terms.gain.simplified.latex).toBe(result.gain.simplified.latex);
+    expect(terms.gain.simplified.assumption).toBeUndefined();
   });
 });
 

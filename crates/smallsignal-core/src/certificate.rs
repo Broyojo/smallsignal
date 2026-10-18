@@ -73,7 +73,9 @@ pub fn certificate(text: &str, req: &Request) -> Result<Value, String> {
     }
     let symbolic = req.symbolic || !net.missing.is_empty();
     let op = if symbolic { None } else { Some(operating_point(&net)?) };
-    let full = ss::build(&net, op.as_ref())?;
+    // Named as `analyze` names them (a known triode channel is R_on).
+    let (linear, _) = crate::analyze::known_regions(&net, req, symbolic);
+    let full = ss::build_with(&net, op.as_ref(), &linear)?;
     // Under assumptions, the element list the gain's forms are built on.
     let ssc = match &req.assume {
         Some(r) => {

@@ -150,8 +150,10 @@ fn regions_for(kind: &Kind) -> &'static [&'static str] {
     }
 }
 
-/// The full model's parameter that `term` removes from `element`.
-fn param_name(kind: &Kind, term: Term, element: &str) -> String {
+/// The full model's parameter that `term` removes from `element`. A MOSFET
+/// in triode has its channel's R_on (`ron_M1`) in place of r_o, so `ro`
+/// names none there.
+pub(crate) fn param_name(kind: &Kind, term: Term, element: &str) -> String {
     match (term, kind) {
         (Term::Open | Term::Short, Kind::D { .. }) => format!("rd_{element}"),
         (Term::Open | Term::Short, _) => element.to_string(),

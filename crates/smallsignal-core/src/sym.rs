@@ -94,6 +94,7 @@ fn device_sub(kind: &str) -> Option<(&'static str, &'static str)> {
         "gm" => ("g", "m"),
         "gmb" => ("g", "mb"),
         "ro" => ("r", "o"),
+        "ron" => ("R", "on"),
         "rpi" => ("r", "\\pi "),
         "rmu" => ("r", "\\mu "),
         "rbs" => ("r", "bs"),
@@ -981,12 +982,19 @@ pub fn body_order(p: &XPoly, syms: &[Sym]) -> XPoly {
 /// For each power of s, the terms of lowest total degree in the symbols with
 /// `small`.
 fn lowest_order(p: &XPoly, syms: &[Sym], small: fn(&Sym) -> bool) -> XPoly {
-    // Σ e[k] over the symbols with `flag`, as e.iter().zip(syms).filter(..).
-    let sum_of = |flag: fn(&Sym) -> bool| {
-        let idx: Vec<usize> = (0..syms.len()).filter(|&k| flag(&syms[k])).collect();
-        move |e: &[u8]| -> u32 { idx.iter().filter_map(|&k| e.get(k)).map(|&x| x as u32).sum() }
-    };
-    let (spow, order) = (sum_of(|s| s.reactive), sum_of(small));
+    let marked: Vec<bool> = syms.iter().map(small).collect();
+    lowest_order_in(p, syms, &marked)
+}
+
+/// For each power of s, the terms of lowest total degree in the symbols
+/// marked in `small` (by index): the limit as those go to 0 together (for
+/// an output resistance, its conductance in MNA form).
+pub fn lowest_order_in(p: &XPoly, syms: &[Sym], small: &[bool]) -> XPoly {
+    // Σ e[k] over the marked symbols.
+    let sum_of =
+        |idx: Vec<usize>| move |e: &[u8]| -> u32 { idx.iter().filter_map(|&k| e.get(k)).map(|&x| x as u32).sum() };
+    let spow = sum_of((0..syms.len()).filter(|&k| syms[k].reactive).collect());
+    let order = sum_of((0..syms.len()).filter(|&k| small.get(k) == Some(&true)).collect());
     let keys: Vec<(u32, u32)> = p.terms.iter().map(|(e, _)| (spow(e), order(e))).collect();
     // Lowest order per power of s (few powers: a short list).
     let mut best: Vec<(u32, u32)> = Vec::new();

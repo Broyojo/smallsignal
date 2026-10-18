@@ -23,7 +23,7 @@ pub enum Role {
 
 #[derive(Clone, Debug)]
 pub struct Param {
-    /// Plain identifier, e.g. `RD`, `gm_M1`, `ro_M1`.
+    /// Plain identifier, e.g. `RD`, `gm_M1`, `ro_M1` (`ron_M1` in triode).
     pub name: String,
     pub latex: String,
     /// Value of the displayed quantity (Ω for resistances, S for gm, F, H…).
@@ -35,8 +35,9 @@ pub struct Param {
     pub role: Role,
     pub unit: &'static str,
     pub element: String,
-    /// An output resistance of a device outside saturation (MOS triode,
-    /// BJT saturation): small, so hand analysis keeps it finite.
+    /// An output resistance of a device outside saturation (a MOS triode
+    /// channel's R_on, a saturated BJT's r_o): small, so hand analysis
+    /// keeps it finite.
     pub linear: bool,
 }
 
@@ -598,8 +599,13 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     add_mos_symbolic(&mut params, &mut stamps, nm, d, g, s, b)?;
                     let lin = linear.contains(&ei);
                     if lin {
+                        // Known to be in triode: its channel resistance.
                         let ro = format!("ro_{nm}");
-                        params.iter_mut().filter(|p| p.name == ro).for_each(|p| p.linear = true);
+                        for p in params.iter_mut().filter(|p| p.name == ro) {
+                            p.name = format!("ron_{nm}");
+                            p.latex = dev_latex("R", "on", nm);
+                            p.linear = true;
+                        }
                     }
                     // The capacitances the card can give a saturated device
                     // (a triode one when its region is known): Meyer C_gd and
@@ -645,16 +651,16 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     });
                 }
                 if m.gds > 0.0 {
-                    let p = add(
-                        &mut params,
-                        format!("ro_{nm}"),
-                        dev_latex("r", "o", nm),
-                        1.0 / m.gds,
-                        Role::DeviceR,
-                        "Ω",
-                        nm,
-                    )?;
-                    params[p].linear = m.region == MosRegion::Triode;
+                    // In triode the output conductance is the channel's own:
+                    // R_on, the same 1/g_ds.
+                    let triode = m.region == MosRegion::Triode;
+                    let (name, latex) = if triode {
+                        (format!("ron_{nm}"), dev_latex("R", "on", nm))
+                    } else {
+                        (format!("ro_{nm}"), dev_latex("r", "o", nm))
+                    };
+                    let p = add(&mut params, name, latex, 1.0 / m.gds, Role::DeviceR, "Ω", nm)?;
+                    params[p].linear = triode;
                     stamps.push(Stamp::Adm { a: ed, b: es, p });
                 }
                 if m.gmb > 0.0 && b != es {

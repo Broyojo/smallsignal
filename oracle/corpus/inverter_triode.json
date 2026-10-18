@@ -1,0 +1,3 @@
+{"input": "VIN", "output": "out", "ref": null, "freqs": [1000], "rin": false, "rout": true,
+ "description": "Input above mid-rail: M1 in triode (its channel resistance R_on = 1/g_ds), M2 saturated.",
+ "hand": {"gain": "-(gm1 + gm2) (Ron1 || ro2), about -(gm1 + gm2) Ron1 as ro2 -> infinity", "rout": "Ron1 || ro2"}}

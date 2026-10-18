@@ -591,16 +591,26 @@ fn symbolic_leading_order_is_labelled() {
     );
 }
 
-/// A numeric simplified form may not drop terms from the numerator and the
-/// denominator whose errors cancel: each coefficient stays within twice the
-/// tolerance on its own. Before, a transconductor with R1/R2 feedback
-/// (gm·RD = 2.3) showed R1/R2 (1, with R1 = 40k and R2 = 60k), which is no
-/// limit of the gain (exact 1.045), and a matched CMOS inverter showed
-/// −g_{m1} r_{o2}, half of each part.
+/// The "smallest terms" simplified form (`approx: "terms"`).
+fn terms(input: &str, output: &str) -> Request {
+    let mut r = request(input, output);
+    r.approx = Some("terms".into());
+    r
+}
+
+/// A "smallest terms" simplified form may not drop terms from the numerator
+/// and the denominator whose errors cancel: each coefficient stays within
+/// twice the tolerance on its own. Before, a transconductor with R1/R2
+/// feedback (gm·RD = 2.3) showed R1/R2 (1, with R1 = 40k and R2 = 60k),
+/// which is no limit of the gain (exact 1.045), and a matched CMOS inverter
+/// showed −g_{m1} r_{o2}, half of each part.
 #[test]
 fn simplified_parts_are_each_within_tolerance() {
     let feedback = "fb\nVIN in 0 AC 1\nRD 0 out 5k\nR1 out f 50k\nR2 f 0 50k\nG1 out in f in 0.46m\n";
-    let r = run(feedback, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    let r = run(
+        feedback,
+        &req(json!({ "input": "VIN", "output": "out", "rout": true, "approx": "terms" })),
+    );
     assert_eq!(
         r["gain"]["simplified"]["latex"],
         "\\frac{G_{1} R_{D} \\left(R_{1} + R_{2}\\right)}{G_{1} R_{D} R_{2} + R_{1} + R_{2}}"
@@ -611,7 +621,7 @@ fn simplified_parts_are_each_within_tolerance() {
     );
     let r = run(
         &feedback.replace("50k\nR2 f 0 50k", "40k\nR2 f 0 60k"),
-        &request("VIN", "out"),
+        &terms("VIN", "out"),
     );
     assert_eq!(
         r["gain"]["simplified"]["latex"],
@@ -620,7 +630,7 @@ fn simplified_parts_are_each_within_tolerance() {
     let inverter = "inv\nVDD vdd 0 1.8\nVIN in 0 DC 0.9 AC 1\nM1 out in 0 0 nch W=10u L=1u\n\
                     M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n\
                     .model pch PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.1)\n";
-    let r = run(inverter, &request("VIN", "out"));
+    let r = run(inverter, &terms("VIN", "out"));
     assert_eq!(r["gain"]["simplified"]["same"], false);
     assert_eq!(
         r["gain"]["simplified"]["latex"],
@@ -628,8 +638,41 @@ fn simplified_parts_are_each_within_tolerance() {
     );
 }
 
-/// Terms of equal size are dropped together or not at all: a matched pair
-/// keeps a symmetric simplified form (before, r_{o2} but not r_{o1}). At a
+/// Named assumptions never drop a nameless part. The feedback
+/// transconductor has no device terms to assume, so its simplified form
+/// is the exact one, with nothing tried; the saturated CMOS inverter's
+/// r_o1 and r_o2 each set half of the result, so none goes, and the form
+/// says no simple form is within the tolerance.
+#[test]
+fn named_forms_drop_no_nameless_part() {
+    let feedback = "fb\nVIN in 0 AC 1\nRD 0 out 5k\nR1 out f 50k\nR2 f 0 50k\nG1 out in f in 0.46m\n";
+    let r = run(feedback, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    for q in ["gain", "rout"] {
+        let s = &r[q]["simplified"];
+        assert_eq!(s["same"], true, "{q}: {s}");
+        assert_eq!(s["method"], "named");
+        assert_eq!(s["named"], json!([]));
+        assert!(s.get("none").is_none(), "{q}: {s}");
+    }
+    let inverter = "inv\nVDD vdd 0 1.8\nVIN in 0 DC 0.9 AC 1\nM1 out in 0 0 nch W=10u L=1u\n\
+                    M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1)\n\
+                    .model pch PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.1)\n";
+    let r = run(inverter, &req(json!({ "input": "VIN", "output": "out", "rout": true })));
+    for q in ["gain", "rout"] {
+        let s = &r[q]["simplified"];
+        assert_eq!(s["none"], true, "{q}: {s}");
+        assert_eq!(s["latex"], r[q]["display"]["latex"], "{q}");
+        assert!(s.get("assumption").is_none(), "{q}: {s}");
+    }
+    assert_eq!(
+        r["gain"]["simplified"]["latex"],
+        "-\\frac{r_{o1} r_{o2} \\left(g_{m1} + g_{m2}\\right)}{r_{o1} + r_{o2}}"
+    );
+}
+
+/// Smallest terms: terms of equal size are dropped together or not at all:
+/// a matched pair keeps a symmetric simplified form (before, r_{o2} but not
+/// r_{o1}). At a
 /// 3% tolerance the two twin terms (4.7% together) cannot both go, so
 /// neither does; at 5% both go, leaving the textbook g_m R_C.
 #[test]
@@ -638,13 +681,16 @@ fn simplified_drops_equal_terms_together() {
                 Q2 c2 cm tail qn\nITAIL tail vee DC 1m\nRC1 vcc c1 5k\nRC2 vcc c2 5k\n.model qn NPN (IS=1e-15 BF=100 VAF=50)\n";
     let r = run(
         pair,
-        &req(json!({ "input": "VIN", "output": "c2", "ref": "c1", "tolerance": 0.03 })),
+        &req(json!({ "input": "VIN", "output": "c2", "ref": "c1", "tolerance": 0.03, "approx": "terms" })),
     );
     assert_eq!(
         r["gain"]["simplified"]["latex"],
         "\\frac{g_{m1} g_{m2} r_{o1} r_{o2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} r_{o1} r_{o2} + g_{m2} r_{o1} r_{o2} + g_{m1} r_{o1} R_{C2} + g_{m2} r_{o2} R_{C1}}"
     );
-    let r = run(pair, &req(json!({ "input": "VIN", "output": "c2", "ref": "c1" })));
+    let r = run(
+        pair,
+        &req(json!({ "input": "VIN", "output": "c2", "ref": "c1", "approx": "terms" })),
+    );
     assert_eq!(
         r["gain"]["simplified"]["latex"],
         "\\frac{g_{m1} g_{m2} \\left(R_{C1} + R_{C2}\\right)}{g_{m1} + g_{m2}}"
@@ -696,10 +742,11 @@ fn symbolic_hand_form_neglects_body_effect() {
     assert_eq!(bulk["gain"]["simplified"]["latex"], "-g_{mb1} R_{D}");
 }
 
-/// Symbolic mode keeps r_o finite for a device it knows is in triode, and
-/// says so. Two NMOS on one gate, the inner one's drain on the outer one's
-/// source: the inner one is in triode whenever the outer one conducts (one
-/// longer device), so its r_o stays. Before: −g_{m1} R_D, a cascode reading.
+/// Symbolic mode keeps the channel resistance R_on finite for a device it
+/// knows is in triode, and says so. Two NMOS on one gate, the inner one's
+/// drain on the outer one's source: the inner one is in triode whenever the
+/// outer one conducts (one longer device), so its R_on stays. Before:
+/// −g_{m1} R_D, a cascode reading.
 #[test]
 fn symbolic_keeps_triode_ro() {
     let r = run(
@@ -707,14 +754,21 @@ fn symbolic_keeps_triode_ro() {
         &request("VIN", "out"),
     );
     assert_eq!(r["warnings"], json!(["M1 is in triode"]));
-    assert!(
-        r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o1}"),
-        "{}",
-        r["gain"]["simplified"]
-    );
-    assert!(!r["gain"]["simplified"]["latex"].as_str().unwrap().contains("r_{o2}"));
+    let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
+    assert!(simplified.contains("R_{on1}"), "{}", r["gain"]["simplified"]);
+    assert!(!simplified.contains("r_{o"), "{simplified}");
+    // The Lean certificate names its parameters alike.
+    let stack = "stack\nVDD vdd 0\nVIN in 0\nRD vdd out\nM2 out in x 0\nM1 x in 0 0\n";
+    let c = smallsignal_core::certificate::certificate(stack, &request("VIN", "out")).unwrap();
+    let names: Vec<&str> = c["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"ron_M1") && names.contains(&"ro_M2"), "{names:?}");
     // The same rule with values given (symbolic mode ignores the bias): the
-    // bottom NMOS of this two-NMOS stage is in triode (r_o2 ≈ 1 kΩ at this
+    // bottom NMOS of this two-NMOS stage is in triode (R_on2 ≈ 1 kΩ at this
     // bias, as numeric mode reports).
     let net = "nn\nVDD vdd 0 1.8\nVIN in 0 DC 1.2 AC 1\nM1 vdd in out 0 nch W=10u L=1u\nM2 out in 0 0 nch W=10u L=1u\n\
                .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 GAMMA=0.4 PHI=0.8)\n";
@@ -723,15 +777,27 @@ fn symbolic_keeps_triode_ro() {
     assert_eq!(r["warnings"], json!(["M2 is in triode"]));
     let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
     assert!(
-        simplified.contains("r_{o2}") && !simplified.contains("r_{o1}"),
+        simplified.contains("R_{on2}") && !simplified.contains("r_{o1}"),
         "{simplified}"
     );
+    let numeric = run(net, &req(json!({ "input": "VIN", "output": "out" })));
+    assert_eq!(numeric["op"]["devices"]["M2"]["region"], "triode");
+    let ron = numeric["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "ron_M2")
+        .unwrap();
+    assert_eq!(ron["latex"], "R_{on2}");
+    // 1/g_ds, as ngspice linearizes it.
+    let gds = numeric["op"]["devices"]["M2"]["gds"].as_f64().unwrap();
+    assert!(close((ron["value"].as_f64().unwrap(), 0.0), (1.0 / gds, 0.0), 1e-12));
 }
 
 /// Matching never merges devices in different regions. A shared-gate stack
 /// of one model and geometry (outer saturated, inner in triode) is offered
 /// no match, and an explicit match is refused, so the inner device keeps its
-/// finite r_o in either element order. Before: matchAuto merged them into
+/// finite R_on in either element order. Before: matchAuto merged them into
 /// r_{o1,2}, which the outer one's region took to infinity, or kept finite
 /// when the inner one came first.
 #[test]
@@ -752,7 +818,7 @@ fn matching_keeps_regions_apart() {
         assert_eq!(r["warnings"], json!(["M2 is in triode"]));
         let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
         assert!(
-            simplified.contains("r_{o2}") && !simplified.contains("r_{o1"),
+            simplified.contains("R_{on2}") && !simplified.contains("r_{o1"),
             "{simplified}"
         );
         let mut explicit = base.clone();

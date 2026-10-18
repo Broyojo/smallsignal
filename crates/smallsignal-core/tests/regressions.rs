@@ -710,6 +710,7 @@ fn match_auto_applies_candidates_in_one_solve() {
         simplified.contains("g_{m1,2}") && simplified.contains("r_{o1,2} \\parallel r_{o3,4}"),
         "{simplified}"
     );
+    assert_eq!(r["gain"]["simplified"]["assumption"], "r_o ≫ R, 1/g_m");
 
     let mut opt_out = base;
     opt_out["unmatch"] = json!([["M1", "M2"]]);

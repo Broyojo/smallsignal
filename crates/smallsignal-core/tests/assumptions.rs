@@ -484,16 +484,24 @@ fn symbolic_mode_takes_the_same_limits() {
     assert_eq!(v["gain"]["exact"]["latex"], "-g_{m1} R_{D}");
     assert_eq!(v["rout"]["exact"]["latex"], "R_{D}");
     assert_eq!(v["gain"]["exact"]["fullModelError"], Value::Null);
-    // A declared triode region keeps r_o finite in the hand-analysis form.
-    let v = run(
-        net,
-        &with(&r, json!({ "regions": [{ "element": "M1", "region": "triode" }] })),
-    );
+    // A declared triode region keeps the channel resistance R_on finite in
+    // the hand-analysis form.
+    let triode = json!({ "regions": [{ "element": "M1", "region": "triode" }] });
+    let v = run(net, &with(&r, triode.clone()));
     assert_eq!(
         v["gain"]["simplified"]["latex"],
-        "-g_{m1} \\left(r_{o1} \\parallel R_{D}\\right)"
+        "-g_{m1} \\left(R_{on1} \\parallel R_{D}\\right)"
     );
     assert_eq!(v["assumptions"]["regions"][0]["actual"], Value::Null);
+    // R_on is no r_o: neglecting r_o there finds nothing to neglect.
+    let mut both = triode;
+    both["ignore"] = json!([{ "element": "M1", "term": "ro" }]);
+    let v = run(net, &with(&r, both));
+    assert_eq!(v["assumptions"]["absent"], json!([{ "element": "M1", "term": "ro" }]));
+    assert_eq!(
+        v["gain"]["exact"]["latex"],
+        "-g_{m1} \\left(R_{on1} \\parallel R_{D}\\right)"
+    );
 }
 
 #[test]
@@ -507,9 +515,10 @@ fn certificates_cover_the_assumed_element_list() {
 
 #[test]
 fn matched_members_with_different_regions_are_not_matched() {
-    // Symbolic mode: a declared triode region keeps M1's r_o finite in the
-    // hand form, M2's not. Merged, the form would follow whichever member
-    // came first; so they are not matched, in either order.
+    // Symbolic mode: a declared triode region makes M1's channel R_on, kept
+    // finite in the hand form, against M2's r_o. Merged, the form would
+    // follow whichever member came first; so they are not matched, in
+    // either order.
     let net = "diff pair\nVDD vdd 0\nVIP ip 0\nVIN in 0\nIT t 0\nM1 o1 ip t 0\nM2 o2 in t 0\nR1 vdd o1\nR2 vdd o2\n";
     for (a, b) in [("triode", "saturation"), ("saturation", "triode")] {
         let mut r = req("VIP", "o1", &[]);
@@ -528,7 +537,11 @@ fn matched_members_with_different_regions_are_not_matched() {
             .iter()
             .map(|p| p["latex"].as_str().unwrap())
             .collect();
-        assert!(latex.contains(&"r_{o1}") && latex.contains(&"r_{o2}"), "{a}: {latex:?}");
+        let (one, two) = match a {
+            "triode" => ("R_{on1}", "r_{o2}"),
+            _ => ("r_{o1}", "R_{on2}"),
+        };
+        assert!(latex.contains(&one) && latex.contains(&two), "{a}: {latex:?}");
     }
 }
 
