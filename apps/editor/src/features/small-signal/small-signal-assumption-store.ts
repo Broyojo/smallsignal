@@ -1,6 +1,7 @@
 import {
   ASSUMPTION_REGIONS,
   ASSUMPTION_TERMS,
+  IMPOSED_REGIONS,
   type AssumableElement,
   type AssumptionTerm,
   type MillerAssumption,
@@ -45,7 +46,7 @@ export const MILLER_TERMS: readonly AssumptionTerm[] = ["cgd", "cmu"];
 export interface PartAssumptions {
   ignore?: Partial<Record<AssumptionTerm, boolean>>;
   miller?: MillerTerm[];
-  region?: string;
+  region?: RegionChoice;
 }
 
 /** A circuit's parts, by `partKey` of their instance path. */
@@ -101,7 +102,17 @@ export function isAssumable(type: string): type is AssumableType {
 }
 
 const KNOWN_TERMS = new Set<string>(Object.values(ASSUMPTION_TERMS).flat());
-const KNOWN_REGIONS = new Set<string>(Object.values(ASSUMPTION_REGIONS).flat());
+/** A region a MOSFET can be assumed in: imposed on its bias. */
+export type RegionChoice = (typeof IMPOSED_REGIONS)[number];
+
+/** Whether parts of this type take a region (MOSFETs). */
+export function takesRegion(type: string): type is "nmos" | "pmos" {
+  return type === "nmos" || type === "pmos";
+}
+
+function isRegionChoice(region: unknown): region is RegionChoice {
+  return (IMPOSED_REGIONS as readonly unknown[]).includes(region);
+}
 
 function parse(stored: string | null): unknown {
   try {
@@ -157,8 +168,9 @@ function readPart(value: unknown): PartAssumptions | null {
         miller.push(term as MillerTerm);
     if (miller.length) part.miller = miller;
   }
-  if (typeof value.region === "string" && KNOWN_REGIONS.has(value.region))
-    part.region = value.region;
+  // Only regions the solver imposes: one it would only check (a BJT's, or
+  // cutoff) stored before regions were imposed is dropped.
+  if (isRegionChoice(value.region)) part.region = value.region;
   return part.ignore || part.miller || part.region ? part : null;
 }
 
@@ -372,11 +384,11 @@ export function withMiller(
   };
 }
 
-/** The region parts are expected in; null checks none. */
+/** The region parts are assumed in (imposed on the bias); null: the bias's. */
 export function withRegion(
   parts: CircuitAssumptions,
   paths: readonly string[],
-  region: string | null,
+  region: RegionChoice | null,
 ): CircuitAssumptions {
   const next = { ...parts };
   for (const path of paths) {
@@ -463,11 +475,7 @@ export function assumptionRequest(
           term === null ? { element: name } : { element: name, term },
         );
     const region = part?.region;
-    if (
-      region &&
-      isTransistor(kind) &&
-      (ASSUMPTION_REGIONS[kind] as readonly string[]).includes(region)
-    )
+    if (takesRegion(kind) && isRegionChoice(region))
       regions.push({ element: name, region });
   }
   if (!ignore.length && !regions.length && !miller.length) return null;

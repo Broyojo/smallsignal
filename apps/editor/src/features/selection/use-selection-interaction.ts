@@ -173,6 +173,8 @@ export interface UseSelectionInteractionOptions {
   snapCoordinate: (value: number, grid: number) => number;
   updateInstanceSelection: (instanceId: string, additive: boolean) => void;
   suppressInstanceClickRef: MutableRefObject<boolean>;
+  /** A plain press and release on an instance that moved nothing. */
+  onInstanceClick?: (instanceId: string) => void;
   logicalRadiusForPixels: (svg: SVGSVGElement, pixels: number) => number;
   snapGuides: (guides: SnapGuideLine[]) => void;
   setProjectedMovePreview: (document: SchematicDocument | null) => void;
@@ -962,7 +964,7 @@ export function useSelectionInteraction(
         else if (!dragged && detachDrag) {
           selectInstance(instanceId, true);
           options.setStatus(`Selected ${instanceId}`);
-        }
+        } else if (!dragged) options.onInstanceClick?.(instanceId);
       },
     );
   };

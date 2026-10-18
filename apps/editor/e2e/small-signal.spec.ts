@@ -998,25 +998,210 @@ test("assumptions: All NMOS on the 5T OTA neglects every NMOS r_o and keeps the 
     .toBe(true);
 });
 
-test("assumptions: a region is checked against the bias, never imposed", async ({
+test("assumptions: triode cannot be imposed on a saturated M1, its own region changes nothing", async ({
   page,
 }) => {
   const panel = await analyze(page, FIXTURES.csWired);
   await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
     "M1 is in saturation.",
   );
+  const before = await formula(panel, "Gain");
   const section = await assumptions(panel);
   const region = section.getByLabel("M1 region", { exact: true });
   await region.selectOption("triode");
   await expect(panel.locator(".small-signal-alert.is-warning")).toHaveText(
-    "M1 is in saturation, assumed triode",
+    "M1 is saturated, cannot assume triode",
   );
-  // The numbers are the bias point's, whatever region was expected.
+  // Refused: the bias's model and numbers stay.
   expect(await cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  expect(await formula(panel, "Gain")).toBe(before);
   await region.selectOption("saturation");
   await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
     "M1 is in saturation.",
   );
+});
+
+const deviceMenu = (page: Page) => page.getByTestId("small-signal-device-menu");
+
+test("device menu: a click on M1 neglects r_o there, and the card and the table agree", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await formula(panel, "Gain");
+  await page.getByTestId("hit-m1").click();
+  const menu = deviceMenu(page);
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveAccessibleName("M1 assumptions");
+  // The part stays selected, its row too.
+  await expect(page.getByTestId("hit-m1")).toHaveClass(/\bselected\b/u);
+  const ro = menu.getByRole("button", { name: "Neglect r_o", exact: true });
+  await expect(ro).toHaveAttribute("aria-pressed", "false");
+  await ro.click();
+  await expect(ro).toHaveAttribute("aria-pressed", "true");
+  // Applied at once: the card's form, its cost, and the same choice in the
+  // table.
+  await expect
+    .poll(() => formula(panel, "Gain"))
+    .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
+  await expect(
+    card(panel, "Gain")
+      .getByText(/from full model$/u)
+      .first(),
+  ).toHaveText("2.0% from full model");
+  await expect(menu.locator("[data-cost]")).toHaveText(
+    "Gain 2.0% from full model",
+  );
+  const section = await assumptions(panel);
+  await expect(neglect(section, "M1 ro")).toBeChecked();
+  // A badge marks the part on the canvas.
+  const badge = page.locator('[data-small-signal-badge="M1"]');
+  await expect(badge).toHaveText("≈");
+  await expect(badge).toHaveAccessibleName("M1: r_o neglected");
+  // Esc closes the menu and keeps the selection.
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByTestId("hit-m1")).toHaveClass(/\bselected\b/u);
+  // The table's change shows in the menu, opened from the badge.
+  await neglect(section, "M1 ro").uncheck();
+  await expect(badge).toHaveCount(0);
+  await neglect(section, "M1 leakage").check();
+  await page.locator('[data-small-signal-badge="M1"]').click();
+  await expect(
+    menu.getByRole("button", { name: "Neglect leakage", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(ro).toHaveAttribute("aria-pressed", "false");
+  // From the keyboard: the row's name opens the menu with focus in it, and
+  // Esc gives focus back.
+  await page.keyboard.press("Escape");
+  const name = section.getByRole("button", { name: "M1", exact: true });
+  await name.focus();
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeVisible();
+  await expect(menu.locator(":focus")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(name).toBeFocused();
+});
+
+test("device menu: saturation on the triode inverter gives −(g_m1 + g_m2)(r_o1 ∥ r_o2) at its bias", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.inverter);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-0.4508, 3);
+  await page.getByTestId("hit-M1").click();
+  const menu = deviceMenu(page);
+  await expect(menu.locator(".small-signal-region")).toHaveText("triode");
+  // In triode M1's channel is R_on: no r_o to neglect.
+  await expect(
+    menu.getByRole("button", { name: "Neglect r_o", exact: true }),
+  ).toHaveCount(0);
+  await menu.getByRole("radio", { name: "Saturation", exact: true }).click();
+  await expect(
+    menu.getByRole("radio", { name: "Saturation", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+  await expect(menu).toContainText("M1 bias says triode");
+  await expect(panel.locator(".small-signal-alert.is-warning")).toHaveText(
+    "M1 bias says triode",
+  );
+  const gain = card(panel, "Gain");
+  await expect(gain.locator("[data-region-note]")).toHaveText(
+    "M1 assumed saturated",
+  );
+  await expect.poll(() => formula(panel, "Gain")).toContain("r_{o1}");
+  expect(await formula(panel, "Gain")).not.toContain("R_{on1}");
+  // The header stays the full model's; the assumed value is the saturated
+  // hand form with the bias table's (assumed) g_m and r_o.
+  expect(await cardValue(panel, "Gain")).toBeCloseTo(-0.4508, 3);
+  const bias = card(panel, "Bias point");
+  await expect(
+    bias.locator('tr[data-device="M1"] [data-quantity="region"]'),
+  ).toHaveText(/^saturation\s*assumed, bias triode$/u);
+  const m1 = await biasLine(panel, "M1");
+  const m2 = await biasLine(panel, "M2");
+  expect(m1.region).toBe("saturation");
+  const assumed = Number(
+    (
+      await gain
+        .getByRole("table", { name: "Full model and assumed" })
+        .locator('tbody tr td[data-quantity="assumed"]')
+        .first()
+        .innerText()
+    ).replace(/−/gu, "-"),
+  );
+  expect(assumed / (-(m1.gm + m2.gm) * parallel(m1.ro, m2.ro))).toBeCloseTo(
+    1,
+    2,
+  );
+  // r_o is now M1's to neglect, and the badge says what was imposed.
+  await expect(
+    menu.getByRole("button", { name: "Neglect r_o", exact: true }),
+  ).toBeVisible();
+  const badge = page.locator('[data-small-signal-badge="M1"]');
+  await expect(badge).toHaveText("sat");
+  await expect(badge).toHaveClass(/\bis-warn\b/u);
+  // Auto gives the bias's model back.
+  await menu.getByRole("radio", { name: "Auto", exact: true }).click();
+  await expect.poll(() => formula(panel, "Gain")).toContain("R_{on1}");
+  await expect(badge).toHaveCount(0);
+});
+
+test("device menu: dragging a part moves it with no menu, a press elsewhere closes one", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await formula(panel, "Gain");
+  const m1 = page.getByTestId("hit-m1");
+  const start = await m1.boundingBox();
+  if (!start) throw new Error("M1 is not on the canvas");
+  // A drag moves the part and opens nothing.
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + start.width / 2 + 60,
+    start.y + start.height / 2,
+    { steps: 6 },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await m1.boundingBox())?.x ?? start.x)
+    .toBeGreaterThan(start.x + 20);
+  await expect(deviceMenu(page)).toHaveCount(0);
+  await expect(m1).toHaveClass(/\bselected\b/u);
+  // Undo puts it back, as for any move.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(async () => (await m1.boundingBox())?.x ?? 0)
+    .toBeCloseTo(start.x, 0);
+  // A plain click opens the menu; a resistor opens none; a press on the
+  // empty canvas closes it and clears the selection as before.
+  await m1.click();
+  await expect(deviceMenu(page)).toBeVisible();
+  await page.getByTestId("hit-r1").click();
+  await expect(deviceMenu(page)).toHaveCount(0);
+  await expect(page.getByTestId("hit-r1")).toHaveClass(/\bselected\b/u);
+  await m1.click();
+  await expect(deviceMenu(page)).toBeVisible();
+  const canvas = page.getByTestId("schematic-canvas");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("no canvas");
+  await page.mouse.click(box.x + 20, box.y + box.height - 20);
+  await expect(deviceMenu(page)).toHaveCount(0);
+  await expect(m1).not.toHaveClass(/\bselected\b/u);
+});
+
+test("device menu: a narrow screen gets it as a sheet along the bottom", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 420, height: 860 });
+  const panel = await analyze(page, FIXTURES.inverter);
+  await formula(panel, "Gain");
+  await page.getByTestId("hit-M1").click();
+  const menu = deviceMenu(page);
+  await expect(menu).toHaveClass(/\bis-sheet\b/u);
+  const box = await menu.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(420);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(860);
 });
 
 test("assumptions: a part selected on the canvas is its row, and the row selects it", async ({

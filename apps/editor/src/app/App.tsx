@@ -931,6 +931,12 @@ function WorkspaceEditor({
   const [netlistPreflightOpen, setNetlistPreflightOpen] = useState(false);
   const [projectPanel, setProjectPanel] =
     useState<EditorProjectPanelMode | null>("netlist");
+  // The last plain click on a part while Small-Signal is open: it opens
+  // that part's assumption menu (`nonce` tells a repeat click apart).
+  const [smallSignalClick, setSmallSignalClick] = useState<{
+    instanceId: string;
+    nonce: number;
+  } | null>(null);
   const [netlistFocusedInstance, setNetlistFocusedInstance] = useState<{
     documentId: string;
     instanceId: string;
@@ -3047,6 +3053,13 @@ function WorkspaceEditor({
     snapCoordinate,
     updateInstanceSelection,
     suppressInstanceClickRef: suppressInstanceClick,
+    onInstanceClick: (instanceId) => {
+      if (projectPanel === "small-signal")
+        setSmallSignalClick((previous) => ({
+          instanceId,
+          nonce: (previous?.nonce ?? 0) + 1,
+        }));
+    },
     logicalRadiusForPixels,
     snapGuides: paintSnapGuides,
     setProjectedMovePreview: setProjectedMovePreviewDocument,
@@ -5515,6 +5528,7 @@ function WorkspaceEditor({
                     rootDocumentId={document.id}
                     selectedInstanceIds={selectedIds}
                     onSelectInstances={(ids) => selectOnly("instance", ids)}
+                    instanceClick={smallSignalClick}
                   />
                 ) : projectPanel === "instances" ? (
                   <InstanceCodePanel

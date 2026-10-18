@@ -249,6 +249,244 @@
   color: var(--icm-warning);
 }
 
+/* An imposed region: dashed, the bias's own under it. */
+.small-signal-region.is-assumed {
+  box-shadow: inset 0 0 0 1px currentColor;
+  background: transparent;
+}
+
+.small-signal-bias-region {
+  display: block;
+  max-width: 6.5em;
+  margin-top: 2px;
+  line-height: var(--icm-line-tight);
+  white-space: normal;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-region-note {
+  color: var(--icm-warning);
+  font-size: var(--icm-font-xs);
+}
+
+/* Device menu: beside the clicked part, the editor's popover surface. */
+.small-signal-device-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  gap: 10px;
+  width: 264px;
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--icm-border-strong);
+  border-radius: var(--icm-radius-md);
+  background: var(--icm-surface);
+  box-shadow: var(--icm-shadow-md);
+  color: var(--icm-text);
+  font-size: var(--icm-font-md);
+  line-height: var(--icm-line);
+}
+
+.small-signal-device-menu.is-sheet {
+  inset: auto 8px max(8px, env(safe-area-inset-bottom)) 8px;
+  width: auto;
+  max-height: 60dvh;
+  border-radius: var(--icm-radius-lg);
+  box-shadow: var(--icm-shadow-lg);
+}
+
+.small-signal-device-menu > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.small-signal-device-menu > header strong {
+  font-size: var(--icm-font-lg);
+  font-weight: 650;
+}
+
+/* Name and type on the left; the bias's region and Close on the right. */
+.small-signal-device-menu > header > .small-signal-muted {
+  margin-right: auto;
+}
+
+.small-signal-device-menu-bias {
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-device-menu-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: -4px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--icm-text-muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.small-signal-device-menu > p {
+  margin: -6px 0 0;
+}
+
+.small-signal-device-menu-section {
+  display: grid;
+  gap: 6px;
+}
+
+.small-signal-device-menu h3 {
+  margin: 0;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.small-signal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* A term to neglect: pressed is neglected, dashed comes from a default. */
+.small-signal-chip {
+  min-width: 36px;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--icm-text);
+  font-size: var(--icm-font-sm);
+  white-space: nowrap;
+}
+
+.small-signal-chip sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.small-signal-chip[aria-pressed="true"],
+.small-signal-chip[aria-pressed="mixed"] {
+  color: var(--icm-accent);
+}
+
+.small-signal-chip[aria-pressed="mixed"] {
+  border-style: dashed;
+  background: var(--icm-accent-soft);
+}
+
+.small-signal-chip[data-inherited][aria-pressed="true"] {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+/* Two to four mutually exclusive choices in one row. */
+.small-signal-segmented {
+  display: flex;
+  padding: 2px;
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-surface-muted);
+}
+
+.small-signal-segmented button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-sm);
+}
+
+.small-signal-segmented button:hover:not(:disabled) {
+  border-color: transparent;
+  background: rgb(255 255 255 / 60%);
+  color: var(--icm-text);
+}
+
+.small-signal-segmented button[aria-checked="true"] {
+  border-color: var(--icm-border-strong);
+  background: var(--icm-surface);
+  box-shadow: var(--icm-shadow-sm);
+  color: var(--icm-text);
+  font-weight: 600;
+}
+
+.small-signal-device-menu-notes {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-surface-muted);
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  list-style: none;
+}
+
+.small-signal-device-menu-notes.is-assumed {
+  background: rgb(var(--icm-warning-rgb) / 12%);
+  color: var(--icm-warning);
+}
+
+.small-signal-device-menu > footer {
+  padding-top: 8px;
+  border-top: 1px solid var(--icm-border);
+}
+
+/* A part with assumptions: a tag at its top right on the canvas. */
+.small-signal-badges {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.small-signal-badge {
+  position: absolute;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  transform: translate(-60%, -40%);
+  border: 1px solid rgb(var(--icm-accent-rgb) / 45%);
+  border-radius: 999px;
+  background: var(--icm-accent-tint);
+  box-shadow: var(--icm-shadow-sm);
+  color: var(--icm-accent);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 16px;
+  pointer-events: auto;
+}
+
+.small-signal-badge:hover:not(:disabled) {
+  border-color: var(--icm-accent);
+  background: var(--icm-accent-tint);
+}
+
+.small-signal-badge[aria-expanded="true"] {
+  border-color: var(--icm-accent);
+  background: var(--icm-accent);
+  color: #fff;
+}
+
+.small-signal-badge.is-warn {
+  border-color: rgb(var(--icm-warning-rgb) / 70%);
+  background: #fdf6e3;
+  color: var(--icm-warning);
+}
+
+.small-signal-badge.is-warn[aria-expanded="true"] {
+  background: var(--icm-warning);
+  color: #fff;
+}
+
 /* Options: the Properties disclosure. */
 .small-signal-options {
   border: 1px solid var(--icm-border);

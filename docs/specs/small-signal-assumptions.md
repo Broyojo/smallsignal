@@ -11,8 +11,9 @@ applied by the solver to the formulas it shows while every number stays the
 full model's, and chosen by the numbers for the numeric ≈ forms. The
 solver's general contract is in
 [crates/README.md](../../crates/README.md#contract). The panel sets them
-in its Assumptions section, its Suggestions section applies `suggestions`
-items to the same store, and its Options choose how ≈ forms are made.
+in its Assumptions section and a device menu on the drawing, its
+Suggestions section applies `suggestions` items to the same store, and its
+Options choose how ≈ forms are made.
 
 ## Rules
 
@@ -136,6 +137,32 @@ items to the same store, and its Options choose how ≈ forms are made.
   table. It has no `ro` term: `assumable` leaves it out, a request for it
   (a type default too) is `absent`, and it is never a suggestion or named
   candidate. R_on → ∞ opens the switch, which is no hand-analysis limit.
+
+## Panel
+
+- While the panel is open, a plain click (no drag) on a transistor,
+  capacitor or diode drawn in the open Cell, its canvas badge, or its row's
+  name in the Assumptions table opens its device menu beside it (a sheet
+  along the bottom below 600 px). It offers the part's `assumable` terms
+  (leakage as one), C_gd or C_μ Miller where offered, a capacitor's or
+  diode's open, short or Miller, and a MOSFET's region (Auto, Saturation,
+  Triode), with its bias region, the solver's sentences about it and the
+  gain's distance from the full model. Choices apply at once. Esc, Close
+  or a press elsewhere closes it; from the keyboard focus moves in and
+  back.
+- The menu and the table write one store: a matched group's row applies
+  to every member and the menu says so; a type default shows dashed, from
+  "All NMOS". Regions are per part only: a type default would impose one
+  circuit's region on every circuit.
+- A part with any choice in effect has a badge at its top right: its
+  region, else open, short or Miller, else ≈; amber when the bias
+  disagrees with the region or refuses it.
+- The table keeps every choice in one overview, collapsed by default. Its
+  Region column is the MOSFETs' (auto, saturation, triode). The panel sends
+  no BJT or cutoff region, which the solver would only check.
+- A card with an imposed region notes it (`M1 assumed saturated`); the
+  bias table shows that region's g_m and r_o, marked assumed, with the
+  bias's region.
 
 ## Named simplified forms
 
@@ -288,6 +315,11 @@ writes one by one.
   `assume_cs_triode_refused`); the inverter's −(g_m1 + g_m2)(r_o1 ∥ r_o2)
   with the level-1 saturation values: `oracle/textbook.py`
   (`inverter_forced_saturation`).
+- Device menu: its model, badges, labels and placement:
+  `apps/editor/src/features/small-signal/small-signal-device-menu.test.ts`;
+  a click on M1 that neglects r_o with the card and table agreeing,
+  saturation on the triode inverter, dragging and selection unchanged, the
+  narrow sheet: `apps/editor/e2e/small-signal.spec.ts` (`device menu: …`).
 - Lean certificates for an assumed element list: `lean/check_all.sh`.
 - Suggestions within the threshold, equal to a direct solve of the applied
   set, in matched-group units, never restoring, capped:
