@@ -377,6 +377,12 @@
   color: var(--icm-accent);
 }
 
+/* Hover keeps a pressed chip pressed, a shade deeper. */
+.small-signal-chip[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: var(--icm-accent);
+  background: rgb(var(--icm-accent-rgb) / 16%);
+}
+
 .small-signal-chip[aria-pressed="mixed"] {
   border-style: dashed;
   background: var(--icm-accent-soft);
@@ -453,7 +459,7 @@
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
-  transform: translate(-60%, -40%);
+  transform: translate(-35%, -65%);
   border: 1px solid rgb(var(--icm-accent-rgb) / 45%);
   border-radius: 999px;
   background: var(--icm-accent-tint);
