@@ -144,10 +144,13 @@ items to the same store, and its Options choose how ≈ forms are made.
   out one at a time, the closest first).
 - Every form is measured on the same check grid and metric against the
   model the forms describe: the full model, or the request's assumed one
-  (whose own cost each form's `fullModelError` reports). Of those within
-  `tolerance` and with fewer terms than the display form, the one with
-  the fewest terms is shown; on a tie, element limits alone, then fewer
-  of them, then the smaller error.
+  (whose own cost each form's `fullModelError` reports). Of those whose
+  reported error (that distance plus the proven junction omission) is
+  within `tolerance` and with fewer terms than the display form, the one
+  with the fewest terms is shown; on a tie, element limits alone, then
+  fewer of them, then the smaller error. A form that vanishes
+  identically (a limit that cuts the only signal path) is measured the
+  same way.
 - Without one, `simplified` is the display form with `named: []`, and
   `none: true` when some candidate appeared in the form.
 - The label (`assumption`) names what the form takes, element limits

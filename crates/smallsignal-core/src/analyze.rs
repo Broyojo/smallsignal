@@ -488,7 +488,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     };
     let named_of = |which: Which| {
         let simplify = &simplify;
-        move |e: &Expr, s: &[Sym], g: &Grid| simplify.named(which, e, s, g, None)
+        move |e: &Expr, s: &[Sym], g: &Grid, slack: f64| simplify.named(which, e, s, g, slack, None)
     };
     let (gain_named, rin_named, rout_named) = (named_of(Which::Gain), named_of(Which::Rin), named_of(Which::Rout));
     // Under assumptions the full model's forms are replaced by the assumed
@@ -919,7 +919,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 "rin" => Which::Rin,
                 _ => Which::Rout,
             };
-            let named = |e: &Expr, s: &[Sym], g: &Grid| simplify.named(which, e, s, g, Some(&st.splits));
+            let named =
+                |e: &Expr, s: &[Sym], g: &Grid, slack: f64| simplify.named(which, e, s, g, slack, Some(&st.splits));
             let (value, agrid) = match form {
                 Some((n, dd)) => aq.json(
                     n,
@@ -1627,9 +1628,10 @@ enum Approx<'a> {
     Named(NamedFn<'a>),
 }
 
-/// A named form from the display form, its symbols and the values of the
-/// model the forms describe on the check grid.
-type NamedFn<'a> = &'a dyn Fn(&Expr, &[Sym], &Grid) -> NamedOutcome;
+/// A named form from the display form, its symbols, the values of the
+/// model the forms describe on the check grid, and the error the reported
+/// one adds to a form's own (the proven junction omission).
+type NamedFn<'a> = &'a dyn Fn(&Expr, &[Sym], &Grid, f64) -> NamedOutcome;
 
 impl<'a> Approx<'a> {
     fn of(method: ApproxMethod, named: NamedFn<'a>) -> Approx<'a> {
@@ -1706,16 +1708,22 @@ impl Simplify<'_> {
 
     /// `which`'s named form, from its display form `display` over `syms`,
     /// within the tolerance of `reference` (the values of the model the
-    /// forms describe on the check grid).
+    /// forms describe on the check grid). `slack` is the part of the
+    /// tolerance the reported error already holds (the proven junction
+    /// omission), so a form is accepted only where its reported error
+    /// stays within the tolerance.
+    #[allow(clippy::too_many_arguments)]
     fn named(
         &self,
         which: Which,
         display: &Expr,
         syms: &[Sym],
         reference: &Grid,
+        slack: f64,
         splits: Option<&[crate::miller::Split]>,
     ) -> NamedOutcome {
         use crate::approx::{symbol_of, Unit, NAMED_TERMS};
+        let tol = self.tol - slack;
         let mut used = vec![false; syms.len()];
         for t in display.num.iter().chain(&display.den) {
             for (k, &x) in t.e.iter().enumerate() {
@@ -1748,7 +1756,7 @@ impl Simplify<'_> {
             keep
         };
         let ctx = self.ctx(which, reference, splits);
-        let report = ctx.search(self.tol, NAMED_LIMITS, named);
+        let report = ctx.search(tol, NAMED_LIMITS, named);
         let present = present.into_inner();
         // The exact form under the greedy set, or the set less its last
         // assumptions.
@@ -1763,7 +1771,7 @@ impl Simplify<'_> {
             if kept.is_empty() {
                 break;
             }
-            if let Some((expr, syms, err)) = self.derive(&ctx, which, &kept, splits, reference) {
+            if let Some((expr, syms, err)) = self.derive(&ctx, which, &kept, splits, reference, tol) {
                 subs = Some(NamedCand {
                     expr,
                     syms,
@@ -1776,9 +1784,9 @@ impl Simplify<'_> {
             kept.pop();
         }
         // The leading-order limit, on the display form and on that one.
-        let (any_lead, mut leads) = self.leading(display, syms, &[], reference);
+        let (any_lead, mut leads) = self.leading(display, syms, &[], reference, tol);
         if let Some(s) = &subs {
-            leads.extend(self.leading(&s.expr, &s.syms, &s.kept, reference).1);
+            leads.extend(self.leading(&s.expr, &s.syms, &s.kept, reference, tol).1);
         }
         if report.candidates == 0 && !any_lead {
             return NamedOutcome::Nothing;
@@ -1789,7 +1797,7 @@ impl Simplify<'_> {
         let best = subs
             .into_iter()
             .chain(leads)
-            .filter(|c| c.err <= self.tol && c.expr.term_count() < display.term_count())
+            .filter(|c| c.err <= tol && c.expr.term_count() < display.term_count())
             .min_by(|a, b| {
                 let key = |c: &NamedCand| (c.expr.term_count(), c.lead.is_some(), c.kept.len());
                 key(a).cmp(&key(b)).then(a.err.total_cmp(&b.err))
@@ -1843,6 +1851,7 @@ impl Simplify<'_> {
         syms: &[Sym],
         kept: &[&'c crate::suggest::Candidate],
         reference: &Grid,
+        tol: f64,
     ) -> (bool, Vec<NamedCand<'c>>) {
         let mut used = vec![false; syms.len()];
         for t in expr.num.iter().chain(&expr.den) {
@@ -1873,7 +1882,7 @@ impl Simplify<'_> {
                 &sym::lowest_order_in(&n, syms, &small),
                 &sym::lowest_order_in(&d, syms, &small),
             );
-            if ln.is_zero() || ld.is_zero() {
+            if ld.is_zero() {
                 return None;
             }
             let e = Expr::from_mna(&ln, &ld, syms);
@@ -1902,12 +1911,12 @@ impl Simplify<'_> {
         // fewest terms, every subset tried while there are few (then the
         // smaller error, then more devices); else leave out, one at a time,
         // the device whose leaving out brings the limit closest.
-        let over = out.first().is_none_or(|c| c.err > self.tol);
+        let over = out.first().is_none_or(|c| c.err > tol);
         if over && groups.len() <= LEAD_SUBSETS_UP_TO && expr.term_count() <= LEAD_SUBSET_TERMS {
             let mut best: Option<(Vec<usize>, (Expr, f64))> = None;
             for mask in 1..(1usize << groups.len()) - 1 {
                 let set: Vec<usize> = all.iter().copied().filter(|g| mask >> g & 1 == 1).collect();
-                let Some(r) = limit(&set).filter(|r| r.1 <= self.tol) else {
+                let Some(r) = limit(&set).filter(|r| r.1 <= tol) else {
                     continue;
                 };
                 let better = best.as_ref().is_none_or(|(bs, (be, berr))| {
@@ -1933,7 +1942,7 @@ impl Simplify<'_> {
                     .min_by(|a, b| a.1 .1.total_cmp(&b.1 .1));
                 let Some((rest, r)) = next else { break };
                 set = rest;
-                if r.1 <= self.tol {
+                if r.1 <= tol {
                     out.push(cand(&set, r));
                     break;
                 }
@@ -1944,7 +1953,11 @@ impl Simplify<'_> {
 
     /// The form of `which` under the request's assumptions and `kept`, and
     /// its distance from `reference`: None over the budget, unbounded, or
-    /// beyond the tolerance.
+    /// beyond `tol`. The form is evaluated itself, so the junctions its own
+    /// model leaves out are already in that distance. A form that vanishes
+    /// identically (a named limit that cuts the only signal path) is a form
+    /// like any other, measured the same way.
+    #[allow(clippy::too_many_arguments)]
     fn derive(
         &self,
         ctx: &SuggestCtx,
@@ -1952,6 +1965,7 @@ impl Simplify<'_> {
         kept: &[&crate::suggest::Candidate],
         splits: Option<&[crate::miller::Split]>,
         reference: &Grid,
+        tol: f64,
     ) -> Option<(Expr, Vec<Sym>, f64)> {
         let extra: Vec<(String, crate::assume::Term)> = kept
             .iter()
@@ -1991,7 +2005,7 @@ impl Simplify<'_> {
             shown = s;
         }
         let (num, den) = cancel(&num, &den);
-        if den.is_zero() || num.is_zero() {
+        if den.is_zero() {
             return None;
         }
         let syms = shown.syms;
@@ -2014,7 +2028,7 @@ impl Simplify<'_> {
             None => exact,
         };
         let err = deviation(&self.on_grid(&form), reference);
-        (err <= self.tol).then_some((form, syms, err))
+        (err <= tol).then_some((form, syms, err))
     }
 }
 
@@ -3362,7 +3376,9 @@ impl Quantities<'_> {
                 // Within the tolerance of the model the forms describe, as
                 // `tolerance` always is: the full model, or the request's
                 // assumed one (whose own cost `fullModelError` reports).
-                method = match named(&display, syms, &exact_grid) {
+                // The reported error adds the proven omission (`err_of`), so
+                // a form is accepted only within the tolerance less it.
+                method = match named(&display, syms, &exact_grid, self.omit_err) {
                     NamedOutcome::Found(n) => {
                         simp_err = err_of(&n.expr);
                         simplified = n.expr;
