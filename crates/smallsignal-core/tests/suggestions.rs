@@ -76,7 +76,11 @@ fn check(net: &str, req: Value, quantity: &str) -> Value {
     // Applying the set: the analysis's own deviation, to rounding.
     let mut applied = req.clone();
     let current = req["assume"]["ignore"].as_array().cloned().unwrap_or_default();
-    applied["assume"] = json!({ "ignore": current.into_iter().chain(kept(&v)).collect::<Vec<_>>() });
+    // Regions and Miller splits stay as they were.
+    if !applied["assume"].is_object() {
+        applied["assume"] = json!({});
+    }
+    applied["assume"]["ignore"] = json!(current.into_iter().chain(kept(&v)).collect::<Vec<_>>());
     applied.as_object_mut().unwrap().remove("suggest");
     let w = run(net, &request(applied));
     let direct = w[quantity]["assumed"]["maxRelError"].as_f64().unwrap();
@@ -285,4 +289,62 @@ fn the_ua741_gets_suggestions_over_budget() {
     assert_eq!(s["capped"], Value::Null);
     assert!(kept(&v).len() > 20, "{s}");
     assert!(items(&v).iter().any(|it| it["scope"] == "type"));
+}
+
+const CAPS_CS: &str = include_str!("../../../oracle/corpus/caps_cs.cir");
+const CS_CGD: &str = include_str!("../../../oracle/corpus/assume_cs_cgd_miller.cir");
+const OTA_CC: &str = include_str!("../../../oracle/corpus/assume_ota_miller_cc.cir");
+
+#[test]
+fn device_capacitances_are_candidates() {
+    let req = json!({
+        "input": "VIN", "output": "out", "freqs": [1e3, 1e6], "rout": true,
+        "suggest": { "quantity": "gain" },
+    });
+    let v = check(CAPS_CS, req, "gain");
+    // M1's gate-bulk overlap: a fraction of a percent of the gain.
+    assert!(
+        items(&v)
+            .iter()
+            .any(|it| it["term"] == "cgb" && it["elements"] == json!(["M1"])),
+        "{}",
+        v["suggestions"]
+    );
+}
+
+#[test]
+fn a_miller_split_in_effect_is_kept_and_never_a_candidate() {
+    // C_gd of M1 split, then CC: the base is the split model's own
+    // deviation, and what a split keeps (the capacitance; a capacitor's open
+    // and short) is no candidate, so none is evaluated only to be refused.
+    for (net, split, gone, rin) in [
+        (CS_CGD, json!({ "element": "M1", "term": "cgd" }), 1, true),
+        (OTA_CC, json!({ "element": "CC" }), 2, false),
+    ] {
+        let mut req = json!({
+            "input": "VIN", "output": "out", "freqs": [1e3, 1e6], "rin": rin, "rout": true,
+            "suggest": { "quantity": "gain", "threshold": 1.0 },
+        });
+        let plain = run(net, &request(req.clone()));
+        req["assume"] = json!({ "miller": [split] });
+        let v = check(net, req, "gain");
+        let (s, p) = (&v["suggestions"], &plain["suggestions"]);
+        let base = s["base"].as_f64().unwrap();
+        let own = v["gain"]["assumed"]["maxRelError"].as_f64().unwrap();
+        assert!(base > 0.0 && agree(base, own), "{base} {own}");
+        let target = split["element"].clone();
+        let term = split.get("term").cloned();
+        assert!(
+            !items(&v)
+                .iter()
+                .any(|it| it["elements"] == json!([target]) && term.as_ref().is_none_or(|t| it["term"] == *t)),
+            "{s}"
+        );
+        assert_eq!(
+            s["candidates"].as_u64().unwrap() + gone,
+            p["candidates"].as_u64().unwrap(),
+            "{s}"
+        );
+        assert_eq!(s["unbounded"], p["unbounded"], "{s}");
+    }
 }

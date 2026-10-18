@@ -6,7 +6,10 @@ import type {
   SmallSignalSource,
   SmallSignalSuggestion,
 } from "@icm/small-signal";
-import { partKey } from "./small-signal-assumption-store";
+import {
+  partKey,
+  type CircuitAssumptions,
+} from "./small-signal-assumption-store";
 import {
   assumptionColumnChange,
   assumptionColumns,
@@ -633,5 +636,34 @@ describe("suggestions", () => {
         pmos: ["ro"],
       }),
     ).toEqual({ [partKey(["a"])]: { ignore: {} } });
+  });
+
+  it("keeps Miller splits, and a neglected capacitance ends its own", () => {
+    const elements = [
+      { name: "M1", kind: "nmos", instancePath: ["m1"] },
+    ] as SmallSignalElement[];
+    const split = { [partKey(["m1"])]: { miller: ["cgd", "cgs"] } };
+    // r_o neglected: both splits stay.
+    expect(
+      withSuggestions(
+        split as CircuitAssumptions,
+        [item(["M1"], "ro", "nmos", "part")],
+        elements,
+        {},
+      ),
+    ).toEqual({
+      [partKey(["m1"])]: { ignore: { ro: true }, miller: ["cgd", "cgs"] },
+    });
+    // C_gs neglected: its split ends, C_gd's stays.
+    expect(
+      withSuggestions(
+        split as CircuitAssumptions,
+        [item(["M1"], "cgs", "nmos", "part")],
+        elements,
+        {},
+      ),
+    ).toEqual({
+      [partKey(["m1"])]: { ignore: { cgs: true }, miller: ["cgd"] },
+    });
   });
 });

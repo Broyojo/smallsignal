@@ -1348,30 +1348,52 @@ struct SuggestCtx<'a> {
 }
 
 impl SuggestCtx<'_> {
-    /// Unbounded at s = 0 without junction leakage (as `analyze` decides
-    /// what to restore).
-    fn vanishes(&self, m: &SsCircuit) -> bool {
+    /// `which` unbounded at s = 0 without junction leakage (as `analyze`
+    /// decides what to restore).
+    fn vanishes(&self, which: Which, m: &SsCircuit) -> bool {
         let m = m.omit(&m.optional);
-        let (sys, border) = self.probe.den_system(self.which, &m);
+        let (sys, border) = self.probe.den_system(which, &m);
         crate::pencil::vanishes(&sys, &m, border.as_deref(), true)
     }
 
-    /// The assumptions put back for the quantity under `a`, by element and
-    /// term (sorted), and the model it is analyzed on: as `analyze` does.
-    fn model(&self, a: &crate::assume::Assume, full_vanishes: bool) -> (Vec<(String, &'static str)>, SsCircuit) {
-        let (amatched, _) = consistent_groups(self.net, self.matched, a);
-        let units = crate::assume::units(a, element_groups(self.net, &amatched));
-        let restored = if full_vanishes {
+    /// The assumptions `analyze` puts back for `which` under `a`.
+    fn restored(&self, which: Which, a: &crate::assume::Assume, units: &[Vec<usize>]) -> Vec<usize> {
+        if self.vanishes(which, self.full) {
             Vec::new()
         } else {
-            crate::assume::restore(&units, |r| self.vanishes(&crate::assume::apply(self.full, a, r)))
-        };
+            crate::assume::restore(units, |r| self.vanishes(which, &crate::assume::apply(self.full, a, r)))
+        }
+    }
+
+    /// The assumptions put back for the quantity under `a`, by element and
+    /// term (sorted), and the model it is analyzed on, Miller splits
+    /// included with K from the gain's model: as `analyze` does.
+    fn model(&self, a: &crate::assume::Assume) -> (Vec<(String, &'static str)>, SsCircuit) {
+        let (amatched, _) = consistent_groups(self.net, self.matched, a);
+        let units = crate::assume::units(a, element_groups(self.net, &amatched));
+        let restored = self.restored(self.which, a, &units);
         let mut back: Vec<(String, &'static str)> = restored
             .iter()
             .map(|&i| (a.applied[i].element.clone(), a.applied[i].term.as_str()))
             .collect();
         back.sort();
-        (back, crate::assume::apply(self.full, a, &restored))
+        let base = crate::assume::apply(self.full, a, &restored);
+        if a.miller.is_empty() {
+            return (back, base);
+        }
+        let gain_base = match self.which {
+            Which::Gain => base.clone(),
+            _ => crate::assume::apply(self.full, a, &self.restored(Which::Gain, a, &units)),
+        };
+        let splits = crate::miller::gains(
+            self.net,
+            self.full,
+            &gain_base,
+            &self.probe.excite,
+            &a.miller,
+            &mut Vec::new(),
+        );
+        (back, crate::miller::split(&base, &splits, &a.miller))
     }
 
     /// The quantity on `m` over the check grid by LU, as the numeric path
@@ -1406,17 +1428,27 @@ impl SuggestCtx<'_> {
         use crate::suggest::Outcome;
         let current = self.current.cloned().unwrap_or_default();
         let resolved = resolve(self.net, self.full, self.op, &current).unwrap_or_default();
-        let full_vanishes = self.vanishes(self.full);
-        let (base_back, _) = self.model(&resolved, full_vanishes);
+        let (base_back, _) = self.model(&resolved);
         let in_effect: Vec<(String, crate::assume::Term)> =
             resolved.applied.iter().map(|x| (x.element.clone(), x.term)).collect();
         // Asked for but absent (an open 0 F capacitor) still rules out its
         // opposite: the request would be both open and short.
-        let taken: Vec<(String, crate::assume::Term)> = in_effect
+        let mut taken: Vec<(String, crate::assume::Term)> = in_effect
             .iter()
             .cloned()
             .chain(resolved.absent.iter().cloned())
             .collect();
+        // A Miller split keeps its capacitance: neither neglected nor (a
+        // capacitor's, a diode's) open or shorted. Splits are no candidates.
+        for t in &resolved.miller {
+            use crate::assume::Term;
+            taken.extend(
+                t.term
+                    .into_iter()
+                    .chain([Term::Open, Term::Short])
+                    .map(|x| (t.element.clone(), x)),
+            );
+        }
         let (amatched, _) = consistent_groups(self.net, &self.accepted, &resolved);
         let cands = crate::suggest::candidates(
             &crate::assume::assumable_terms(self.net, self.full),
@@ -1424,7 +1456,7 @@ impl SuggestCtx<'_> {
             element_groups(self.net, &amatched),
         );
         let eval = |extra: &[(String, crate::assume::Term)]| {
-            if extra.is_empty() && in_effect.is_empty() {
+            if extra.is_empty() && in_effect.is_empty() && resolved.miller.is_empty() {
                 // The full model itself: 0, or nothing to compare.
                 return Outcome::Deviation(deviation(&self.full_grid.vals, self.full_grid));
             }
@@ -1436,7 +1468,7 @@ impl SuggestCtx<'_> {
             let Ok(a) = resolve(self.net, self.full, self.op, &req) else {
                 return Outcome::Unbounded;
             };
-            let (back, model) = self.model(&a, full_vanishes);
+            let (back, model) = self.model(&a);
             if back != base_back {
                 return Outcome::Unbounded;
             }
