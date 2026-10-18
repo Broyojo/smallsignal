@@ -167,28 +167,43 @@ Options choose how ≈ forms are made.
 ## Named simplified forms
 
 - In numeric mode, with `approx: "named"` (the default), the `simplified`
-  form of gain, Zin and Zout is the exact form of the model under the
-  request's assumptions plus a set of named assumptions, by the same
-  substitution and restore as `assume`, then `display`'s junction-leakage
-  rule and common-factor cancellation. It drops no nameless term.
-- Candidates are the suggestion candidates of the terms `ro`, `gmb`,
-  `rbs`, `rbd`, `rmu` and the device capacitances, per element or matched
-  group (none type-wide), whose symbol appears in the display form. Never
-  r_π, a passive's open or short, or a Miller split; a split in effect
-  keeps its K.
-- The set is the suggestions' greedy one with threshold `tolerance`,
-  measured on the same check grid and metric against the model the forms
-  describe: the full model, or the request's assumed model (whose own cost
-  each form's `fullModelError` reports). Its form must have fewer terms
-  than the display form, fit the term budget and stay within `tolerance`;
-  else the set without its last assumption is tried, four sets at most.
-- Without such a set `simplified` is the display form with `named: []`,
-  and `none: true` when some candidate appeared in the form.
-- The label (`assumption`) names what the form adds, grouped by kind (r_o,
-  g_mb, junction leakage, capacitances): one by its symbol, "r_o2 → ∞";
-  several by kind and element, "r_o → ∞ for M2, M4", or by kind alone when
-  they are every candidate of that kind in the form, "g_mb → 0"; groups
-  joined "A, B and C"; "_" starts a subscript up to the next space.
+  form of gain, Zin and Zout is a named limit of the model under the
+  request's assumptions: element limits by the same substitution and
+  restore as `assume`, then `display`'s junction-leakage rule and
+  common-factor cancellation, optionally followed by the hand-analysis
+  limit r_o ≫ R, 1/g_m. It drops no nameless term.
+- Element candidates are the suggestion candidates of the terms `ro`,
+  `gmb`, `rbs`, `rbd`, `rmu` and the device capacitances, per element or
+  matched group (none type-wide), whose symbol appears in the display
+  form. Never r_π, a passive's open or short, or a Miller split; a split
+  in effect keeps its K. Their set is the suggestions' greedy one with
+  threshold `tolerance`; if its form is over the budget or the
+  tolerance, the set without its last assumption is tried, four sets at
+  most.
+- The hand-analysis limit is symbolic mode's leading order: the output
+  resistances (r_o, r_μ, junction leakage; not a triode channel's R_on)
+  of a set of devices scaled as r/ε together, numerator and denominator
+  each cut to their lowest order in ε per power of s, then cancelled. It
+  is taken on the display form and on the element set's form, per device
+  or matched group: on all of them, and, when that is over the
+  tolerance, on the subset with the fewest terms within it (every subset
+  while there are at most 8 devices and 2,000 terms, else devices left
+  out one at a time, the closest first).
+- Every form is measured on the same check grid and metric against the
+  model the forms describe: the full model, or the request's assumed one
+  (whose own cost each form's `fullModelError` reports). Of those within
+  `tolerance` and with fewer terms than the display form, the one with
+  the fewest terms is shown; on a tie, element limits alone, then fewer
+  of them, then the smaller error.
+- Without one, `simplified` is the display form with `named: []`, and
+  `none: true` when some candidate appeared in the form.
+- The label (`assumption`) names what the form takes, element limits
+  grouped by kind (r_o, g_mb, junction leakage, capacitances): one by its
+  symbol, "r_o2 → ∞"; several by kind and element, "r_o → ∞ for M2, M4",
+  or by kind alone when they are every candidate of that kind in the form,
+  "g_mb → 0"; then the hand limit, "r_o ≫ R, 1/g_m", with its devices
+  when not all of those in the form ("r_o ≫ R, 1/g_m for M1, M2"); joined
+  "A, B and C"; "_" starts a subscript up to the next space.
 - `approx: "terms"` keeps the smallest-terms form
   ([crates/README.md](../../crates/README.md#pipeline)). Symbolic mode
   keeps its hand-analysis limit whatever `approx` says. The noise and
@@ -271,10 +286,11 @@ rout in the request`, `suggest: threshold must be above 0`.
 Request `approx` (CLI `--approx named|terms`): `"named"` (default) or
 `"terms"`; else `approx: no method 'x' (use named or terms)`. Each
 numeric `simplified` carries `method` (`"named"` or `"terms"`); a named
-one also `named` `[{elements, term, latex}]` (latex such as
-`r_{o2} \to \infty`), `assumption` (the label, when `named` is not
-empty) and `none` (only when true). Its `maxRelError` is against the
-model the forms describe.
+one also `named` `[{elements, term, latex}]` (the element limits, latex
+such as `r_{o2} \to \infty`), `leadingOrder` `{elements, all}` (when the
+hand limit is taken), `assumption` (the label, when either is) and
+`none` (only when true). Its `maxRelError` is against the model the
+forms describe.
 
 Response `suggestions`: `{quantity, threshold, base, items, combined,
 candidates, evaluated, unbounded, capped}`, `base` the current
@@ -326,12 +342,15 @@ writes one by one.
   `crates/smallsignal-core/tests/suggestions.rs`; applied sets against the
   rebuild: `oracle/compare.py` (sidecar `suggest`).
 - Named forms: the triode inverter's −R_on1(g_m2 + g_m1) and R_on1 with
-  "r_o2 → ∞" and their error, the 5T OTA keeping both pairs' r_o, the
-  request's assumptions kept, no form within the tolerance, smallest terms
-  unchanged, R_on never a candidate:
+  "r_o2 → ∞" and their error, the 5T OTA's g_m(r_o1,2 ∥ r_o3,4) and the
+  cascode's (g_m2 + g_mb2) r_o1 r_o2 by the hand limit at their true
+  error, the two-stage OTA's first-stage limit no longer than smallest
+  terms, the request's assumptions kept, no form within the tolerance,
+  smallest terms unchanged, R_on never a candidate:
   `crates/smallsignal-core/tests/named_approx.rs`, `edge_cases.rs`
-  (`named_forms_drop_no_nameless_part`); the inverter's values and R_on
-  against ngspice: `oracle/compare.py` (`inverter_triode`); the triode
+  (`named_forms_drop_no_nameless_part`); the inverter's and the cascode's
+  values against ngspice: `oracle/compare.py` (`inverter_triode`,
+  `cascode_isrc`); the triode
   stack's R_on in hand KCL: `oracle/textbook.py` (`stack_shared_gate`); the
   label, the option and the bias table's R_on in the panel:
   `apps/editor/e2e/small-signal.spec.ts`.

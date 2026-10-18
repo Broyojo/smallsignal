@@ -705,16 +705,12 @@ fn match_auto_applies_candidates_in_one_solve() {
         .map(|c| c["applied"].as_bool().unwrap())
         .collect();
     assert_eq!(applied, vec![true, true]);
-    // The named form is over the merged symbols (r_o5 → ∞ alone is within
-    // 5%: the pairs' r_o set the gain).
     let simplified = r["gain"]["simplified"]["latex"].as_str().unwrap();
     assert!(
-        ["g_{m1,2}", "r_{o1,2}", "r_{o3,4}"]
-            .iter()
-            .all(|s| simplified.contains(s)),
+        simplified.contains("g_{m1,2}") && simplified.contains("r_{o1,2} \\parallel r_{o3,4}"),
         "{simplified}"
     );
-    assert_eq!(r["gain"]["simplified"]["assumption"], "r_o5 → ∞");
+    assert_eq!(r["gain"]["simplified"]["assumption"], "r_o ≫ R, 1/g_m");
 
     let mut opt_out = base;
     opt_out["unmatch"] = json!([["M1", "M2"]]);

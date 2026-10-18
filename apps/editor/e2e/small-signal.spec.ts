@@ -317,7 +317,7 @@ test("textbook diff pair reads like hand analysis: differential, matched, gm(ro 
     .not.toContain("g_{m3,4}");
 });
 
-test("5T OTA with a real bias: saturated, matched, ≈ assumes only the tail's r_o", async ({
+test("5T OTA with a real bias: saturated, matched, gm(ro ∥ ro)/(1 + CL(…)s)", async ({
   page,
 }) => {
   const panel = await analyze(page, FIXTURES.ota);
@@ -326,25 +326,27 @@ test("5T OTA with a real bias: saturated, matched, ≈ assumes only the tail's r
   );
   const chips = panel.getByLabel("Matched pairs").getByRole("button");
   await expect(chips).toHaveCount(2);
-  // Both pairs' r_o set the output: the named form keeps them.
   const gain = await formula(panel, "Gain");
   expect(gain).toContain("g_{m1,2}");
-  expect(gain).toMatch(/r_\{o1,2\}.*r_\{o3,4\}/u);
-  expect(gain).not.toContain("r_{o5}");
+  expect(gain).toContain("r_{o1,2} \\parallel r_{o3,4}");
+  // Named: the hand limit, with its true error.
   await expect(card(panel, "Gain").locator('[data-approx="named"]')).toHaveText(
-    "ro5 → ∞, within <0.1%",
+    /^ro ≫ R, 1\/gm, within (<0\.1|\d\.\d+)%$/u,
   );
   const value = Math.abs(await cardValue(panel, "Gain"));
   expect(value).toBeGreaterThan(100);
   expect(value).toBeLessThan(5000);
-  // Smallest terms: gm(ro ∥ ro)/(1 + CL(…)s), as before.
+  // Smallest terms finds the same form, unnamed.
   await panel.getByText("Options", { exact: true }).click();
   await panel
     .getByLabel("Approximation", { exact: true })
     .selectOption("terms");
-  await expect
-    .poll(() => formula(panel, "Gain"))
-    .toContain("r_{o1,2} \\parallel r_{o3,4}");
+  await expect(
+    card(panel, "Gain").locator('[data-approx="named"]'),
+  ).toHaveCount(0);
+  expect(await formula(panel, "Gain")).toContain(
+    "r_{o1,2} \\parallel r_{o3,4}",
+  );
 });
 
 test("RC filter: 1/(1 + R1 C1 s) with its pole", async ({ page }) => {
@@ -1413,17 +1415,11 @@ test("assumptions: Miller on CC in a two-stage OTA, labeled with K, its cost mea
   await expect(gain.locator(".small-signal-miller")).toHaveText(
     /^Miller CC, K = −\d{3}$/u,
   );
-  // Named assumptions on top of the split: only the tail's r_o goes, which
-  // leaves 49 terms, too long to typeset; the split's own cost is in the
-  // note. Smallest terms gives the short form in K.
-  await expect(gain.locator('[data-approx="named"]')).toHaveText(
-    /^ro5 → ∞, \d+% from full model$/u,
-  );
-  await panel.getByText("Options", { exact: true }).click();
-  await panel
-    .getByLabel("Approximation", { exact: true })
-    .selectOption("terms");
   await expect.poll(() => formula(panel, "Gain")).toContain("K_{CC}");
+  // The hand limit on the split model; the split's own cost is the note's.
+  await expect(gain.locator('[data-approx="named"]')).toHaveText(
+    /^ro ≫ R, 1\/gm, \d+% from full model$/u,
+  );
   // The split keeps the dominant pole and loses pole splitting: its cost.
   await expect(gain).toContainText("% from full model");
   const table = gain.getByRole("table", { name: "Full model and assumed" });

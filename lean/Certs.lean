@@ -24,6 +24,7 @@ import Certs.caps_diode
 import Certs.caps_ota5t
 import Certs.caps_sf
 import Certs.caps_triode
+import Certs.cascode_isrc
 import Certs.cccs
 import Certs.ccvs
 import Certs.cs_pmos_load

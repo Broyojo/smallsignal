@@ -42,8 +42,9 @@ with numeric values, poles and zeros, and the operating point.
    more than 5·10⁷ term products.
 5. **Display**: conductances become resistances, common factors cancel, and
    terms are sorted by magnitude. The numeric simplified form of gain, Zin
-   and Zout is the exact form under named assumptions the numbers choose
-   ([rules](../docs/specs/small-signal-assumptions.md#named-simplified-forms)).
+   and Zout is the shortest named limit within `tolerance`: element limits
+   (r_o → ∞, g_mb → 0, …) and the hand limit r_o ≫ R, 1/g_m, chosen by the
+   numbers ([rules](../docs/specs/small-signal-assumptions.md#named-simplified-forms)).
    With `approx: "terms"` it drops the smallest terms within each power of
    s instead, up to the coarsest pruning whose error over 1 Hz–100 GHz stays
    within `tolerance`. Magnitude pruning (there, in noise and in distortion)
