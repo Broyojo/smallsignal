@@ -292,3 +292,47 @@ fn symbolic_mode_keeps_the_hand_limit() {
         assert!(s.get("method").is_none());
     }
 }
+
+/// A named form is accepted only where the error it reports, which adds
+/// the proven junction omission to its distance from the forms' exact
+/// model, stays within the tolerance. At a tolerance between the triode
+/// inverter's r_o2 → ∞ distance and that plus the omission bound, it is
+/// not taken (before: taken, reporting more than the tolerance).
+#[test]
+fn a_named_form_reports_no_more_than_the_tolerance() {
+    let net = corpus("inverter_triode");
+    let base = json!({ "input": "VIN", "output": "out", "rout": true });
+    let r = run(&net, &req(base.clone()));
+    let omit = r["omissionError"].as_f64().unwrap();
+    assert!(omit > 0.0);
+    let reported = r["gain"]["simplified"]["maxRelError"].as_f64().unwrap();
+    let mut tight = base;
+    tight["tolerance"] = json!(reported - omit / 2.0);
+    let r = run(&net, &req(tight));
+    for q in ["gain", "rout"] {
+        let s = &r[q]["simplified"];
+        let tol = s["tolerance"].as_f64().unwrap();
+        assert!(s["maxRelError"].as_f64().unwrap() <= tol, "{q}: {s}");
+        assert_eq!(s["none"], true, "{q}: {s}");
+    }
+}
+
+/// A named limit that cuts the only signal path leaves an identically
+/// zero form, measured like any other: an off NMOS whose gate reaches the
+/// drain only through C_gd reads 0 assuming C_gd1 → 0 at a 100%
+/// tolerance (its distance is 1), and keeps its exact form at 5% (before:
+/// the zero form was discarded, so 100% showed the exact form too).
+#[test]
+fn a_named_limit_may_leave_zero() {
+    let net = "off nmos\nVIN in 0 DC 0 AC 1\nM1 out in 0 0 nch W=10u L=1u\nRL out 0 1k\n\
+               .model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 CGDO=3e-10)\n";
+    let wide = run(net, &req(json!({ "input": "VIN", "output": "out", "tolerance": 1.0 })));
+    let s = &wide["gain"]["simplified"];
+    assert_eq!(s["latex"], "0", "{s}");
+    assert_eq!(s["assumption"], "C_gd1 → 0");
+    assert!(s["maxRelError"].as_f64().unwrap() <= 1.0);
+    let tight = run(net, &req(json!({ "input": "VIN", "output": "out" })));
+    let s = &tight["gain"]["simplified"];
+    assert_eq!(s["none"], true, "{s}");
+    assert_eq!(s["latex"], "\\frac{R_{L} C_{gd1} s}{1 + R_{L} C_{gd1} s}");
+}
