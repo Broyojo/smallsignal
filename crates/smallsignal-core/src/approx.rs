@@ -2,10 +2,11 @@
 //! form may assume and how its label reads.
 //!
 //! The form itself is the exact form of the model under a set of named
-//! assumptions (`assume`), chosen by the `suggest` search on the numbers;
-//! `analyze` builds it. Here: which terms are candidates, whether one
-//! appears in a form, and the label, e.g. "r_o2 → ∞" or
-//! "r_o → ∞ for M2, M4 and g_mb → 0".
+//! assumptions (`assume`), chosen by the `suggest` search on the numbers,
+//! possibly followed by the hand limit r_o ≫ R, 1/g_m; `analyze` builds
+//! it. Here: which terms are candidates, whether one appears in a form,
+//! and the label, e.g. "r_o2 → ∞", "r_o → ∞ for M2, M4 and g_mb → 0" or
+//! "r_o ≫ R, 1/g_m for M1, M2".
 
 use crate::assume::Term;
 use crate::sym::Sym;
@@ -127,11 +128,39 @@ pub fn unit_latex(u: &Unit) -> Option<String> {
     })
 }
 
+/// The hand-analysis limit r_o ≫ R, 1/g_m taken on a named form: the
+/// leading order as the output resistances of `elements` go to infinity
+/// together (`all`: every one left in the form).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lead {
+    pub elements: Vec<String>,
+    pub all: bool,
+}
+
+/// The leading-order clause of a label: "r_o ≫ R, 1/g_m", or with the
+/// devices it covers when not all, "r_o ≫ R, 1/g_m for M1, M3".
+pub fn lead_label(lead: &Lead) -> String {
+    if lead.all {
+        "r_o ≫ R, 1/g_m".to_string()
+    } else {
+        format!("r_o ≫ R, 1/g_m for {}", lead.elements.join(", "))
+    }
+}
+
 /// The label of a named form, grouped by kind (r_o, g_mb, junction
 /// leakage, capacitances): one unit by its symbol ("r_o2 → ∞"); several by
 /// kind with their elements ("r_o → ∞ for M2, M4"), or without them when
-/// they are every unit of that kind in the form (`present`).
-pub fn label(chosen: &[Unit], present: &[Unit]) -> String {
+/// they are every unit of that kind in the form (`present`); then the
+/// leading-order limit, if taken.
+pub fn label(chosen: &[Unit], present: &[Unit], lead: Option<&Lead>) -> String {
+    let mut parts = unit_parts(chosen, present);
+    if let Some(l) = lead {
+        parts.push(lead_label(l));
+    }
+    join(&parts)
+}
+
+fn unit_parts(chosen: &[Unit], present: &[Unit]) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     for g in 0..4 {
         let of: Vec<&Unit> = chosen.iter().filter(|u| group(u.term) == g).collect();
@@ -178,7 +207,7 @@ pub fn label(chosen: &[Unit], present: &[Unit]) -> String {
             format!("{head} → {lim} for {}", elements.join(", "))
         });
     }
-    join(&parts)
+    parts
 }
 
 #[cfg(test)]
@@ -195,6 +224,7 @@ mod tests {
 
     #[test]
     fn labels_group_by_kind() {
+        let label = |chosen: &[Unit], present: &[Unit]| super::label(chosen, present, None);
         let ro2 = unit(&["M2"], Term::Ro, Some("r_{o2}"));
         let ro4 = unit(&["M4"], Term::Ro, Some("r_{o4}"));
         let ro5 = unit(&["M5"], Term::Ro, Some("r_{o5}"));
@@ -224,5 +254,20 @@ mod tests {
         assert_eq!(plain("r_{o,in}"), "r_o,in");
         assert_eq!(unit_latex(&gmb).unwrap(), "g_{mb1,2} = 0");
         assert_eq!(unit_latex(&ro2).unwrap(), "r_{o2} \\to \\infty");
+    }
+
+    #[test]
+    fn the_leading_order_comes_last() {
+        let ro5 = unit(&["M5"], Term::Ro, Some("r_{o5}"));
+        let all = Lead {
+            elements: vec!["M1".into(), "M2".into()],
+            all: true,
+        };
+        assert_eq!(label(&[], &[], Some(&all)), "r_o ≫ R, 1/g_m");
+        let some = Lead { all: false, ..all };
+        assert_eq!(
+            label(std::slice::from_ref(&ro5), std::slice::from_ref(&ro5), Some(&some)),
+            "r_o5 → ∞ and r_o ≫ R, 1/g_m for M1, M2"
+        );
     }
 }

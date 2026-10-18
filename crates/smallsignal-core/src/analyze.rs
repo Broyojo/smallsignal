@@ -1595,7 +1595,19 @@ struct Named {
     syms: Vec<Sym>,
     /// The assumptions made on top of the request's, in label order.
     units: Vec<crate::approx::Unit>,
+    /// The leading-order limit r_o ≫ R, 1/g_m, when taken (after `units`).
+    lead: Option<crate::approx::Lead>,
     label: String,
+}
+
+/// A named form considered: its form, the substitutions under it, the
+/// leading-order limit taken on it, its distance from the reference.
+struct NamedCand<'c> {
+    expr: Expr,
+    syms: Vec<Sym>,
+    kept: Vec<&'c crate::suggest::Candidate>,
+    lead: Option<crate::approx::Lead>,
+    err: f64,
 }
 
 /// The outcome of the named-assumption search for one quantity.
@@ -1632,6 +1644,13 @@ impl<'a> Approx<'a> {
 /// its last assumption, before there is no named form.
 const NAMED_TRIES: usize = 4;
 
+/// The leading-order limit is tried on every subset of devices while there
+/// are at most this many in the form (2^8 limits), and the form has at
+/// most `LEAD_SUBSET_TERMS` terms; past that, devices are left out one at
+/// a time.
+const LEAD_SUBSETS_UP_TO: usize = 8;
+const LEAD_SUBSET_TERMS: usize = 2_000;
+
 /// The named search's caps: generous, so that the time cap almost never
 /// decides (the result would then depend on the machine).
 const NAMED_LIMITS: crate::suggest::Limits = crate::suggest::Limits {
@@ -1644,7 +1663,9 @@ const NAMED_LIMITS: crate::suggest::Limits = crate::suggest::Limits {
 /// full model, or the request's assumed one), over the named assumptions
 /// that appear in the form, then the exact form of the model under the set
 /// found (`assume::apply`, restored as `analyze` restores), junction
-/// leakage left out as in `display`, common factors cancelled.
+/// leakage left out as in `display`, common factors cancelled; and the
+/// hand limit r_o ≫ R, 1/g_m on that form or the display form. Of these,
+/// the one within the tolerance with the fewest terms.
 struct Simplify<'a> {
     probe: &'a Probe<'a>,
     net: &'a Netlist,
@@ -1728,10 +1749,10 @@ impl Simplify<'_> {
         };
         let ctx = self.ctx(which, reference, splits);
         let report = ctx.search(self.tol, NAMED_LIMITS, named);
-        if report.candidates == 0 {
-            return NamedOutcome::Nothing;
-        }
         let present = present.into_inner();
+        // The exact form under the greedy set, or the set less its last
+        // assumptions.
+        let mut subs: Option<NamedCand> = None;
         let mut kept: Vec<&crate::suggest::Candidate> = report
             .items
             .iter()
@@ -1742,47 +1763,196 @@ impl Simplify<'_> {
             if kept.is_empty() {
                 break;
             }
-            if let Some((expr, syms)) = self.derive(&ctx, which, &kept, splits, display.term_count(), reference) {
-                let mut units: Vec<Unit> = kept.iter().map(|c| unit(c)).collect();
-                // Label order: by term, then as the netlist lists them.
-                let order = |u: &Unit| self.net.element(&u.elements[0]).unwrap_or(usize::MAX);
-                units.sort_by(|a, b| a.term.cmp(&b.term).then(order(a).cmp(&order(b))));
-                let label = crate::approx::label(&units, &present);
-                let mut seen = self.seen.borrow_mut();
-                for (k, s) in syms.iter().enumerate() {
-                    let used = expr
-                        .num
-                        .iter()
-                        .chain(&expr.den)
-                        .any(|t| t.e.get(k).is_some_and(|&x| x > 0));
-                    if used && !seen.iter().any(|x| x.name == s.name && x.latex == s.latex) {
-                        seen.push(s.clone());
-                    }
-                }
-                return NamedOutcome::Found(Named {
+            if let Some((expr, syms, err)) = self.derive(&ctx, which, &kept, splits, reference) {
+                subs = Some(NamedCand {
                     expr,
                     syms,
-                    units,
-                    label,
+                    kept: kept.clone(),
+                    lead: None,
+                    err,
                 });
+                break;
             }
             kept.pop();
         }
-        NamedOutcome::NoneWithin
+        // The leading-order limit, on the display form and on that one.
+        let (any_lead, mut leads) = self.leading(display, syms, &[], reference);
+        if let Some(s) = &subs {
+            leads.extend(self.leading(&s.expr, &s.syms, &s.kept, reference).1);
+        }
+        if report.candidates == 0 && !any_lead {
+            return NamedOutcome::Nothing;
+        }
+        // Within the tolerance and simpler than the display form: the
+        // fewest terms, then a substitution alone, fewer substitutions, the
+        // smaller error.
+        let best = subs
+            .into_iter()
+            .chain(leads)
+            .filter(|c| c.err <= self.tol && c.expr.term_count() < display.term_count())
+            .min_by(|a, b| {
+                let key = |c: &NamedCand| (c.expr.term_count(), c.lead.is_some(), c.kept.len());
+                key(a).cmp(&key(b)).then(a.err.total_cmp(&b.err))
+            });
+        let Some(best) = best else {
+            return NamedOutcome::NoneWithin;
+        };
+        let mut units: Vec<Unit> = best.kept.iter().map(|c| unit(c)).collect();
+        // Label order: by term, then as the netlist lists them.
+        let order = |u: &Unit| self.net.element(&u.elements[0]).unwrap_or(usize::MAX);
+        units.sort_by(|a, b| a.term.cmp(&b.term).then(order(a).cmp(&order(b))));
+        let label = crate::approx::label(&units, &present, best.lead.as_ref());
+        let mut seen = self.seen.borrow_mut();
+        for (k, s) in best.syms.iter().enumerate() {
+            let used = best
+                .expr
+                .num
+                .iter()
+                .chain(&best.expr.den)
+                .any(|t| t.e.get(k).is_some_and(|&x| x > 0));
+            if used && !seen.iter().any(|x| x.name == s.name && x.latex == s.latex) {
+                seen.push(s.clone());
+            }
+        }
+        NamedOutcome::Found(Named {
+            expr: best.expr,
+            syms: best.syms,
+            units,
+            lead: best.lead,
+            label,
+        })
     }
 
-    /// The form of `which` under the request's assumptions and `kept`:
-    /// None over the budget, unbounded, no simpler than `terms` terms, or
-    /// beyond the tolerance of `reference`.
+    /// `e` on the check grid (None where not finite).
+    fn on_grid(&self, e: &Expr) -> Vec<Option<Complex64>> {
+        let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+        self.grid.iter().map(|&f| Some(e.eval(jw(f))).filter(finite)).collect()
+    }
+
+    /// The hand-analysis limit r_o ≫ R, 1/g_m on `expr` (over `syms`, made
+    /// with the substitutions `kept`): the leading order as device output
+    /// resistances (r_o, r_μ, junction leakage, not a triode channel's
+    /// R_on) go to infinity together, numerator and denominator each cut
+    /// to their lowest order in their conductances per power of s, then
+    /// cancelled, as symbolic mode takes it. Per device (or matched group):
+    /// all of them, and when that is over the tolerance a subset within it
+    /// (see below). Also says whether any device's appears in `expr`.
+    fn leading<'c>(
+        &self,
+        expr: &Expr,
+        syms: &[Sym],
+        kept: &[&'c crate::suggest::Candidate],
+        reference: &Grid,
+    ) -> (bool, Vec<NamedCand<'c>>) {
+        let mut used = vec![false; syms.len()];
+        for t in expr.num.iter().chain(&expr.den) {
+            for (k, &x) in t.e.iter().enumerate() {
+                used[k] |= x > 0;
+            }
+        }
+        // One group per device, or matched group: its symbols.
+        let mut groups: Vec<(Vec<String>, Vec<usize>)> = Vec::new();
+        for (k, s) in syms.iter().enumerate().filter(|(k, s)| s.output_r && used[*k]) {
+            match groups.iter_mut().find(|(els, _)| *els == s.elements) {
+                Some((_, ks)) => ks.push(k),
+                None => groups.push((s.elements.clone(), vec![k])),
+            }
+        }
+        if groups.is_empty() {
+            return (false, Vec::new());
+        }
+        let (n, d) = expr.to_mna(syms);
+        let limit = |set: &[usize]| -> Option<(Expr, f64)> {
+            let mut small = vec![false; syms.len()];
+            for &g in set {
+                for &k in &groups[g].1 {
+                    small[k] = true;
+                }
+            }
+            let (ln, ld) = cancel(
+                &sym::lowest_order_in(&n, syms, &small),
+                &sym::lowest_order_in(&d, syms, &small),
+            );
+            if ln.is_zero() || ld.is_zero() {
+                return None;
+            }
+            let e = Expr::from_mna(&ln, &ld, syms);
+            let err = deviation(&self.on_grid(&e), reference);
+            Some((e, err))
+        };
+        let lead = |set: &[usize]| {
+            let mut elements: Vec<String> = set.iter().flat_map(|&g| groups[g].0.clone()).collect();
+            elements.sort_by_key(|e| self.net.element(e).unwrap_or(usize::MAX));
+            elements.dedup();
+            crate::approx::Lead {
+                elements,
+                all: set.len() == groups.len(),
+            }
+        };
+        let cand = |set: &[usize], (expr, err): (Expr, f64)| NamedCand {
+            expr,
+            syms: syms.to_vec(),
+            kept: kept.to_vec(),
+            lead: Some(lead(set)),
+            err,
+        };
+        let all: Vec<usize> = (0..groups.len()).collect();
+        let mut out: Vec<NamedCand> = limit(&all).map(|r| cand(&all, r)).into_iter().collect();
+        // Over the tolerance with all of them: the subset within it with the
+        // fewest terms, every subset tried while there are few (then the
+        // smaller error, then more devices); else leave out, one at a time,
+        // the device whose leaving out brings the limit closest.
+        let over = out.first().is_none_or(|c| c.err > self.tol);
+        if over && groups.len() <= LEAD_SUBSETS_UP_TO && expr.term_count() <= LEAD_SUBSET_TERMS {
+            let mut best: Option<(Vec<usize>, (Expr, f64))> = None;
+            for mask in 1..(1usize << groups.len()) - 1 {
+                let set: Vec<usize> = all.iter().copied().filter(|g| mask >> g & 1 == 1).collect();
+                let Some(r) = limit(&set).filter(|r| r.1 <= self.tol) else {
+                    continue;
+                };
+                let better = best.as_ref().is_none_or(|(bs, (be, berr))| {
+                    (r.0.term_count(), r.1, std::cmp::Reverse(set.len()))
+                        < (be.term_count(), *berr, std::cmp::Reverse(bs.len()))
+                });
+                if better {
+                    best = Some((set, r));
+                }
+            }
+            if let Some((set, r)) = best {
+                out.push(cand(&set, r));
+            }
+        } else if over {
+            let mut set = all.clone();
+            while set.len() > 1 {
+                let next = set
+                    .iter()
+                    .filter_map(|&g| {
+                        let rest: Vec<usize> = set.iter().copied().filter(|&x| x != g).collect();
+                        limit(&rest).map(|r| (rest, r))
+                    })
+                    .min_by(|a, b| a.1 .1.total_cmp(&b.1 .1));
+                let Some((rest, r)) = next else { break };
+                set = rest;
+                if r.1 <= self.tol {
+                    out.push(cand(&set, r));
+                    break;
+                }
+            }
+        }
+        (true, out)
+    }
+
+    /// The form of `which` under the request's assumptions and `kept`, and
+    /// its distance from `reference`: None over the budget, unbounded, or
+    /// beyond the tolerance.
     fn derive(
         &self,
         ctx: &SuggestCtx,
         which: Which,
         kept: &[&crate::suggest::Candidate],
         splits: Option<&[crate::miller::Split]>,
-        terms: usize,
         reference: &Grid,
-    ) -> Option<(Expr, Vec<Sym>)> {
+    ) -> Option<(Expr, Vec<Sym>, f64)> {
         let extra: Vec<(String, crate::assume::Term)> = kept
             .iter()
             .flat_map(|c| c.elements.iter().map(|e| (e.clone(), c.term)))
@@ -1826,20 +1996,16 @@ impl Simplify<'_> {
         }
         let syms = shown.syms;
         let exact = Expr::from_mna(&num, &den, &syms);
-        let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
-        let on_grid = |e: &Expr| -> Vec<Option<Complex64>> {
-            self.grid.iter().map(|&f| Some(e.eval(jw(f))).filter(finite)).collect()
-        };
         // Junction leakage left out where that moves this model's values by
         // at most LEAKAGE_REL, as the display form leaves it out.
         let form = match drop_leakage(&num, &den, &syms) {
             Some((n, d)) => {
                 let cand = Expr::from_mna(&n, &d, &syms);
                 let own = Grid {
-                    vals: on_grid(&exact),
+                    vals: self.on_grid(&exact),
                     bounds: Vec::new(),
                 };
-                if deviation(&on_grid(&cand), &own) + omit_err <= LEAKAGE_REL {
+                if deviation(&self.on_grid(&cand), &own) + omit_err <= LEAKAGE_REL {
                     cand
                 } else {
                     exact
@@ -1847,8 +2013,8 @@ impl Simplify<'_> {
             }
             None => exact,
         };
-        let err = deviation(&on_grid(&form), reference);
-        (form.term_count() < terms && err <= self.tol).then_some((form, syms))
+        let err = deviation(&self.on_grid(&form), reference);
+        (err <= self.tol).then_some((form, syms, err))
     }
 }
 
@@ -3211,7 +3377,11 @@ impl Quantities<'_> {
                                 })
                             })
                             .collect();
-                        json!({ "method": "named", "assumption": n.label, "named": items })
+                        let mut m = json!({ "method": "named", "assumption": n.label, "named": items });
+                        if let Some(l) = &n.lead {
+                            m["leadingOrder"] = json!({ "elements": l.elements, "all": l.all });
+                        }
+                        m
                     }
                     NamedOutcome::NoneWithin => json!({ "method": "named", "named": [], "none": true }),
                     NamedOutcome::Nothing => json!({ "method": "named", "named": [] }),
