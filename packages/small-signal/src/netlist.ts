@@ -198,6 +198,9 @@ export interface SmallSignalNetlist {
   notes: string[];
   /** Supply nets drawn with a VDD symbol and driven by an added DC source. */
   supplies: string[];
+  /** Every supply rail the drawing marks (VDD symbols, supply and ground
+   * rail nets), driven by an added source or a drawn one. */
+  rails: string[];
   /**
    * Pins the drawing leaves unconnected, as `R1.1`. Touching parts are not
    * connected in Analog Canvas (only wires connect), and an open pin makes
@@ -218,6 +221,11 @@ export interface SmallSignalNetlist {
   noDcPath: string[];
   /** Device kinds that use a level-1 model card (the editable ones). */
   models: ModelKind[];
+  /**
+   * The solver node of each pin drawn in the open Cell, by instance id then
+   * pin name: where a node's DC voltage can be shown on the drawing.
+   */
+  terminals: Record<string, Record<string, string>>;
 }
 
 export interface SmallSignalNetlistOptions {
@@ -383,6 +391,7 @@ function translate(
   const elements: SmallSignalElement[] = [];
   let floating = 0;
   const unconnected: string[] = [];
+  const terminals: Record<string, Record<string, string>> = {};
 
   const symbolOf = (cell: DesignNetlistCell, id: string) =>
     (
@@ -446,6 +455,12 @@ function translate(
         return net(node.netName);
       });
       nodes.forEach((node) => nets.add(node));
+      if (depth === 0)
+        instance.nodes.forEach((node, index) => {
+          const solved = nodes[index];
+          if (solved && !/^nc\d+$/u.test(solved))
+            (terminals[instance.id] ??= {})[node.pinName] = solved;
+        });
       const label = `${instance.reference}${suffix ? ` in ${suffix}` : ""}`;
 
       const child =
@@ -750,9 +765,11 @@ function translate(
     missing,
     notes,
     supplies,
+    rails: [...supplyNets].filter((net) => nets.has(net)).sort(),
     unconnected,
     unknownBias,
     models: [...usedModels],
+    terminals,
     noDcPath: [...nets].filter(
       (net) => net !== "0" && !dcPath.has(net) && !/^nc\d+$/u.test(net),
     ),

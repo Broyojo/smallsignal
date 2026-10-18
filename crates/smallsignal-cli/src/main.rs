@@ -1,6 +1,6 @@
 //! `smallsignal analyze <netlist> --input VIN --output out[:ref] [--freq 1,1k]
 //! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--miller CC]
-//! [--suggest gain:0.01] [--tol 0.05] [--approx named|terms] [--verify] [--pretty]`
+//! [--suggest gain:0.01] [--sweep auto] [--tol 0.05] [--approx named|terms] [--verify] [--pretty]`
 
 use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
@@ -8,7 +8,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
 [--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] \
-[--ignore M1:ro,C1:short] [--region M3:triode] [--miller CC,M2:cgd] [--suggest gain|rin|rout[:threshold]] [--tol x] [--approx named|terms] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--ignore M1:ro,C1:short] [--region M3:triode] [--miller CC,M2:cgd] [--suggest gain|rin|rout[:threshold]] [--sweep auto|fLow,fHigh[,perDecade]] [--tol x] [--approx named|terms] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -149,6 +149,26 @@ fn run() -> Result<(), String> {
                         .miller
                         .push(smallsignal_core::miller::MillerRequest { element, term });
                 }
+            }
+            // auto, or fLow,fHigh[,perDecade]: a dense sweep for a Bode plot.
+            "--sweep" => {
+                let v = value(&mut it, a)?;
+                let mut sweep = smallsignal_core::sweep::SweepRequest::default();
+                if v.trim() != "auto" {
+                    let parts: Vec<&str> = v.split(',').map(str::trim).collect();
+                    let freq = |f: &str| smallsignal_core::units::parse_value(f).ok_or(format!("bad frequency '{f}'"));
+                    match parts[..] {
+                        [lo, hi] | [lo, hi, _] => {
+                            sweep.f_low = Some(freq(lo)?);
+                            sweep.f_high = Some(freq(hi)?);
+                        }
+                        _ => return Err("--sweep needs auto or fLow,fHigh[,perDecade]".to_string()),
+                    }
+                    if let [_, _, per] = parts[..] {
+                        sweep.per_decade = Some(per.parse().map_err(|_| format!("bad points per decade '{per}'"))?);
+                    }
+                }
+                req.sweep = Some(sweep);
             }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,

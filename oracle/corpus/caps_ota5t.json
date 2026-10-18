@@ -13,5 +13,10 @@
  "rin": false,
  "rout": true,
  "pz": true,
+ "sweep": [
+  100,
+  10000000000.0,
+  10
+ ],
  "description": "5T OTA: the mirror pole at node x (PMOS Meyer C_gs3 + C_gs4 plus the overlap C_gd1, C_gd4) and its pole-zero doublet, the output pole (CL, C_gd2, C_gd4), and the C_gd feedthrough zeros. Gate capacitances only (the other corpus circuits cover the junctions), so the symbolic certificate stays small enough for Lean."
 }

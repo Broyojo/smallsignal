@@ -130,8 +130,10 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt"),
                     want_system: bool = False, drop: set[tuple[str, str]] | None = None,
                     miller: list[tuple[str, str | None]] | None = None, kvalues: dict | None = None,
-                    regions: dict[str, str] | None = None):
-    """variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
+                    regions: dict[str, str] | None = None, freqs: list[float] | None = None):
+    """freqs: the frequencies solved (default: the sidecar's).
+
+    variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
     "solverlike" (only the junction / g_mu terms in `kept`, the solver's own
     parameter names such as rbd_m1, rmu_q2, each as ngspice has it) or
     "solverlike_phys" (solverlike plus the physical part, without gmin, of
@@ -383,7 +385,7 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
         xmax = max(abs(x[i]) for i in range(len(x)))
         return kappa * eps * xmax / abs(value) if value != 0 else mp.inf
     ref = side.get("ref")
-    for f in side["freqs"]:
+    for f in side["freqs"] if freqs is None else freqs:
         s = mp.mpc(0, 2 * mp.pi * f)
         A, b = system(s, "gain")
         x = mp.lu_solve(A, b)

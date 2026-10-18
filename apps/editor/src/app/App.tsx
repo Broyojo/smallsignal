@@ -5529,6 +5529,18 @@ function WorkspaceEditor({
                     selectedInstanceIds={selectedIds}
                     onSelectInstances={(ids) => selectOnly("instance", ids)}
                     instanceClick={smallSignalClick}
+                    onOpenExample={(id) => {
+                      // The examples load with their own chunk, as the
+                      // Library loads them.
+                      void import("../examples/library-examples").then(
+                        ({ libraryProjectExamples }) => {
+                          const example = libraryProjectExamples.find(
+                            (candidate) => candidate.id === id,
+                          );
+                          if (example) openLibraryExample(example);
+                        },
+                      );
+                    }}
                   />
                 ) : projectPanel === "instances" ? (
                   <InstanceCodePanel

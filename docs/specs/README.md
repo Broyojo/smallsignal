@@ -31,6 +31,7 @@ on. Each topic has one owner spec; others link to it.
 | [`community-gallery.md`](community-gallery.md)                     | Gallery feed, accounts, moderation                                     |
 | [`analog-arena.md`](analog-arena.md)                               | Contract with the AnalogArena Worker (cross-repo)                      |
 | [`small-signal-assumptions.md`](small-signal-assumptions.md)       | Per-device small-signal assumptions: limits, restore, full-model error, named ≈ forms |
+| [`small-signal-panel.md`](small-signal-panel.md)                   | Small-signal Bode plots, formula ↔ drawing link, bias on the drawing, guide |
 
 ## Writing a spec
 

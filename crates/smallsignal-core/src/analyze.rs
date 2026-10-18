@@ -84,6 +84,9 @@ pub struct Request {
     /// "terms" (the smallest terms dropped).
     #[serde(default)]
     pub approx: Option<String>,
+    /// A dense log-spaced sweep of gain, Zin and Zout (see `sweep`).
+    #[serde(default)]
+    pub sweep: Option<crate::sweep::SweepRequest>,
 }
 
 /// How numeric mode simplifies gain, Zin and Zout (`approx`).
@@ -216,6 +219,9 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
     if let Some(band) = req.noise_band {
         crate::noise::check_band(band)?;
+    }
+    if let Some(sw) = &req.sweep {
+        sw.check()?;
     }
     let inputs: Vec<usize> = std::iter::once(input).chain(neg).collect();
     let bound = unknowns_lower_bound(&net, &inputs);
@@ -394,10 +400,29 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
     }
     let symbols = sym::symbols(&net, &ss, &matched, symbolic, &mut warnings);
     let x = |p: &Poly| XPoly::from_poly(p, &symbols.class, symbols.syms.len());
+    // The cross-check always solves the FULL model (every junction), so an
+    // omission can never hide.
+    let fsys = probe.systems(&full);
+    // The swept frequencies: none without numbers or anything reactive.
+    let sweep = match &req.sweep {
+        Some(sw) if !symbolic && full.has_reactive() => {
+            let roots = if sw.f_low.is_some() {
+                Vec::new()
+            } else {
+                circuit_roots(&fsys.gain, &full)
+                    .map(|r| crate::sweep::roots_hz(&r))
+                    .unwrap_or_default()
+            };
+            Some(sw.resolve(&roots, &freqs))
+        }
+        _ => None,
+    };
+    let swept: &[f64] = sweep.as_ref().map_or(&[], |s| s.freqs.as_slice());
     let q = Quantities {
         ss: &ss,
         sym: &symbols,
         freqs: &freqs,
+        sweep: swept,
         grid: &grid,
         tol,
         symbolic,
@@ -442,9 +467,9 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         ),
     );
 
-    // The cross-check always solves the FULL model (every junction), so an
-    // omission can never hide.
-    let fsys = probe.systems(&full);
+    if req.sweep.is_some() {
+        resp.insert("sweep".into(), sweep.as_ref().map_or(Value::Null, |s| s.json()));
+    }
 
     // Gain: input source(s) excited, output voltage per unit input. A
     // differential pair is driven ±1 (so v_id = 2) and the denominator
@@ -463,6 +488,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         full: &full,
         class: &full_class,
         freqs: &freqs,
+        sweep: swept,
     };
     let differential = mode == Mode::Differential;
     let forms = exact_forms(&probe, &ss, &x, differential, max_terms, symbolic, None)?;
@@ -925,6 +951,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 full: &m.model,
                 class: &aclass,
                 freqs: &freqs,
+                sweep: swept,
             };
             let form = match *name {
                 "gain" => m.forms.gain.as_ref(),
@@ -2259,6 +2286,15 @@ fn merge_assumed(
         block["infinite"] = json!(true);
     }
     o.insert("assumed".into(), block);
+    // The sweep: the full model's values, the assumed model's, and the
+    // assumed model's simplified form.
+    if let Some(full_sweep) = full.get("sweep") {
+        let part = |key: &str| assumed.get("sweep").map_or(Value::Null, |a| a[key].clone());
+        o.insert(
+            "sweep".into(),
+            json!({ "full": full_sweep["full"], "assumed": part("full"), "approx": part("approx") }),
+        );
+    }
     out
 }
 
@@ -2589,6 +2625,8 @@ struct Numeric<'a> {
     /// `full`'s parameter → symbol, as matching merges them.
     class: &'a [usize],
     freqs: &'a [f64],
+    /// Swept frequencies (`sweep`), empty without one.
+    sweep: &'a [f64],
 }
 
 /// A quantity as wᵀx on one system (x = A⁻¹b), for its poles and zeros:
@@ -2706,7 +2744,7 @@ impl Numeric<'_> {
             (false, false) => warnings.push(format!("{title} poles and zeros not found.")),
         }
         let listed = |r: Option<Vec<Complex64>>| r.map(|r| r.iter().map(hz).collect::<Vec<_>>());
-        let v = json!({
+        let mut v = json!({
             "unit": unit,
             "exact": null, "display": null, "simplified": null, "skipped": skipped,
             "values": values,
@@ -2716,6 +2754,10 @@ impl Numeric<'_> {
             "zeros": listed(zeros),
             "check": null,
         });
+        if !self.sweep.is_empty() {
+            let full = crate::sweep::points(self.sweep.iter().map(|&f| at(f).map(|(h, _)| h)));
+            v["sweep"] = json!({ "full": full, "approx": null });
+        }
         (v, g)
     }
 }
@@ -3173,6 +3215,8 @@ struct Quantities<'a> {
     ss: &'a SsCircuit,
     sym: &'a Symbols,
     freqs: &'a [f64],
+    /// Swept frequencies (`sweep`), empty without one.
+    sweep: &'a [f64],
     grid: &'a [f64],
     tol: f64,
     symbolic: bool,
@@ -3518,6 +3562,13 @@ impl Quantities<'_> {
             "zeros": zeros,
             "check": { "ok": check_ok, "maxRelDiff": max_diff },
         });
+        if !self.sweep.is_empty() {
+            let curve = |e: &Expr| crate::sweep::points(self.sweep.iter().map(|&f| Some(e.eval(jw(f)))));
+            v["sweep"] = json!({
+                "full": curve(&exact),
+                "approx": if same { Value::Null } else { curve(&simplified) },
+            });
+        }
         if self.assume {
             let exact_err = full_error(&exact);
             v["exact"]["fullModelError"] = exact_err.clone();

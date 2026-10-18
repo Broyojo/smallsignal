@@ -85,6 +85,9 @@ def run_cli(cmd: list[str], cir: Path, side: dict) -> dict:
         items = (side.get("assume") or {}).get(key) or []
         if items:
             args += [flag, ",".join(f"{x['element']}:{x[field]}" for x in items)]
+    if side.get("sweep"):
+        lo, hi, per = side["sweep"]
+        args += ["--sweep", f"{float(lo)!r},{float(hi)!r},{int(per)}"]
     if side.get("suggest"):
         args += ["--suggest", f"{side['suggest']['quantity']}:{side['suggest']['threshold']!r}"]
     miller = (side.get("assume") or {}).get("miller") or []
@@ -551,6 +554,59 @@ def compare_assume(got: dict, want: dict, side: dict, cir: Path, rep: Report):
                     rep.failures.append(f"assumed.gain pole {z:.8g}: no root of the assumed circuit within 1e-6")
 
 
+def sweep_point(p: list | None, f: float) -> dict:
+    """A swept point, [re, im] or null, as a value entry."""
+    return {"f": f, "re": None, "im": None, "inf": True} if p is None else {"f": f, "re": p[0], "im": p[1]}
+
+
+def compare_sweep(got: dict, want: dict, side: dict, cir: Path, rep: Report):
+    """Sidecar `sweep`: the swept frequencies are the generator's, every
+    `full` point equals ngspice's .ac there, and under `assume` every
+    `assumed` point equals indep.py's rebuild of the assumed circuit."""
+    import mpmath
+
+    import indep
+
+    freqs = (got.get("sweep") or {}).get("f") or []
+    ref = want["sweep"]["f"]
+    if len(freqs) != len(ref) or not all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(freqs, ref)):
+        rep.failures.append(f"sweep.f: {len(freqs)} points, want {len(ref)} at the generator's frequencies")
+        return
+    assume = side.get("assume") or {}
+    applied = {(x["element"], x["term"]) for x in assume.get("ignore", [])}
+    mill = [(x["element"], x.get("term")) for x in assume.get("miller", [])]
+    regions = {x["element"]: x["region"] for x in assume.get("regions", [])}
+    for q, kind in (("gain", "gain"), ("rin", "z"), ("rout", "z")):
+        if q not in want["sweep"]:
+            continue
+        curves = (got.get(q) or {}).get("sweep") or {}
+        full = curves.get("full") or []
+        if len(full) != len(ref):
+            rep.failures.append(f"sweep.{q}.full: {len(full)} points, want {len(ref)}")
+            continue
+        for k, w in enumerate(want["sweep"][q]):
+            rep.complex(f"sweep.{q}@{w['f']:g}", sweep_point(full[k], w["f"]), w, kind)
+        if not assume:
+            continue
+        assumed = curves.get("assumed") or []
+        if len(assumed) != len(ref):
+            rep.failures.append(f"sweep.{q}.assumed: {len(assumed)} points, want {len(ref)}")
+            continue
+        restored = {(r["element"], r["term"]) for r in ((got[q].get("assumed") or {}).get("restored") or [])}
+        # K as the solver's own (compare_assume checks it against indep.py).
+        kfix = {f"{m['element'].lower()}:{m['term'] or ''}": mpmath.mpf(m["k"])
+                for m in (got.get("assumptions") or {}).get("miller", []) if m.get("k") is not None} or None
+        ind = indep.build_and_solve(cir, want, "full", dps=30, drop=set(applied - restored), miller=mill,
+                                    kvalues=kfix, regions=regions, freqs=ref)
+        for k, f in enumerate(ref):
+            x = ind.get(f"{q}@{f:g}")
+            if x is None:
+                continue
+            w = ({"re": None, "im": None, "inf": True} if mpmath.isinf(abs(x))
+                 else {"re": float(mpmath.re(x)), "im": float(mpmath.im(x))})
+            rep.complex(f"sweep.{q}.assumed@{f:g}", sweep_point(assumed[k], f), w, kind)
+
+
 def compare_suggest(got: dict, want: dict, side: dict, cir: Path, rep: Report, cmd: list[str]):
     """Sidecar `suggest`: every item within the threshold, and the greedy
     set applied on top of the sidecar's own assumptions solves to an
@@ -635,6 +691,11 @@ def compare(got: dict, want: dict, rep: Report, side: dict | None = None, cir: P
         compare_assume(got, want, side, cir, rep)
     if side and side.get("suggest") and cir is not None and cmd is not None:
         compare_suggest(got, want, side, cir, rep, cmd)
+    if side and side.get("sweep") and cir is not None:
+        if "sweep" not in want:
+            rep.failures.append("sweep: the sidecar requests it but the expected result has no sweep block")
+        else:
+            compare_sweep(got, want, side, cir, rep)
 
 
 def main() -> int:

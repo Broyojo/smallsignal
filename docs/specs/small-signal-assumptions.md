@@ -148,8 +148,8 @@ Options choose how ≈ forms are made.
   diode's open, short or Miller, and a MOSFET's region (Auto, Saturation,
   Triode), with its bias region, the solver's sentences about it and the
   gain's distance from the full model. Choices apply at once. Esc, Close
-  or a press elsewhere closes it; from the keyboard focus moves in and
-  back.
+  or a press elsewhere closes it (Esc does nothing else in the editor);
+  from the keyboard focus moves in and back.
 - The menu and the table write one store: a matched group's row applies
   to every member and the menu says so; a type default shows dashed, from
   "All NMOS". Regions are per part only: a type default would impose one
@@ -214,7 +214,9 @@ Options choose how ≈ forms are made.
 - The panel's Options offer "Named assumptions" (default) and "Smallest
   terms", kept in `localStorage` (`smallsignal.approx`). A named form's
   note reads "r_o2 → ∞, within 0.25%", under assumptions "…, 2.1% from
-  full model"; `none` reads "No simple form within 5.0%."
+  full model" (signs and large distances:
+  [small-signal-panel.md](small-signal-panel.md#rules)); `none` reads
+  "No simple form within 5.0%."
 
 ## Contract
 

@@ -27,6 +27,7 @@ pub mod roots;
 pub mod ss;
 pub mod structure;
 pub mod suggest;
+pub mod sweep;
 pub mod sym;
 pub mod units;
 pub mod verify;
