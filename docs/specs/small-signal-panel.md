@@ -33,7 +33,8 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   node's DC voltage on its longest wire in the open Cell (ground and
   supply rails aside) and each transistor drawn there with its bias
   region (`sat`, `triode`, `off`, `active`), amber outside the
-  amplifying region. They follow pans and zooms in the layer of the
+  amplifying region, where the part (10 px) or wire (28 px) is big enough
+  on screen to carry one. They follow pans and zooms in the layer of the
   assumption badges. The choice is kept per viewer.
 - How to use: five numbered lines naming the panel's controls. It is the
   whole panel while nothing is drawn (with the 5T OTA example to place),
