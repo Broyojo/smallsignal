@@ -6,6 +6,8 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { CircuitProject } from "@icm/model";
 import {
@@ -13,6 +15,7 @@ import {
   CANONICAL_FORMULA_FONT_SIZE,
   cachedFormulaResult,
   prepareFormula,
+  type FormulaArtifact,
   type FormulaRequest,
   type FormulaTypesetResult,
 } from "@icm/math-typesetting/cache";
@@ -50,6 +53,7 @@ import {
   type RegionReport,
   type SmallSignalAssumptionReport,
   type SmallSignalElement,
+  type SmallSignalNetlist,
   type SmallSignalApprox,
   type SmallSignalExpression,
   type SmallSignalSuggestion,
@@ -83,12 +87,26 @@ import {
   type MillerTerm,
   type RegionChoice,
 } from "./small-signal-assumption-store";
+import { BodePlot, hasBode } from "./small-signal-bode";
 import {
-  CanvasBadges,
+  CanvasOverlay,
+  type OpDeviceLabel,
+  type OpNetLabel,
+} from "./small-signal-canvas";
+import {
+  createLinkStore,
+  elementSymbols,
+  symbolAt,
+  symbolAtPoint,
+  symbolElements,
+  symbolHighlightCss,
+  withSymbolKeys,
+  type LinkStore,
+} from "./small-signal-link";
+import {
   DeviceMenu,
   instanceHit,
   termText,
-  useInstanceRects,
   type CanvasBadge,
   type DeviceMenuActions,
   type DeviceMenuModel,
@@ -433,6 +451,10 @@ function ModelFields({
 export function formatEngineering(value: number, unit = ""): string {
   if (!Number.isFinite(value)) return String(value);
   if (value === 0) return `0${unit ? ` ${unit}` : ""}`;
+  // Past the prefixes (a leakage current of 1e-20 A): an exponent, never
+  // "0.00002586 fA".
+  if (Math.abs(value) < 1e-15)
+    return `${value.toExponential(3)}${unit ? ` ${unit}` : ""}`;
   const prefixes = ["f", "p", "n", "µ", "m", "", "k", "M", "G", "T"];
   const exponent = Math.min(
     12,
@@ -537,22 +559,69 @@ function Formula({ latex }: { latex: string }) {
         reason={tooLong ? "too-long" : "unavailable"}
       />
     );
-  const artifact = result.artifact;
-  // Long expressions keep their size and scroll sideways rather than
-  // shrinking past legibility.
+  return <TypesetFormula latex={latex} artifact={result.artifact} />;
+}
+
+/**
+ * A typeset formula, inline so each symbol can be pointed at (its device
+ * lights up on the drawing); copying a selection writes the TeX
+ * (`copyWithTex`). Long expressions keep their size and scroll sideways
+ * rather than shrinking past legibility.
+ */
+function TypesetFormula({
+  latex,
+  artifact,
+}: {
+  latex: string;
+  artifact: FormulaArtifact;
+}) {
+  const svg = useMemo(() => withSymbolKeys(artifact.svg), [artifact.svg]);
   return (
     <div className="small-signal-formula-scroll">
-      <img
+      <span
         className="small-signal-formula"
-        alt={latex}
-        src={`data:image/svg+xml,${encodeURIComponent(artifact.svg)}`}
+        role="img"
+        aria-label={latex}
+        data-tex={latex}
         style={{
           width: `${artifact.width / CANONICAL_FORMULA_FONT_SIZE}em`,
           height: `${artifact.height / CANONICAL_FORMULA_FONT_SIZE}em`,
         }}
+        dangerouslySetInnerHTML={{ __html: svg }}
       />
     </div>
   );
+}
+
+/**
+ * Copying a selection of the panel: each typeset formula as its TeX,
+ * `$…$` (an SVG has no text to copy), and no plot's axis labels; lines as
+ * the panel lays them out. Null when the selection holds neither.
+ */
+export function copyWithTex(fragment: DocumentFragment): string | null {
+  const formulas = fragment.querySelectorAll<HTMLElement>(
+    ".small-signal-formula[data-tex]",
+  );
+  const plots = fragment.querySelectorAll(".small-signal-bode");
+  if (!formulas.length && !plots.length) return null;
+  const document = fragment.ownerDocument;
+  for (const formula of formulas)
+    formula.replaceWith(
+      document.createTextNode(` $${formula.dataset.tex ?? ""}$ `),
+    );
+  for (const plot of plots) plot.remove();
+  // innerText needs a rendered element: off screen, in the panel's styles.
+  const host = document.createElement("div");
+  host.className = "small-signal-panel";
+  host.style.cssText = "position: fixed; left: -10000px; top: 0; width: 600px";
+  host.append(fragment);
+  document.body.append(host);
+  const text = host.innerText;
+  host.remove();
+  return text
+    .replace(/[ \t]+/gu, " ")
+    .replace(/ *\n+ */gu, "\n")
+    .trim();
 }
 
 /** A unitless value (a voltage gain) as a plain number: -3.85, 1.2e-5. */
@@ -616,8 +685,9 @@ function MainFormula({
   const shown =
     display && !display.same && display.latex !== null ? display : null;
   if (assumed) {
-    // Every form is the assumed model's: said with its distance from the
-    // full model rather than from its own exact form.
+    // Every form is the assumed model's: exact for it ("="), said with its
+    // distance from the full model rather than from its own exact form.
+    // "≈" belongs to a simplified form only.
     const lead = shown ?? quantity.exact;
     if (!lead?.latex)
       return <ExactFormula symbol={symbol} quantity={quantity} />;
@@ -626,12 +696,16 @@ function MainFormula({
     const equals =
       (error !== null && error < INVISIBLE_ERROR) ||
       Boolean(assumed.infinite && quantity.infinite);
+    // The display form drops junction leakage the assumed model has.
+    const leaky = shown !== null && (shown.maxRelError ?? 0) >= INVISIBLE_ERROR;
     return (
       <>
         <Formula
-          latex={`${symbol} ${equals ? "=" : "\\approx"} ${lead.latex}`}
+          latex={`${symbol} ${leaky ? "\\approx" : "="} ${lead.latex}`}
         />
-        {equals ? null : <FullModelNote error={error} />}
+        {equals ? null : (
+          <FullModelNote error={error} assumed leakage={leaky} />
+        )}
         {shown ? (
           <details className="small-signal-exact">
             <summary>{EXACT_ASSUMED}</summary>
@@ -681,10 +755,24 @@ function ExactFormula({
   return <Formula latex={`${symbol} = ${quantity.exact.latex}`} />;
 }
 
+/**
+ * A relative error: "2.0%", "150%"; from twice the value on, as a
+ * multiple of it, "3.4×", "181×", "18,000×", never thousands of percent.
+ */
 export function formatPercent(fraction: number): string {
+  if (!Number.isFinite(fraction)) return "∞";
   const percent = fraction * 100;
   if (percent === 0) return "0%";
   if (percent < 0.1) return "<0.1%";
+  if (fraction >= 2) {
+    const times =
+      fraction < 10
+        ? fraction.toFixed(1)
+        : fraction < 1000
+          ? String(Math.round(fraction))
+          : Number(fraction.toPrecision(2)).toLocaleString("en-US");
+    return `${times}×`;
+  }
   // Two digits, without an exponent past 100%.
   return percent >= 99.5
     ? `${Math.round(percent)}%`
@@ -716,9 +804,38 @@ function leadNote(
     .join(", ");
 }
 
-function FullModelNote({ error }: { error: number | null | undefined }) {
+/** "Assumed model, 2.1% from full model": an exact form of the assumed
+ * model, and what the assumptions cost. */
+export function assumedModelText(
+  error: number | null | undefined,
+  leakage = false,
+): string | null {
   const text = fullModelText(error);
-  return text ? <small className="small-signal-muted">{text}</small> : null;
+  if (!text) return null;
+  return leakage
+    ? `Assumed model, junction leakage neglected, ${text}`
+    : `Assumed model, ${text}`;
+}
+
+function FullModelNote({
+  error,
+  assumed = false,
+  leakage = false,
+}: {
+  error: number | null | undefined;
+  /** The form is exact for the assumed model: say so. */
+  assumed?: boolean;
+  /** ...less its junction leakage. */
+  leakage?: boolean;
+}) {
+  const text = assumed
+    ? assumedModelText(error, leakage)
+    : fullModelText(error);
+  return text ? (
+    <small className="small-signal-muted" data-full-model-note>
+      {text}
+    </small>
+  ) : null;
 }
 
 /**
@@ -965,6 +1082,7 @@ function QuantityCard({
   assumed,
   miller,
   regions,
+  sweep,
 }: {
   title: string;
   symbol: string;
@@ -978,6 +1096,8 @@ function QuantityCard({
   miller?: readonly MillerReport[] | undefined;
   /** The regions the forms impose ("M1 assumed saturated"). */
   regions?: readonly RegionReport[] | undefined;
+  /** The swept frequencies of `quantity.sweep`, for its Bode plot. */
+  sweep?: readonly number[] | undefined;
 }) {
   const imposed = assumed ? regionNote(regions) : null;
   // The simpler form appears only when it actually dropped terms, and never
@@ -1072,6 +1192,21 @@ function QuantityCard({
         </small>
       ) : null}
       {assumed && miller?.length ? <MillerNote splits={miller} /> : null}
+      {sweep && hasBode(sweep, quantity.sweep?.full) ? (
+        <BodePlot
+          title={title}
+          freqs={sweep}
+          curves={{
+            full: quantity.sweep?.full,
+            assumed: assumed ? quantity.sweep?.assumed : null,
+            approx: simpler ? quantity.sweep?.approx : null,
+          }}
+          ohms={unit === "Ω"}
+          poles={quantity.poles}
+          zeros={quantity.zeros}
+          format={formatEngineering}
+        />
+      ) : null}
       {assumed && quantity.values?.length ? (
         <AssumedTable values={quantity.values} assumed={assumed} unit={unit} />
       ) : quantity.values && quantity.values.length > 1 ? (
@@ -1295,17 +1430,21 @@ function LeadFormula({
   }
   const error = shown.relError ?? 0;
   const fullModelError = shown.fullModelError ?? null;
-  const equals = assumed
-    ? fullModelError !== null && fullModelError < INVISIBLE_ERROR
-    : shownIsExact || error < INVISIBLE_ERROR;
+  // "=" when the form is exact for its model (the assumed one under
+  // assumptions, whose cost the note gives); "≈" only for a form that
+  // drops something.
+  const equals = shownIsExact || error < INVISIBLE_ERROR;
+  const costless = fullModelError !== null && fullModelError < INVISIBLE_ERROR;
   return (
     <>
       <Formula
         latex={`${symbol} ${equals ? "=" : "\\approx"} ${shown.latex}`}
       />
-      {equals ? null : assumed ? (
-        <FullModelNote error={fullModelError} />
-      ) : (
+      {assumed ? (
+        costless ? null : (
+          <FullModelNote error={fullModelError} assumed leakage={!equals} />
+        )
+      ) : equals ? null : (
         <small className="small-signal-muted">
           neglecting junction leakage ({formatPercent(error)})
         </small>
@@ -1897,12 +2036,20 @@ function BiasTable({
   );
   const ohms = (value: number) =>
     Number.isFinite(value) ? formatEngineering(value, "Ω") : "∞";
+  const regionPill = (row: Row) => (
+    <span
+      className={`small-signal-region is-${row.region}${row.bias === undefined ? "" : " is-assumed"}`}
+      title={row.bias === undefined ? undefined : `assumed, bias ${row.bias}`}
+    >
+      {row.region}
+    </span>
+  );
   return (
     <table className="small-signal-bias-table">
       <thead>
         <tr>
           <th scope="col" />
-          {showRegion ? <th scope="col" /> : null}
+          {showRegion ? <th scope="col" data-col="region" /> : null}
           <th scope="col">I</th>
           <th scope="col">
             g<sub>m</sub>
@@ -1925,14 +2072,18 @@ function BiasTable({
       <tbody>
         {rows.map((row) => (
           <tr key={row.name} data-device={row.name}>
-            <th scope="row">{row.name}</th>
-            {showRegion ? (
-              <td data-quantity="region">
-                <span
-                  className={`small-signal-region is-${row.region}${row.bias === undefined ? "" : " is-assumed"}`}
-                >
-                  {row.region}
+            <th scope="row">
+              {row.name}
+              {showRegion ? (
+                // At phone width the region sits under the name instead.
+                <span className="small-signal-bias-inline" aria-hidden="true">
+                  {regionPill(row)}
                 </span>
+              ) : null}
+            </th>
+            {showRegion ? (
+              <td data-quantity="region" data-col="region">
+                {regionPill(row)}
                 {row.bias === undefined ? null : (
                   <small className="small-signal-bias-region">
                     assumed, bias {row.bias}
@@ -3008,6 +3159,220 @@ export function differentialPairs(
   return pairs;
 }
 
+export const OP_STORAGE_KEY = "smallsignal.biasOnDrawing";
+
+function loadOpShown(): boolean {
+  try {
+    return window.localStorage.getItem(OP_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveOpShown(shown: boolean) {
+  try {
+    window.localStorage.setItem(OP_STORAGE_KEY, shown ? "1" : "0");
+  } catch {
+    // As for the models.
+  }
+}
+
+/** A transistor's region as the drawing labels it. */
+const REGION_SHORT: Record<string, [string, string]> = {
+  saturation: ["sat", "saturation"],
+  triode: ["triode", "triode"],
+  cutoff: ["off", "cutoff"],
+  "forward-active": ["active", "active"],
+  "reverse-active": ["reverse", "triode"],
+};
+
+/**
+ * The operating point as the drawing shows it: each node's DC voltage on
+ * its wires in the open Cell (ground and the supplies aside), and each
+ * transistor drawn there with its region.
+ */
+export function operatingPointLabels(
+  op: NonNullable<SmallSignalResult["op"]>,
+  netlist: SmallSignalNetlist,
+  document: CircuitProject["documents"][number] | undefined,
+): { devices: OpDeviceLabel[]; nets: OpNetLabel[] } {
+  const devices: OpDeviceLabel[] = [];
+  for (const element of netlist.elements) {
+    const device = op.devices[element.name];
+    const id = element.instancePath[0];
+    if (!device || !id || element.instancePath.length !== 1) continue;
+    if (!("region" in device)) continue;
+    const [region, tone] = REGION_SHORT[device.region] ?? [
+      device.region,
+      device.region,
+    ];
+    // A saturated BJT is out of its amplifying region, as triode is.
+    const bjt = device.type === "npn" || device.type === "pnp";
+    devices.push({
+      instanceId: id,
+      element: element.name,
+      region,
+      tone: bjt && device.region === "saturation" ? "triode" : tone,
+    });
+  }
+  const routes = new Map<string, string[]>();
+  for (const net of document?.nets ?? []) {
+    const node = net.terminals
+      .map(
+        (terminal) =>
+          netlist.terminals[terminal.instanceId]?.[terminal.pinName],
+      )
+      .find(Boolean);
+    if (!node || node === "0" || netlist.supplies.includes(node)) continue;
+    const wires = (document?.routes ?? [])
+      .filter((route) => route.netId === net.id)
+      .map((route) => route.id);
+    if (wires.length) routes.set(node, [...(routes.get(node) ?? []), ...wires]);
+  }
+  const nets = [...routes].flatMap(([node, wires]) => {
+    const voltage = op.nodes[node];
+    return voltage === undefined
+      ? []
+      : [{ node, text: formatEngineering(voltage, "V"), routes: wires }];
+  });
+  return { devices, nets };
+}
+
+/** The canvas side of the formula link: a part hovered on the drawing
+ * marks its symbols (all of a placed Cell's parts for the Cell). */
+function useCanvasHover(
+  link: LinkStore,
+  symbols: ReadonlyMap<string, readonly string[]>,
+  elements: readonly SmallSignalElement[] | undefined,
+) {
+  useEffect(() => {
+    const onOver = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      const hit = target?.closest?.(
+        '[data-testid="schematic-canvas"] [data-canvas-hit-kind="instance"]',
+      );
+      const id = hit?.getAttribute("data-canvas-hit-id");
+      if (!id) {
+        if (link.get()?.source === "canvas") link.set(null);
+        return;
+      }
+      const names = (elements ?? [])
+        .filter((element) => element.instancePath[0] === id)
+        .map((element) => element.name);
+      const marked = elementSymbols(symbols, names);
+      link.set(
+        names.length
+          ? { source: "canvas", elements: names, symbols: marked }
+          : null,
+      );
+    };
+    document.addEventListener("pointerover", onOver);
+    return () => {
+      document.removeEventListener("pointerover", onOver);
+      if (link.get()?.source === "canvas") link.set(null);
+    };
+  }, [link, symbols, elements]);
+}
+
+/** The hovered symbols' highlight in every formula of the panel. */
+function SymbolHighlight({ link }: { link: LinkStore }) {
+  const state = useSyncExternalStore(link.subscribe, link.get, () => null);
+  const css = symbolHighlightCss(".small-signal-panel", state?.symbols ?? []);
+  return css ? <style data-small-signal-highlight>{css}</style> : null;
+}
+
+export const GUIDE_STORAGE_KEY = "smallsignal.guideDismissed";
+
+function loadGuideDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(GUIDE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveGuideDismissed(dismissed: boolean) {
+  try {
+    if (dismissed) window.localStorage.setItem(GUIDE_STORAGE_KEY, "1");
+    else window.localStorage.removeItem(GUIDE_STORAGE_KEY);
+  } catch {
+    // As for the models.
+  }
+}
+
+/** Library examples that analyze as drawn (the others need bias values
+ * or sit in triode), as the guide offers them. */
+export const GUIDE_EXAMPLES = [
+  { id: "five-transistor-ota-sky130", label: "5T OTA" },
+] as const;
+
+/** How to use the panel, in five steps with the controls' own names. */
+function Guide({
+  onClose,
+  onOpenExample,
+}: {
+  /** Absent on the empty state, where the guide is the content. */
+  onClose?: (() => void) | undefined;
+  onOpenExample?: ((id: string) => void) | undefined;
+}) {
+  return (
+    <section
+      className="small-signal-guide"
+      aria-label="How to use"
+      data-testid="small-signal-guide"
+    >
+      <header>
+        <strong>How to use</strong>
+        {onClose ? (
+          <button
+            type="button"
+            className="small-signal-device-menu-close"
+            aria-label="Close guide"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        ) : null}
+      </header>
+      <ol>
+        <li>Draw a circuit, or place an example.</li>
+        <li>
+          Pick <b>Input</b> and <b>Output</b>.
+        </li>
+        <li>
+          Read <b>Gain</b>, <b>Zin</b> and <b>Zout</b>, exact and ≈.
+        </li>
+        <li>Click a transistor on the drawing to set its assumptions.</li>
+        <li>
+          Open <b>Suggestions</b> for assumptions within 1%. Point at a plot to
+          read it.
+        </li>
+      </ol>
+      <p className="small-signal-muted">
+        ≈ is a simpler form within 5%. &ldquo;% from full model&rdquo; is what
+        your assumptions cost.
+      </p>
+      {onOpenExample ? (
+        <p className="small-signal-guide-examples">
+          Place an example:{" "}
+          {GUIDE_EXAMPLES.map((example, index) => (
+            <span key={example.id}>
+              {index ? ", " : ""}
+              <button
+                type="button"
+                className="small-signal-link-button"
+                onClick={() => onOpenExample(example.id)}
+              >
+                {example.label}
+              </button>
+            </span>
+          ))}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 const DIFF_PREFIX = "diff:";
 const NO_ASSUMPTIONS: CircuitAssumptions = {};
 
@@ -3018,6 +3383,7 @@ export function SmallSignalPanel({
   selectedInstanceIds,
   onSelectInstances,
   instanceClick,
+  onOpenExample,
 }: {
   project: CircuitProject;
   rootDocumentId?: string;
@@ -3027,7 +3393,11 @@ export function SmallSignalPanel({
   onSelectInstances?: (instanceIds: string[]) => void;
   /** The last plain click on a part of the open Cell: opens its menu. */
   instanceClick?: { instanceId: string; nonce: number } | null;
+  /** Open a Library example by id (the guide's examples). */
+  onOpenExample?: (id: string) => void;
 }) {
+  // The guide: the empty state, and until a viewer first closes it.
+  const [guideOpen, setGuideOpen] = useState(() => !loadGuideDismissed());
   const [supply, setSupply] = useState(String(DEFAULT_SUPPLY_VOLTAGE));
   const supplyVoltage = parseFrequencies(supply)[0] ?? DEFAULT_SUPPLY_VOLTAGE;
   // DC values typed for undriven Pins (inputs and bias nodes).
@@ -3298,7 +3668,8 @@ export function SmallSignalPanel({
       const client = clientRef.current;
       if (!client) return;
       setSolving(true);
-      void client.analyze(text, job).then((next) => {
+      // The main solve also sweeps gain, Zin and Zout for their plots.
+      void client.analyze(text, { ...job, sweep: {} }).then((next) => {
         if (current !== generation.current) return;
         setResponse(next);
         setResponseKey(requestKey);
@@ -3683,17 +4054,116 @@ export function SmallSignalPanel({
       );
       return badge ? [badge] : [];
     });
-  const tracked = useInstanceRects(
-    badges.map((badge) => badge.instanceId),
-    Boolean(netlist),
+
+  // Formula ↔ drawing: what is hovered, in a store only the highlights read.
+  const [link] = useState<LinkStore>(createLinkStore);
+  const symbols = useMemo(
+    () => symbolElements(result?.params),
+    [result?.params],
   );
+  // The drawn part (in the open Cell) each element is, or sits inside.
+  const instanceOf = useMemo(
+    () =>
+      new Map(
+        (netlist?.elements ?? []).flatMap((element) =>
+          element.instancePath[0]
+            ? [[element.name, element.instancePath[0]] as const]
+            : [],
+        ),
+      ),
+    [netlist?.elements],
+  );
+  const panelRef = useRef<HTMLElement>(null);
+  useCanvasHover(link, symbols, netlist?.elements);
+  const onPanelPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    const target = event.target as Element;
+    const formula = target.closest?.(".small-signal-formula");
+    const latex = formula
+      ? (symbolAt(target, symbols, formula) ??
+        symbolAtPoint(formula, event.clientX, event.clientY, symbols))
+      : null;
+    if (latex) {
+      link.set({
+        source: "formula",
+        elements: symbols.get(latex) ?? [],
+        symbols: [latex],
+      });
+      return;
+    }
+    const row = target.closest?.("[data-device]");
+    const device = row?.getAttribute("data-device");
+    if (device) {
+      link.set({
+        source: "table",
+        elements: [device],
+        symbols: elementSymbols(symbols, [device]),
+      });
+      return;
+    }
+    if (link.get()?.source !== "canvas") link.set(null);
+  };
+
+  // The operating point on the drawing: node voltages on their wires and
+  // each transistor's region, while the panel is open.
+  const [opShown, setOpShown] = useState(loadOpShown);
+  useEffect(() => saveOpShown(opShown), [opShown]);
+  const op =
+    opShown && result?.op && netlist
+      ? operatingPointLabels(
+          result.op,
+          netlist,
+          project.documents.find(
+            (d) => d.id === (rootDocumentId ?? project.topDocumentId),
+          ),
+        )
+      : null;
+
+  // Nothing drawn: the guide is the whole panel. Parts but no source to
+  // drive: the guide under Input and Output.
+  const blank = !netlist?.elements.length;
+  const empty = blank || !sources.length;
+  const guide =
+    empty || guideOpen ? (
+      <Guide
+        onClose={
+          empty
+            ? undefined
+            : () => {
+                setGuideOpen(false);
+                saveGuideDismissed(true);
+              }
+        }
+        // Placing an example adds it to the drawing: only on an empty one.
+        onOpenExample={blank ? onOpenExample : undefined}
+      />
+    ) : null;
 
   return (
     <StaleBuildContext.Provider value={markStale}>
+      <SymbolHighlight link={link} />
       <section
+        ref={panelRef}
         className="small-signal-panel"
         aria-label="Small-signal analysis"
         data-testid="small-signal-panel"
+        onPointerOver={onPanelPointer}
+        onPointerMove={(event) => {
+          // Between a symbol's strokes the pointer is over the formula
+          // itself: the symbol is found by its box.
+          if ((event.target as Element).closest?.(".small-signal-formula"))
+            onPanelPointer(event);
+        }}
+        onPointerLeave={() => {
+          if (link.get()?.source !== "canvas") link.set(null);
+        }}
+        onCopy={(event) => {
+          const selection = window.getSelection();
+          if (!selection?.rangeCount) return;
+          const text = copyWithTex(selection.getRangeAt(0).cloneContents());
+          if (text === null) return;
+          event.clipboardData.setData("text/plain", text);
+          event.preventDefault();
+        }}
       >
         <header className="small-signal-header">
           <h2>Small-Signal</h2>
@@ -3702,7 +4172,24 @@ export function SmallSignalPanel({
               Solving…
             </span>
           ) : null}
+          {empty ? null : (
+            <button
+              type="button"
+              className="small-signal-help"
+              aria-label="How to use"
+              aria-expanded={guideOpen}
+              title="How to use"
+              onClick={() => {
+                const next = !guideOpen;
+                setGuideOpen(next);
+                if (!next) saveGuideDismissed(true);
+              }}
+            >
+              ?
+            </button>
+          )}
         </header>
+        {empty ? null : guide}
         {staleBuild ? (
           <div className="small-signal-alert is-error" role="alert">
             <p>This page is an older version of the site.</p>
@@ -3716,8 +4203,8 @@ export function SmallSignalPanel({
             </button>
           </div>
         ) : null}
-        {!netlist ? (
-          <p className="small-signal-muted">Draw a circuit to analyze it.</p>
+        {blank || !netlist ? (
+          guide
         ) : (
           <>
             <div className="small-signal-io">
@@ -3761,6 +4248,7 @@ export function SmallSignalPanel({
                 </select>
               </label>
             </div>
+            {sources.length ? null : guide}
 
             {unconnected.length ? (
               <div className="small-signal-alert is-error" role="alert">
@@ -3875,6 +4363,7 @@ export function SmallSignalPanel({
                 assumed={assumedOf(result.gain)}
                 miller={result.assumptions?.miller}
                 regions={regionReports}
+                sweep={result.sweep?.f}
               />
             ) : null}
             {result?.rin ? (
@@ -3887,6 +4376,7 @@ export function SmallSignalPanel({
                 assumed={assumedOf(result.rin)}
                 miller={result.assumptions?.miller}
                 regions={regionReports}
+                sweep={result.sweep?.f}
               />
             ) : null}
             {result?.rout ? (
@@ -3899,6 +4389,7 @@ export function SmallSignalPanel({
                 assumed={assumedOf(result.rout)}
                 miller={result.assumptions?.miller}
                 regions={regionReports}
+                sweep={result.sweep?.f}
               />
             ) : null}
 
@@ -3906,6 +4397,16 @@ export function SmallSignalPanel({
               <section className="small-signal-card" aria-label="Bias point">
                 <header>
                   <span>Bias point</span>
+                  <label className="small-signal-check small-signal-op-toggle">
+                    <input
+                      type="checkbox"
+                      checked={opShown}
+                      onChange={(event) =>
+                        setOpShown(event.currentTarget.checked)
+                      }
+                    />
+                    Show on drawing
+                  </label>
                 </header>
                 <BiasTable devices={devices} regions={regionReports} />
               </section>
@@ -4244,15 +4745,16 @@ export function SmallSignalPanel({
           </>
         )}
       </section>
-      <CanvasBadges
+      <CanvasOverlay
         badges={badges}
-        rects={tracked.rects}
-        container={tracked.container}
         open={menu?.instanceId ?? null}
         onOpen={(badge, keyboard) => {
           onSelectInstances?.([badge.instanceId]);
           openMenu(badge.instanceId, keyboard);
         }}
+        op={op}
+        store={link}
+        instanceOf={instanceOf}
       />
       {menu && menuRow ? (
         <DeviceMenu

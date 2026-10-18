@@ -127,17 +127,17 @@ async function cardValue(panel: Locator, name: string): Promise<number> {
   return Number(match[1]) * scale[match[2] ?? ""]!;
 }
 
-/** A card's main formula: a typeset image, never a placeholder or raw TeX. */
+/** A card's main formula: typeset, never a placeholder or raw TeX. */
 async function formula(panel: Locator, name: string): Promise<string> {
   const section = card(panel, name);
-  const image = section.locator("img.small-signal-formula").first();
+  const image = section.locator(".small-signal-formula").first();
   await expect(image).toBeVisible({ timeout: 15_000 });
   await expect(section.locator(".small-signal-formula-pending")).toHaveCount(0);
   // Raw TeX is never what a person sees.
   await expect(section.locator("code.small-signal-latex-source")).toHaveCount(
     0,
   );
-  return (await image.getAttribute("alt")) ?? "";
+  return (await image.getAttribute("data-tex")) ?? "";
 }
 
 /** gm and ro as the Bias point card prints them for one transistor. */
@@ -226,7 +226,7 @@ test("a pin that only looks connected blocks the analysis", async ({
     "R1.1 is not connected",
   );
   await expect(card(panel, "Gain")).toHaveCount(0);
-  await expect(panel.locator("img.small-signal-formula")).toHaveCount(0);
+  await expect(panel.locator(".small-signal-formula")).toHaveCount(0);
   const outputs = await panel
     .getByLabel("Output", { exact: true })
     .locator("option")
@@ -396,7 +396,7 @@ test("a page left behind by a deploy offers a reload instead of raw TeX", async 
   await expect(
     page.getByRole("button", { name: "Reload to update" }),
   ).toBeVisible({ timeout: 15_000 });
-  await expect(panel.locator("img.small-signal-formula")).toHaveCount(0);
+  await expect(panel.locator(".small-signal-formula")).toHaveCount(0);
   expect(retired.size).toBeGreaterThan(0);
   // The renderer failed, not the formula: never claim it is too long.
   await expect(
@@ -512,7 +512,7 @@ test("device capacitances from Models add a pole, and neglecting C_gd moves it a
   await panel.getByLabel("NMOS CBD").fill("10f");
   await expect(caps.locator("summary")).toHaveText("Capacitances (3 set)");
   // The output node's C_gd + C_db: one pole, and the Miller zero g_m/C_gd.
-  await expect(gain.getByText(/^Pole /u)).toBeVisible();
+  await expect(gain.locator("small").getByText(/^Pole /u)).toBeVisible();
   await expect.poll(() => formula(panel, "Gain")).toContain("C_{gd1}");
   expect(await formula(panel, "Gain")).toContain("C_{db1}");
 
@@ -620,15 +620,15 @@ test("noise: the input-referred PSD is 4kT(2/(3gm) + 1/(gm² R1)), and the band 
   const { gm } = await biasLine(panel, "M1");
   await panel.getByText("Noise", { exact: true }).click();
   const noise = panel.locator("details.small-signal-noise");
-  const image = noise.locator("img.small-signal-formula").first();
+  const image = noise.locator(".small-signal-formula").first();
   await expect(image).toBeVisible({ timeout: 15_000 });
-  const alt = (await image.getAttribute("alt")) ?? "";
+  const alt = (await image.getAttribute("data-tex")) ?? "";
   // Typeset from intact TeX: a lost backslash (\f, \a) shows up here.
   expect(alt).toMatch(
     /^\\frac\{\\overline\{v_\{n,in\}\^\{2\}\}\}\{\\Delta f\} = 4kT/u,
   );
   expect(
-    await image.evaluate((img: HTMLImageElement) => img.naturalWidth),
+    await image.evaluate((span) => span.querySelector("svg")?.clientWidth),
   ).toBeGreaterThan(0);
   expect(alt).toContain("g_{m1}");
 
@@ -737,10 +737,10 @@ test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", as
   );
   expect(Math.abs(swing / (gm * 10e3 * 0.01) - 1)).toBeLessThan(2e-3);
   // a₃ is exactly zero for a square law with a resistor load.
-  const images = section.locator("img.small-signal-formula");
+  const images = section.locator(".small-signal-formula");
   await expect(images.first()).toBeVisible();
   const alts = await images.evaluateAll((all) =>
-    all.map((img) => img.getAttribute("alt") ?? ""),
+    all.map((img) => img.getAttribute("data-tex") ?? ""),
   );
   expect(alts.some((alt) => /^a_\{3\} = 0$/u.test(alt))).toBe(true);
 
@@ -826,7 +826,7 @@ test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async 
       exact: false,
     }),
   ).toHaveCount(1);
-  await expect(panel.locator("img.small-signal-formula")).toHaveCount(0);
+  await expect(panel.locator(".small-signal-formula")).toHaveCount(0);
   await expect(
     card(panel, "Bias point").locator("tr[data-device]"),
   ).toHaveCount(25);
@@ -896,11 +896,12 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   );
   await expect
     .poll(() => formula(panel, "Gain"))
-    .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
+    .toMatch(/ = -g_\{m1\} R_\{1\}$/u);
   const gain = card(panel, "Gain");
-  // gm R1 against gm (ro ∥ R1): R1 / ro = 10k / 500k.
+  // gm R1 against gm (ro ∥ R1): R1 / ro = 10k / 500k. Exact for the
+  // assumed model, so "=", with what the assumption costs.
   await expect(gain.getByText(/from full model$/u)).toHaveText(
-    "2.0% from full model",
+    "Assumed model, 2.0% from full model",
   );
   await expect(gain.locator("details.small-signal-exact > summary")).toHaveText(
     "Exact for these assumptions",
@@ -941,7 +942,7 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   panel = await openPanel(page);
   await expect
     .poll(() => formula(panel, "Gain"))
-    .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
+    .toMatch(/ = -g_\{m1\} R_\{1\}$/u);
   section = await assumptions(panel);
   await expect(neglect(section, "M1 ro")).toBeChecked();
 
@@ -1044,12 +1045,12 @@ test("device menu: a click on M1 neglects r_o there, and the card and the table 
   // table.
   await expect
     .poll(() => formula(panel, "Gain"))
-    .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
+    .toMatch(/ = -g_\{m1\} R_\{1\}$/u);
   await expect(
     card(panel, "Gain")
       .getByText(/from full model$/u)
       .first(),
-  ).toHaveText("2.0% from full model");
+  ).toHaveText("Assumed model, 2.0% from full model");
   await expect(menu.locator("[data-cost]")).toHaveText(
     "Gain 2.0% from full model",
   );
@@ -1261,8 +1262,8 @@ test("named assumptions: the triode inverter's ≈ forms assume r_o2 → ∞, it
   ] as const) {
     const quantity = card(panel, name);
     const simpler = quantity.locator(".small-signal-simpler");
-    await expect(simpler.locator("img.small-signal-formula")).toHaveAttribute(
-      "alt",
+    await expect(simpler.locator(".small-signal-formula")).toHaveAttribute(
+      "data-tex",
       `\\approx ${form}`,
     );
     const note = simpler.locator('[data-approx="named"]');
@@ -1421,10 +1422,10 @@ test("assumptions: Miller on CC in a two-stage OTA, labeled with K, its cost mea
   await expect.poll(() => formula(panel, "Gain")).toContain("K_{CC}");
   // The hand limit on the split model; the split's own cost is the note's.
   await expect(gain.locator('[data-approx="named"]')).toHaveText(
-    /^ro ≫ R, 1\/gm, \d+% from full model$/u,
+    /^ro ≫ R, 1\/gm, [\d.,]+(%|×) from full model$/u,
   );
   // The split keeps the dominant pole and loses pole splitting: its cost.
-  await expect(gain).toContainText("% from full model");
+  await expect(gain).toContainText(/(%|×) from full model/u);
   const table = gain.getByRole("table", { name: "Full model and assumed" });
   const zero = table.locator('tr[data-root="zero"]');
   await expect(zero).toHaveCount(1);
@@ -1499,4 +1500,219 @@ test("assumptions: Miller on a device's C_gd excludes neglecting it", async ({
   await expect(miller).not.toBeChecked();
   await expect(cell.locator("summary")).toHaveText("Cgd");
   await expect(gain.locator(".small-signal-miller")).toHaveCount(0);
+});
+
+const bode = (panel: Locator, name: string) =>
+  card(panel, name).getByTestId("small-signal-bode");
+
+test("bode: the two-stage OTA's gain plot marks its poles and zero, and the crosshair reads the card's value at 1 kHz", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.twoStage);
+  await formula(panel, "Gain");
+  const plot = bode(panel, "Gain");
+  await expect(plot).toBeVisible();
+  // The full model's two poles and its right half-plane zero.
+  await expect(plot.locator('[data-root="pole"]')).toHaveCount(2);
+  const zero = plot.locator('[data-root="zero"]');
+  await expect(zero).toHaveCount(1);
+  await expect(zero).toHaveClass(/\bis-rhp\b/u);
+  await expect(plot.locator(".small-signal-bode-legend")).toHaveText(
+    /Full model\s*≈ form/u,
+  );
+  // At the 1k tick the readout is the card's own number, in dB.
+  await plot.scrollIntoViewIfNeeded();
+  const tick = plot.locator("text", { hasText: /^1k$/u });
+  const at = await tick.boundingBox();
+  await page.mouse.move(at!.x + at!.width / 2, at!.y - 60);
+  const readout = plot.getByTestId("small-signal-bode-readout");
+  await expect(readout.locator("strong")).toHaveText("1 kHz");
+  const db = Number(
+    (
+      await readout
+        .locator('tr[data-curve="full"] [data-quantity="magnitude"]')
+        .innerText()
+    )
+      .replace("−", "-")
+      .replace(" dB", ""),
+  );
+  const gain = await cardValue(panel, "Gain");
+  expect(Math.abs(db - 20 * Math.log10(Math.abs(gain)))).toBeLessThan(0.06);
+  await page.mouse.move(5, 5);
+  await expect(readout).toHaveCount(0);
+  // Zin looks into a gate: nothing to plot.
+  await expect(bode(panel, "Input impedance")).toHaveCount(0);
+  await expect(bode(panel, "Output impedance")).toBeVisible();
+});
+
+test("bode: a circuit without capacitors has no plot", async ({ page }) => {
+  const panel = await analyze(page, FIXTURES.inverter);
+  await formula(panel, "Gain");
+  await expect(panel.getByTestId("small-signal-bode")).toHaveCount(0);
+});
+
+test("link: pointing at g_m1 rings M1 on the drawing, pointing at M1 marks its symbols, and a copy writes TeX", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.inverter);
+  const tex = await formula(panel, "Gain");
+  const symbol = card(panel, "Gain")
+    .locator('.small-signal-formula [data-sym="g_{m1}"]')
+    .first();
+  // Between strokes too: the pointer at the symbol's centre, not its ink.
+  const box = await symbol.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  const ring = page.locator('[data-small-signal-ring="M1"]');
+  await expect(ring).toBeVisible();
+  const r = await ring.boundingBox();
+  const hit = await page.getByTestId("hit-M1").boundingBox();
+  expect(r!.x).toBeLessThanOrEqual(hit!.x);
+  expect(r!.x + r!.width).toBeGreaterThanOrEqual(hit!.x + hit!.width);
+  // The symbol itself is marked, the other device's are not.
+  const highlight = page.locator("style[data-small-signal-highlight]");
+  const marked = () => highlight.evaluate((style) => style.textContent ?? "");
+  await expect.poll(marked).toMatch(/\[data-sym="g_\{m1\}"\]/u);
+  expect(await marked()).not.toMatch(/g_\{m2\}/u);
+  // From the drawing: M1 marks every symbol of M1.
+  await page.getByTestId("hit-M1").hover();
+  await expect(ring).toHaveCount(0);
+  await expect.poll(marked).toMatch(/\[data-sym="R_\{on1\}"\]/u);
+  expect(await marked()).toMatch(/\[data-sym="g_\{m1\}"\]/u);
+  await page.mouse.move(5, 5);
+  await expect(highlight).toHaveCount(0);
+  // Copying a selection over the formula writes its TeX.
+  const copied = await card(panel, "Gain").evaluate((section) => {
+    let text = "";
+    const listen = (event: ClipboardEvent) => {
+      text = event.clipboardData?.getData("text/plain") ?? "";
+    };
+    window.addEventListener("copy", listen);
+    const range = document.createRange();
+    range.selectNodeContents(section);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand("copy");
+    window.removeEventListener("copy", listen);
+    selection.removeAllRanges();
+    return text;
+  });
+  expect(copied).toContain(`$${tex}$`);
+});
+
+test("operating point: Show on drawing labels the node voltages and each transistor's region, kept across a reload", async ({
+  page,
+}) => {
+  let panel = await analyze(page, FIXTURES.inverter);
+  await formula(panel, "Gain");
+  const toggle = card(panel, "Bias point").getByLabel("Show on drawing");
+  await expect(toggle).not.toBeChecked();
+  await expect(page.locator("[data-op-device]")).toHaveCount(0);
+  await toggle.check();
+  await expect(page.locator('[data-op-device="M1"]')).toHaveText("triode");
+  await expect(page.locator('[data-op-device="M2"]')).toHaveText("sat");
+  // Every label is a voltage of the bias the panel solved.
+  const nets = page.locator("[data-op-node]");
+  await expect(nets.first()).toBeVisible();
+  for (const text of await nets.allInnerTexts())
+    expect(text).toMatch(/^-?[\d.]+ [mµ]?V$/u);
+  await expect(page.locator('[data-op-node="out"]')).toHaveText(/^[\d.]+ mV$/u);
+  await page.reload();
+  await awaitEditorReady(page);
+  panel = await openPanel(page);
+  await expect(
+    card(panel, "Bias point").getByLabel("Show on drawing"),
+  ).toBeChecked();
+  await expect(page.locator('[data-op-device="M1"]')).toHaveText("triode");
+  // Only while the panel is open.
+  await page.getByTestId("small-signal-toggle").click();
+  await expect(page.locator("[data-op-device]")).toHaveCount(0);
+});
+
+test("costs: twice the full model's value and more read as a multiple, never thousands of percent", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.twoStage);
+  await formula(panel, "Gain");
+  const section = await assumptions(panel);
+  await neglect(section, "All NMOS ro").check();
+  await section
+    .getByLabel("CC open or short", { exact: true })
+    .selectOption("miller");
+  const note = card(panel, "Gain").locator('[data-approx="named"]');
+  await expect(note).toHaveText(/^ro ≫ R, 1\/gm, \d+\.\d× from full model$/u);
+  await expect(panel).not.toContainText(/\d{3,}% from full model/u);
+  // Zout has no simpler form: its own form is exact for the assumed model.
+  const zout = card(panel, "Output impedance");
+  await expect(zout.locator('[data-approx="none"]')).toHaveText(
+    "No simple form within 5.0%.",
+  );
+  await expect(zout.locator("[data-full-model-note]")).toHaveText(
+    /^Assumed model, (junction leakage neglected, )?[\d.,]+(%|×) from full model$/u,
+  );
+});
+
+test("bias table: at phone width it fits its card", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const panel = await analyze(page, FIXTURES.bjtOpAmp);
+  const table = card(panel, "Bias point").locator("table");
+  await expect(table.locator("tbody tr")).toHaveCount(25, { timeout: 30_000 });
+  const fits = await table.evaluate(
+    (element) => element.scrollWidth <= element.parentElement!.clientWidth,
+  );
+  expect(fits).toBe(true);
+  // A device off its amplifying region still says so, under its name.
+  await expect(
+    table.locator('tr[data-device="Q15"] th .small-signal-region'),
+  ).toBeVisible();
+});
+
+test("device menu: Esc closes it and leaves the editor's own cancel alone", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.inverter);
+  await formula(panel, "Gain");
+  await page.getByTestId("hit-M1").click();
+  await expect(deviceMenu(page)).toBeVisible();
+  const status = page.locator(".statusbar-left");
+  const before = await status.innerText();
+  await page.keyboard.press("Escape");
+  await expect(deviceMenu(page)).toHaveCount(0);
+  await expect(status).not.toContainText("Cancelled");
+  expect(await status.innerText()).toBe(before);
+});
+
+test("guide: it is the empty panel, closes once for good, and ? brings it back", async ({
+  page,
+}) => {
+  await openEditor(page);
+  let panel = await openPanel(page);
+  const guide = panel.getByTestId("small-signal-guide");
+  await expect(guide).toBeVisible();
+  await expect(guide.locator("li")).toHaveCount(5);
+  await expect(guide).toContainText("Pick Input and Output.");
+  await expect(guide.getByRole("button", { name: "5T OTA" })).toBeVisible();
+  // With a circuit it stays on top until closed, and closed it stays.
+  await openProjectFile(
+    page,
+    fixture(FIXTURES.inverter),
+    "cmos-inverter-triode.icproj.json",
+  );
+  panel = await openPanel(page);
+  await formula(panel, "Gain");
+  await expect(guide).toBeVisible();
+  await expect(guide.getByRole("button", { name: "5T OTA" })).toHaveCount(0);
+  await guide.getByRole("button", { name: "Close guide" }).click();
+  await expect(guide).toHaveCount(0);
+  await page.reload();
+  await awaitEditorReady(page);
+  panel = await openPanel(page);
+  await formula(panel, "Gain");
+  await expect(panel.getByTestId("small-signal-guide")).toHaveCount(0);
+  const help = panel.getByRole("button", { name: "How to use" });
+  await help.click();
+  await expect(panel.getByTestId("small-signal-guide")).toBeVisible();
+  await expect(help).toHaveAttribute("aria-expanded", "true");
+  await help.click();
+  await expect(panel.getByTestId("small-signal-guide")).toHaveCount(0);
 });

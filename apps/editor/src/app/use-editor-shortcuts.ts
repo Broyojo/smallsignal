@@ -359,6 +359,15 @@ function createEditorShortcutHandler({
       ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
     )
       return;
+    // An open small-signal device menu closes on its own Escape; the canvas
+    // keeps its selection and tool.
+    if (
+      event.key === "Escape" &&
+      globalThis.document.querySelector(
+        '[data-testid="small-signal-device-menu"]',
+      )
+    )
+      return;
     if (event.key === "Escape" && netLabelPlacement) {
       event.preventDefault();
       cancelNetLabelEditing();

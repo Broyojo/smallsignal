@@ -807,3 +807,370 @@
   align-items: center;
   gap: 8px;
 }
+
+/* A typeset formula, inline so its symbols can be pointed at. A click
+   selects it whole, and copying writes its TeX. */
+.small-signal-formula {
+  user-select: all;
+}
+
+.small-signal-formula > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.small-signal-formula [data-sym] {
+  transition: fill 80ms ease-out;
+}
+
+/* Header: the title, Solving…, and How to use. */
+.small-signal-header {
+  align-items: center;
+  gap: 8px;
+}
+
+.small-signal-header h2 {
+  margin-right: auto;
+}
+
+.small-signal-help {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--icm-border);
+  border-radius: 999px;
+  background: var(--icm-surface);
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-sm);
+  font-weight: 650;
+  line-height: 1;
+}
+
+.small-signal-help[aria-expanded="true"] {
+  border-color: rgb(var(--icm-accent-rgb) / 45%);
+  background: var(--icm-accent-tint);
+  color: var(--icm-accent);
+}
+
+/* How to use: five steps in the card look. */
+.small-signal-guide {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-md);
+  background: var(--icm-surface);
+  font-size: var(--icm-font-sm);
+  line-height: var(--icm-line);
+}
+
+.small-signal-guide > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+}
+
+.small-signal-guide > header strong {
+  font-size: var(--icm-font-md);
+  font-weight: 650;
+}
+
+.small-signal-guide ol {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.small-signal-guide li::marker {
+  color: var(--icm-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-guide b {
+  font-weight: 600;
+}
+
+.small-signal-guide-examples {
+  margin: 0;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--icm-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.small-signal-link-button:hover:not(:disabled) {
+  border: 0;
+  background: none;
+  text-decoration: underline;
+}
+
+/* Bode plot: magnitude over phase on one log frequency axis. Series ink
+   from the categorical order: blue full model, orange ≈ form, aqua
+   assumed model, each with its own dash so none depends on color. */
+.small-signal-bode {
+  --small-signal-curve-full: var(--icm-accent);
+  --small-signal-curve-approx: #eb6834;
+  --small-signal-curve-assumed: #1baf7a;
+  position: relative;
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 0;
+  min-width: 0;
+}
+
+.small-signal-bode > svg {
+  display: block;
+  overflow: visible;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.small-signal-bode-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+}
+
+.small-signal-bode-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.small-signal-bode-frame {
+  fill: none;
+  stroke: var(--icm-border);
+}
+
+.small-signal-bode-grid line {
+  stroke: var(--icm-border);
+  stroke-opacity: 0.6;
+}
+
+.small-signal-bode-grid text,
+.small-signal-bode-unit {
+  fill: var(--icm-text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-bode-line {
+  fill: none;
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.small-signal-bode-line.is-full {
+  stroke: var(--small-signal-curve-full);
+}
+
+.small-signal-bode-line.is-approx {
+  stroke: var(--small-signal-curve-approx);
+  stroke-dasharray: 5 3;
+}
+
+.small-signal-bode-line.is-assumed {
+  stroke: var(--small-signal-curve-assumed);
+  stroke-dasharray: 1.5 2.5;
+  stroke-width: 2;
+}
+
+.small-signal-bode-root path,
+.small-signal-bode-root circle {
+  fill: var(--icm-surface);
+  stroke: var(--icm-text);
+  stroke-width: 1.4;
+}
+
+.small-signal-bode-root-guide {
+  stroke: var(--icm-text-muted);
+  stroke-opacity: 0.35;
+  stroke-dasharray: 2 3;
+}
+
+.small-signal-bode-cursor line {
+  stroke: var(--icm-text);
+  stroke-opacity: 0.45;
+}
+
+.small-signal-bode-cursor circle {
+  stroke: var(--icm-surface);
+  stroke-width: 2;
+}
+
+.small-signal-bode-cursor .is-full circle {
+  fill: var(--small-signal-curve-full);
+}
+
+.small-signal-bode-cursor .is-approx circle {
+  fill: var(--small-signal-curve-approx);
+}
+
+.small-signal-bode-cursor .is-assumed circle {
+  fill: var(--small-signal-curve-assumed);
+}
+
+.small-signal-bode-readout {
+  position: absolute;
+  top: 18px;
+  z-index: 1;
+  display: grid;
+  gap: 2px;
+  padding: 5px 7px;
+  border: 1px solid var(--icm-border-strong);
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-surface);
+  box-shadow: var(--icm-shadow-sm);
+  font-size: var(--icm-font-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.small-signal-bode-readout table {
+  border-collapse: collapse;
+}
+
+.small-signal-bode-readout th,
+.small-signal-bode-readout td {
+  padding: 0 0 0 8px;
+  text-align: right;
+}
+
+.small-signal-bode-readout th {
+  padding-left: 0;
+  color: var(--icm-text-muted);
+  font-weight: 400;
+  text-align: left;
+}
+
+/* The canvas layer: a part's symbol hovered in a formula rings it, and
+   the operating point labels its wires and transistors. */
+.small-signal-link-ring {
+  position: absolute;
+  border: 1.5px solid var(--icm-accent);
+  border-radius: 6px;
+  background: rgb(var(--icm-accent-rgb) / 8%);
+  box-shadow: 0 0 0 3px rgb(var(--icm-accent-rgb) / 12%);
+  pointer-events: none;
+}
+
+.small-signal-op-net,
+.small-signal-op-device {
+  position: absolute;
+  padding: 0 4px;
+  border: 1px solid var(--icm-border);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 92%);
+  color: var(--icm-text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Under its wire: a net's name sits above it. */
+.small-signal-op-net {
+  transform: translate(-50%, 3px);
+  color: #1f5fa8;
+}
+
+.small-signal-op-net.is-vertical {
+  transform: translate(4px, -50%);
+}
+
+.small-signal-op-device {
+  transform: translate(3px, -100%);
+  font-weight: 650;
+}
+
+.small-signal-op-device.is-saturation,
+.small-signal-op-device.is-active {
+  border-color: rgb(63 163 77 / 35%);
+  color: #2b7a37;
+}
+
+.small-signal-op-device.is-triode,
+.small-signal-op-device.is-cutoff {
+  border-color: rgb(var(--icm-warning-rgb) / 45%);
+  background: #fdf6e3;
+  color: var(--icm-warning);
+}
+
+/* The Bias point card's header toggle. */
+.small-signal-card > header .small-signal-op-toggle {
+  display: flex;
+  gap: 4px;
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.small-signal-op-toggle input {
+  margin: 0;
+}
+
+/* The bias table at phone width: the region goes under the name. */
+.small-signal-card {
+  container-type: inline-size;
+}
+
+.small-signal-bias-inline {
+  display: none;
+}
+
+@container (max-width: 340px) {
+  .small-signal-bias-table {
+    font-size: var(--icm-font-xs);
+  }
+
+  .small-signal-bias-table th,
+  .small-signal-bias-table td {
+    padding-right: 4px;
+  }
+
+  /* Still too wide: a value's unit goes under it. */
+  .small-signal-bias-table td {
+    white-space: normal;
+  }
+
+  .small-signal-bias-table [data-col="region"] {
+    display: none;
+  }
+
+  .small-signal-bias-inline {
+    display: block;
+    margin-top: 1px;
+    font-weight: 400;
+  }
+
+  .small-signal-bias-inline .small-signal-bias-region {
+    display: none;
+  }
+}
+
+/* A right half-plane pole or zero: the one an engineer must not miss. */
+.small-signal-bode-root.is-rhp path,
+.small-signal-bode-root.is-rhp circle {
+  stroke: var(--icm-warning);
+}

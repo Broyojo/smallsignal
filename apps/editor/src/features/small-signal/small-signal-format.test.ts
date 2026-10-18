@@ -392,7 +392,15 @@ describe("formatPercent", () => {
     expect(formatPercent(0.02)).toBe("2.0%");
     expect(formatPercent(0.984)).toBe("98%");
     expect(formatPercent(1)).toBe("100%");
-    expect(formatPercent(15.2)).toBe("1520%");
+    expect(formatPercent(1.5)).toBe("150%");
+  });
+
+  it("writes twice the value and more as a multiple of it", () => {
+    expect(formatPercent(2)).toBe("2.0×");
+    expect(formatPercent(15.2)).toBe("15×");
+    expect(formatPercent(180.61)).toBe("181×");
+    expect(formatPercent(18061)).toBe("18,000×");
+    expect(formatPercent(Infinity)).toBe("∞");
   });
 });
 
