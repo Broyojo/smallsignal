@@ -35,6 +35,8 @@ const FIXTURES = {
   bjtOpAmp: "packages/small-signal/test-fixtures/bjt-op-amp.icproj.json",
   twoStage:
     "packages/small-signal/test-fixtures/two-stage-miller-ota.icproj.json",
+  inverter:
+    "packages/small-signal/test-fixtures/cmos-inverter-triode.icproj.json",
 } as const;
 
 /**
@@ -315,7 +317,7 @@ test("textbook diff pair reads like hand analysis: differential, matched, gm(ro 
     .not.toContain("g_{m3,4}");
 });
 
-test("5T OTA with a real bias: saturated, matched, gm(ro ∥ ro)/(1 + CL(…)s)", async ({
+test("5T OTA with a real bias: saturated, matched, ≈ assumes only the tail's r_o", async ({
   page,
 }) => {
   const panel = await analyze(page, FIXTURES.ota);
@@ -324,12 +326,25 @@ test("5T OTA with a real bias: saturated, matched, gm(ro ∥ ro)/(1 + CL(…)s)"
   );
   const chips = panel.getByLabel("Matched pairs").getByRole("button");
   await expect(chips).toHaveCount(2);
+  // Both pairs' r_o set the output: the named form keeps them.
   const gain = await formula(panel, "Gain");
   expect(gain).toContain("g_{m1,2}");
-  expect(gain).toContain("r_{o1,2} \\parallel r_{o3,4}");
+  expect(gain).toMatch(/r_\{o1,2\}.*r_\{o3,4\}/u);
+  expect(gain).not.toContain("r_{o5}");
+  await expect(card(panel, "Gain").locator('[data-approx="named"]')).toHaveText(
+    "ro5 → ∞, within <0.1%",
+  );
   const value = Math.abs(await cardValue(panel, "Gain"));
   expect(value).toBeGreaterThan(100);
   expect(value).toBeLessThan(5000);
+  // Smallest terms: gm(ro ∥ ro)/(1 + CL(…)s), as before.
+  await panel.getByText("Options", { exact: true }).click();
+  await panel
+    .getByLabel("Approximation", { exact: true })
+    .selectOption("terms");
+  await expect
+    .poll(() => formula(panel, "Gain"))
+    .toContain("r_{o1,2} \\parallel r_{o3,4}");
 });
 
 test("RC filter: 1/(1 + R1 C1 s) with its pole", async ({ page }) => {
@@ -1040,6 +1055,76 @@ test("assumptions: a term the gain cannot do without is kept, and said once", as
   expect(await formula(panel, "Gain")).toMatch(/-g_\{m1\} r_\{o1\}$/u);
 });
 
+test("named assumptions: the triode inverter's ≈ forms assume r_o2 → ∞, its channel is R_on", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.inverter);
+  await expect(panel.getByLabel("Output", { exact: true })).toHaveValue("out");
+  // −(g_m1 + g_m2)(R_on1 ∥ r_o2), M1's channel 885 Ω.
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-0.4508, 3);
+  expect(await formula(panel, "Gain")).toContain(
+    "= -\\frac{R_{on1} r_{o2} \\left(g_{m2} + g_{m1}\\right)}{r_{o2} + R_{on1}}",
+  );
+  for (const [name, form] of [
+    ["Gain", "-R_{on1} \\left(g_{m2} + g_{m1}\\right)"],
+    ["Output impedance", "R_{on1}"],
+  ] as const) {
+    const quantity = card(panel, name);
+    const simpler = quantity.locator(".small-signal-simpler");
+    await expect(simpler.locator("img.small-signal-formula")).toHaveAttribute(
+      "alt",
+      `\\approx ${form}`,
+    );
+    const note = simpler.locator('[data-approx="named"]');
+    await expect(note).toHaveText("ro2 → ∞, within 0.18%");
+    await expect(note.locator("sub")).toHaveText("o2");
+  }
+  // The bias table's r_o column holds M1's channel R_on.
+  const bias = card(panel, "Bias point");
+  await expect(bias.locator("thead th").last()).toHaveText("ro, Ron");
+  await expect(
+    bias.locator('tr[data-device="M1"] [data-quantity="ron"]'),
+  ).toHaveText(/^885(\.\d)? Ω$/u);
+  await expect(
+    bias.locator('tr[data-device="M2"] [data-quantity="ro"]'),
+  ).toHaveText("500 kΩ");
+  // R_on is no r_o: M1 has nothing in the r_o column to neglect.
+  const section = await assumptions(panel);
+  await expect(section.getByLabel("M1 ro", { exact: true })).toHaveCount(0);
+  await expect(section.getByLabel("M2 ro", { exact: true })).toBeVisible();
+
+  // Smallest terms instead: the same form here, said as before, and kept
+  // for the next session.
+  const options = panel.locator("details.small-signal-options", {
+    has: page.locator(":scope > summary", { hasText: /^Options$/u }),
+  });
+  await options.locator(":scope > summary").click();
+  const approx = panel.getByLabel("Approximation", { exact: true });
+  await expect(approx).toHaveValue("named");
+  await approx.selectOption("terms");
+  const gain = card(panel, "Gain");
+  await expect(gain.locator('[data-approx="named"]')).toHaveCount(0);
+  await expect(gain.locator(".small-signal-simpler small")).toHaveText(
+    "within 0.18% of exact",
+  );
+  expect(
+    await page.evaluate(() => localStorage.getItem("smallsignal.approx")),
+  ).toBe("terms");
+  await page.reload();
+  await awaitEditorReady(page);
+  await openProjectFile(page, fixture(FIXTURES.inverter));
+  const again = await openPanel(page);
+  await again
+    .locator("details.small-signal-options", {
+      has: page.locator(":scope > summary", { hasText: /^Options$/u }),
+    })
+    .locator(":scope > summary")
+    .click();
+  await expect(again.getByLabel("Approximation", { exact: true })).toHaveValue(
+    "terms",
+  );
+});
+
 /** The Suggestions section, open. */
 async function suggestions(panel: Locator): Promise<Locator> {
   const section = panel.locator("details.small-signal-suggestions");
@@ -1143,6 +1228,16 @@ test("assumptions: Miller on CC in a two-stage OTA, labeled with K, its cost mea
   await expect(gain.locator(".small-signal-miller")).toHaveText(
     /^Miller CC, K = −\d{3}$/u,
   );
+  // Named assumptions on top of the split: only the tail's r_o goes, which
+  // leaves 49 terms, too long to typeset; the split's own cost is in the
+  // note. Smallest terms gives the short form in K.
+  await expect(gain.locator('[data-approx="named"]')).toHaveText(
+    /^ro5 → ∞, \d+% from full model$/u,
+  );
+  await panel.getByText("Options", { exact: true }).click();
+  await panel
+    .getByLabel("Approximation", { exact: true })
+    .selectOption("terms");
   await expect.poll(() => formula(panel, "Gain")).toContain("K_{CC}");
   // The split keeps the dominant pole and loses pole splitting: its cost.
   await expect(gain).toContainText("% from full model");

@@ -11,6 +11,9 @@ import {
   type CircuitAssumptions,
 } from "./small-signal-assumption-store";
 import {
+  noneText,
+  readApprox,
+  subscriptParts,
   assumptionColumnChange,
   assumptionColumns,
   assumptionRows,
@@ -665,5 +668,43 @@ describe("suggestions", () => {
     ).toEqual({
       [partKey(["m1"])]: { ignore: { cgs: true }, miller: ["cgd"] },
     });
+  });
+});
+
+describe("named-assumption ≈ forms", () => {
+  it("splits a label at its subscripts", () => {
+    expect(subscriptParts("r_o2 → ∞")).toEqual([
+      { base: "r", sub: "o2" },
+      " ",
+      "→",
+      " ",
+      "∞",
+    ]);
+    expect(subscriptParts("r_o1,2 → ∞")[0]).toEqual({
+      base: "r",
+      sub: "o1,2",
+    });
+    // A comma that ends a token is not part of the subscript.
+    expect(subscriptParts("C_gs, C_gd → 0 for M3, M4").slice(0, 4)).toEqual([
+      { base: "C", sub: "gs" },
+      ",",
+      " ",
+      { base: "C", sub: "gd" },
+    ]);
+    // The hand-analysis labels have none.
+    expect(subscriptParts("ro ≫ R, 1/gm").join("")).toBe("ro ≫ R, 1/gm");
+  });
+
+  it("keeps named assumptions unless smallest terms was chosen", () => {
+    expect(readApprox(null)).toBe("named");
+    expect(readApprox("named")).toBe("named");
+    expect(readApprox("terms")).toBe("terms");
+    expect(readApprox("garbage")).toBe("named");
+  });
+
+  it("says when no simple form is within the tolerance", () => {
+    expect(noneText({ latex: "x", tolerance: 0.05 })).toBe(
+      "No simple form within 5.0%.",
+    );
   });
 });
