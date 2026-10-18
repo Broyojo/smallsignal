@@ -20,6 +20,7 @@ import { FORMULA_MAX_LATEX_LENGTH } from "@icm/math-typesetting/profile";
 import {
   ASSUMPTION_REGIONS,
   ASSUMPTION_TERMS,
+  CAPACITANCE_PARAMETERS,
   createSmallSignalClient,
   DEFAULT_MODEL_PARAMETERS,
   DEFAULT_SUPPLY_VOLTAGE,
@@ -45,7 +46,9 @@ import {
   type AssumableElement,
   type AssumedQuantity,
   type AssumptionTerm,
+  type MillerReport,
   type RootPair,
+  type SmallSignalAssumptionReport,
   type SmallSignalElement,
   type SmallSignalSuggestion,
   type SmallSignalSuggestions,
@@ -55,9 +58,11 @@ import {
   assumptionRequest,
   circuitStorageKey,
   isIgnored,
+  isMiller,
   isTransistor,
   loadCircuits,
   loadDefaults,
+  MILLER_TERMS,
   partKey,
   saveCircuits,
   saveDefaults,
@@ -66,11 +71,13 @@ import {
   touchCircuit,
   TRANSISTOR_TYPES,
   withDefault,
+  withMiller,
   withRegion,
   withTerms,
   type AssumableType,
   type AssumptionDefaults,
   type CircuitAssumptions,
+  type MillerTerm,
 } from "./small-signal-assumption-store";
 import {
   browserStaleBuildRecovery,
@@ -184,6 +191,34 @@ const MODEL_RANGE: Record<
   // Flicker noise: KF·I^AF/f (ngspice's level-1 MOS form uses gm²).
   KF: { min: 0, max: 1 },
   AF: { min: 0, max: 10 },
+  // Capacitances, all 0 (none) by default. TOX in m (0: no Meyer gate
+  // capacitances); overlap and sidewall per m, CJ per m²; potentials in V;
+  // grading coefficients and FC below the 1 where the formulas diverge.
+  TOX: { min: 1e-10, max: 1e-5, zero: true },
+  CGSO: { min: 0, max: 1e-6 },
+  CGDO: { min: 0, max: 1e-6 },
+  CGBO: { min: 0, max: 1e-6 },
+  CJ: { min: 0, max: 10 },
+  MJ: { min: 0, max: 0.99 },
+  CJSW: { min: 0, max: 1e-6 },
+  MJSW: { min: 0, max: 0.99 },
+  PB: { min: 0.01, max: 10 },
+  FC: { min: 0, max: 0.95 },
+  CBD: { min: 0, max: 1e-6 },
+  CBS: { min: 0, max: 1e-6 },
+  CJE: { min: 0, max: 1e-6 },
+  VJE: { min: 0.01, max: 10 },
+  MJE: { min: 0, max: 0.99 },
+  CJC: { min: 0, max: 1e-6 },
+  VJC: { min: 0.01, max: 10 },
+  MJC: { min: 0, max: 0.99 },
+  XCJC: { min: 0, max: 1 },
+  CJS: { min: 0, max: 1e-6 },
+  TF: { min: 0, max: 1e-3 },
+  CJO: { min: 0, max: 1e-6 },
+  VJ: { min: 0.01, max: 10 },
+  M: { min: 0, max: 0.99 },
+  TT: { min: 0, max: 1e-3 },
 };
 
 export function modelValue(name: string, text: string): number | null {
@@ -279,44 +314,63 @@ function ModelFields({
       kinds.includes(kind) ||
       Object.values(text[kind] ?? {}).some((typed) => typed.trim()),
   );
+  const field = (kind: ModelKind, name: string, fallback: number) => {
+    const typed = text[kind]?.[name] ?? "";
+    const invalid = typed.trim() !== "" && modelValue(name, typed) === null;
+    return (
+      <label key={name}>
+        {name}
+        <input
+          aria-label={`${MODEL_TITLE[kind]} ${name}`}
+          aria-invalid={invalid || undefined}
+          title={invalid ? rangeText(name) : undefined}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          placeholder={formatSpiceNumber(fallback)}
+          value={typed}
+          onChange={(event) =>
+            onChange({
+              ...text,
+              [kind]: {
+                ...text[kind],
+                [name]: event.currentTarget.value,
+              },
+            })
+          }
+        />
+      </label>
+    );
+  };
   return (
     <>
-      {shown.map((kind) => (
-        <fieldset key={kind} className="small-signal-model">
-          <legend>{MODEL_TITLE[kind]}</legend>
-          {Object.entries(DEFAULT_MODEL_PARAMETERS[kind]).map(
-            ([name, fallback]) => {
-              const typed = text[kind]?.[name] ?? "";
-              const invalid =
-                typed.trim() !== "" && modelValue(name, typed) === null;
-              return (
-                <label key={name}>
-                  {name}
-                  <input
-                    aria-label={`${MODEL_TITLE[kind]} ${name}`}
-                    aria-invalid={invalid || undefined}
-                    title={invalid ? rangeText(name) : undefined}
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    placeholder={formatSpiceNumber(fallback)}
-                    value={typed}
-                    onChange={(event) =>
-                      onChange({
-                        ...text,
-                        [kind]: {
-                          ...text[kind],
-                          [name]: event.currentTarget.value,
-                        },
-                      })
-                    }
-                  />
-                </label>
-              );
-            },
-          )}
-        </fieldset>
-      ))}
+      {shown.map((kind) => {
+        const entries = Object.entries(DEFAULT_MODEL_PARAMETERS[kind]);
+        const charge = CAPACITANCE_PARAMETERS[kind];
+        const typedCharge = charge.filter((name) => text[kind]?.[name]?.trim());
+        return (
+          <fieldset key={kind} className="small-signal-model">
+            <legend>{MODEL_TITLE[kind]}</legend>
+            {entries
+              .filter(([name]) => !charge.includes(name))
+              .map(([name, fallback]) => field(kind, name, fallback))}
+            <details
+              className="small-signal-model-caps"
+              open={typedCharge.length > 0 || undefined}
+            >
+              <summary>
+                Capacitances
+                {typedCharge.length ? ` (${typedCharge.length} set)` : ""}
+              </summary>
+              <div className="small-signal-model">
+                {entries
+                  .filter(([name]) => charge.includes(name))
+                  .map(([name, fallback]) => field(kind, name, fallback))}
+              </div>
+            </details>
+          </fieldset>
+        );
+      })}
       {modelTextEdited(text) ? (
         <button
           type="button"
@@ -723,6 +777,59 @@ function AssumedTable({
   );
 }
 
+/** Whether the forms are the assumed model's: anything neglected or split. */
+export function anyAssumed(
+  report: SmallSignalAssumptionReport | undefined,
+): boolean {
+  return Boolean(report?.applied.length || report?.miller?.length);
+}
+
+/** C_C for capacitor CC, C_gd2 for C_gd of M2: as the equations write it. */
+function SplitCapacitance({ split }: { split: MillerReport }) {
+  const rest = split.element.slice(1);
+  const sub =
+    split.term === null
+      ? rest
+      : `${CAP_SUB[split.term] ?? split.term.slice(1)}${/^[\d,]*$/u.test(rest) ? rest : `,${rest}`}`;
+  return (
+    <>
+      C<sub>{sub}</sub>
+    </>
+  );
+}
+
+/** "−84.1": K to three digits, with a minus sign. */
+export function kText(k: number): string {
+  return Number(k.toPrecision(3)).toString().replace(/^-/u, "−");
+}
+
+/**
+ * The Miller splits the forms are exact for: "Miller C_C, K = −84.1". In
+ * symbolic mode K is a symbol, shown with its definition.
+ */
+function MillerNote({ splits }: { splits: readonly MillerReport[] }) {
+  return (
+    <>
+      {splits.map((split) => (
+        <div
+          key={`${split.element}:${split.term ?? ""}`}
+          className="small-signal-muted small-signal-miller"
+          data-miller={split.element}
+        >
+          Miller <SplitCapacitance split={split} />,{" "}
+          {split.k !== null ? (
+            `K = ${kText(split.k)}`
+          ) : split.definition ? (
+            <Formula latex={`${split.symbol} = ${split.definition.latex}`} />
+          ) : (
+            "K unavailable"
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** Shown once, on the first result whose formula is over the budget. */
 const NO_FORMULA_NOTE = "Formula too large to derive. Try a smaller block.";
 
@@ -734,6 +841,7 @@ function QuantityCard({
   unit,
   noFormulaNote = false,
   assumed,
+  miller,
 }: {
   title: string;
   symbol: string;
@@ -743,6 +851,8 @@ function QuantityCard({
   noFormulaNote?: boolean;
   /** Set under assumptions; the header value stays the full model's. */
   assumed?: AssumedQuantity | undefined;
+  /** The Miller splits the assumed forms are exact for. */
+  miller?: readonly MillerReport[] | undefined;
 }) {
   // The simpler form appears only when it actually dropped terms, and never
   // repeats the form above it (an assumption can leave nothing to drop).
@@ -818,6 +928,7 @@ function QuantityCard({
           ) : null}
         </>
       )}
+      {assumed && miller?.length ? <MillerNote splits={miller} /> : null}
       {assumed && quantity.values?.length ? (
         <AssumedTable values={quantity.values} assumed={assumed} unit={unit} />
       ) : quantity.values && quantity.values.length > 1 ? (
@@ -1704,16 +1815,49 @@ function MatchedPairs({
 
 /** Junction leakage (r_bs, r_bd, r_μ) shares one column. */
 const LEAKAGE_TERMS: ReadonlySet<string> = new Set(["rbs", "rbd", "rmu"]);
+/** Device capacitances share one column, each its own choice in it. */
+const CAP_TERMS: readonly AssumptionTerm[] = [
+  "cgs",
+  "cgd",
+  "cgb",
+  "cbd",
+  "cbs",
+  "cpi",
+  "cmu",
+  "ccs",
+];
 /** Known columns first, in hand-analysis order; any others follow. */
-const COLUMN_ORDER = ["ro", "gmb", "rpi", "leakage"];
+const COLUMN_ORDER = ["ro", "gmb", "rpi", "leakage", "caps"];
 
 function termColumn(term: string): string {
-  return LEAKAGE_TERMS.has(term) ? "leakage" : term;
+  if (LEAKAGE_TERMS.has(term)) return "leakage";
+  return (CAP_TERMS as readonly string[]).includes(term) ? "caps" : term;
+}
+
+/** C_gs, C_db, C_π: a capacitance term as the equations write it. */
+const CAP_SUB: Record<string, string> = {
+  cgs: "gs",
+  cgd: "gd",
+  cgb: "gb",
+  cbd: "db",
+  cbs: "sb",
+  cpi: "π",
+  cmu: "μ",
+  ccs: "cs",
+};
+
+function CapSymbol({ term }: { term: string }) {
+  return (
+    <span>
+      C<sub>{CAP_SUB[term] ?? term.slice(1)}</sub>
+    </span>
+  );
 }
 
 /** A column's symbol as the bias table writes it: r_o, g_mb, r_π, C_gs. */
 function ColumnSymbol({ column }: { column: string }) {
   if (column === "leakage") return <>Leakage</>;
+  if (column === "caps") return <>Caps</>;
   const [head = "", ...rest] = column;
   return (
     <>
@@ -1736,6 +1880,8 @@ interface AssumptionMember {
   /** Set for a part drawn in the open Cell itself (selectable there). */
   instanceId: string | null;
   terms: readonly AssumptionTerm[];
+  /** Capacitances a Miller split can take (null: a capacitor's own). */
+  miller: readonly MillerTerm[];
 }
 
 export interface AssumptionRow {
@@ -1769,7 +1915,7 @@ export function assumptionRows(
 ): AssumptionRow[] {
   const drawn = new Map(elements.map((element) => [element.name, element]));
   const members = new Map<string, AssumptionMember>();
-  for (const { element, type, terms } of assumable) {
+  for (const { element, type, terms, miller } of assumable) {
     const part = drawn.get(element);
     // Metadata from a solve of another drawing never describes this part.
     if (!part || part.kind !== type) continue;
@@ -1780,6 +1926,7 @@ export function assumptionRows(
       path: partKey(instancePath),
       instanceId: instancePath.length === 1 ? (instancePath[0] ?? null) : null,
       terms,
+      miller: miller ?? [],
     });
   }
   const all = [...members.values()];
@@ -1874,9 +2021,13 @@ export function assumptionColumnChange(
   column: string,
   on: boolean,
   { defaults, parts }: AssumptionChoices,
+  /** One term of the column alone (a capacitance in the Caps cell). */
+  only?: AssumptionTerm,
 ): AssumptionChange {
   const inColumn = (terms: readonly AssumptionTerm[]) =>
-    terms.filter((term) => termColumn(term) === column);
+    terms.filter(
+      (term) => termColumn(term) === column && (!only || term === only),
+    );
   if (row.scope === "type" && isTransistor(row.type))
     return withDefault(
       defaults,
@@ -1948,10 +2099,123 @@ function AssumptionTable({
         ?.scrollIntoView({ block: "nearest" });
   }, [selectedRows]);
 
-  const setTerms = (row: AssumptionRow, column: string, on: boolean) =>
-    onChange(assumptionColumnChange(row, column, on, { defaults, parts }));
+  const setTerms = (
+    row: AssumptionRow,
+    column: string,
+    on: boolean,
+    only?: AssumptionTerm,
+  ) =>
+    onChange(
+      assumptionColumnChange(row, column, on, { defaults, parts }, only),
+    );
+
+  /** Each capacitance the row's devices have, neglected or not, and C_gd
+   * or C_μ split by Miller where it bridges two signal nodes: a popover of
+   * checkboxes, the summary naming the choices. */
+  const capsCell = (row: AssumptionRow) => {
+    const tally = (flags: boolean[]) => {
+      const on = flags.filter(Boolean).length;
+      return {
+        checked: flags.length > 0 && on === flags.length,
+        mixed: on > 0 && on < flags.length,
+      };
+    };
+    const state = CAP_TERMS.flatMap((term) => {
+      const having = row.members.filter((member) =>
+        member.terms.includes(term),
+      );
+      if (!having.length) return [];
+      // A type row sets defaults: a split is a part's own choice.
+      const splittable =
+        row.scope !== "type" &&
+        MILLER_TERMS.includes(term) &&
+        having.every((member) => member.miller.includes(term));
+      return [
+        {
+          term,
+          ...tally(
+            having.map((member) =>
+              isIgnored(row.type, term, parts[member.path], defaults),
+            ),
+          ),
+          miller: splittable
+            ? tally(having.map((member) => isMiller(term, parts[member.path])))
+            : null,
+        },
+      ];
+    });
+    if (!state.length)
+      return (
+        <td key="caps" className="small-signal-muted">
+          —
+        </td>
+      );
+    const chosen = state.filter(
+      (cap) => cap.checked || cap.mixed || cap.miller?.checked,
+    );
+    const setMiller = (term: AssumptionTerm, on: boolean) =>
+      onChange({
+        parts: row.members.reduce(
+          (next, member) => withMiller(next, member.path, term, on),
+          parts,
+        ),
+      });
+    return (
+      <td key="caps">
+        <details className="small-signal-caps">
+          <summary aria-label={`${row.label} caps`}>
+            {chosen.length
+              ? chosen.map((cap, i) => (
+                  <span key={cap.term}>
+                    {i ? " " : ""}
+                    {cap.miller?.checked ? "Miller " : ""}
+                    <CapSymbol term={cap.term} />
+                  </span>
+                ))
+              : "none"}
+          </summary>
+          <div>
+            {state.map((cap) => (
+              <div key={cap.term} className="small-signal-cap-choice">
+                <label>
+                  <input
+                    type="checkbox"
+                    aria-label={`${row.label} ${cap.term}`}
+                    checked={cap.checked}
+                    ref={(input) => {
+                      if (input) input.indeterminate = cap.mixed;
+                    }}
+                    onChange={() =>
+                      setTerms(row, "caps", !cap.checked, cap.term)
+                    }
+                  />
+                  <CapSymbol term={cap.term} />
+                </label>
+                {cap.miller ? (
+                  <label>
+                    <input
+                      type="checkbox"
+                      aria-label={`${row.label} ${cap.term} Miller`}
+                      checked={cap.miller.checked}
+                      ref={(input) => {
+                        if (input)
+                          input.indeterminate = cap.miller?.mixed ?? false;
+                      }}
+                      onChange={() => setMiller(cap.term, !cap.miller?.checked)}
+                    />
+                    Miller
+                  </label>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </details>
+      </td>
+    );
+  };
 
   const termCell = (row: AssumptionRow, column: string) => {
+    if (column === "caps") return capsCell(row);
     const pairs = row.members.flatMap((member) =>
       member.terms
         .filter((term) => termColumn(term) === column)
@@ -2018,45 +2282,62 @@ function AssumptionTable({
     const member = row.members[0];
     if (!member) return null;
     const part = parts[member.path];
-    const value = isIgnored(row.type, "open", part, defaults)
-      ? "open"
-      : isIgnored(row.type, "short", part, defaults)
-        ? "short"
-        : "";
+    // A capacitor between two signal nodes can be split by Miller instead.
+    const splittable = row.type === "capacitor" && member.miller.includes(null);
+    const value =
+      splittable && isMiller(null, part)
+        ? "miller"
+        : isIgnored(row.type, "open", part, defaults)
+          ? "open"
+          : isIgnored(row.type, "short", part, defaults)
+            ? "short"
+            : "";
     return (
       <td colSpan={Math.max(columns.length, 1)}>
         <select
           aria-label={`${row.label} open or short`}
           value={value}
           onChange={(event) => {
-            const choice = event.currentTarget.value as AssumptionTerm | "";
+            const choice = event.currentTarget.value;
+            const cleared = withMiller(
+              withTerms(
+                parts,
+                member.path,
+                row.type,
+                ["open", "short"],
+                false,
+                defaults,
+              ),
+              member.path,
+              null,
+              false,
+            );
             onChange({
-              parts: choice
-                ? withTerms(
-                    parts,
-                    member.path,
-                    row.type,
-                    [choice],
-                    true,
-                    defaults,
-                  )
-                : withTerms(
-                    parts,
-                    member.path,
-                    row.type,
-                    ["open", "short"],
-                    false,
-                    defaults,
-                  ),
+              parts:
+                choice === "miller"
+                  ? withMiller(cleared, member.path, null, true)
+                  : choice
+                    ? withTerms(
+                        cleared,
+                        member.path,
+                        row.type,
+                        [choice as AssumptionTerm],
+                        true,
+                        defaults,
+                      )
+                    : cleared,
             });
           }}
         >
           <option value="" />
-          {member.terms.map((term) => (
-            <option key={term} value={term}>
-              {term}
-            </option>
-          ))}
+          {member.terms
+            .filter((term) => term === "open" || term === "short")
+            .map((term) => (
+              <option key={term} value={term}>
+                {term}
+              </option>
+            ))}
+          {splittable ? <option value="miller">Miller</option> : null}
         </select>
       </td>
     );
@@ -2401,17 +2682,6 @@ export function SmallSignalPanel({
       }),
     [project, rootDocumentId, supplyVoltage, pinBias, models],
   );
-  const assume = useMemo(
-    () =>
-      netlist
-        ? assumptionRequest(
-            netlist.elements,
-            assumptionDefaults,
-            assumptionParts,
-          )
-        : null,
-    [netlist, assumptionDefaults, assumptionParts],
-  );
   const updateAssumptions = ({ defaults, parts }: AssumptionChange) => {
     if (defaults) setAssumptionDefaults(defaults);
     if (parts) {
@@ -2446,6 +2716,21 @@ export function SmallSignalPanel({
     circuit: string;
     result: SmallSignalResult;
   } | null>(null);
+  // Miller splits the circuit's last answer no longer offers are not sent
+  // (the request is keyed by its text, so this re-solves at most once).
+  const offered = resultForCircuit(lastResult, assumptionKey)?.assumable;
+  const assume = useMemo(
+    () =>
+      netlist
+        ? assumptionRequest(
+            netlist.elements,
+            assumptionDefaults,
+            assumptionParts,
+            offered,
+          )
+        : null,
+    [netlist, assumptionDefaults, assumptionParts, offered],
+  );
   const [staleBuild, setStaleBuild] = useState(false);
   const markStale = useCallback(() => setStaleBuild(true), []);
   const [solving, setSolving] = useState(false);
@@ -2834,7 +3119,9 @@ export function SmallSignalPanel({
     result &&
     !result.warnings?.length &&
     devices.every(([, device]) =>
-      ["saturation", "forward-active"].includes(String(device.region)),
+      ["saturation", "forward-active"].includes(
+        "region" in device ? device.region : "",
+      ),
     );
   const pinsNeedingBias = sources.filter(
     (source) => source.pin && unknownBias.includes(source.pin),
@@ -2859,7 +3146,7 @@ export function SmallSignalPanel({
     Object.keys(assumptionDefaults).length > 0 ||
     Object.keys(assumptionParts).length > 0;
   // The forms are the assumed model's only once something was applied.
-  const assumedOn = Boolean(result?.assumptions?.applied.length);
+  const assumedOn = anyAssumed(result?.assumptions);
   const assumedOf = (quantity: SmallSignalQuantity) =>
     assumedOn ? quantity.assumed : undefined;
 
@@ -3048,6 +3335,7 @@ export function SmallSignalPanel({
                 unit={inputSource?.kind === "current" ? "Ω" : ""}
                 noFormulaNote={firstWithoutFormula === "gain"}
                 assumed={assumedOf(result.gain)}
+                miller={result.assumptions?.miller}
               />
             ) : null}
             {result?.rin ? (
@@ -3058,6 +3346,7 @@ export function SmallSignalPanel({
                 unit="Ω"
                 noFormulaNote={firstWithoutFormula === "rin"}
                 assumed={assumedOf(result.rin)}
+                miller={result.assumptions?.miller}
               />
             ) : null}
             {result?.rout ? (
@@ -3068,6 +3357,7 @@ export function SmallSignalPanel({
                 unit="Ω"
                 noFormulaNote={firstWithoutFormula === "rout"}
                 assumed={assumedOf(result.rout)}
+                miller={result.assumptions?.miller}
               />
             ) : null}
 
@@ -3213,9 +3503,7 @@ export function SmallSignalPanel({
                         current={inputSource?.kind === "current"}
                         band={noiseBand}
                         onBand={setNoiseBand}
-                        assumed={Boolean(
-                          noiseResponse.assumptions?.applied.length,
-                        )}
+                        assumed={Boolean(anyAssumed(noiseResponse.assumptions))}
                       />
                     </>
                   ) : null}
@@ -3306,7 +3594,7 @@ export function SmallSignalPanel({
                             distortion={distortionResponse.distortion}
                             current={currentInput}
                             assumed={Boolean(
-                              distortionResponse.assumptions?.applied.length,
+                              anyAssumed(distortionResponse.assumptions),
                             )}
                           />
                         </>

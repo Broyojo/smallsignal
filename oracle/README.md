@@ -31,6 +31,22 @@ uv run compare.py -v --corpus regressions --expected regressions/expected   # mi
 - `regressions/`: minimized failures with their diagnoses (see its README).
 - Sidecar `"tooLarge": true`: every quantity must be over the term budget
   (numeric, no KCL check); without it none may be.
+- Sidecar `"pz": true`: the gain's `poles` and `zeros` (Hz) are the
+  reference too (`pz.py`): the finite roots of det(G + sC) and of its
+  bordered Cramer numerator on `indep.py`'s rebuild with ngspice's own
+  capacitances, as eigenvalues at 100 digits, no common factor cancelled.
+  Generation confirms them with ngspice's `.pz` (each root within 1e-6,
+  kept as `pzNgspice`) unless `"pz": {"ngspice": false}` (a two-source
+  input, or a circuit where ngspice's `.pz` fails; the description says
+  which). compare.py pairs each solver root with a reference root within
+  rtol·|root|; a reference root the solver lacks must be a cancelled
+  pole–zero pair.
+- Device capacitances: with frequencies, generation prints every device's
+  capacitances after `ac` (ngspice computes them only for a small-signal
+  load) into `op.devices.<name>.caps` (solver keys: MOS cgs, cgd, cgb, cbd,
+  cbs; BJT cpi, cmu = @q[cmu] + @q[cbx], csub, cx = −@q[cexbc]; diode cj =
+  @d[cd]), for devices with any nonzero one. compare.py checks each at
+  rtol (floor 1e-22 F), and `indep.py` stamps them.
 - Sidecar `"gmin": 1e-18`: both simulators run at that gmin, where a
   gmin-level gap the solver does not model vanishes (a PNP's base-substrate
   gmin, amplified by an op-amp's open-loop gain).
@@ -182,7 +198,8 @@ absolute floors per quantity.
   `description` and textbook `hand` formulas.
 - `expected/<name>.json`: ngspice results in the CLI's contract shape (`op`,
   `gain`, `rin`, `rout`). It also carries `vsource_currents` and per-device
-  `region`/`vov`/`reverse`. An infinite impedance is `{"re": null, "im": null, "inf": true}`.
+  `region`/`vov`/`reverse`, device `caps`, and with `pz` the gain's `poles`
+  and `zeros`. An infinite impedance is `{"re": null, "im": null, "inf": true}`.
 - `random/`, `expected_random/`: generated, git-ignored.
 
 ## Conventions

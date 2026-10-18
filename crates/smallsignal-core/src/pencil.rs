@@ -15,7 +15,6 @@
 //! symbolic polynomial: at random parameter values modulo 2⁶¹−1.
 
 use crate::linalg::{LuComplex, PIVOT_TOL};
-use crate::poly::Poly;
 use crate::ss::{SsCircuit, System};
 use num_complex::Complex64;
 
@@ -41,29 +40,27 @@ impl Pencil {
         // Per reactive parameter, its entries (row, column, coefficient).
         type Entries = Vec<(usize, usize, i128)>;
         let mut reactive: Vec<(usize, Entries)> = Vec::new();
-        for (r, row) in sys.a.iter().enumerate() {
-            for (c, p) in row.iter().enumerate() {
-                for (&m, &coef) in &p.terms {
-                    if m == 0 {
-                        g[r * n + c] += coef as f64;
-                        continue;
-                    }
-                    // Every MNA entry is a sum of single parameters.
-                    if m.count_ones() != 1 {
-                        return None;
-                    }
-                    let i = m.trailing_zeros() as usize;
-                    if m & ss.reactive_mask == 0 {
-                        g[r * n + c] += coef as f64 * ss.params[i].mna_value();
-                    } else {
-                        match reactive.iter_mut().find(|(k, _)| *k == i) {
-                            Some((_, list)) => list.push((r, c, coef)),
-                            None => reactive.push((i, vec![(r, c, coef)])),
-                        }
-                    }
-                }
+        for t in &sys.terms {
+            let (r, c, coef) = (t.row, t.col, t.coef);
+            match t.param {
+                None => g[r * n + c] += coef as f64,
+                Some(i) if !ss.params[i].reactive => g[r * n + c] += coef as f64 * ss.params[i].mna_value(),
+                Some(i) => match reactive.iter_mut().find(|(k, _)| *k == i) {
+                    Some((_, list)) => match list.iter_mut().find(|e| e.0 == r && e.1 == c) {
+                        // Entries of one parameter at one place add up, as
+                        // the polynomial matrix holds them.
+                        Some(e) => e.2 += coef,
+                        None => list.push((r, c, coef)),
+                    },
+                    None => reactive.push((i, vec![(r, c, coef)])),
+                },
             }
         }
+        // A parameter's entries that cancelled leave nothing.
+        for (_, list) in reactive.iter_mut() {
+            list.retain(|e| e.2 != 0);
+        }
+        reactive.retain(|(_, list)| !list.is_empty());
         if let Some(w) = border {
             for (r, &b) in sys.b.iter().enumerate() {
                 g[r * n + dim] = b as f64;
@@ -471,21 +468,6 @@ fn inv_mod(x: u128) -> u128 {
     pow_mod(x, P - 2)
 }
 
-fn eval_mod(p: &Poly, vals: &[u128]) -> u128 {
-    let mut acc = 0u128;
-    for (&m, &c) in &p.terms {
-        let mut v = c.rem_euclid(P as i128) as u128;
-        let mut bits = m;
-        while bits != 0 {
-            let i = bits.trailing_zeros() as usize;
-            v = v * vals[i] % P;
-            bits &= bits - 1;
-        }
-        acc = (acc + v) % P;
-    }
-    acc
-}
-
 /// det of `sys`'s matrix, bordered as in `Pencil::new`, at parameter values
 /// `vals`, modulo P.
 fn det_mod(sys: &System, border: Option<&[(usize, i128)]>, vals: &[u128]) -> u128 {
@@ -493,10 +475,13 @@ fn det_mod(sys: &System, border: Option<&[(usize, i128)]>, vals: &[u128]) -> u12
     let n = dim + usize::from(border.is_some());
     let modp = |c: i128| c.rem_euclid(P as i128) as u128;
     let mut a = vec![0u128; n * n];
-    for (r, row) in sys.a.iter().enumerate() {
-        for (c, p) in row.iter().enumerate() {
-            a[r * n + c] = eval_mod(p, vals);
-        }
+    for t in &sys.terms {
+        let v = match t.param {
+            None => modp(t.coef),
+            Some(p) => modp(t.coef) * vals[p] % P,
+        };
+        let e = &mut a[t.row * n + t.col];
+        *e = (*e + v) % P;
     }
     if let Some(w) = border {
         for (r, &b) in sys.b.iter().enumerate() {
@@ -569,7 +554,10 @@ pub fn s_orders(
     class: Option<&[usize]>,
 ) -> Option<(usize, usize)> {
     let reactive: Vec<bool> = ss.params.iter().map(|p| p.reactive).collect();
-    let m = reactive.iter().filter(|&&r| r).count();
+    // det's degree in s is at most the number of reactive parameters and at
+    // most the matrix order (each row contributes one factor).
+    let order = sys.dim + usize::from(border.is_some());
+    let m = reactive.iter().filter(|&&r| r).count().min(order);
     let of = |i: usize| class.map_or(i, |c| c[i]);
     let classes = (0..reactive.len()).map(|i| of(i) + 1).max().unwrap_or(0);
     let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;

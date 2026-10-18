@@ -1,6 +1,6 @@
 //! `smallsignal analyze <netlist> --input VIN --output out[:ref] [--freq 1,1k]
-//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--suggest gain:0.01] [--tol 0.05]
-//! [--verify] [--pretty]`
+//! [--rin] [--rout] [--noise] [--noise-band 1,1meg] [--ignore M1:ro] [--region M3:triode] [--miller CC]
+//! [--suggest gain:0.01] [--tol 0.05] [--verify] [--pretty]`
 
 use smallsignal_core::{analyze, Request};
 use std::process::ExitCode;
@@ -8,7 +8,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: smallsignal analyze <netlist> --input <source> --output <node>[:<ref>] \
 [--input-neg <source>] [--mode differential|common] [--match M1,M2;M3,M4] [--match-auto] \
 [--freq f1,f2,...] [--rin] [--rout] [--noise] [--noise-band fLow,fHigh] [--nonlinear M1,Q2] [--order 2|3] [--amplitude a] \
-[--ignore M1:ro,C1:short] [--region M3:triode] [--suggest gain|rin|rout[:threshold]] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
+[--ignore M1:ro,C1:short] [--region M3:triode] [--miller CC,M2:cgd] [--suggest gain|rin|rout[:threshold]] [--tol x] [--verify] [--symbolic] [--max-terms n] [--certificate] [--pretty]";
 
 fn main() -> ExitCode {
     match run() {
@@ -134,6 +134,20 @@ fn run() -> Result<(), String> {
                     time_limit: None,
                     max_candidates: None,
                 });
+            }
+            // Capacitances split by the Miller approximation: a capacitor by
+            // name, a device's by ELEMENT:TERM.
+            "--miller" => {
+                let assume = req.assume.get_or_insert_with(Default::default);
+                for item in value(&mut it, a)?.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+                    let (element, term) = match item.split_once(':') {
+                        Some((e, t)) => (e.to_string(), Some(t.to_string())),
+                        None => (item.to_string(), None),
+                    };
+                    assume
+                        .miller
+                        .push(smallsignal_core::miller::MillerRequest { element, term });
+                }
             }
             "--pretty" => pretty = true,
             "--certificate" => certificate = true,

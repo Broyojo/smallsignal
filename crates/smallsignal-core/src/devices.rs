@@ -30,6 +30,7 @@ pub struct MosModel {
     /// Flicker noise coefficient and exponent (ngspice KF, AF).
     pub kf: f64,
     pub af: f64,
+    pub caps: crate::caps::MosCapModel,
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +44,7 @@ pub struct BjtModel {
     pub vaf: f64,
     pub kf: f64,
     pub af: f64,
+    pub caps: crate::caps::BjtCapModel,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,7 @@ pub struct DiodeModel {
     pub n: f64,
     pub kf: f64,
     pub af: f64,
+    pub caps: crate::caps::DiodeCapModel,
 }
 
 /// Permittivity of SiO₂ (ngspice CONSTepsSiO2 = 3.9·ε₀).

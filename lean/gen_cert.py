@@ -5,7 +5,8 @@ usage: python3 lean/gen_cert.py [--numeric] NAME|PATH.cir[@E1:term,E2:term] ...
 For each netlist (a name means oracle/corpus/NAME.cir with its sidecar JSON
 for the input source), runs `smallsignal analyze --certificate` and writes
 lean/Certs/NAME.lean. Assumptions (the sidecar's `assume`, plus any after
-`@`, as --ignore) apply: the certificate is for the assumed element list,
+`@`, as --ignore, and its Miller splits as --miller) apply: the certificate
+is for the assumed element list (a split's C_in and C_out as two params),
 and a variant `NAME@M1:ro` is written as NAME_M1_ro. That file states the circuit as an element list in
 Smallsignal.Mna's vocabulary, and proves, for symbolic parameters over any
 field with the determinant nonzero, that the solver's claimed solution
@@ -160,6 +161,11 @@ def main() -> int:
         ignore += [x for x in extra.split(",") if x]
         if ignore:
             cmd += ["--ignore", ",".join(ignore)]
+        # Miller splits: the certificate is over the split's C_in and C_out.
+        miller = [x["element"] + (f":{x['term']}" if x.get("term") else "")
+                  for x in (side.get("assume") or {}).get("miller", [])]
+        if miller:
+            cmd += ["--miller", ",".join(miller)]
         out = subprocess.run(cmd, capture_output=True, text=True)
         cert = json.loads(out.stdout)
         if "error" in cert:

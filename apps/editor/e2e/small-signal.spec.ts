@@ -33,6 +33,8 @@ const FIXTURES = {
   rc: "apps/editor/src/examples/simulation-rc.icproj.json",
   rlc: "apps/editor/src/examples/simulation-rlc.icproj.json",
   bjtOpAmp: "packages/small-signal/test-fixtures/bjt-op-amp.icproj.json",
+  twoStage:
+    "packages/small-signal/test-fixtures/two-stage-miller-ota.icproj.json",
 } as const;
 
 /**
@@ -425,14 +427,16 @@ test("model parameters are editable: the bias follows the square law", async ({
   const models = panel.locator("details.small-signal-options", {
     has: page.locator("summary", { hasText: /^Models/u }),
   });
-  await models.locator("summary").click();
-  await expect(models.locator("summary")).toHaveText("Models");
+  await models.locator(":scope > summary").click();
+  await expect(models.locator(":scope > summary")).toHaveText("Models");
   const kp = panel.getByLabel("NMOS KP");
   await expect(kp).toHaveAttribute("placeholder", "200u");
 
   // Twice µCox: more current at the same overdrive.
   await kp.fill("400u");
-  await expect(models.locator("summary")).toHaveText("Models (edited)");
+  await expect(models.locator(":scope > summary")).toHaveText(
+    "Models (edited)",
+  );
   await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.3);
   const strong = await biasLine(panel, "M1");
   expect(strong.id).toBeGreaterThan(base.id);
@@ -463,8 +467,64 @@ test("model parameters are editable: the bias follows the square law", async ({
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
   await panel.getByLabel("NMOS LAMBDA").fill("0");
   await panel.getByRole("button", { name: "Reset to defaults" }).click();
-  await expect(models.locator("summary")).toHaveText("Models");
+  await expect(models.locator(":scope > summary")).toHaveText("Models");
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+});
+
+test("device capacitances from Models add a pole, and neglecting C_gd moves it and removes the zero", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  const gain = card(panel, "Gain");
+  // No charge parameters, no capacitances: a flat gain.
+  await expect(gain.getByText(/^Poles? /u)).toHaveCount(0);
+
+  await panel.getByText(/^Models/u).click();
+  const nmos = panel.locator("fieldset.small-signal-model", {
+    has: page.locator("legend", { hasText: "NMOS" }),
+  });
+  const caps = nmos.locator("details.small-signal-model-caps");
+  await caps.locator("summary").click();
+  await expect(panel.getByLabel("NMOS TOX")).toHaveAttribute(
+    "placeholder",
+    "0",
+  );
+  await panel.getByLabel("NMOS TOX").fill("20n");
+  await panel.getByLabel("NMOS CGDO").fill("3e-10");
+  await panel.getByLabel("NMOS CBD").fill("10f");
+  await expect(caps.locator("summary")).toHaveText("Capacitances (3 set)");
+  // The output node's C_gd + C_db: one pole, and the Miller zero g_m/C_gd.
+  await expect(gain.getByText(/^Pole /u)).toBeVisible();
+  await expect.poll(() => formula(panel, "Gain")).toContain("C_{gd1}");
+  expect(await formula(panel, "Gain")).toContain("C_{db1}");
+
+  // Assumptions: the Caps cell neglects C_gd alone.
+  const section = await assumptions(panel);
+  const cell = section.locator("details.small-signal-caps").filter({
+    has: page.getByLabel("M1 caps", { exact: true }),
+  });
+  await expect(cell.locator("summary")).toHaveText("none");
+  await cell.locator("summary").click();
+  await neglect(section, "M1 cgd").check();
+  await expect(cell.locator("summary")).toHaveText("Cgd");
+  await expect.poll(() => formula(panel, "Gain")).not.toContain("C_{gd1}");
+  const table = gain.getByRole("table", { name: "Full model and assumed" });
+  // The pole moves (C_db alone) with its Δ, the zero goes.
+  const pole = table.locator('tr[data-root="pole"]');
+  await expect(pole).toHaveCount(1);
+  await expect(pole.locator('td[data-quantity="assumed"]')).not.toHaveText(
+    "removed",
+  );
+  await expect(pole.locator('td[data-quantity="delta"]')).toHaveText(/%$/u);
+  const zero = table.locator('tr[data-root="zero"]');
+  await expect(zero.locator('td[data-quantity="assumed"]')).toHaveText(
+    "removed",
+  );
+  await page.screenshot({
+    path: test.info().outputPath("device-caps-assumptions.png"),
+    fullPage: false,
+  });
 });
 
 test("stored model values: malformed ones are dropped, every edit shows, Reset clears all", async ({
@@ -795,7 +855,7 @@ test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async 
 /** The Assumptions section, open. */
 async function assumptions(panel: Locator): Promise<Locator> {
   const section = panel.locator("details.small-signal-assumptions-section");
-  const summary = section.locator("summary");
+  const summary = section.locator(":scope > summary");
   await expect(summary).toBeVisible();
   if ((await section.getAttribute("open")) === null) await summary.click();
   return section;
@@ -814,7 +874,9 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   // NMOS as a type, M1 itself, and R1 to take open or shorted.
   await expect(section.locator("tr[data-row]")).toHaveCount(3);
   await neglect(section, "M1 ro").check();
-  await expect(section.locator("summary")).toHaveText("Assumptions (on)");
+  await expect(section.locator(":scope > summary")).toHaveText(
+    "Assumptions (on)",
+  );
   await expect
     .poll(() => formula(panel, "Gain"))
     .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
@@ -869,7 +931,7 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   // Reset gives the full model's form back.
   await section.getByRole("button", { name: "Reset", exact: true }).click();
   await expect.poll(() => formula(panel, "Gain")).toContain("\\parallel R_{1}");
-  await expect(section.locator("summary")).toHaveText("Assumptions");
+  await expect(section.locator(":scope > summary")).toHaveText("Assumptions");
   expect(
     await page.evaluate(() => localStorage.getItem("smallsignal.assumptions")),
   ).toBe("{}");
@@ -1053,4 +1115,109 @@ test("suggestions: the 25-BJT op-amp, numeric over the term budget", async ({
     section.getByRole("button", { name: "Apply all", exact: true }),
   ).toBeVisible();
   await expect(section).not.toContainText("Checked");
+});
+
+test("assumptions: Miller on CC in a two-stage OTA, labeled with K, its cost measured, the RHP zero removed", async ({
+  page,
+}) => {
+  let panel = await analyze(page, FIXTURES.twoStage);
+  await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
+    "All transistors are in saturation.",
+  );
+  await expect(panel.getByLabel("Output", { exact: true })).toHaveValue("vout");
+  let section = await assumptions(panel);
+  // CC bridges the two stages' outputs; CL ends at ground: no Miller there.
+  const cc = section.getByLabel("CC open or short", { exact: true });
+  await expect(cc.locator('option[value="miller"]')).toHaveText("Miller");
+  await expect(
+    section
+      .getByLabel("CL open or short", { exact: true })
+      .locator('option[value="miller"]'),
+  ).toHaveCount(0);
+  await cc.selectOption("miller");
+  await expect(section.locator(":scope > summary")).toHaveText(
+    "Assumptions (on)",
+  );
+  const gain = card(panel, "Gain");
+  // K = v(vout)/v(vo1) at DC = −g_m7 (r_o7 ∥ r_o8), a few hundred here.
+  await expect(gain.locator(".small-signal-miller")).toHaveText(
+    /^Miller CC, K = −\d{3}$/u,
+  );
+  await expect.poll(() => formula(panel, "Gain")).toContain("K_{CC}");
+  // The split keeps the dominant pole and loses pole splitting: its cost.
+  await expect(gain).toContainText("% from full model");
+  const table = gain.getByRole("table", { name: "Full model and assumed" });
+  const zero = table.locator('tr[data-root="zero"]');
+  await expect(zero).toHaveCount(1);
+  await expect(zero.locator('td[data-quantity="full"]')).toHaveText(/^\d/u);
+  await expect(zero.locator('td[data-quantity="assumed"]')).toHaveText(
+    "removed",
+  );
+  const dominant = table.locator('tr[data-root="pole"]').first();
+  await expect(dominant.locator('td[data-quantity="delta"]')).toHaveText(
+    /^(<0\.1|\d(\.\d+)?)%$/u,
+  );
+  await gain.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("miller-panel.png") });
+  await gain.screenshot({ path: test.info().outputPath("miller-card.png") });
+
+  // Kept for this circuit across a reload, under the capacitor's own key.
+  expect(
+    await page.evaluate(() => localStorage.getItem("smallsignal.assumptions")),
+  ).toContain('"miller":[null]');
+  await page.reload();
+  await awaitEditorReady(page);
+  panel = await openPanel(page);
+  section = await assumptions(panel);
+  await expect(
+    section.getByLabel("CC open or short", { exact: true }),
+  ).toHaveValue("miller");
+  await expect(card(panel, "Gain").locator(".small-signal-miller")).toHaveText(
+    /^Miller CC, K = −\d{3}$/u,
+  );
+
+  // Open instead: the split ends, the label goes.
+  await section
+    .getByLabel("CC open or short", { exact: true })
+    .selectOption("open");
+  await expect(card(panel, "Gain").locator(".small-signal-miller")).toHaveCount(
+    0,
+  );
+});
+
+test("assumptions: Miller on a device's C_gd excludes neglecting it", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  await panel.getByText(/^Models/u).click();
+  const nmos = panel.locator("fieldset.small-signal-model", {
+    has: page.locator("legend", { hasText: "NMOS" }),
+  });
+  await nmos.locator("details.small-signal-model-caps > summary").click();
+  await panel.getByLabel("NMOS TOX").fill("20n");
+  await panel.getByLabel("NMOS CGDO").fill("3e-10");
+  await expect.poll(() => formula(panel, "Gain")).toContain("C_{gd1}");
+  const section = await assumptions(panel);
+  const cell = section.locator("details.small-signal-caps").filter({
+    has: page.getByLabel("M1 caps", { exact: true }),
+  });
+  await cell.locator("summary").click();
+  // C_gs ends at ground (the source): only C_gd can be split.
+  await expect(neglect(section, "M1 cgs Miller")).toHaveCount(0);
+  const miller = neglect(section, "M1 cgd Miller");
+  await miller.check();
+  await expect(cell.locator("summary")).toHaveText("Miller Cgd");
+  await expect(neglect(section, "M1 cgd")).not.toBeChecked();
+  const gain = card(panel, "Gain");
+  // K = −g_m (r_o ∥ R_1): the DC gain itself.
+  await expect(gain.locator(".small-signal-miller")).toHaveText(
+    /^Miller Cgd1, K = −4\.19$/u,
+  );
+  await expect.poll(() => formula(panel, "Gain")).toContain("K_{gd1}");
+  // Neglecting C_gd ends its split.
+  await neglect(section, "M1 cgd").check();
+  await expect(miller).not.toBeChecked();
+  await expect(cell.locator("summary")).toHaveText("Cgd");
+  await expect(gain.locator(".small-signal-miller")).toHaveCount(0);
 });

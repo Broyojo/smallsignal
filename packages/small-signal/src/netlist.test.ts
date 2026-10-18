@@ -104,6 +104,23 @@ describe("model parameters", () => {
       ".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50 KF=0 AF=1)",
     );
   });
+
+  it("writes charge parameters only when they differ from ngspice's defaults", () => {
+    // CBD = 0 would override CJ·AD in ngspice, so a default is left off.
+    expect(
+      modelCard("nmos", { nmos: { TOX: 20e-9, CGDO: 3e-10, CBD: 0, MJ: 0.5 } }),
+    ).toBe(
+      ".model nmos_l1 NMOS (LEVEL=1 KP=0.0002 VTO=0.5 LAMBDA=0.05 GAMMA=0 PHI=0.6 KF=0 AF=1 TOX=2e-8 CGDO=3e-10)",
+    );
+    expect(
+      modelCard("npn", { npn: { CJE: 1e-12, CJC: 5e-13, TF: 3e-10 } }),
+    ).toBe(
+      ".model npn_l1 NPN (IS=1e-15 BF=100 VAF=50 KF=0 AF=1 CJE=1e-12 CJC=5e-13 TF=3e-10)",
+    );
+    expect(modelCard("diode", { diode: { CJO: 2e-12, TT: 1e-9 } })).toBe(
+      ".model diode_l1 D (IS=1e-14 N=1 KF=0 AF=1 CJO=2e-12 TT=1e-9)",
+    );
+  });
 });
 
 describe("net names", () => {

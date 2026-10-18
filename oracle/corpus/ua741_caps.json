@@ -1,0 +1,37 @@
+{
+ "input": "VINP",
+ "output": "OUT",
+ "ref": null,
+ "freqs": [
+  1,
+  10,
+  100,
+  1000,
+  10000.0,
+  100000.0,
+  1000000.0,
+  10000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "tooLarge": true,
+ "gmin": 1e-18,
+ "reference_limits": {
+  "V(out)": {
+   "rtol": 0.0001,
+   "why": "The open-loop output sits within 0.3 mV of 0 V: a difference of 5.5 nV (8e-14 V at the input through the 68k gain) is below what either DC solve fixes, and is above the 1 nV floor only at the nodes the output stage follows."
+  },
+  "V(net4)": {
+   "rtol": 0.0001,
+   "why": "The open-loop output sits within 0.3 mV of 0 V: a difference of 5.5 nV (8e-14 V at the input through the 68k gain) is below what either DC solve fixes, and is above the 1 nV floor only at the nodes the output stage follows."
+  },
+  "V(net19)": {
+   "rtol": 0.0001,
+   "why": "The open-loop output sits within 0.3 mV of 0 V: a difference of 5.5 nV (8e-14 V at the input through the 68k gain) is below what either DC solve fixes, and is above the 1 nV floor only at the nodes the output stage follows."
+  }
+ },
+ "description": "The uA741 of ua741.json with device capacitances: NPN CJE 1p, CJC 0.5p, TF 0.35n; lateral PNP CJE 0.3p, CJC 1p, TF 30n. 173 small-signal parameters, past the 128 a monomial holds, so every quantity is numeric (tooLarge). Poles and zeros against the 100-digit roots alone: ngspice's .pz returns repeated garbage here (14 copies of one complex pair). gmin 1e-18 as ua741.json.",
+ "pz": {
+  "ngspice": false
+ }
+}

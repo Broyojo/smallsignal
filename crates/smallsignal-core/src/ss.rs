@@ -111,11 +111,19 @@ pub enum Stamp {
     },
 }
 
+/// Monomials are `u128` parameter sets, so an exact (symbolic) system holds
+/// at most this many parameters; a larger circuit is `wide` and numeric.
+pub const MONO_BITS: usize = 128;
+
+/// Parameters a (numeric) small-signal circuit may have at all.
+const MAX_PARAMS: usize = 4096;
+
 #[derive(Clone, Debug)]
 pub struct SsCircuit {
     pub params: Vec<Param>,
     pub stamps: Vec<Stamp>,
     pub warnings: Vec<String>,
+    /// Inverted and reactive parameters as monomial masks (0 when `wide`).
     pub inv_mask: Mono,
     pub reactive_mask: Mono,
     /// Junction conductances (MOS bulk gbs/gbd, BJT gμ) that `analyze` may
@@ -169,6 +177,66 @@ fn dev_latex(base: &str, sub: &str, elem: &str) -> String {
     }
 }
 
+/// TeX subscript of each device capacitance kind (the parameter name's
+/// prefix, `cgs_M1`): C_{gs}, C_{db}, C_{\pi}…
+pub(crate) fn cap_sub(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "cgs" => "gs",
+        "cgd" => "gd",
+        "cgb" => "gb",
+        "cbd" => "db",
+        "cbs" => "sb",
+        "cpi" => "\\pi ",
+        "cmu" => "\\mu ",
+        "ccs" => "cs",
+        "cbsub" => "bs",
+        "cx" => "x",
+        "cj" => "j",
+        _ => return None,
+    })
+}
+
+/// A device capacitance `kind` of element `nm` between `a` and `b` (a VCCS
+/// s·C·(v_cp − v_cn) from `a` to `b` when `ctrl` is given). Zero values,
+/// and a capacitance with both ends on one node, are not stamped; NaN is
+/// the symbolic value.
+#[allow(clippy::too_many_arguments)]
+fn add_cap(
+    params: &mut Vec<Param>,
+    stamps: &mut Vec<Stamp>,
+    nm: &str,
+    kind: &str,
+    a: usize,
+    b: usize,
+    ctrl: Option<(usize, usize)>,
+    value: f64,
+) -> Result<(), String> {
+    if value == 0.0 || (ctrl.is_none() && a == b) || ctrl.is_some_and(|(cp, cn)| cp == cn || a == b) {
+        return Ok(());
+    }
+    let sub = cap_sub(kind).expect("capacitance kind");
+    let p = add(
+        params,
+        format!("{kind}_{nm}"),
+        dev_latex("C", sub, nm),
+        value,
+        Role::Capacitor,
+        "F",
+        nm,
+    )?;
+    stamps.push(match ctrl {
+        None => Stamp::Adm { a, b, p },
+        Some((cp, cn)) => Stamp::Vccs {
+            op: a,
+            on: b,
+            cp,
+            cn,
+            p,
+        },
+    });
+    Ok(())
+}
+
 fn add(
     params: &mut Vec<Param>,
     name: String,
@@ -178,8 +246,8 @@ fn add(
     unit: &'static str,
     elem: &str,
 ) -> Result<usize, String> {
-    if params.len() >= 128 {
-        return Err("too many small-signal parameters (limit 128)".to_string());
+    if params.len() >= MAX_PARAMS {
+        return Err(format!("too many small-signal parameters (limit {MAX_PARAMS})"));
     }
     let inverted = matches!(role, Role::DeviceR | Role::Resistor);
     let reactive = matches!(role, Role::Capacitor | Role::Inductor);
@@ -284,6 +352,96 @@ fn add_junctions(
         out.push(p);
     }
     Ok(out)
+}
+
+fn mult_of(kind: &Kind) -> f64 {
+    match kind {
+        Kind::Q { mult, .. } | Kind::M { mult, .. } | Kind::D { mult, .. } => *mult,
+        _ => 1.0,
+    }
+}
+
+/// A device capacitance at the operating point: `kind` (the parameter
+/// name's prefix) between `a` and `b`, or with `ctrl` a transcapacitance
+/// s·value·(v_cp − v_cn) from `a` to `b`. Zero values included.
+pub struct DevCap {
+    pub kind: &'static str,
+    pub a: usize,
+    pub b: usize,
+    pub ctrl: Option<(usize, usize)>,
+    pub value: f64,
+}
+
+/// Every capacitance of device `ei` at `op`, as ngspice's AC load stamps
+/// them (see `caps`): MOS gs, gd, gb, db, sb; BJT π, μ, substrate, and the
+/// transcapacitance C_x = −geqcb (s·geqcb·v_bc from base to emitter, so
+/// C_x·s·v_bc from emitter to base, positive in forward bias); diode j.
+pub fn device_caps(e: &crate::netlist::Element, op: &Op, ei: usize) -> Vec<DevCap> {
+    let n = &e.nodes;
+    let v = |k: usize| op.v[k];
+    let cap = |kind, a, b, value| DevCap {
+        kind,
+        a,
+        b,
+        ctrl: None,
+        value,
+    };
+    match (&e.kind, &op.dev[ei]) {
+        (
+            Kind::M {
+                model,
+                w,
+                l,
+                mult,
+                geom,
+            },
+            Some(DevOp::Mos(m)),
+        ) => {
+            let (d, g, s, b) = (n[0], n[1], n[2], n[3]);
+            let ty = model.ty;
+            let c = crate::caps::mos_caps(model, *w, *l, *mult, geom, (ty * m.vgs, ty * m.vds, ty * m.vbs));
+            vec![
+                cap("cgs", g, s, c.cgs),
+                cap("cgd", g, d, c.cgd),
+                cap("cgb", g, b, c.cgb),
+                cap("cbd", b, d, c.cbd),
+                cap("cbs", b, s, c.cbs),
+            ]
+        }
+        (
+            Kind::Q {
+                model, area, mult, sub, ..
+            },
+            Some(DevOp::Bjt(_)),
+        ) => {
+            let (c, b, em) = (n[0], n[1], n[2]);
+            let (ty, cm) = (model.ty, &model.caps);
+            let sub_con = if cm.subs > 0.0 { c } else { b };
+            let vsub = sub.map_or(0.0, |sn| ty * cm.subs * (v(sn) - v(sub_con)));
+            let bc = crate::caps::bjt_caps(model, *area, *mult, ty * (v(b) - v(em)), ty * (v(b) - v(c)), vsub);
+            let mut out = vec![cap("cpi", b, em, bc.cpi), cap("cmu", b, c, bc.cmu)];
+            if let Some(sn) = sub {
+                out.push(cap(if cm.subs > 0.0 { "ccs" } else { "cbsub" }, *sn, sub_con, bc.csub));
+            }
+            out.push(DevCap {
+                kind: "cx",
+                a: em,
+                b,
+                ctrl: Some((b, c)),
+                value: 0.0 - bc.geqcb,
+            });
+            out
+        }
+        (Kind::D { model, area, mult }, Some(DevOp::Diode(dd))) => {
+            vec![cap(
+                "cj",
+                n[0],
+                n[1],
+                crate::caps::diode_cap(model, area * mult, dd.vd, dd.gd),
+            )]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// With `op = None` the analysis is purely symbolic: every MOSFET is taken
@@ -434,13 +592,30 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     p,
                 });
             }
-            Kind::M { .. } => {
+            Kind::M { model, mult, geom, .. } => {
                 let (d, g, s, b) = (n[0], n[1], n[2], n[3]);
                 let Some(op) = op else {
                     add_mos_symbolic(&mut params, &mut stamps, nm, d, g, s, b)?;
-                    if linear.contains(&ei) {
+                    let lin = linear.contains(&ei);
+                    if lin {
                         let ro = format!("ro_{nm}");
                         params.iter_mut().filter(|p| p.name == ro).for_each(|p| p.linear = true);
+                    }
+                    // The capacitances the card can give a saturated device
+                    // (a triode one when its region is known): Meyer C_gd and
+                    // C_gb vanish in saturation, so only overlap remains.
+                    let c = &model.caps;
+                    let (czbd, czbdsw, czbs, czbssw) = crate::caps::mos_zero_bias(c, *mult, geom);
+                    let some = |x: bool| if x { f64::NAN } else { 0.0 };
+                    let meyer = c.cox > 0.0;
+                    for (kind, x, y, present) in [
+                        ("cgs", g, s, meyer || c.cgso != 0.0),
+                        ("cgd", g, d, (meyer && lin) || c.cgdo != 0.0),
+                        ("cgb", g, b, c.cgbo != 0.0),
+                        ("cbd", b, d, czbd != 0.0 || czbdsw != 0.0),
+                        ("cbs", b, s, czbs != 0.0 || czbssw != 0.0),
+                    ] {
+                        add_cap(&mut params, &mut stamps, nm, kind, x, y, None, some(present))?;
                     }
                     continue;
                 };
@@ -508,9 +683,19 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                 if m.region == MosRegion::Triode {
                     warnings.push(format!("{nm} is in triode"));
                 }
+                for c in device_caps(e, op, ei) {
+                    add_cap(&mut params, &mut stamps, nm, c.kind, c.a, c.b, c.ctrl, c.value)?;
+                }
             }
-            Kind::Q { .. } => {
+            Kind::Q {
+                model, sub, float_sub, ..
+            } => {
                 let (c, b, em) = (n[0], n[1], n[2]);
+                let cm = &model.caps;
+                // The substrate junction ends at the collector (vertical) or
+                // the base (lateral).
+                let sub_con = if cm.subs > 0.0 { c } else { b };
+                let sub_kind = if cm.subs > 0.0 { "ccs" } else { "cbsub" };
                 let Some(op) = op else {
                     let p = add(
                         &mut params,
@@ -549,6 +734,42 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     )?;
                     params[p].linear = linear.contains(&ei);
                     stamps.push(Stamp::Adm { a: c, b: em, p });
+                    // Forward-active: C_π from CJE and TF, C_μ from CJC. The
+                    // transcapacitance (TF with VAF) is left out, as hand
+                    // analysis does.
+                    let some = |x: bool| if x { f64::NAN } else { 0.0 };
+                    add_cap(
+                        &mut params,
+                        &mut stamps,
+                        nm,
+                        "cpi",
+                        b,
+                        em,
+                        None,
+                        some(cm.cje != 0.0 || cm.tf != 0.0),
+                    )?;
+                    add_cap(
+                        &mut params,
+                        &mut stamps,
+                        nm,
+                        "cmu",
+                        b,
+                        c,
+                        None,
+                        some(cm.cjc != 0.0 || cm.tr != 0.0),
+                    )?;
+                    if let (Some(sn), false) = (sub, float_sub) {
+                        add_cap(
+                            &mut params,
+                            &mut stamps,
+                            nm,
+                            sub_kind,
+                            *sn,
+                            sub_con,
+                            None,
+                            some(cm.cjs != 0.0),
+                        )?;
+                    }
                     continue;
                 };
                 let Some(DevOp::Bjt(q)) = &op.dev[ei] else {
@@ -606,11 +827,31 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     stamps.push(Stamp::Adm { a: c, b: em, p });
                 }
                 junctions.push((ei, b, c, q.gmu, "mu", "\\mu "));
+                if let (Some(sn), true) = (sub, float_sub) {
+                    // The substrate junction's gmin holds a floating substrate.
+                    junctions.push((ei, *sn, sub_con, mult_of(&e.kind) * net.gmin, "sub", "sub"));
+                }
+                for c in device_caps(e, op, ei) {
+                    add_cap(&mut params, &mut stamps, nm, c.kind, c.a, c.b, c.ctrl, c.value)?;
+                }
             }
-            Kind::D { .. } => {
-                let rd = match op.map(|o| &o.dev[ei]) {
-                    Some(Some(DevOp::Diode(dd))) => 1.0 / dd.gd,
-                    _ => f64::NAN,
+            Kind::D { model, .. } => {
+                let (rd, cj) = match op {
+                    Some(op) => {
+                        let rd = match &op.dev[ei] {
+                            Some(DevOp::Diode(dd)) => 1.0 / dd.gd,
+                            _ => f64::NAN,
+                        };
+                        (rd, device_caps(e, op, ei).first().map_or(0.0, |c| c.value))
+                    }
+                    None => (
+                        f64::NAN,
+                        if model.caps.cjo != 0.0 || model.caps.tt != 0.0 {
+                            f64::NAN
+                        } else {
+                            0.0
+                        },
+                    ),
                 };
                 let p = add(
                     &mut params,
@@ -622,6 +863,7 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
                     nm,
                 )?;
                 stamps.push(Stamp::Adm { a: n[0], b: n[1], p });
+                add_cap(&mut params, &mut stamps, nm, "cj", n[0], n[1], None, cj)?;
             }
         }
     }
@@ -632,6 +874,13 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
         *seen.entry(p.latex.clone()).or_default() += 1;
     }
     for p in params.iter_mut() {
+        let kind = p.name.split('_').next().unwrap_or("");
+        if seen[&p.latex] > 1 && p.role == Role::Capacitor && p.name != p.element {
+            if let Some(sub) = cap_sub(kind) {
+                p.latex = format!("C_{{{sub},{}}}", esc(&p.element));
+            }
+            continue;
+        }
         if seen[&p.latex] > 1 && matches!(p.role, Role::Gm | Role::Gmb | Role::DeviceR) {
             let base = p.latex.split('_').next().unwrap_or("x").to_string();
             let sub = p
@@ -645,16 +894,7 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
             p.latex = format!("{base}_{{{sub},{}}}", esc(&p.element));
         }
     }
-    let mut inv_mask = 0;
-    let mut reactive_mask = 0;
-    for (i, p) in params.iter().enumerate() {
-        if p.inverted {
-            inv_mask |= 1u128 << i;
-        }
-        if p.reactive {
-            reactive_mask |= 1u128 << i;
-        }
-    }
+    let (inv_mask, reactive_mask) = masks(&params);
     Ok(SsCircuit {
         params,
         stamps,
@@ -665,7 +905,35 @@ pub fn build_with(net: &Netlist, op: Option<&Op>, linear: &[usize]) -> Result<Ss
     })
 }
 
+/// Inverted and reactive masks; both 0 for a wide circuit (no monomials).
+pub(crate) fn masks(params: &[Param]) -> (Mono, Mono) {
+    let (mut inv_mask, mut reactive_mask) = (0, 0);
+    if params.len() > MONO_BITS {
+        return (0, 0);
+    }
+    for (i, p) in params.iter().enumerate() {
+        if p.inverted {
+            inv_mask |= 1u128 << i;
+        }
+        if p.reactive {
+            reactive_mask |= 1u128 << i;
+        }
+    }
+    (inv_mask, reactive_mask)
+}
+
 impl SsCircuit {
+    /// Over `MONO_BITS` parameters: no exact form exists, only the numeric
+    /// system (`System::terms`).
+    pub fn wide(&self) -> bool {
+        self.params.len() > MONO_BITS
+    }
+
+    /// Whether any parameter carries s.
+    pub fn has_reactive(&self) -> bool {
+        self.params.iter().any(|p| p.reactive)
+    }
+
     fn param_of(st: &Stamp) -> Option<usize> {
         match *st {
             Stamp::Adm { p, .. } | Stamp::Vccs { p, .. } | Stamp::Cccs { p, .. } | Stamp::Ind { p, .. } => Some(p),
@@ -706,15 +974,7 @@ impl SsCircuit {
                 st
             })
             .collect();
-        let (mut inv_mask, mut reactive_mask) = (0, 0);
-        for (i, p) in params.iter().enumerate() {
-            if p.inverted {
-                inv_mask |= 1u128 << i;
-            }
-            if p.reactive {
-                reactive_mask |= 1u128 << i;
-            }
-        }
+        let (inv_mask, reactive_mask) = masks(&params);
         SsCircuit {
             params,
             stamps,
@@ -751,11 +1011,44 @@ pub enum Excite {
 
 pub struct System {
     pub dim: usize,
+    /// The matrix over the parameters; rows are empty when the circuit is
+    /// wide (`det` then reports it over budget).
     pub a: Vec<Vec<Poly>>,
+    /// Every stamp entry (row, column, parameter or None for a constant,
+    /// coefficient): the numeric matrix, for any number of parameters.
+    pub terms: Vec<Term>,
     pub b: Vec<i128>,
     /// Column of each netlist node (None for ground, or merged into ground).
     pub node_col: Vec<Option<usize>>,
     pub branch_col: HashMap<usize, usize>,
+}
+
+/// One stamp entry of the MNA matrix: coef·p (·s when p is reactive) at
+/// (row, col), or the constant coef when p is None.
+#[derive(Clone, Copy, Debug)]
+pub struct Term {
+    pub row: usize,
+    pub col: usize,
+    pub param: Option<usize>,
+    pub coef: i128,
+}
+
+impl System {
+    /// The value of each term at s (`ss` the circuit the system was built
+    /// from).
+    pub fn term_value(&self, t: &Term, ss: &SsCircuit, s: num_complex::Complex64) -> num_complex::Complex64 {
+        match t.param {
+            None => num_complex::Complex64::new(t.coef as f64, 0.0),
+            Some(p) => {
+                let v = t.coef as f64 * ss.params[p].mna_value();
+                if ss.params[p].reactive {
+                    s * v
+                } else {
+                    num_complex::Complex64::new(v, 0.0)
+                }
+            }
+        }
+    }
 }
 
 fn find(uf: &mut [usize], x: usize) -> usize {
@@ -835,14 +1128,28 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             dim += 1;
         }
     }
-    let mut a = vec![vec![Poly::zero(); dim]; dim];
+    let wide = ss.wide();
+    let mut a = if wide {
+        vec![Vec::new(); dim]
+    } else {
+        vec![vec![Poly::zero(); dim]; dim]
+    };
+    let mut terms: Vec<Term> = Vec::new();
     let nc = |n: usize| node_col[n];
-    let mut put = |r: Option<usize>, c: Option<usize>, m: Mono, v: i128| {
+    let mut put = |r: Option<usize>, c: Option<usize>, param: Option<usize>, coef: i128| {
         if let (Some(r), Some(c)) = (r, c) {
-            a[r][c].add_term(m, v);
+            if !wide {
+                a[r][c].add_term(param.map_or(0, |p| 1u128 << p), coef);
+            }
+            terms.push(Term {
+                row: r,
+                col: c,
+                param,
+                coef,
+            });
         }
     };
-    let bit = |p: usize| 1u128 << p;
+    let bit = |p: usize| Some(p);
     for s in &ss.stamps {
         match *s {
             Stamp::Adm { a: x, b: y, p } => {
@@ -868,10 +1175,10 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             Stamp::VSrc { e, a: x, b: y } => {
                 if let Some(&k) = branch_col.get(&e) {
                     let (cx, cy) = (nc(x), nc(y));
-                    put(cx, Some(k), 0, 1);
-                    put(cy, Some(k), 0, -1);
-                    put(Some(k), cx, 0, 1);
-                    put(Some(k), cy, 0, -1);
+                    put(cx, Some(k), None, 1);
+                    put(cy, Some(k), None, -1);
+                    put(Some(k), cx, None, 1);
+                    put(Some(k), cy, None, -1);
                 }
             }
             Stamp::ISrc { .. } | Stamp::Short { .. } => {}
@@ -885,10 +1192,10 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             } => {
                 let k = Some(branch_col[&e]);
                 let (cx, cy) = (nc(x), nc(y));
-                put(cx, k, 0, 1);
-                put(cy, k, 0, -1);
-                put(k, cx, 0, 1);
-                put(k, cy, 0, -1);
+                put(cx, k, None, 1);
+                put(cy, k, None, -1);
+                put(k, cx, None, 1);
+                put(k, cy, None, -1);
                 if let Some(p) = p {
                     put(k, nc(cp), bit(p), -1);
                     put(k, nc(cn), bit(p), 1);
@@ -902,10 +1209,10 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             Stamp::Ccvs { e, a: x, b: y, ctrl, p } => {
                 let k = Some(branch_col[&e]);
                 let (cx, cy) = (nc(x), nc(y));
-                put(cx, k, 0, 1);
-                put(cy, k, 0, -1);
-                put(k, cx, 0, 1);
-                put(k, cy, 0, -1);
+                put(cx, k, None, 1);
+                put(cy, k, None, -1);
+                put(k, cx, None, 1);
+                put(k, cy, None, -1);
                 if let Some(p) = p {
                     put(k, branch_col.get(&ctrl).copied(), bit(p), -1);
                 }
@@ -913,10 +1220,10 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
             Stamp::Ind { e, a: x, b: y, p } => {
                 let k = Some(branch_col[&e]);
                 let (cx, cy) = (nc(x), nc(y));
-                put(cx, k, 0, 1);
-                put(cy, k, 0, -1);
-                put(k, cx, 0, 1);
-                put(k, cy, 0, -1);
+                put(cx, k, None, 1);
+                put(cy, k, None, -1);
+                put(k, cx, None, 1);
+                put(k, cy, None, -1);
                 put(k, k, bit(p), -1);
             }
         }
@@ -960,6 +1267,7 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
     System {
         dim,
         a,
+        terms,
         b,
         node_col,
         branch_col,
@@ -969,6 +1277,9 @@ pub fn system(net: &Netlist, ss: &SsCircuit, ex: &Excite) -> System {
 impl System {
     /// Cramer numerator for unknown `col`: det with that column replaced by b.
     pub fn cramer(&self, col: usize, max_terms: usize) -> Result<Poly, String> {
+        if self.a.iter().any(|r| r.len() != self.dim) {
+            return Err(crate::det::too_large(max_terms));
+        }
         let mut a = self.a.clone();
         for (r, row) in a.iter_mut().enumerate() {
             row[col] = Poly::constant(self.b[r]);

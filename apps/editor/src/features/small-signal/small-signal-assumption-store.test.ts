@@ -5,12 +5,14 @@ import {
   assumptionRequest,
   circuitStorageKey,
   isIgnored,
+  isMiller,
   partKey,
   readCircuits,
   readDefaults,
   storeCircuit,
   touchCircuit,
   withDefault,
+  withMiller,
   withRegion,
   withTerms,
   type StoredAssumptions,
@@ -204,6 +206,34 @@ describe("choices against the defaults", () => {
     expect(off.defaults).toEqual({ npn: ["rpi"] });
   });
 
+  it("a Miller split excludes neglecting, opening or shorting the capacitance", () => {
+    const defaults = { nmos: ["cgd" as const] };
+    // Split: kept whatever the default, and sent as a split.
+    const split = withMiller({}, "m1", "cgd", true);
+    expect(split.m1).toEqual({ ignore: {}, miller: ["cgd"] });
+    expect(isMiller("cgd", split.m1)).toBe(true);
+    expect(isIgnored("nmos", "cgd", split.m1, defaults)).toBe(false);
+    // Neglected again: the split ends.
+    const neglected = withTerms(split, "m1", "nmos", ["cgd"], true, defaults);
+    expect(neglected.m1).toEqual({ ignore: {} });
+    expect(isIgnored("nmos", "cgd", neglected.m1, defaults)).toBe(true);
+    // A capacitor: Miller, open or short, one at a time.
+    const open = withTerms({}, "c1", "capacitor", ["open"], true, {});
+    const miller = withMiller(open, "c1", null, true);
+    expect(miller.c1).toEqual({ ignore: {}, miller: [null] });
+    expect(isIgnored("capacitor", "open", miller.c1, {})).toBe(false);
+    expect(
+      withTerms(miller, "c1", "capacitor", ["short"], true, {}).c1,
+    ).toEqual({ ignore: { short: true } });
+    expect(withMiller(miller, "c1", null, false).c1).toEqual({ ignore: {} });
+    // A type default that neglects the term ends each part's split of it.
+    const all = withDefault({}, split, "nmos", ["cgd"], true, ["m1"]);
+    expect(all.parts.m1).toEqual({ ignore: {} });
+    expect(
+      withDefault({}, split, "nmos", ["cgd"], false, ["m1"]).parts.m1,
+    ).toEqual({ ignore: {}, miller: ["cgd"] });
+  });
+
   it("sets and clears an expected region", () => {
     const set = withRegion(
       { m1: { ignore: { ro: true } } },
@@ -247,5 +277,102 @@ describe("assumptionRequest", () => {
       // A BJT region on a MOSFET is never sent.
       regions: [{ element: "M1", region: "triode" }],
     });
+  });
+
+  it("sends Miller splits, a capacitor's without a term, and never neglects one", () => {
+    const elements: SmallSignalElement[] = [
+      ...ELEMENTS,
+      { name: "CC", instancePath: ["cc"], kind: "capacitor" },
+    ];
+    const request = assumptionRequest(
+      elements,
+      { nmos: ["cgd"] },
+      {
+        [partKey(["m1"])]: { miller: ["cgd"] },
+        [partKey(["cc"])]: { miller: [null] },
+        // Not a capacitance of a BJT, nor a resistor's own: never sent.
+        [partKey(["q1"])]: { miller: ["cgd"] },
+        [partKey(["r1"])]: { miller: [null] },
+      },
+    );
+    expect(request).toEqual({
+      ignore: [{ element: "M2_X1", term: "cgd" }],
+      miller: [{ element: "M1", term: "cgd" }, { element: "CC" }],
+    });
+  });
+});
+
+describe("Miller splits the solver no longer offers", () => {
+  const elements: SmallSignalElement[] = [
+    { name: "M1", instancePath: ["m1"], kind: "nmos" },
+    { name: "CC", instancePath: ["cc"], kind: "capacitor" },
+  ];
+  const parts = {
+    [partKey(["m1"])]: { miller: ["cgd" as const] },
+    [partKey(["cc"])]: { miller: [null] },
+  };
+  const offered = (cc: (null | "cgd")[], m1: ("cgd" | null)[]) => [
+    { element: "CC", type: "capacitor" as const, terms: [], miller: cc },
+    {
+      element: "M1",
+      type: "nmos" as const,
+      terms: ["cgd" as const],
+      miller: m1 as "cgd"[],
+    },
+  ];
+
+  it("are not sent, and the part acts as without them", () => {
+    // CC now ends at ground, M1's C_gd at a supply: neither is offered.
+    expect(
+      assumptionRequest(elements, { nmos: ["cgd"] }, parts, offered([], [])),
+    ).toEqual({ ignore: [{ element: "M1", term: "cgd" }] });
+    expect(assumptionRequest(elements, {}, parts, offered([null], []))).toEqual(
+      { miller: [{ element: "CC" }] },
+    );
+  });
+
+  it("are sent while offered, or before the circuit has an answer", () => {
+    const both = {
+      miller: [{ element: "M1", term: "cgd" }, { element: "CC" }],
+    };
+    expect(
+      assumptionRequest(elements, {}, parts, offered([null], ["cgd"])),
+    ).toEqual(both);
+    expect(assumptionRequest(elements, {}, parts)).toEqual(both);
+    expect(assumptionRequest(elements, {}, parts, null)).toEqual(both);
+  });
+});
+
+describe("Miller splits in storage", () => {
+  it("keeps known splits, drops unknown ones and those the part also neglects", () => {
+    const stored = {
+      k: {
+        used: 1,
+        parts: {
+          '["m1"]': { miller: ["cgd", "cgd", "cmu", "ro", 3] },
+          '["m2"]': { ignore: { cgd: true }, miller: ["cgd"] },
+          '["c1"]': { ignore: { open: true }, miller: [null] },
+          '["c2"]': { miller: [null] },
+          '["c3"]': { miller: "cgd" },
+        },
+      },
+    };
+    expect(readCircuits(JSON.stringify(stored)).k!.parts).toEqual({
+      '["m1"]': { miller: ["cgd", "cmu"] },
+      '["m2"]': { ignore: { cgd: true } },
+      '["c1"]': { ignore: { open: true } },
+      '["c2"]': { miller: [null] },
+    });
+  });
+
+  it("a part with only a split is stored, and one without is dropped", () => {
+    const key = circuitStorageKey("p", "main");
+    const next = storeCircuit(
+      {},
+      key,
+      { '["c1"]': { miller: [null] }, '["c2"]': { ignore: {}, miller: [] } },
+      5,
+    );
+    expect(next[key]!.parts).toEqual({ '["c1"]': { miller: [null] } });
   });
 });

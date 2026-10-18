@@ -131,9 +131,50 @@ def check_assume(case: Case, notes: list[str]) -> list[str]:
     return fails
 
 
+def check_miller(case: Case, notes: list[str]) -> list[str]:
+    """A Miller split: the exact gain equals the split circuit's hand KCL in
+    the symbol K, K's definition equals the hand DC ratio, the split form
+    has the case's pole, and that pole with the textbook K is the textbook
+    pole."""
+    fails: list[str] = []
+    m = case.miller
+    split = ",".join(e + (f":{t}" if t else "") for e, t in m.split)
+    data = run(case.netlist, case, ["--symbolic", "--miller", split])
+    got = ours(data["gain"])
+    hand = sp.sympify(case.gain.hand())
+    if not identical(got, hand):
+        fails.append(f"gain: solver {sp.simplify(got)}  !=  split hand KCL {hand}")
+    split_info = data["assumptions"]["miller"]
+    if len(split_info) != 1 or split_info[0]["definition"] is None:
+        return fails + [f"miller: {split_info}"]
+    d = split_info[0]["definition"]
+    k = parse(d["num"]) / parse(d["den"])
+    if not identical(k, sp.sympify(m.k())):
+        fails.append(f"K: solver {k}  !=  hand {m.k()}")
+    den = sp.fraction(sp.cancel(sp.together(got)))[1]
+    roots = sp.solve(den, s)
+    if not any(identical(r, sp.sympify(m.pole())) for r in roots):
+        fails.append(f"poles {roots}: none is {m.pole()}")
+    ksym = next(iter(x for x in sp.sympify(m.pole()).free_symbols if x.name.startswith("K_")))
+    if not identical(sp.sympify(m.pole()).subs(ksym, m.k_textbook()), sp.sympify(m.textbook())):
+        fails.append(f"pole {m.pole()} at K = {m.k_textbook()} is not the textbook {m.textbook()}")
+    lead = sp.limit(k.subs({x: x / sp.Symbol("eps") for x in k.free_symbols if x.name.startswith("ro_")}),
+                    sp.Symbol("eps"), 0)
+    if not identical(lead, sp.sympify(m.k_textbook())):
+        fails.append(f"K as r_o -> oo: {lead}  !=  textbook {m.k_textbook()}")
+    notes.append(f"K = {d['latex']}, gain: {data['gain']['exact']['latex']}")
+    return fails
+
+
 def check_case(case: Case, verbose: bool) -> list[str]:
     fails: list[str] = []
     notes: list[str] = []
+    if case.miller:
+        fails = check_miller(case, notes)
+        if verbose:
+            for n in notes:
+                print(f"    {n}")
+        return fails
     if case.assume:
         fails = check_assume(case, notes)
         if verbose:
@@ -174,7 +215,11 @@ def check_case(case: Case, verbose: bool) -> list[str]:
     if case.name.startswith("miller"):
         num = sp.numer(sp.together(ours(data["gain"])))
         zeros = sp.solve(num, s)
-        want = sp.Symbol("gm_M1") / sp.Symbol("CGD")
+        # The feedback capacitance: an element, or the device's own C_gd / C_μ.
+        names = {str(x) for x in num.free_symbols}
+        gm, cf = next(((g, c) for g, c in (("gm_Q1", "cmu_Q1"), ("gm_M1", "cgd_M1")) if c in names),
+                      ("gm_M1", "CGD"))
+        want = sp.Symbol(gm) / sp.Symbol(cf)
         if not any(sp.simplify(z - want) == 0 for z in zeros):
             fails.append(f"gain zero: {zeros}, want gm/Cgd")
     if case.numeric_netlist:

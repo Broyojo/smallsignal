@@ -1,0 +1,8 @@
+BJT in saturation with CJE, CJC, TF and TR
+VCC vcc 0 5
+VIN in 0 DC 0.8 AC 1
+RB in b 2k
+RC vcc c 20k
+Q1 c b 0 npns
+.model npns NPN (IS=1e-16 BF=100 VAF=50 CJE=1p CJC=0.5p TF=0.3n TR=10n)
+.end

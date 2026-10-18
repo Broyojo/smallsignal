@@ -273,7 +273,7 @@ impl Ctx<'_> {
             let finite_before = !asm.nonfinite;
             asm.current = Some(ei);
             match &e.kind {
-                Kind::M { model, w, l, mult } => {
+                Kind::M { model, w, l, mult, .. } => {
                     let ty = model.ty;
                     let (d, g, s, b) = (e.nodes[0], e.nodes[1], e.nodes[2], e.nodes[3]);
                     let (vd, vg, vs, vb) = (volt(x, d), volt(x, g), volt(x, s), volt(x, b));
@@ -324,7 +324,7 @@ impl Ctx<'_> {
                         von: ev.von,
                     };
                 }
-                Kind::Q { model, area, mult } => {
+                Kind::Q { model, area, mult, .. } => {
                     let ty = model.ty;
                     let (c, bn, en) = (e.nodes[0], e.nodes[1], e.nodes[2]);
                     let (vc, vb, ve) = (volt(x, c), volt(x, bn), volt(x, en));
@@ -358,6 +358,22 @@ impl Ctx<'_> {
                         ty * ev.cb,
                         &[(ev.gpi, bn, en, ty * vbe), (ev.gmu, bn, c, ty * vbc)],
                     );
+                    // A substrate only BJTs share: its junction's gmin (no
+                    // ISS) to the collector, or the base when lateral.
+                    if let Kind::Q {
+                        sub: Some(sn),
+                        float_sub: true,
+                        ..
+                    } = &e.kind
+                    {
+                        let con = if model.caps.subs > 0.0 { c } else { bn };
+                        let g = mult * gmin;
+                        let (p, q) = (lay.n(*sn), lay.n(con));
+                        asm.add(p, p, g);
+                        asm.add(q, q, g);
+                        asm.add(p, q, -g);
+                        asm.add(q, p, -g);
+                    }
                     st[ei] = St::Bjt { vbe, vbc };
                 }
                 Kind::D { model, area, mult } => {
@@ -647,7 +663,7 @@ fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterat
         .map(|e| {
             let nv = |i: usize| v[e.nodes[i]];
             match &e.kind {
-                Kind::M { model, w, l, mult } => {
+                Kind::M { model, w, l, mult, .. } => {
                     let ty = model.ty;
                     let (vgs, vds, vbs) = (nv(1) - nv(2), nv(0) - nv(2), nv(3) - nv(2));
                     let beta = model.kp * w / l * mult;
@@ -672,7 +688,7 @@ fn finish(net: &Netlist, lay: &Layout, x: Vec<f64>, method: &'static str, iterat
                         gbd,
                     }))
                 }
-                Kind::Q { model, area, mult } => {
+                Kind::Q { model, area, mult, .. } => {
                     let ty = model.ty;
                     let (vbe, vbc) = (nv(1) - nv(2), nv(1) - nv(0));
                     let ev = bjt_eval(model, *area, *mult, ty * vbe, ty * vbc, gmin);

@@ -257,6 +257,15 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         }
     }
     let full = ss::build_with(&net, op.as_ref(), &linear)?;
+    // Past the monomial width only the numeric system exists, which needs
+    // numbers.
+    if symbolic && full.wide() {
+        return Err(format!(
+            "Too many small-signal parameters for a symbolic analysis ({}, limit {})",
+            full.params.len(),
+            ss::MONO_BITS
+        ));
+    }
     let assumptions = req
         .assume
         .as_ref()
@@ -290,7 +299,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         rin: rin_kind,
         rout: req.rout,
     };
-    let grid = check_grid(full.reactive_mask != 0, &freqs);
+    let grid = check_grid(full.has_reactive(), &freqs);
     // Junction conductances (gbs, gbd, gμ) stay in the exact model unless the
     // full numeric system proves that leaving them out moves no reported
     // value by more than OMIT_REL; symbolic mode leaves them out, as hand
@@ -406,7 +415,15 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             Mode::Common => "common",
         }),
     );
-    resp.insert("assumable".into(), crate::assume::assumable(&net, &full));
+    resp.insert(
+        "assumable".into(),
+        crate::miller::with_targets(
+            crate::assume::assumable(&net, &full),
+            &net,
+            &full,
+            &ss::system(&net, &full, &excite),
+        ),
+    );
 
     // The cross-check always solves the FULL model (every junction), so an
     // omission can never hide.
@@ -532,6 +549,10 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
         }
         let mut models: Vec<AModel> = Vec::new();
         let mut of_quantity: Vec<(&str, usize)> = Vec::new();
+        // Miller splits, with K from the gain's model (the first built), so
+        // one split model serves every quantity.
+        let mut splits: Option<Vec<crate::miller::Split>> = None;
+        let mut definitions: Vec<Option<(Value, Vec<Sym>)>> = Vec::new();
         for (which, name) in wanted {
             // Unbounded: the denominator vanishes at s = 0 (identically, or
             // a pole at DC). Without junction leakage, which hand analysis
@@ -565,7 +586,11 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             let k = match models.iter().position(|m| m.restored == restored) {
                 Some(k) => k,
                 None => {
-                    let model = crate::assume::apply(&full, a, &restored);
+                    let base = crate::assume::apply(&full, a, &restored);
+                    let splits = splits.get_or_insert_with(|| {
+                        crate::miller::gains(&net, &full, &base, &excite, &a.miller, &mut warnings)
+                    });
+                    let model = crate::miller::split(&base, splits, &a.miller);
                     let (ass, aomitted, aerr) = if symbolic {
                         (model.clone(), Vec::new(), 0.0)
                     } else {
@@ -576,7 +601,38 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     };
                     let asym = sym::symbols(&net, &ass, &amatched, symbolic, &mut warnings);
                     let ax = |p: &Poly| XPoly::from_poly(p, &asym.class, asym.syms.len());
-                    let aforms = exact_forms(&probe, &ass, &ax, differential, max_terms, symbolic)?;
+                    let mut aforms = exact_forms(&probe, &ass, &ax, differential, max_terms, symbolic)?;
+                    // The forms over C and K in place of C_in and C_out.
+                    let (shown, slots) = crate::miller::shown(&ass, &asym, splits);
+                    if !slots.is_empty() {
+                        let sub = |f: &mut Option<(XPoly, XPoly)>| -> Result<(), String> {
+                            if let Some((n, d)) = f.take() {
+                                *f = crate::miller::substitute(&n, &d, &slots, max_terms)
+                                    .map(Some)
+                                    .or_else(|e| numeric_if_over_budget(symbolic, e))?;
+                            }
+                            Ok(())
+                        };
+                        sub(&mut aforms.gain)?;
+                        for f in [&mut aforms.rin, &mut aforms.rout].into_iter().flatten() {
+                            sub(f)?;
+                        }
+                    }
+                    // K's closed form, on the model K's value comes from
+                    // (every junction kept: an omission is proven only for
+                    // the reported quantities, not for v_b/v_a).
+                    if models.is_empty() && aforms.d.is_some() {
+                        let ksys = ss::system(&net, &model, &excite);
+                        let ksym = sym::symbols(&net, &model, &amatched, symbolic, &mut Vec::new());
+                        let (kshown, _) = crate::miller::shown(&model, &ksym, splits);
+                        let kx = |p: &Poly| XPoly::from_poly(p, &ksym.class, ksym.syms.len());
+                        definitions = splits
+                            .iter()
+                            .map(|sp| k_definition(&ksys, &kx, &kshown, sp, model.reactive_mask, max_terms))
+                            .collect();
+                    } else if models.is_empty() {
+                        definitions = vec![None; splits.len()];
+                    }
                     models.push(AModel {
                         restored: restored.clone(),
                         model,
@@ -584,6 +640,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                         omitted: aomitted,
                         omit_err: aerr,
                         symbols: asym,
+                        shown,
                         forms: aforms,
                     });
                     models.len() - 1
@@ -597,6 +654,8 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             matched: amatched,
             models,
             of_quantity,
+            splits: splits.unwrap_or_default(),
+            definitions,
         });
     }
     // The model the gain's closed forms (and so the noise and distortion
@@ -708,6 +767,21 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             assumed: setup.as_ref().map(|_| in_effect.as_slice()),
         };
         resp.insert("distortion".into(), crate::distortion::report(&ctx, &mut warnings)?);
+        // vsFreq takes every capacitance as linear; a bias-dependent device
+        // charge (ngspice's .disto expands it) adds harmonics it leaves out.
+        let charged: Vec<&str> = net
+            .elements
+            .iter()
+            .filter(|e| req.nonlinear.iter().any(|n| n.eq_ignore_ascii_case(&e.name)))
+            .filter(|e| crate::caps::nonlinear_charge(&e.kind))
+            .map(|e| e.name.as_str())
+            .collect();
+        if !charged.is_empty() && freqs.iter().any(|&f| f > 0.0) {
+            warnings.push(format!(
+                "HD vs frequency takes the capacitances of {} as linear",
+                charged.join(", ")
+            ));
+        }
         for w in rebuild_warnings.into_inner() {
             if !warnings.contains(&w) {
                 warnings.push(w);
@@ -763,7 +837,7 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
             let asys = probe.systems(&m.model);
             let aq = Quantities {
                 ss: &m.ss,
-                sym: &m.symbols,
+                sym: &m.shown,
                 omit_err: m.omit_err,
                 assume: true,
                 ..q
@@ -824,12 +898,20 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 .collect();
             let merged = merge_assumed(&resp[*name], value, &agrid, full_grid, restored, symbolic);
             resp.insert(name.to_string(), merged);
-            for s in &m.symbols.syms {
+            for s in &m.shown.syms {
                 let key = (s.name.clone(), s.latex.clone());
                 if !listed.contains(&key) {
                     listed.push(key);
                     params.push(params_json(std::slice::from_ref(s))[0].clone());
                 }
+            }
+        }
+        // K's definitions keep junctions the forms may leave out.
+        for s in st.definitions.iter().flatten().flat_map(|d| &d.1) {
+            let key = (s.name.clone(), s.latex.clone());
+            if !listed.contains(&key) {
+                listed.push(key);
+                params.push(params_json(std::slice::from_ref(s))[0].clone());
             }
         }
         resp.insert("params".into(), Value::Array(params));
@@ -864,6 +946,14 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                 "regions": a.regions.iter().map(|r| json!({
                     "element": r.element, "assumed": r.assumed, "actual": r.actual,
                 })).collect::<Vec<_>>(),
+                "miller": st.splits.iter().zip(&st.definitions).map(|(sp, def)| {
+                    let t = &a.miller[sp.target];
+                    json!({
+                        "element": t.element, "term": t.term.map(|x| x.as_str()),
+                        "latex": sp.latex, "symbol": sp.k_latex,
+                        "k": num_or_null(sp.k), "definition": def.as_ref().map(|d| &d.0),
+                    })
+                }).collect::<Vec<_>>(),
             }),
         );
     }
@@ -1088,7 +1178,12 @@ struct AModel {
     ss: SsCircuit,
     omitted: Vec<String>,
     omit_err: f64,
+    /// Over `ss`'s parameters (a Miller split's C_in and C_out apart).
     symbols: Symbols,
+    /// The forms' symbols: `symbols` with each split's C and K in place of
+    /// its C_in and C_out.
+    shown: Symbols,
+    /// gain, rin and rout over `shown`; `d` and `gsys` over the parameters.
     forms: ExactForms,
 }
 
@@ -1101,6 +1196,9 @@ struct AssumeSetup<'a> {
     models: Vec<AModel>,
     /// Each quantity's model.
     of_quantity: Vec<(&'a str, usize)>,
+    /// The Miller splits made, and each one's K as a closed form.
+    splits: Vec<crate::miller::Split>,
+    definitions: Vec<Option<(Value, Vec<Sym>)>>,
 }
 
 impl AssumeSetup<'_> {
@@ -1153,7 +1251,82 @@ pub(crate) fn gain_model(
     } else {
         crate::assume::restore(&units, |r| vanishes(&crate::assume::apply(full, a, r)))
     };
-    crate::assume::apply(full, a, &restored)
+    let base = crate::assume::apply(full, a, &restored);
+    let splits = crate::miller::gains(net, full, &base, excite, &a.miller, &mut Vec::new());
+    crate::miller::split(&base, &splits, &a.miller)
+}
+
+/// K = v_b(0)/v_a(0) of a Miller split over `shown` ({latex, num, den}):
+/// the ratio of the Cramer numerators of `sys` (the gain system of the model
+/// K's value comes from) with every reactive term dropped (`reactive`, the
+/// parameters' mask), cancelled. None over the term budget, or past
+/// LATEX_TERM_LIMIT terms.
+fn k_definition(
+    sys: &System,
+    x: &dyn Fn(&Poly) -> Result<XPoly, String>,
+    shown: &Symbols,
+    split: &crate::miller::Split,
+    reactive: u128,
+    max_terms: usize,
+) -> Option<(Value, Vec<Sym>)> {
+    let (ca, cb) = (sys.node_col[split.a]?, sys.node_col[split.b]?);
+    let dc: Vec<Vec<Poly>> = sys
+        .a
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|p| {
+                    let mut q = Poly::zero();
+                    for (&m, &c) in &p.terms {
+                        if m & reactive == 0 {
+                            q.add_term(m, c);
+                        }
+                    }
+                    q
+                })
+                .collect()
+        })
+        .collect();
+    let cramer = |col: usize| -> Option<XPoly> {
+        let mut a = dc.clone();
+        for (r, row) in a.iter_mut().enumerate() {
+            row[col] = Poly::constant(sys.b[r]);
+        }
+        x(&crate::det::det(&a, max_terms).ok()?).ok()
+    };
+    let (num, den) = cancel(&cramer(cb)?, &cramer(ca)?);
+    if den.is_zero() || num.is_zero() {
+        return None;
+    }
+    // Junction leakage left out where it moves K by at most LEAKAGE_REL, as
+    // the display forms leave it out.
+    let leaky = |e: &[u8]| e.iter().zip(&shown.syms).any(|(&x, s)| s.leakage && x > 0);
+    let drop_leak = |p: &XPoly| XPoly {
+        terms: p.terms.iter().filter(|(e, _)| !leaky(e)).cloned().collect(),
+    };
+    let (ln, ld) = cancel(&drop_leak(&num), &drop_leak(&den));
+    let at_dc = |n: &XPoly, d: &XPoly| Expr::from_mna(n, d, &shown.syms).eval(Complex64::new(0.0, 0.0));
+    let (num, den) = if (ln != num || ld != den) && !ln.is_zero() && !ld.is_zero() && {
+        let (k, kl) = (at_dc(&num, &den), at_dc(&ln, &ld));
+        (k - kl).norm() <= LEAKAGE_REL * k.norm()
+    } {
+        (ln, ld)
+    } else {
+        (num, den)
+    };
+    let e = Expr::from_mna(&num, &den, &shown.syms);
+    if e.term_count() > LATEX_TERM_LIMIT {
+        return None;
+    }
+    let (mn, md) = e.to_mna(&shown.syms);
+    let (n, d) = e.plain(&shown.syms);
+    let latex = structured(&mn, &md, &shown.syms).unwrap_or_else(|| e.latex(&shown.syms));
+    // Its symbols, for `params` (a junction the forms leave out may be one).
+    let used: Vec<Sym> = (0..shown.syms.len())
+        .filter(|&k| num.terms.iter().chain(&den.terms).any(|(e, _)| e[k] > 0))
+        .map(|k| shown.syms[k].clone())
+        .collect();
+    Some((json!({ "latex": latex, "num": n, "den": d }), used))
 }
 
 /// What `suggest` needs of the analysis: the quantity's full-model values
@@ -1316,7 +1489,15 @@ fn consistent_groups(
             .iter()
             .find(|r| r.element.eq_ignore_ascii_case(name))
             .map(|r| r.assumed.clone());
-        (t, region)
+        // Miller splits count too: each split keeps its own C and K.
+        let mut miller: Vec<Option<crate::assume::Term>> = a
+            .miller
+            .iter()
+            .filter(|x| x.element.eq_ignore_ascii_case(name))
+            .map(|x| x.term)
+            .collect();
+        miller.sort();
+        (t, region, miller)
     };
     let (mut keep, mut warn) = (Vec::new(), Vec::new());
     for g in matched {
@@ -2284,33 +2465,14 @@ fn xnode(sys: &System, x: &[Complex64], node: usize) -> Complex64 {
     sys.node_col[node].map(|c| x[c]).unwrap_or_default()
 }
 
-fn eval_poly(p: &Poly, ss: &SsCircuit, s: Complex64) -> Complex64 {
-    let mut acc = Complex64::new(0.0, 0.0);
-    for (&m, &c) in &p.terms {
-        let mut v = c as f64;
-        let mut bits = m;
-        while bits != 0 {
-            let i = bits.trailing_zeros() as usize;
-            v *= ss.params[i].mna_value();
-            bits &= bits - 1;
-        }
-        acc += v * s.powu((m & ss.reactive_mask).count_ones());
-    }
-    acc
-}
-
 /// Independent numeric solve of the same system (complex LU), used to
 /// cross-check every symbolic result. Returns the solution and its normwise
 /// forward-error bound κ₁(A)·eps·‖x‖ (an absolute bound on each component).
 pub(crate) fn matrix_at(sys: &System, ss: &SsCircuit, s: Complex64) -> Vec<Complex64> {
     let n = sys.dim;
     let mut a = vec![Complex64::new(0.0, 0.0); n * n];
-    for r in 0..n {
-        for c in 0..n {
-            if !sys.a[r][c].is_zero() {
-                a[r * n + c] = eval_poly(&sys.a[r][c], ss, s);
-            }
-        }
+    for t in &sys.terms {
+        a[t.row * n + t.col] += sys.term_value(t, ss, s);
     }
     a
 }
@@ -2683,6 +2845,24 @@ fn op_json(net: &Netlist, op: &Op) -> Value {
             Some(DevOp::Diode(dd)) => json!({ "type": "diode", "id": dd.id, "vd": dd.vd, "gd": dd.gd }),
             None => continue,
         };
+        // Capacitances (F) at this bias, zeros included; a BJT's substrate
+        // one is `csub` whichever terminal it ends at.
+        let mut d = d;
+        let mut caps: Map<String, Value> = ss::device_caps(e, op, ei)
+            .into_iter()
+            .map(|c| {
+                let key = if matches!(c.kind, "ccs" | "cbsub") {
+                    "csub"
+                } else {
+                    c.kind
+                };
+                (key.to_string(), json!(c.value))
+            })
+            .collect();
+        if matches!(e.kind, Kind::Q { .. }) {
+            caps.entry("csub").or_insert(json!(0.0));
+        }
+        d["caps"] = Value::Object(caps);
         devices.insert(e.name.clone(), d);
     }
     json!({ "nodes": nodes, "sources": sources, "devices": devices, "method": op.method, "iterations": op.iterations })

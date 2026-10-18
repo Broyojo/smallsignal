@@ -5,6 +5,11 @@ import { smallSignalNetlist } from "./netlist.js";
 import { ASSUMPTION_TERMS } from "./types.js";
 import type {
   AssumableElement,
+  BjtCapacitances,
+  MillerReport,
+  MosCapacitances,
+  MosOperatingPoint,
+  Root,
   AssumedQuantity,
   DistortionForm,
   DistortionQuantity,
@@ -541,8 +546,113 @@ describe.skipIf(!built)(
       expect(Object.keys(result.op.devices)).toHaveLength(25);
       expect(Date.now() - started).toBeLessThan(15_000);
     });
+
+    it("the op-amp with device capacitances: past 128 parameters, numeric", async () => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const netlist = smallSignalNetlist(
+        parseProject(
+          readFileSync(
+            new URL("../test-fixtures/bjt-op-amp.icproj.json", import.meta.url),
+            "utf8",
+          ),
+        ),
+        {
+          models: {
+            npn: { CJE: 1e-12, CJC: 0.5e-12, TF: 0.35e-9 },
+            pnp: { CJE: 0.3e-12, CJC: 1e-12, TF: 30e-9 },
+          },
+        },
+      )!;
+      const started = Date.now();
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({
+            input: "VINP",
+            inputNeg: "VINN",
+            mode: "differential",
+            output: "OUT",
+            freqs: [1, 1e6],
+            rin: true,
+            rout: true,
+          }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.params.length).toBeGreaterThan(128);
+      for (const name of ["gain", "rin", "rout"]) {
+        declared(result[name]);
+        expect(result[name].skipped).toBe(
+          "too large for the exact closed form",
+        );
+      }
+      // Each BJT's C_π and C_μ add poles; the 30 pF one stays dominant.
+      expect(result.gain.poles.length).toBeGreaterThan(10);
+      const slowest = Math.min(
+        ...result.gain.poles.map((p: Root) => Math.hypot(p.re, p.im)),
+      );
+      expect(slowest).toBeCloseTo(10.6, 0);
+      for (const device of Object.values(result.op.devices) as {
+        caps: object;
+      }[])
+        expect(Object.keys(device.caps).sort()).toEqual(
+          [...BJT_CAP_KEYS].sort(),
+        );
+      expect(Date.now() - started).toBeLessThan(15_000);
+    });
+
+    it("device capacitances: every op field is declared", async () => {
+      const wasm = await import(
+        /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+      );
+      wasm.initSync({
+        module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+      });
+      const netlist = smallSignalNetlist(
+        parseProject(
+          readFileSync(
+            new URL(
+              "../test-fixtures/cs-vdd-pin-wired.icproj.json",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        ),
+        { models: { nmos: { TOX: 20e-9, CGDO: 3e-10, CBD: 1e-15 } } },
+      )!;
+      const result = JSON.parse(
+        wasm.analyze(
+          netlist.text,
+          JSON.stringify({ input: "V1", output: "Vout" }),
+        ),
+      );
+      expect(result.error).toBeUndefined();
+      const m1 = result.op.devices.M1 as MosOperatingPoint;
+      expect(Object.keys(m1.caps).sort()).toEqual([...MOS_CAP_KEYS].sort());
+      expect(m1.caps.cgs).toBeGreaterThan(0);
+      const value = (name: string) =>
+        result.params.find((p: { name: string }) => p.name === name)?.value;
+      // Saturated: C_gd is CGDO·W alone, as the parameter list has it.
+      expect(m1.caps.cgd).toBeGreaterThan(0);
+      expect(value("cgd_M1")).toBe(m1.caps.cgd);
+      expect(value("cbd_M1")).toBeGreaterThan(0);
+    });
   },
 );
+
+const MOS_CAP_KEYS = allKeys<MosCapacitances>()([
+  "cgs",
+  "cgd",
+  "cgb",
+  "cbd",
+  "cbs",
+]);
+const BJT_CAP_KEYS = allKeys<BjtCapacitances>()(["cpi", "cmu", "csub", "cx"]);
 
 const ASSUMED_KEYS = allKeys<AssumedQuantity>()([
   "values",
@@ -563,6 +673,20 @@ const REPORT_KEYS = allKeys<SmallSignalAssumptionReport>()([
   "applied",
   "absent",
   "regions",
+  "miller",
+] as const);
+const MILLER_KEYS = allKeys<MillerReport>()([
+  "element",
+  "term",
+  "latex",
+  "symbol",
+  "k",
+  "definition",
+] as const);
+const DEFINITION_KEYS = allKeys<NonNullable<MillerReport["definition"]>>()([
+  "latex",
+  "num",
+  "den",
 ] as const);
 const RESTORED_KEYS = allKeys<RestoredAssumption>()([
   "element",
@@ -573,6 +697,7 @@ const ASSUMABLE_KEYS = allKeys<AssumableElement>()([
   "element",
   "type",
   "terms",
+  "miller",
 ] as const);
 
 describe.skipIf(!built)("assumptions match the TypeScript contract", () => {
@@ -666,6 +791,67 @@ describe.skipIf(!built)("assumptions match the TypeScript contract", () => {
     for (const t of ignored) expect(t.monomial).toContain("d");
     for (const c of result.distortion.coefficients)
       expect(c).toHaveProperty("fullModelError");
+  });
+
+  it("a Miller split's report is present and declared", async () => {
+    const wasm = await import(
+      /* @vite-ignore */ new URL("smallsignal_wasm.js", wasmDir).href
+    );
+    wasm.initSync({
+      module: readFileSync(new URL("smallsignal_wasm_bg.wasm", wasmDir)),
+    });
+    // Two transconductance stages, CC across the second: K = −g₂R₂ = −100.
+    const netlist = [
+      "two stage",
+      "VIN in 0 DC 0 AC 1",
+      "G1 n1 0 in 0 1m",
+      "R1 n1 0 100k",
+      "G2 out 0 n1 0 2m",
+      "R2 out 0 50k",
+      "CL out 0 2p",
+      "CC n1 out 1p",
+    ].join("\n");
+    const result = JSON.parse(
+      wasm.analyze(
+        netlist,
+        JSON.stringify({
+          input: "VIN",
+          output: "out",
+          rout: true,
+          freqs: [1e3, 1e6],
+          assume: { miller: [{ element: "CC" }] },
+        }),
+      ),
+    );
+    expect(result.error).toBeUndefined();
+    const keys = (value: object, want: readonly string[]) =>
+      expect(Object.keys(value).sort()).toEqual([...want].sort());
+    keys(result.assumptions, REPORT_KEYS);
+    expect(result.assumptions.applied).toEqual([]);
+    const [split] = result.assumptions.miller;
+    keys(split, MILLER_KEYS);
+    keys(split.definition, DEFINITION_KEYS);
+    expect(split).toMatchObject({
+      element: "CC",
+      term: null,
+      latex: "C_{C}",
+      symbol: "K_{CC}",
+    });
+    expect(split.k).toBeCloseTo(-100, 9);
+    expect(split.definition.latex).toBe("-G_{2} R_{2}");
+    for (const element of result.assumable) keys(element, ASSUMABLE_KEYS);
+    const of = (name: string) =>
+      result.assumable.find(
+        (e: AssumableElement) => e.element === name,
+      ) as AssumableElement;
+    expect(of("CC").miller).toEqual([null]);
+    expect(of("CL").miller).toEqual([]);
+    // K is a parameter with its value; the forms are over C_C and K.
+    expect(
+      result.params.find((p: { name: string }) => p.name === "K_CC").value,
+    ).toBe(split.k);
+    expect(result.gain.exact.latex).toContain("K_{CC}");
+    expect(result.gain.exact).toHaveProperty("fullModelError");
   });
 });
 

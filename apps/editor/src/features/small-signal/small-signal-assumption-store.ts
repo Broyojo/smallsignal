@@ -3,6 +3,7 @@ import {
   ASSUMPTION_TERMS,
   type AssumableElement,
   type AssumptionTerm,
+  type MillerAssumption,
   type SmallSignalAssumptions,
   type SmallSignalElement,
 } from "@icm/small-signal";
@@ -28,11 +29,22 @@ export type AssumptionDefaults = Partial<
 >;
 
 /**
+ * A capacitance a Miller split can take: a device's by its term, or a
+ * capacitor's own (null).
+ */
+export type MillerTerm = AssumptionTerm | null;
+
+/** The device capacitances a Miller split is offered for. */
+export const MILLER_TERMS: readonly AssumptionTerm[] = ["cgd", "cmu"];
+
+/**
  * One part's own choices: a term neglected (true) or kept (false) where that
- * differs from the default, and the region it is expected in.
+ * differs from the default, the capacitances split by the Miller
+ * approximation, and the region it is expected in.
  */
 export interface PartAssumptions {
   ignore?: Partial<Record<AssumptionTerm, boolean>>;
+  miller?: MillerTerm[];
   region?: string;
 }
 
@@ -132,9 +144,29 @@ function readPart(value: unknown): PartAssumptions | null {
     }
     if (Object.keys(ignore).length) part.ignore = ignore;
   }
+  // A split the part also neglects, opens or shorts is no choice at all
+  // (stored before splits existed, or edited by hand): the split goes.
+  if (Array.isArray(value.miller)) {
+    const miller: MillerTerm[] = [];
+    for (const term of value.miller as unknown[])
+      if (
+        (term === null || MILLER_TERMS.includes(term as AssumptionTerm)) &&
+        !miller.includes(term as MillerTerm) &&
+        !conflicts(part, term as MillerTerm)
+      )
+        miller.push(term as MillerTerm);
+    if (miller.length) part.miller = miller;
+  }
   if (typeof value.region === "string" && KNOWN_REGIONS.has(value.region))
     part.region = value.region;
-  return part.ignore || part.region ? part : null;
+  return part.ignore || part.miller || part.region ? part : null;
+}
+
+/** Whether a part's own choices take `term` to a limit a split excludes. */
+function conflicts(part: PartAssumptions, term: MillerTerm): boolean {
+  return term === null
+    ? Boolean(part.ignore?.open || part.ignore?.short)
+    : Boolean(part.ignore?.[term]);
 }
 
 /** The most recently used circuits, at most MAX_STORED_CIRCUITS. */
@@ -173,7 +205,11 @@ export function readCircuits(stored: string | null): StoredAssumptions {
 }
 
 function isEmpty(part: PartAssumptions): boolean {
-  return !part.region && !Object.keys(part.ignore ?? {}).length;
+  return (
+    !part.region &&
+    !Object.keys(part.ignore ?? {}).length &&
+    !part.miller?.length
+  );
 }
 
 /**
@@ -223,19 +259,33 @@ function byDefault(
   return isTransistor(type) && (defaults[type]?.includes(term) ?? false);
 }
 
-/** Whether a part neglects `term`: its own choice, else its type's default. */
+/** Whether a part splits `term` (null: a capacitor's own) by Miller. */
+export function isMiller(
+  term: MillerTerm,
+  part: PartAssumptions | undefined,
+): boolean {
+  return part?.miller?.includes(term) ?? false;
+}
+
+/**
+ * Whether a part neglects `term`: its own choice, else its type's default.
+ * A Miller split of the term (or of a capacitor, for open and short)
+ * overrides the default.
+ */
 export function isIgnored(
   type: AssumableType,
   term: AssumptionTerm,
   part: PartAssumptions | undefined,
   defaults: AssumptionDefaults,
 ): boolean {
+  if (isMiller(term === "open" || term === "short" ? null : term, part))
+    return false;
   return part?.ignore?.[term] ?? byDefault(type, term, defaults);
 }
 
 /**
- * Whether parts of one type make the same choices, every term and the
- * region: the solver matches only parts that do.
+ * Whether parts of one type make the same choices, every term, the Miller
+ * splits and the region: the solver matches only parts that do.
  */
 export function sameChoices(
   type: AssumableType,
@@ -248,6 +298,7 @@ export function sameChoices(
       ASSUMPTION_TERMS[type].map((term) =>
         isIgnored(type, term, parts[path], defaults),
       ),
+      MILLER_TERMS.map((term) => isMiller(term, parts[path])),
       parts[path]?.region ?? null,
     ]);
   const first = paths[0];
@@ -257,9 +308,21 @@ export function sameChoices(
   );
 }
 
+/** `part` without the Miller splits in `terms`. */
+function withoutMiller(
+  part: PartAssumptions,
+  terms: readonly MillerTerm[],
+): PartAssumptions {
+  const { miller, ...rest } = part;
+  const kept = (miller ?? []).filter((term) => !terms.includes(term));
+  return kept.length ? { ...rest, miller: kept } : rest;
+}
+
 /**
  * A part's `terms` neglected (or kept), stored only where that differs from
  * the default. Taking a passive open un-shorts it, and the reverse.
+ * Neglecting a capacitance, or taking a capacitor open or shorted, ends its
+ * Miller split.
  */
 export function withTerms(
   parts: CircuitAssumptions,
@@ -269,7 +332,7 @@ export function withTerms(
   on: boolean,
   defaults: AssumptionDefaults,
 ): CircuitAssumptions {
-  const part = parts[path] ?? {};
+  let part = parts[path] ?? {};
   const ignore = { ...part.ignore };
   for (const term of terms) {
     delete ignore[term];
@@ -277,7 +340,36 @@ export function withTerms(
   }
   if (on && terms.includes("open")) delete ignore.short;
   if (on && terms.includes("short")) delete ignore.open;
+  if (on)
+    part = withoutMiller(
+      part,
+      terms.map((term) => (term === "open" || term === "short" ? null : term)),
+    );
   return { ...parts, [path]: { ...part, ignore } };
+}
+
+/**
+ * A part's capacitance `term` (null: a capacitor's own) split by Miller, or
+ * no longer. A split keeps the capacitance (neither neglected nor open nor
+ * shorted), whatever the default.
+ */
+export function withMiller(
+  parts: CircuitAssumptions,
+  path: string,
+  term: MillerTerm,
+  on: boolean,
+): CircuitAssumptions {
+  const part = withoutMiller(parts[path] ?? {}, [term]);
+  if (!on) return { ...parts, [path]: part };
+  const ignore = { ...part.ignore };
+  if (term === null) {
+    delete ignore.open;
+    delete ignore.short;
+  } else delete ignore[term];
+  return {
+    ...parts,
+    [path]: { ...part, ignore, miller: [...(part.miller ?? []), term] },
+  };
 }
 
 /** The region parts are expected in; null checks none. */
@@ -313,8 +405,10 @@ export function withDefault(
   const { [type]: _old, ...others } = defaults;
   const next = { ...parts };
   for (const path of paths) {
-    const part = parts[path];
-    if (!part?.ignore) continue;
+    let part = parts[path];
+    if (!part?.ignore && !part?.miller) continue;
+    // Neglected everywhere: a part's split of the term ends too.
+    if (on) part = withoutMiller(part, terms);
     const ignore = { ...part.ignore };
     for (const term of terms) delete ignore[term];
     next[path] = { ...part, ignore };
@@ -325,20 +419,49 @@ export function withDefault(
   };
 }
 
-/** The solver's `assume` for the drawn parts; null when nothing is assumed. */
+/**
+ * The solver's `assume` for the drawn parts; null when nothing is assumed.
+ * With `available` (the circuit's last `assumable`), a stored Miller split
+ * the solver no longer offers (the capacitance now ends at ground or a
+ * supply) is not sent, and the part acts as without it. It stays stored,
+ * and returns when the drawing offers it again.
+ */
 export function assumptionRequest(
   elements: readonly SmallSignalElement[],
   defaults: AssumptionDefaults,
   parts: CircuitAssumptions,
+  available?: readonly AssumableElement[] | null,
 ): SmallSignalAssumptions | null {
   const ignore: { element: string; term: AssumptionTerm }[] = [];
   const regions: { element: string; region: string }[] = [];
+  const miller: MillerAssumption[] = [];
+  const offered = available
+    ? new Map(available.map((entry) => [entry.element, entry.miller ?? []]))
+    : null;
   for (const { name, kind, instancePath } of elements) {
     if (!isAssumable(kind)) continue;
-    const part = parts[partKey(instancePath)];
+    const stored = parts[partKey(instancePath)];
+    const part =
+      offered && stored?.miller
+        ? withoutMiller(
+            stored,
+            stored.miller.filter(
+              (term) => !(offered.get(name) ?? []).includes(term),
+            ),
+          )
+        : stored;
     for (const term of ASSUMPTION_TERMS[kind])
       if (isIgnored(kind, term, part, defaults))
         ignore.push({ element: name, term });
+    for (const term of part?.miller ?? [])
+      if (
+        term === null
+          ? kind === "capacitor"
+          : (ASSUMPTION_TERMS[kind] as readonly string[]).includes(term)
+      )
+        miller.push(
+          term === null ? { element: name } : { element: name, term },
+        );
     const region = part?.region;
     if (
       region &&
@@ -347,10 +470,11 @@ export function assumptionRequest(
     )
       regions.push({ element: name, region });
   }
-  if (!ignore.length && !regions.length) return null;
+  if (!ignore.length && !regions.length && !miller.length) return null;
   return {
     ...(ignore.length ? { ignore } : {}),
     ...(regions.length ? { regions } : {}),
+    ...(miller.length ? { miller } : {}),
   };
 }
 

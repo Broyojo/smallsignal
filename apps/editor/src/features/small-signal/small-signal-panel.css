@@ -371,6 +371,15 @@
   font-weight: 650;
 }
 
+/* A model's charge parameters, collapsed until used. */
+.small-signal-model-caps {
+  grid-column: 1 / -1;
+}
+
+.small-signal-model-caps > .small-signal-model {
+  margin-top: 6px;
+}
+
 .small-signal-panel .small-signal-model input {
   min-height: var(--icm-control-h);
   padding: 0.3rem 0.45rem;
@@ -427,6 +436,52 @@
   color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
   font-weight: 400;
+}
+
+/* One Caps cell per row: the neglected capacitances, a popover of choices. */
+.small-signal-caps {
+  position: relative;
+}
+
+.small-signal-caps > summary {
+  cursor: pointer;
+  color: var(--icm-text-muted);
+}
+
+.small-signal-caps[open] > summary {
+  color: var(--icm-text);
+}
+
+.small-signal-caps > div {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  display: grid;
+  gap: 2px;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-md);
+  background: var(--icm-surface);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.small-signal-caps label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A capacitance's neglect, then its Miller split where it has one. */
+.small-signal-cap-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.small-signal-miller {
+  display: block;
 }
 
 .small-signal-assumptions tbody th {

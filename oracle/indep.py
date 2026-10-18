@@ -59,7 +59,8 @@ def model_params(text: str) -> dict[str, dict[str, float]]:
 
 def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     kept: set[str] | None = None, phys_kinds: tuple[str, ...] = ("mos", "bjt"),
-                    want_system: bool = False, drop: set[tuple[str, str]] | None = None):
+                    want_system: bool = False, drop: set[tuple[str, str]] | None = None,
+                    miller: list[tuple[str, str | None]] | None = None, kvalues: dict | None = None):
     """variant: "full" (ngspice's circuit), "phys" (no gmin anywhere),
     "solverlike" (only the junction / g_mu terms in `kept`, the solver's own
     parameter names such as rbd_m1, rmu_q2, each as ngspice has it) or
@@ -70,8 +71,17 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
     vocabulary, each taken to its limit at the same operating point: a
     device's ro (gds, go), gmb, rpi (gpi), rmu (gmu), rbs, rbd conductance
     left out (gmin included); an element "open" left out (an inductor's
-    branch carries no current) or "short" replaced by a 0 V branch."""
+    branch carries no current) or "short" replaced by a 0 V branch.
+
+    miller: capacitances as (element, term), term None for a capacitor
+    itself, each replaced by C(1 - K) from a to ground and C(K - 1)/K from b
+    to ground, K = v(b)/v(a) of this rebuild at s = 0 under the gain
+    excitation (a, b as the solver orients them: a capacitor so |K| >= 1,
+    a device's capacitance gate/base first), or kvalues["e:term"] when
+    given. out[("miller", "e:term")] is K."""
     mp.mp.dps = dps
+    mill: dict = {(e.lower(), t or None): None for e, t in (miller or [])}
+    ks: dict | None = None
     kept = {k.lower() for k in (kept or set())}
     drop = {(e.lower(), t) for e, t in (drop or set())}
     dropped = lambda e, t: (e.name.lower(), t) in drop
@@ -132,6 +142,20 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
             p, n, cp, cn = ni(p), ni(n), ni(cp), ni(cn)
             add(p, cp, g); add(p, cn, -g); add(n, cp, -g); add(n, cn, g)
 
+        def cap(e, term, a_, b_, value):
+            """A capacitance from a_ to b_, or under `miller` its split:
+            C(1 - K) from a to ground and C(K - 1)/K from b to ground (none
+            before K is known, which is solved at s = 0, where both vanish)."""
+            key = (e.name.lower(), term)
+            if key not in mill:
+                adm(a_, b_, s * value)
+                return
+            mill[key] = (a_, b_, value)
+            if ks is not None:
+                K, (oa, ob) = ks[key]
+                adm(oa, "0", s * value * (1 - K))
+                adm(ob, "0", s * value * (K - 1) / K)
+
         for e in net.elements:
             k, t = e.kind, e.tokens
             if dropped(e, "short"):
@@ -147,7 +171,7 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
             if k == "r":
                 adm(e.nodes[0], e.nodes[1], 1 / num(t[3]))
             elif k == "c":
-                adm(e.nodes[0], e.nodes[1], s * num(t[3]))
+                cap(e, None, e.nodes[0], e.nodes[1], num(t[3]))
             elif k == "g":
                 vccs(*e.nodes[:4], num(t[5]))
             elif k == "f":
@@ -193,6 +217,13 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     vj = tt * (v(bn) - v(other))
                     phys = isat / VT * mp.exp(vj / VT) if vj > -3 * VT else mp.mpf(0)
                     adm(bn, other, term(f"r{which}_{e.name}", phys, gmin_full))
+                # ngspice's capacitances at this bias (pz.py), on the
+                # physical terminals as mos1acld stamps them.
+                caps = d.get("caps") or {}
+                for a_, b_, key in ((gn, sn, "cgs"), (gn, dn, "cgd"), (gn, bn, "cgb"), (bn, dn, "cbd"),
+                                    (bn, sn, "cbs")):
+                    if caps.get(key) and not dropped(e, key):
+                        cap(e, key, a_, b_, P(caps[key]))
             elif k == "q":
                 d = devs[e.name.lower()]
                 c, bb, em = e.nodes[:3]
@@ -207,9 +238,26 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                     adm(bb, em, gpi)
                 if not dropped(e, "rmu"):
                     adm(bb, c, gmu)
+                caps = d.get("caps") or {}
+                if caps:
+                    if not dropped(e, "cpi"):
+                        cap(e, "cpi", bb, em, P(caps["cpi"]))
+                    if not dropped(e, "cmu"):
+                        cap(e, "cmu", bb, c, P(caps["cmu"]))
+                    # The substrate (ground when not given) ends at the
+                    # collector (vertical, the NPN default) or base (lateral).
+                    sub = e.nodes[3] if len(e.nodes) == 4 else "0"
+                    mname = (t[5] if len(e.nodes) == 4 else t[4]).lower()
+                    subs = models.get(mname, {}).get("subs", 1 if net.models.get(mname) == "npn" else -1)
+                    if not dropped(e, "ccs"):
+                        cap(e, "ccs", sub, c if subs > 0 else bb, P(caps["csub"]))
+                    # bjtacld's geqcb = −C_x: s·geqcb·v_bc from base to emitter.
+                    vccs(bb, em, bb, c, -s * P(caps["cx"]))
             elif k == "d":
                 d = devs[e.name.lower()]
                 adm(e.nodes[0], e.nodes[1], P(d["gd"]) - gmin_full + gmin)
+                if (d.get("caps") or {}).get("cj") and not dropped(e, "cj"):
+                    cap(e, "cj", e.nodes[0], e.nodes[1], P(d["caps"]["cj"]))
             else:
                 raise ValueError(f"unsupported element {e.name}")
         if mode == "rout":
@@ -220,6 +268,21 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
                 b[r_] -= 1
         return A, b
 
+    at = lambda x, n: x[ni(n)] if n is not None and ni(n) is not None else 0
+    if mill:
+        # K at s = 0, where every capacitance (split or not) is open.
+        A0, b0 = system(mp.mpf(0), "gain")
+        x0 = mp.lu_solve(A0, b0)
+        ks = {}
+        for key, found in mill.items():
+            if found is None:
+                raise ValueError(f"miller: no capacitance {key}")
+            a_, b_, _ = found
+            va, vb = at(x0, a_), at(x0, b_)
+            if key[1] is None and abs(va) > abs(vb):
+                a_, b_, va, vb = b_, a_, vb, va
+            fixed = (kvalues or {}).get(f"{key[0]}:{key[1] or ''}")
+            ks[key] = (vb / va if fixed is None else fixed, (a_, b_))
     if want_system == "poles":
         return poles(system, dim)
     if want_system:
@@ -227,7 +290,8 @@ def build_and_solve(cir: Path, want: dict, variant: str = "full", dps: int = 60,
         # 1 A at the output, anything else leaves every source at zero.
         return system, ni, bidx, net, side, models
     out: dict[str, object] = {}
-    at = lambda x, n: x[ni(n)] if n is not None and ni(n) is not None else 0
+    for (mel, mterm), (K, _) in (ks or {}).items():
+        out[("miller", f"{mel}:{mterm or ''}")] = K
     eps = mp.mpf(2) ** -52
 
     def bound(A, x, value):
