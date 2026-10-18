@@ -16,8 +16,18 @@ pub const MAX_WORK: u64 = 50_000_000;
 /// and memory.
 const ROW_TOUCHED_FACTOR: usize = 2;
 
+/// The over-budget error, which leaves a quantity numeric.
+pub fn too_large(max_terms: usize) -> String {
+    format!("exact expression too large (over {max_terms} terms); simplify the circuit or analyze a smaller block")
+}
+
+/// The determinant; a wide system (rows without entries: more parameters
+/// than a monomial holds) is over budget.
 pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
     let n = a.len();
+    if a.iter().any(|r| r.len() != n) {
+        return Err(too_large(max_terms));
+    }
     if n == 0 {
         return Ok(Poly::one());
     }
@@ -54,9 +64,7 @@ pub fn det(a: &[Vec<Poly>], max_terms: usize) -> Result<Poly, String> {
         must[r] |= must[r - 1];
     }
 
-    let too_large = || {
-        format!("exact expression too large (over {max_terms} terms); simplify the circuit or analyze a smaller block")
-    };
+    let too_large = || too_large(max_terms);
     let mut work: u64 = 0;
     let mut cur: MonoMap<Poly> = MonoMap::default();
     cur.insert(0, Poly::one());

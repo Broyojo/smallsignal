@@ -425,14 +425,16 @@ test("model parameters are editable: the bias follows the square law", async ({
   const models = panel.locator("details.small-signal-options", {
     has: page.locator("summary", { hasText: /^Models/u }),
   });
-  await models.locator("summary").click();
-  await expect(models.locator("summary")).toHaveText("Models");
+  await models.locator(":scope > summary").click();
+  await expect(models.locator(":scope > summary")).toHaveText("Models");
   const kp = panel.getByLabel("NMOS KP");
   await expect(kp).toHaveAttribute("placeholder", "200u");
 
   // Twice µCox: more current at the same overdrive.
   await kp.fill("400u");
-  await expect(models.locator("summary")).toHaveText("Models (edited)");
+  await expect(models.locator(":scope > summary")).toHaveText(
+    "Models (edited)",
+  );
   await expect.poll(() => cardValue(panel, "Gain")).toBeLessThan(-4.3);
   const strong = await biasLine(panel, "M1");
   expect(strong.id).toBeGreaterThan(base.id);
@@ -463,8 +465,64 @@ test("model parameters are editable: the bias follows the square law", async ({
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
   await panel.getByLabel("NMOS LAMBDA").fill("0");
   await panel.getByRole("button", { name: "Reset to defaults" }).click();
-  await expect(models.locator("summary")).toHaveText("Models");
+  await expect(models.locator(":scope > summary")).toHaveText("Models");
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+});
+
+test("device capacitances from Models add a pole, and neglecting C_gd moves it and removes the zero", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+  const gain = card(panel, "Gain");
+  // No charge parameters, no capacitances: a flat gain.
+  await expect(gain.getByText(/^Poles? /u)).toHaveCount(0);
+
+  await panel.getByText(/^Models/u).click();
+  const nmos = panel.locator("fieldset.small-signal-model", {
+    has: page.locator("legend", { hasText: "NMOS" }),
+  });
+  const caps = nmos.locator("details.small-signal-model-caps");
+  await caps.locator("summary").click();
+  await expect(panel.getByLabel("NMOS TOX")).toHaveAttribute(
+    "placeholder",
+    "0",
+  );
+  await panel.getByLabel("NMOS TOX").fill("20n");
+  await panel.getByLabel("NMOS CGDO").fill("3e-10");
+  await panel.getByLabel("NMOS CBD").fill("10f");
+  await expect(caps.locator("summary")).toHaveText("Capacitances (3 set)");
+  // The output node's C_gd + C_db: one pole, and the Miller zero g_m/C_gd.
+  await expect(gain.getByText(/^Pole /u)).toBeVisible();
+  await expect.poll(() => formula(panel, "Gain")).toContain("C_{gd1}");
+  expect(await formula(panel, "Gain")).toContain("C_{db1}");
+
+  // Assumptions: the Caps cell neglects C_gd alone.
+  const section = await assumptions(panel);
+  const cell = section.locator("details.small-signal-caps").filter({
+    has: page.getByLabel("M1 caps", { exact: true }),
+  });
+  await expect(cell.locator("summary")).toHaveText("none");
+  await cell.locator("summary").click();
+  await neglect(section, "M1 cgd").check();
+  await expect(cell.locator("summary")).toHaveText("Cgd");
+  await expect.poll(() => formula(panel, "Gain")).not.toContain("C_{gd1}");
+  const table = gain.getByRole("table", { name: "Full model and assumed" });
+  // The pole moves (C_db alone) with its Δ, the zero goes.
+  const pole = table.locator('tr[data-root="pole"]');
+  await expect(pole).toHaveCount(1);
+  await expect(pole.locator('td[data-quantity="assumed"]')).not.toHaveText(
+    "removed",
+  );
+  await expect(pole.locator('td[data-quantity="delta"]')).toHaveText(/%$/u);
+  const zero = table.locator('tr[data-root="zero"]');
+  await expect(zero.locator('td[data-quantity="assumed"]')).toHaveText(
+    "removed",
+  );
+  await page.screenshot({
+    path: test.info().outputPath("device-caps-assumptions.png"),
+    fullPage: false,
+  });
 });
 
 test("stored model values: malformed ones are dropped, every edit shows, Reset clears all", async ({
@@ -795,7 +853,7 @@ test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async 
 /** The Assumptions section, open. */
 async function assumptions(panel: Locator): Promise<Locator> {
   const section = panel.locator("details.small-signal-assumptions-section");
-  const summary = section.locator("summary");
+  const summary = section.locator(":scope > summary");
   await expect(summary).toBeVisible();
   if ((await section.getAttribute("open")) === null) await summary.click();
   return section;
@@ -814,7 +872,9 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   // NMOS as a type, M1 itself, and R1 to take open or shorted.
   await expect(section.locator("tr[data-row]")).toHaveCount(3);
   await neglect(section, "M1 ro").check();
-  await expect(section.locator("summary")).toHaveText("Assumptions (on)");
+  await expect(section.locator(":scope > summary")).toHaveText(
+    "Assumptions (on)",
+  );
   await expect
     .poll(() => formula(panel, "Gain"))
     .toMatch(/ \\approx -g_\{m1\} R_\{1\}$/u);
@@ -869,7 +929,7 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   // Reset gives the full model's form back.
   await section.getByRole("button", { name: "Reset", exact: true }).click();
   await expect.poll(() => formula(panel, "Gain")).toContain("\\parallel R_{1}");
-  await expect(section.locator("summary")).toHaveText("Assumptions");
+  await expect(section.locator(":scope > summary")).toHaveText("Assumptions");
   expect(
     await page.evaluate(() => localStorage.getItem("smallsignal.assumptions")),
   ).toBe("{}");

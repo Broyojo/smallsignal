@@ -7,6 +7,7 @@
 
 pub mod analyze;
 pub mod assume;
+pub mod caps;
 pub mod certificate;
 pub mod dc;
 pub mod det;

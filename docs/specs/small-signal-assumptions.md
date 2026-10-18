@@ -65,8 +65,9 @@ Request `assume` (CLI `--ignore M1:ro,C1:short`, `--region M3:triode`):
 }
 ```
 
-- Terms: `ro`, `gmb`, `rbs`, `rbd` (MOSFET); `ro`, `rpi`, `rmu` (BJT);
-  `open`, `short` (R, C, L, diode). Regions: `saturation`, `triode`,
+- Terms: `ro`, `gmb`, `rbs`, `rbd`, and the capacitances `cgs`, `cgd`,
+  `cgb`, `cbs`, `cbd` taken to 0 (MOSFET); `ro`, `rpi`, `rmu`, `cpi`, `cmu`,
+  `ccs` (BJT); `open`, `short` (R, C, L, diode) and `cj` (diode). Regions: `saturation`, `triode`,
   `cutoff` (MOSFET); `forward-active`, `saturation`, `reverse-active`,
   `cutoff` (BJT).
 - Errors: `assume: no element 'M9'`, `assume: M1 has no term rpi`,

@@ -1,5 +1,6 @@
 //! SPICE netlist subset parser (see plan/contract.md for the dialect).
 
+use crate::caps::{BjtCapModel, DiodeCapModel, MosCapModel, MosGeom};
 use crate::devices::{BjtModel, DiodeModel, MosModel, EPS_OX};
 use crate::units::parse_value;
 use std::collections::HashMap;
@@ -37,18 +38,26 @@ pub enum Kind {
         ctrl: usize,
         gain: f64,
     },
+    /// `geom`: AD, AS, PD, PS for the bulk junction capacitances.
     M {
         model: MosModel,
         w: f64,
         l: f64,
         mult: f64,
+        geom: MosGeom,
     },
     /// `mult` (M=): that many devices in parallel, as ngspice: every
-    /// current and conductance, gmin's included, times M.
+    /// current and conductance, gmin's included, times M. `sub`: the
+    /// substrate node (ground when not given, as ngspice), or None when the
+    /// named substrate connects to nothing else (its capacitance then leads
+    /// nowhere). `float_sub`: a substrate only BJTs share, held (as in
+    /// ngspice) by each substrate junction's gmin.
     Q {
         model: BjtModel,
         area: f64,
         mult: f64,
+        sub: Option<usize>,
+        float_sub: bool,
     },
     /// `mult` (M=): as ngspice, the junction scales with area·M (gmin does
     /// not), and the flicker noise is M devices' sharing the current.
@@ -220,10 +229,14 @@ fn split_kv(toks: &[String]) -> (Vec<&str>, HashMap<String, String>) {
 }
 
 const MOS_KNOWN: &[&str] = &[
-    "level", "kp", "vto", "vt0", "lambda", "gamma", "phi", "is", "tox", "uo", "kf", "af",
+    "level", "kp", "vto", "vt0", "lambda", "gamma", "phi", "is", "tox", "uo", "kf", "af", "cgso", "cgdo", "cgbo",
+    "cbd", "cbs", "cj", "cjsw", "mj", "mjsw", "pb", "fc",
 ];
-const BJT_KNOWN: &[&str] = &["is", "bf", "br", "vaf", "va", "kf", "af"];
-const DIODE_KNOWN: &[&str] = &["is", "n", "kf", "af"];
+const BJT_KNOWN: &[&str] = &[
+    "is", "bf", "br", "vaf", "va", "kf", "af", "cje", "vje", "pe", "mje", "me", "tf", "xtf", "vtf", "itf", "cjc",
+    "vjc", "pc", "mjc", "mc", "xcjc", "tr", "cjs", "ccs", "csub", "vjs", "ps", "mjs", "ms", "fc", "subs",
+];
+const DIODE_KNOWN: &[&str] = &["is", "n", "kf", "af", "cjo", "cj0", "cj", "vj", "pb", "m", "fc", "tt"];
 
 pub fn parse(text: &str) -> Result<Netlist, String> {
     let (title, lines) = logical_lines(text);
@@ -263,11 +276,6 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
             let list: Vec<&str> = ignored.iter().map(|s| s.as_str()).collect();
             warnings.push(format!("Model {name} ignores {}", list.join(", ")));
         }
-        // TOX sets C_ox (KP, flicker noise), but ngspice also adds Meyer gate
-        // capacitances from it, which this solver does not model.
-        if matches!(kind.as_str(), "nmos" | "pmos") && params.get("tox").is_some_and(|&t| t > 0.0) {
-            warnings.push(format!("Model {name} has no gate capacitances from TOX"));
-        }
         cards.insert(name, Card { kind, params });
     }
 
@@ -289,6 +297,8 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
     let mut elements: Vec<Element> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut pending_ctrl: Vec<(usize, String, usize)> = Vec::new();
+    // BJT substrates named on the element line: (element, node name).
+    let mut pending_sub: Vec<(usize, String)> = Vec::new();
     for line in &lines {
         let t = &line.toks;
         let head = t[0].to_ascii_lowercase();
@@ -424,6 +434,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     cox: EPS_OX / 1e-7,
                     kf: 0.0,
                     af: 1.0,
+                    caps: MosCapModel::default(),
                 };
                 (
                     Kind::M {
@@ -431,6 +442,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                         w: f64::NAN,
                         l: f64::NAN,
                         mult: 1.0,
+                        geom: MosGeom::default(),
                     },
                     pos[..4].to_vec(),
                 )
@@ -446,12 +458,15 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     vaf: 0.0,
                     kf: 0.0,
                     af: 1.0,
+                    caps: BjtCapModel::new(1.0),
                 };
                 (
                     Kind::Q {
                         model,
                         area: 1.0,
                         mult: 1.0,
+                        sub: None,
+                        float_sub: false,
                     },
                     pos[..3].to_vec(),
                 )
@@ -466,6 +481,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                             n: 1.0,
                             kf: 0.0,
                             af: 1.0,
+                            caps: DiodeCapModel::default(),
                         },
                         area: 1.0,
                         mult: 1.0,
@@ -509,6 +525,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     cox,
                     kf: card.get("kf").unwrap_or(0.0),
                     af: card.get("af").unwrap_or(1.0),
+                    caps: mos_caps_model(card, tox),
                 };
                 let kvf = |k: &str, d: f64| -> Result<f64, String> {
                     match kv.get(k) {
@@ -522,7 +539,22 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                 if l <= 0.0 || w <= 0.0 {
                     return Err(format!("line {no}: {name} needs positive W and L"));
                 }
-                (Kind::M { model, w, l, mult }, pos[..4].to_vec())
+                let geom = MosGeom {
+                    ad: kvf("ad", 0.0)?,
+                    as_: kvf("as", 0.0)?,
+                    pd: kvf("pd", 0.0)?,
+                    ps: kvf("ps", 0.0)?,
+                };
+                (
+                    Kind::M {
+                        model,
+                        w,
+                        l,
+                        mult,
+                        geom,
+                    },
+                    pos[..4].to_vec(),
+                )
             }
             'q' => {
                 need(4)?;
@@ -548,6 +580,7 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     vaf: card.get("vaf").or(card.get("va")).unwrap_or(0.0),
                     kf: card.get("kf").unwrap_or(0.0),
                     af: card.get("af").unwrap_or(1.0),
+                    caps: bjt_caps_model(card, ty),
                 };
                 let area = match (pos.get(rest), kv.get("area")) {
                     (Some(a), _) => val(Some(a), "area")?,
@@ -560,7 +593,19 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                         .ok_or_else(|| format!("line {no}: bad m '{v}' for {name}"))?,
                     None => 1.0,
                 };
-                (Kind::Q { model, area, mult }, pos[..3].to_vec())
+                if mi == 4 {
+                    pending_sub.push((elements.len(), pos[3].to_ascii_lowercase()));
+                }
+                (
+                    Kind::Q {
+                        model,
+                        area,
+                        mult,
+                        sub: Some(0),
+                        float_sub: false,
+                    },
+                    pos[..3].to_vec(),
+                )
             }
             'd' => {
                 need(3)?;
@@ -574,6 +619,13 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
                     n: card.get("n").unwrap_or(1.0),
                     kf: card.get("kf").unwrap_or(0.0),
                     af: card.get("af").unwrap_or(1.0),
+                    caps: DiodeCapModel {
+                        cjo: card.get("cjo").or(card.get("cj0")).or(card.get("cj")).unwrap_or(0.0),
+                        vj: card.get("vj").or(card.get("pb")).unwrap_or(1.0),
+                        m: card.get("m").unwrap_or(0.5),
+                        fc: card.get("fc").unwrap_or(0.5),
+                        tt: card.get("tt").unwrap_or(0.0),
+                    },
                 };
                 let area = match (pos.get(3), kv.get("area")) {
                     (Some(a), _) => val(Some(a), "area")?,
@@ -615,6 +667,37 @@ pub fn parse(text: &str) -> Result<Netlist, String> {
         match &mut elements[ei].kind {
             Kind::F { ctrl, .. } | Kind::H { ctrl, .. } => *ctrl = ci,
             _ => unreachable!(),
+        }
+    }
+
+    // A named substrate is a node when something else connects to it. One
+    // only BJTs share floats, held by each substrate junction's gmin (as in
+    // ngspice), and couples their collectors (bases, when lateral) through
+    // the substrate capacitances; one only a single BJT names carries
+    // nothing, so it is left out.
+    let shared = |name: &str| pending_sub.iter().filter(|(_, n)| n == name).count() > 1;
+    let mut floating: Vec<(String, usize)> = Vec::new();
+    for (ei, sname) in &pending_sub {
+        let (node, float) = if is_ground(sname) {
+            (Some(0), false)
+        } else if let Some(&k) = node_index.get(sname) {
+            (Some(k), false)
+        } else if shared(sname) {
+            let k = match floating.iter().find(|(n, _)| n == sname) {
+                Some(&(_, k)) => k,
+                None => {
+                    nodes.push(sname.clone());
+                    floating.push((sname.clone(), nodes.len() - 1));
+                    nodes.len() - 1
+                }
+            };
+            (Some(k), true)
+        } else {
+            (None, false)
+        };
+        if let Kind::Q { sub, float_sub, .. } = &mut elements[*ei].kind {
+            *sub = node;
+            *float_sub = float;
         }
     }
 
@@ -671,6 +754,56 @@ fn source_spec(t: &[&str], no: usize) -> Result<(f64, f64), String> {
         }
     }
     Ok((dc, ac))
+}
+
+/// MOS level-1 charge parameters of a card. `tox`: TOX when given and
+/// positive (TOX = 0 or absent means no Meyer capacitances, as mos1temp).
+fn mos_caps_model(card: &Card, tox: Option<f64>) -> MosCapModel {
+    let d = MosCapModel::default();
+    MosCapModel {
+        cox: tox.map(|t| EPS_OX / t).unwrap_or(0.0),
+        cgso: card.get("cgso").unwrap_or(0.0),
+        cgdo: card.get("cgdo").unwrap_or(0.0),
+        cgbo: card.get("cgbo").unwrap_or(0.0),
+        cbd: card.get("cbd"),
+        cbs: card.get("cbs"),
+        cj: card.get("cj").unwrap_or(0.0),
+        cjsw: card.get("cjsw").unwrap_or(0.0),
+        mj: card.get("mj").unwrap_or(d.mj),
+        mjsw: card.get("mjsw").unwrap_or(d.mjsw),
+        pb: card.get("pb").unwrap_or(d.pb),
+        fc: card.get("fc").unwrap_or(d.fc),
+    }
+}
+
+/// Gummel–Poon charge parameters of a card, with ngspice's aliases (PE, ME,
+/// PC, MC, CCS, CSUB, PS, MS) and SUBS (1 vertical, −1 lateral; NPN
+/// vertical and PNP lateral by default).
+fn bjt_caps_model(card: &Card, ty: f64) -> BjtCapModel {
+    let d = BjtCapModel::new(ty);
+    let get = |keys: &[&str], dflt: f64| keys.iter().find_map(|k| card.get(k)).unwrap_or(dflt);
+    BjtCapModel {
+        cje: get(&["cje"], d.cje),
+        vje: get(&["vje", "pe"], d.vje),
+        mje: get(&["mje", "me"], d.mje),
+        tf: get(&["tf"], d.tf),
+        xtf: get(&["xtf"], d.xtf),
+        vtf: get(&["vtf"], d.vtf),
+        itf: get(&["itf"], d.itf),
+        cjc: get(&["cjc"], d.cjc),
+        vjc: get(&["vjc", "pc"], d.vjc),
+        mjc: get(&["mjc", "mc"], d.mjc),
+        xcjc: get(&["xcjc"], d.xcjc),
+        tr: get(&["tr"], d.tr),
+        cjs: get(&["cjs", "ccs", "csub"], d.cjs),
+        vjs: get(&["vjs", "ps"], d.vjs),
+        mjs: get(&["mjs", "ms"], d.mjs),
+        fc: get(&["fc"], d.fc),
+        subs: match card.get("subs") {
+            Some(v) if v == 1.0 || v == -1.0 => v,
+            _ => d.subs,
+        },
+    }
 }
 
 #[cfg(test)]

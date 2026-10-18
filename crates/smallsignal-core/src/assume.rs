@@ -54,6 +54,18 @@ pub enum Term {
     Rbd,
     Rpi,
     Rmu,
+    /// Device capacitances, each taken to 0.
+    Cgs,
+    Cgd,
+    Cgb,
+    Cbs,
+    Cbd,
+    Cpi,
+    Cmu,
+    /// A BJT's substrate capacitance, to the collector or (lateral) base.
+    Ccs,
+    /// A diode's junction capacitance.
+    Cj,
     Open,
     Short,
 }
@@ -67,6 +79,15 @@ impl Term {
             Term::Rbd => "rbd",
             Term::Rpi => "rpi",
             Term::Rmu => "rmu",
+            Term::Cgs => "cgs",
+            Term::Cgd => "cgd",
+            Term::Cgb => "cgb",
+            Term::Cbs => "cbs",
+            Term::Cbd => "cbd",
+            Term::Cpi => "cpi",
+            Term::Cmu => "cmu",
+            Term::Ccs => "ccs",
+            Term::Cj => "cj",
             Term::Open => "open",
             Term::Short => "short",
         }
@@ -80,6 +101,15 @@ impl Term {
             "rbd" => Term::Rbd,
             "rpi" => Term::Rpi,
             "rmu" => Term::Rmu,
+            "cgs" => Term::Cgs,
+            "cgd" => Term::Cgd,
+            "cgb" => Term::Cgb,
+            "cbs" => Term::Cbs,
+            "cbd" => Term::Cbd,
+            "cpi" => Term::Cpi,
+            "cmu" => Term::Cmu,
+            "ccs" => Term::Ccs,
+            "cj" => Term::Cj,
             "open" => Term::Open,
             "short" => Term::Short,
             _ => return None,
@@ -90,9 +120,20 @@ impl Term {
 /// The terms an element of this kind can take.
 pub fn terms_for(kind: &Kind) -> &'static [Term] {
     match kind {
-        Kind::M { .. } => &[Term::Ro, Term::Gmb, Term::Rbs, Term::Rbd],
-        Kind::Q { .. } => &[Term::Ro, Term::Rpi, Term::Rmu],
-        Kind::R { .. } | Kind::C { .. } | Kind::L { .. } | Kind::D { .. } => &[Term::Open, Term::Short],
+        Kind::M { .. } => &[
+            Term::Ro,
+            Term::Gmb,
+            Term::Rbs,
+            Term::Rbd,
+            Term::Cgs,
+            Term::Cgd,
+            Term::Cgb,
+            Term::Cbs,
+            Term::Cbd,
+        ],
+        Kind::Q { .. } => &[Term::Ro, Term::Rpi, Term::Rmu, Term::Cpi, Term::Cmu, Term::Ccs],
+        Kind::D { .. } => &[Term::Open, Term::Short, Term::Cj],
+        Kind::R { .. } | Kind::C { .. } | Kind::L { .. } => &[Term::Open, Term::Short],
         _ => &[],
     }
 }
@@ -111,6 +152,8 @@ fn param_name(kind: &Kind, term: Term, element: &str) -> String {
     match (term, kind) {
         (Term::Open | Term::Short, Kind::D { .. }) => format!("rd_{element}"),
         (Term::Open | Term::Short, _) => element.to_string(),
+        // A lateral device's substrate capacitance ends at the base.
+        (Term::Ccs, Kind::Q { model, .. }) if model.caps.subs < 0.0 => format!("cbsub_{element}"),
         (t, _) => format!("{}_{element}", t.as_str()),
     }
 }
@@ -214,7 +257,11 @@ pub fn resolve(net: &Netlist, full: &SsCircuit, op: Option<&Op>, req: &AssumeReq
 /// `restored`.
 pub fn apply(full: &SsCircuit, a: &Assume, restored: &[usize]) -> SsCircuit {
     let active = || a.applied.iter().enumerate().filter(|(i, _)| !restored.contains(i));
-    let drop: Vec<usize> = active().filter_map(|(_, x)| x.param).collect();
+    let mut drop: Vec<usize> = active().filter_map(|(_, x)| x.param).collect();
+    // An open element is left out whole: a diode's C_j goes with its r_d.
+    for (_, x) in active().filter(|(_, x)| x.term == Term::Open) {
+        drop.extend((0..full.params.len()).filter(|&i| full.params[i].element == x.element));
+    }
     let mut model = full.omit(&drop);
     for (_, x) in active() {
         if let Some((a, b)) = x.short {
@@ -316,7 +363,16 @@ pub fn latex_of(net: &Netlist, x: &Applied, symbol: Option<&str>) -> String {
         .element(&x.element)
         .is_some_and(|ei| matches!(net.elements[ei].kind, Kind::C { .. }));
     let to_inf = match x.term {
-        Term::Gmb => false,
+        Term::Gmb
+        | Term::Cgs
+        | Term::Cgd
+        | Term::Cgb
+        | Term::Cbs
+        | Term::Cbd
+        | Term::Cpi
+        | Term::Cmu
+        | Term::Ccs
+        | Term::Cj => false,
         Term::Open => !capacitor,
         Term::Short => capacitor,
         _ => true,

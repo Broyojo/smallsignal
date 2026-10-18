@@ -1,0 +1,8 @@
+NMOS CS with gate overlap capacitances, distortion vs frequency
+VDD vdd 0 5
+VIN in 0 DC 0.9 AC 1
+RS in g 5k
+RD vdd out 5k
+M1 out g 0 0 nch W=10u L=1u
+.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 CGSO=2e-9 CGDO=1e-9)
+.end

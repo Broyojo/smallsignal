@@ -485,11 +485,11 @@ describe("assumption table", () => {
     expect(resultForCircuit(null, "p/main")).toBeNull();
   });
 
-  it("one column per term the circuit has, leakage combined, others after", () => {
+  it("one column per term the circuit has, leakage and capacitances combined", () => {
     const rows = assumptionRows(
       [
         ...assumable,
-        { element: "M4", type: "pmos", terms: ["ro", "cgs"] },
+        { element: "M4", type: "pmos", terms: ["ro", "cgs", "cgd", "cbd"] },
       ] as Parameters<typeof assumptionRows>[0],
       [...elements, { name: "M4", instancePath: ["m4"], kind: "pmos" }],
       [],
@@ -500,7 +500,7 @@ describe("assumption table", () => {
       "gmb",
       "rpi",
       "leakage",
-      "cgs",
+      "caps",
     ]);
   });
 });

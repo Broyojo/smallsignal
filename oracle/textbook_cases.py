@@ -260,6 +260,32 @@ def miller(with_cl: bool, ideal=False):
     return solve(eqs, [vg, vo], vo)
 
 
+def miller_device(ideal=False):
+    """CS stage with the MOSFET's own capacitances (cgs_M1 g–s, cgd_M1 g–d,
+    cbd_M1 d–b with the bulk on ground): the RHP zero at gm/C_gd."""
+    vg, vo = sp.symbols("vg vo")
+    cgs, cgd, cdb = sym("cgs_M1"), sym("cgd_M1"), sym("cbd_M1")
+    eqs = [
+        (vg - 1) / sym("RS") + vg * s * cgs + (vg - vo) * s * cgd,
+        vo / sym("RD") + (vo - vg) * s * cgd + vo * s * cdb + mos("M1", vo, vg, 0, ideal=ideal),
+    ]
+    return solve(eqs, [vg, vo], vo)
+
+
+def miller_bjt_device(ideal=False):
+    """CE stage with the BJT's C_π (b–e) and C_μ (b–c): Miller at the base,
+    the RHP zero at gm/C_μ."""
+    vb, vo = sp.symbols("vb vo")
+    cpi, cmu = sym("cpi_Q1"), sym("cmu_Q1")
+    gm, rpi, ro = sym("gm_Q1"), sym("rpi_Q1"), sym("ro_Q1")
+    ic = gm * vb + (0 if ideal else vo / ro)
+    eqs = [
+        (vb - 1) / sym("RS") + vb / rpi + vb * s * cpi + (vb - vo) * s * cmu,
+        vo / sym("RC") + (vo - vb) * s * cmu + ic,
+    ]
+    return solve(eqs, [vb, vo], vo)
+
+
 def diffpair_mos_dm():
     """Two sources: v(inp) = +1/2, v(inn) = −1/2."""
     v1, v2, vt = sp.symbols("v1 v2 vt")
@@ -746,6 +772,25 @@ CASES: list[Case] = [
         "cs miller\nVIN in 0\nRS in g\nVDD vdd 0\nRD vdd out\nM1 out g 0 0\nCGD g out\n",
         "VIN", "out",
         gain=Quantity(lambda: miller(False), lead=lambda: miller(False, ideal=True)),
+    ),
+    # Device capacitances from the model card (TOX, CGDO, CJ with AD): the
+    # symbolic analysis stamps C_gs, C_gd and C_db of a saturated device.
+    Case(
+        "miller_device_caps",
+        "cs device caps\nVIN in 0\nRS in g\nVDD vdd 0\nRD vdd out\nM1 out g 0 0 nch W=10u L=1u AD=20p\n"
+        ".model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CJ=5e-4)\n",
+        "VIN", "out",
+        gain=Quantity(lambda: miller_device(), lead=lambda: miller_device(ideal=True)),
+        numeric_netlist="cs device caps\n.options gmin=1e-18\nVIN in 0 DC 0.8 AC 1\nRS in g 2k\nVDD vdd 0 1.8\nRD vdd out 10k\n"
+        "M1 out g 0 0 nch W=10u L=1u AD=20p\n"
+        ".model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.1 TOX=20n CGSO=3e-10 CGDO=3e-10 CJ=5e-4)\n",
+    ),
+    Case(
+        "miller_bjt_device_caps",
+        "ce device caps\nVIN in 0\nRS in b\nVCC vcc 0\nRC vcc out\nQ1 out b 0 npnc\n"
+        ".model npnc NPN (IS=1e-16 BF=100 VAF=50 CJE=1p CJC=0.5p TF=0.3n)\n",
+        "VIN", "out",
+        gain=Quantity(lambda: miller_bjt_device(), lead=lambda: miller_bjt_device(ideal=True)),
     ),
     Case(
         "miller_cl",

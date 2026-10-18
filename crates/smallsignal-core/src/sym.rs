@@ -99,7 +99,8 @@ fn device_sub(kind: &str) -> Option<(&'static str, &'static str)> {
         "rbs" => ("r", "bs"),
         "rbd" => ("r", "bd"),
         "rd" => ("r", "d"),
-        _ => return None,
+        "rsub" => ("r", "sub"),
+        _ => return crate::ss::cap_sub(kind).map(|sub| ("C", sub)),
     })
 }
 
@@ -301,8 +302,8 @@ pub fn symbols(
                 role: p.role,
                 unit: p.unit,
                 elements,
-                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
-                leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd"),
+                output_r: matches!(kind.as_str(), "ro" | "rmu" | "rbs" | "rbd" | "rsub") && !p.linear,
+                leakage: matches!(kind.as_str(), "rmu" | "rbs" | "rbd" | "rsub"),
             });
         }
     }
@@ -325,8 +326,11 @@ pub fn unmerged(ss: &SsCircuit) -> Symbols {
             role: p.role,
             unit: p.unit,
             elements: vec![p.element.clone()],
-            output_r: matches!(kind_of(&p.name, &p.element).as_str(), "ro" | "rmu" | "rbs" | "rbd") && !p.linear,
-            leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd"),
+            output_r: matches!(
+                kind_of(&p.name, &p.element).as_str(),
+                "ro" | "rmu" | "rbs" | "rbd" | "rsub"
+            ) && !p.linear,
+            leakage: matches!(kind_of(&p.name, &p.element).as_str(), "rmu" | "rbs" | "rbd" | "rsub"),
         })
         .collect();
     Symbols {
@@ -364,12 +368,18 @@ pub fn match_candidates(net: &Netlist, ss: &SsCircuit, op: Option<&Op>) -> Vec<(
         let e = &net.elements[i];
         let model_type = |ty: f64| if ty > 0.0 { "n" } else { "p" };
         match &e.kind {
-            Kind::M { model, w, l, mult } if !model.name.is_empty() => Some((
+            Kind::M {
+                model,
+                w,
+                l,
+                mult,
+                geom,
+            } if !model.name.is_empty() => Some((
                 format!("M:{}:{}", model.name.to_ascii_lowercase(), model_type(model.ty)),
-                vec![*w, *l, *mult],
+                vec![*w, *l, *mult, geom.ad, geom.as_, geom.pd, geom.ps],
                 "device",
             )),
-            Kind::Q { model, area, mult } if !model.name.is_empty() => Some((
+            Kind::Q { model, area, mult, .. } if !model.name.is_empty() => Some((
                 format!("Q:{}:{}", model.name.to_ascii_lowercase(), model_type(model.ty)),
                 vec![*area, *mult],
                 "device",

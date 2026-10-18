@@ -1,0 +1,21 @@
+{
+ "input": "VIN",
+ "output": "out",
+ "freqs": [
+  1000,
+  100000.0,
+  1000000.0,
+  10000000.0,
+  100000000.0,
+  1000000000.0,
+  10000000000.0
+ ],
+ "rin": true,
+ "rout": true,
+ "pz": true,
+ "description": "CS stage, saturated: C_gs = 2/3 Cox W L + CGSO W, C_gd = CGDO W (Miller, RHP zero gm/C_gd), C_gb = CGBO L, C_db from CJ AD + CJSW PD at V_DB; C_sb is shorted (bulk on source). Noise spectra through the capacitances.",
+ "hand": {
+  "zero": "+gm / C_gd (right half plane)"
+ },
+ "noise": true
+}
