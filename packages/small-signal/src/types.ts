@@ -147,8 +147,11 @@ export interface SmallSignalExpression {
   assumption?: string;
   /** Numeric simplified forms only: how they were made (`approx`). */
   method?: SmallSignalApprox;
-  /** Named forms: the assumptions made on top of the request's. */
+  /** Named forms: the element limits taken on top of the request's. */
   named?: NamedAssumption[];
+  /** Named forms: the hand limit r_o ≫ R, 1/g_m, when taken, on the
+   * output resistances of `elements` (`all`: every one in the form). */
+  leadingOrder?: { elements: string[]; all: boolean };
   /** Named forms: named assumptions appear in the form, but no set within
    * the tolerance makes it simpler; the form is the exact one. */
   none?: boolean;

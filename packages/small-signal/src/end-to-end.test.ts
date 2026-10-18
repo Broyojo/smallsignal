@@ -89,6 +89,7 @@ const SIMPLIFIED_KEYS = allKeys<SmallSignalExpression>()([
   "fullModelError",
   "method",
   "named",
+  "leadingOrder",
   "none",
   "tolerance",
 ] as const);
