@@ -33,6 +33,14 @@ pub struct Structured {
     negate: bool,
 }
 
+fn gcd(a: i128, b: i128) -> i128 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
 fn admittance_like(s: &Sym) -> bool {
     matches!(s.role, Role::Resistor | Role::DeviceR | Role::Gm | Role::Gmb)
 }
@@ -112,13 +120,15 @@ pub fn structure(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<Structured> {
     let numd = divide(&nterms, g, &m, syms)?;
     let dend = divide(&hterms, g, &m, syms)?;
     // `-(g_{m1} + g_{m2}) (r_{o1} ∥ r_{o2})` reads as the textbook does, but
-    // a sum whose terms share a factor, `(a b + a c) (…)`, reads worse than
-    // the plain fraction.
+    // a sum whose terms share a factor (a symbol, s, or an integer),
+    // `(a b + a c) (…)`, reads worse than the plain fraction.
     let mut k = 0;
     while k < numd.len() {
         let grp: Vec<&DTerm> = numd[k..].iter().take_while(|t| t.spow == numd[k].spow).collect();
         k += grp.len();
-        if grp.len() > 1 && (0..syms.len()).any(|i| grp.iter().all(|t| t.e[i] > 0)) {
+        let content = grp.iter().fold(0i128, |a, t| gcd(a, t.coeff.abs()));
+        if grp.len() > 1 && (grp[0].spow > 0 || content > 1 || (0..syms.len()).any(|i| grp.iter().all(|t| t.e[i] > 0)))
+        {
             return None;
         }
     }
@@ -273,5 +283,65 @@ impl Structured {
         let n: Complex64 = self.num.iter().map(term).sum::<Complex64>() * z;
         let d: Complex64 = Complex64::new(1.0, 0.0) + self.den.iter().map(term).sum::<Complex64>() * z;
         n / d
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sym(latex: &str, role: Role, inverted: bool) -> Sym {
+        Sym {
+            name: latex.into(),
+            latex: latex.into(),
+            value: 1.0,
+            inverted,
+            reactive: role == Role::Capacitor,
+            role,
+            unit: "",
+            elements: Vec::new(),
+            output_r: false,
+            leakage: false,
+        }
+    }
+
+    /// g_{m1}, g_{m2}, r_{o1}, r_{o2} (as conductances), C.
+    fn syms() -> Vec<Sym> {
+        vec![
+            sym("g_{m1}", Role::Gm, false),
+            sym("g_{m2}", Role::Gm, false),
+            sym("r_{o1}", Role::DeviceR, true),
+            sym("r_{o2}", Role::DeviceR, true),
+            sym("C", Role::Capacitor, false),
+        ]
+    }
+
+    fn poly(terms: &[([u8; 5], i128)]) -> XPoly {
+        XPoly {
+            terms: terms.iter().map(|(e, c)| (e.to_vec(), *c)).collect(),
+        }
+    }
+
+    const DEN: [([u8; 5], i128); 2] = [([0, 0, 1, 0, 0], 1), ([0, 0, 0, 1, 0], 1)];
+
+    #[test]
+    fn a_sum_with_no_common_factor_goes_in_front_of_the_group() {
+        let num = poly(&[([1, 0, 0, 0, 0], -1), ([0, 1, 0, 0, 0], -1)]);
+        let st = structure(&num, &poly(&DEN), &syms()).unwrap();
+        assert_eq!(
+            st.latex,
+            "-\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)"
+        );
+    }
+
+    #[test]
+    fn a_sum_sharing_a_symbol_s_or_an_integer_keeps_the_fraction() {
+        for num in [
+            [([1, 1, 0, 0, 0], 1), ([1, 0, 0, 0, 0], 1)],
+            [([1, 0, 0, 0, 1], 1), ([0, 1, 0, 0, 1], 1)],
+            [([1, 0, 0, 0, 0], 2), ([0, 1, 0, 0, 0], 2)],
+        ] {
+            assert!(structure(&poly(&num), &poly(&DEN), &syms()).is_none(), "{num:?}");
+        }
     }
 }

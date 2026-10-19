@@ -3512,8 +3512,12 @@ function Guide({
 }
 
 const DIFF_PREFIX = "diff:";
-/** The Output menu's entry for a difference not drawn as a pair. */
-const DIFFERENCE = "difference";
+/**
+ * The Output menu's pair and "Difference of two nets…" values: a net name
+ * has no spaces, so neither can be taken for one.
+ */
+const OUTPUT_PAIR = "pair ";
+const DIFFERENCE = "difference …";
 const NO_ASSUMPTIONS: CircuitAssumptions = {};
 
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
@@ -4551,7 +4555,7 @@ export function SmallSignalPanel({
                   value={
                     chosenReference === "0"
                       ? chosenOutput
-                      : `${DIFF_PREFIX}${chosenOutput}|${chosenReference}`
+                      : `${OUTPUT_PAIR}${chosenOutput}|${chosenReference}`
                   }
                   onChange={(event) => {
                     const value = event.currentTarget.value;
@@ -4562,9 +4566,9 @@ export function SmallSignalPanel({
                           (net) => net !== "0" && net !== chosenOutput,
                         ) ?? "0",
                       );
-                    } else if (value.startsWith(DIFF_PREFIX)) {
+                    } else if (value.startsWith(OUTPUT_PAIR)) {
                       const [plus, minus] = value
-                        .slice(DIFF_PREFIX.length)
+                        .slice(OUTPUT_PAIR.length)
                         .split("|");
                       setOutput(plus ?? null);
                       setReference(minus ?? "0");
@@ -4586,7 +4590,7 @@ export function SmallSignalPanel({
                   ].map(([plus, minus]) => (
                     <option
                       key={`${plus}|${minus}`}
-                      value={`${DIFF_PREFIX}${plus}|${minus}`}
+                      value={`${OUTPUT_PAIR}${plus}|${minus}`}
                     >
                       {plus} − {minus}
                     </option>
