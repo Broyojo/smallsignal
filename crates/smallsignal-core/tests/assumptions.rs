@@ -522,6 +522,18 @@ M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBD
     let a1 = d["coefficients"][0]["value"].as_f64().unwrap();
     let g = v["gain"]["assumed"]["values"][0]["re"].as_f64().unwrap();
     assert!(rel(a1, g) < 1e-9, "{a1} {g}");
+    // Saturation imposed on M1 (triode at its bias): its square law, so
+    // its V_OD; the bias's own forms have none for it.
+    let vod = |r: &Value| {
+        r["distortion"]["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "Vod_M1")
+    };
+    assert!(vod(&v), "{}", d["symbols"]);
+    assert!(!vod(&plain), "{}", plain["distortion"]["symbols"]);
+    assert!(d["coefficients"][1]["latex"].as_str().unwrap().contains("V_{OD1}"));
 }
 
 #[test]
@@ -596,7 +608,7 @@ fn distortion_drops_the_terms_an_ignored_conductance_linearizes() {
     }
     assert_eq!(d["check"]["ok"], true, "{}", d["check"]);
     // The numeric a_n stay the full model's; the closed form is λ = 0's:
-    // a2 = −K_2g R_D.
+    // a2 = −K_2g R_D = −g_m R_D/(2 V_OD).
     for (a, b) in d["coefficients"]
         .as_array()
         .unwrap()
@@ -606,7 +618,7 @@ fn distortion_drops_the_terms_an_ignored_conductance_linearizes() {
         assert_eq!(a["numeric"], b["numeric"]);
     }
     let a2 = &d["coefficients"][1];
-    assert_eq!(a2["simplified"]["latex"], "-K_{2g,M1} R_{D}", "{a2}");
+    assert_eq!(a2["simplified"]["latex"], "-\\frac{g_{m1} R_{D}}{2 V_{OD1}}", "{a2}");
     assert!(a2["fullModelError"].as_f64().unwrap() > 0.0);
     assert!(d["hd2"]["fullModelError"].is_number());
 }

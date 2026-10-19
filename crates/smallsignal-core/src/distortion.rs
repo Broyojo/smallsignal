@@ -145,7 +145,8 @@ impl Jet {
 /// Level-1 channel current into the effective drain, effective frame
 /// (vds ≥ 0), as `devices::mos_eval`, or with `imposed` that region's
 /// equations, as `devices::mos_eval_in`.
-fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet, imposed: Option<MosRegion>) -> Jet {
+/// The threshold voltage as a jet in v_BS (level 1, ngspice's body effect).
+fn mos_von(m: &MosModel, vbs: Jet) -> Jet {
     let sqphi = m.phi.sqrt();
     let sarg = if vbs.v() <= 0.0 {
         Jet::cst(m.phi).sub(&vbs).sqrt()
@@ -157,17 +158,24 @@ fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet, imposed: Optio
             l
         }
     };
-    let von = Jet::cst(m.ty * m.vto - m.gamma * sqphi).add(&sarg.scale(m.gamma));
-    let vgst = vgs.sub(&von);
+    Jet::cst(m.ty * m.vto - m.gamma * sqphi).add(&sarg.scale(m.gamma))
+}
+
+/// Saturated (by bias or imposed) at this bias.
+fn mos_saturated(vgst: f64, vds: f64, imposed: Option<MosRegion>) -> bool {
+    match imposed {
+        Some(r) => r == MosRegion::Saturation,
+        None => vgst <= vds,
+    }
+}
+
+fn mos_jet(m: &MosModel, beta: f64, vgs: Jet, vds: Jet, vbs: Jet, imposed: Option<MosRegion>) -> Jet {
+    let vgst = vgs.sub(&mos_von(m, vbs));
     if vgst.v() <= 0.0 {
         return Jet::cst(0.0);
     }
     let betap = Jet::cst(1.0).add(&vds.scale(m.lambda)).scale(beta);
-    let saturated = match imposed {
-        Some(r) => r == MosRegion::Saturation,
-        None => vgst.v() <= vds.v(),
-    };
-    if saturated {
+    if mos_saturated(vgst.v(), vds.v(), imposed) {
         betap.mul(&vgst).mul(&vgst).scale(0.5)
     } else {
         betap.mul(&vds).mul(&vgst.sub(&vds.scale(0.5)))
@@ -286,6 +294,9 @@ pub struct NlDev {
     pub outs: Vec<NlOut>,
     /// Biased on a branch point of its equations (see `mos_boundary`).
     pub boundary: bool,
+    /// A saturated MOSFET's overdrive V_GS − V_TH: its square law makes
+    /// each gate / drain coefficient a g_m, r_o and V_OD expression.
+    pub vov: Option<f64>,
 }
 
 /// Expands each named device at the operating point.
@@ -345,6 +356,10 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                     vars: &["g", "d", "b"],
                     outs,
                     boundary: mos_boundary(model, vgs, vds, vbs, n[3] != es, &junctions),
+                    vov: {
+                        let vgst = vgs - mos_von(model, Jet::cst(vbs)).v();
+                        (vgst > 0.0 && mos_saturated(vgst, vds, m.imposed)).then_some(vgst)
+                    },
                 }
             }
             (Kind::Q { model, area, mult, .. }, Some(DevOp::Bjt(q))) => {
@@ -374,6 +389,7 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                         },
                     ],
                     boundary: [ty * q.vbe, vbc].iter().any(|&v| near(v, -3.0 * vt(), v.abs())),
+                    vov: None,
                 }
             }
             (Kind::D { model, area, mult }, Some(DevOp::Diode(d))) => {
@@ -391,6 +407,7 @@ pub fn devices(net: &Netlist, op: &Op, names: &[String]) -> Result<Vec<NlDev>, S
                         free: id,
                     }],
                     boundary: near(d.vd, -3.0 * model.n * vt(), d.vd.abs()),
+                    vov: None,
                 }
             }
             _ => {
@@ -889,6 +906,8 @@ pub struct Closed {
     /// The symbol of each Taylor coefficient (`coefs` order), None when
     /// left out.
     pub coef_sym: Vec<Option<usize>>,
+    /// a_n's numerator is `scale[n]` times a_n's (`ORDER_SCALE`).
+    scale: [i128; 3],
     /// Term budget of every product (as `closed` was given).
     max_terms: usize,
     /// D^0, D^1, … as far as computed, and whether the next power is over
@@ -963,6 +982,7 @@ impl Closed {
             pow,
             vid,
             coef_sym: Vec::new(),
+            scale: [1; 3],
             max_terms,
             dpow: RefCell::new((Vec::new(), false)),
             a_memo: (0..n).map(|_| OnceCell::new()).collect(),
@@ -997,7 +1017,7 @@ impl Closed {
         self.a_memo
             .get(n)?
             .get_or_init(|| {
-                let k = self.vid.pow(n as u32 + 1);
+                let k = self.vid.pow(n as u32 + 1) * self.scale[n];
                 let den = self.with_d_pow(self.pow[n], |p| p.scaled(k)).ok()?;
                 Some(Quantity::new(self.num[n].clone(), den))
             })
@@ -1010,7 +1030,7 @@ impl Closed {
         self.ratio_memo
             .get(n)?
             .get_or_init(|| {
-                let k = self.vid.pow(n as u32);
+                let k = self.vid.pow(n as u32) * self.scale[n];
                 let den = self
                     .with_d_pow(self.pow[n] - 1, |p| p.mul(&self.num[0], self.max_terms))
                     .and_then(|p| p.scaled(k))
@@ -1042,13 +1062,48 @@ fn at_dc(a: &[Vec<Poly>], reactive: u128) -> Vec<Vec<Poly>> {
 /// Symbols for the kept coefficients (their `free` values on the
 /// leakage-free model); matched devices' equal coefficients share one.
 /// Returns the symbol index of each coefficient.
+/// A coefficient written in the device's own symbols: `coeff` · Π sym^exp,
+/// in units of 1/2 (order 2) or 1/4 (order 3) so every coefficient is an
+/// integer (`ORDER_SCALE`).
+struct KForm {
+    coeff: i128,
+    factors: Vec<(usize, u8)>,
+}
+
+/// What a_2 and a_3 are multiplied by when a coefficient is a `KForm`:
+/// K_2g = g_m/(2 V_OD) needs the halves, and an order-3 current is K_3 or
+/// a product of two order-2 ones.
+const ORDER_SCALE: [i128; 3] = [1, 2, 4];
+
+/// A saturated square-law MOSFET's gate / drain coefficients, exactly:
+/// I_D = ½β V_OD² (1 + λ v_DS), g_m = β V_OD (1 + λ v_DS), g_o = ½β λ V_OD²,
+/// so K_{2g} = g_m/(2 V_OD), K_{gd} = 2 g_o/V_OD, K_{2gd} = g_o/V_OD² (the
+/// rest are 0). `w` is 1/V_OD. Checked against the coefficient's value, so
+/// a model this does not describe keeps its K.
+fn square_law(mono: [u8; 3], value: f64, gm: (usize, f64), go: Option<(usize, f64)>, w: (usize, f64)) -> Option<KForm> {
+    let (coeff, factors, f) = match (mono, go) {
+        ([2, 0, 0], _) => (1, vec![(gm.0, 1), (w.0, 1)], gm.1 * w.1 / 2.0),
+        ([1, 1, 0], Some(go)) => (4, vec![(go.0, 1), (w.0, 1)], 2.0 * go.1 * w.1),
+        ([2, 1, 0], Some(go)) => (4, vec![(go.0, 1), (w.0, 2)], go.1 * w.1 * w.1),
+        _ => return None,
+    };
+    let sign = value.signum();
+    ((sign * f - value).abs() <= 1e-9 * value.abs()).then(|| KForm {
+        coeff: sign as i128 * coeff,
+        factors,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn coef_symbols(
+    ss: &SsCircuit,
     devs: &[NlDev],
     coefs: &[Coef],
     keep: &[bool],
     free: bool,
     symbols: &Symbols,
     syms: &mut Vec<Sym>,
+    forms: &mut Vec<Option<KForm>>,
 ) -> Vec<Option<usize>> {
     // Two devices are matched when the symbol layer merged any of their
     // parameters into one symbol (whatever the device kind or region: a
@@ -1060,15 +1115,64 @@ fn coef_symbols(
             .any(|s| s.elements.len() > 1 && s.elements.iter().any(|e| e == a) && s.elements.iter().any(|e| e == b))
     };
     let nbase = syms.len();
+    // A device parameter's symbol, `gm_M1` → g_{m1} (shared when matched).
+    let param = |name: String| {
+        let j = ss.params.iter().position(|p| p.name == name)?;
+        let k = symbols.class[j];
+        Some((k, symbols.syms[k].value))
+    };
+    // 1/V_OD per g_m symbol: matched devices share it at equal values.
+    let mut overdrive: Vec<(usize, usize)> = Vec::new();
     let mut idx = Vec::new();
+    forms.clear();
     for (c, &k) in coefs.iter().zip(keep) {
         let value = if free { c.free } else { c.value };
+        forms.push(None);
         if !k || value == 0.0 {
             idx.push(None);
             continue;
         }
         let d = &devs[c.dev];
         let o = &d.outs[c.out];
+        if let (Some(v), "", Some(gm)) = (d.vov, o.label, param(format!("gm_{}", d.element))) {
+            let go = param(format!("ro_{}", d.element)).filter(|&(k, _)| syms[k].inverted);
+            let w = match overdrive
+                .iter()
+                .find(|&&(g, w)| g == gm.0 && (syms[w].value - v).abs() <= MATCH_REL * v)
+            {
+                Some(&(_, w)) => {
+                    if !syms[w].elements.contains(&d.element) {
+                        syms[w].elements.push(d.element.clone());
+                        syms[w].latex = crate::ss::dev_latex_sub("V", "OD", &sym::merged_name(&syms[w].elements));
+                    }
+                    w
+                }
+                None => {
+                    syms.push(Sym {
+                        name: format!("Vod_{}", d.element),
+                        latex: crate::ss::dev_latex_sub("V", "OD", &d.element),
+                        value: v,
+                        inverted: true,
+                        reactive: false,
+                        role: Role::Overdrive,
+                        unit: "V",
+                        elements: vec![d.element.clone()],
+                        output_r: false,
+                        leakage: false,
+                    });
+                    overdrive.push((gm.0, syms.len() - 1));
+                    syms.len() - 1
+                }
+            };
+            let go = go.map(|(k, r)| (k, 1.0 / r));
+            if !syms[gm.0].inverted {
+                if let Some(f) = square_law(c.mono, value, gm, go, (w, 1.0 / v)) {
+                    *forms.last_mut().expect("pushed") = Some(f);
+                    idx.push(None);
+                    continue;
+                }
+            }
+        }
         let (sub, tex) = mono_sub(&c.mono, d.vars);
         let name = format!("K{}{sub}_{}", o.label, d.element);
         let twin = (nbase..syms.len()).find(|&t| {
@@ -1150,8 +1254,15 @@ pub fn closed(
         ));
     }
     let mut syms = symbols.syms.clone();
-    let cidx = coef_symbols(devs, coefs, keep, free, symbols, &mut syms);
+    let mut forms = Vec::new();
+    let cidx = coef_symbols(ss, devs, coefs, keep, free, symbols, &mut syms, &mut forms);
+    // A V_OD made for a coefficient that kept its K is not shown.
     let nsym = syms.len();
+    let scale = if forms.iter().any(Option::is_some) {
+        ORDER_SCALE
+    } else {
+        [1; 3]
+    };
     let nbase = symbols.syms.len();
     let x = |p: &Poly| -> Result<XPoly, String> { Ok(XPoly::from_poly(p, &symbols.class, nbase)?.padded(nsym)) };
     // det(A0) with column `col` replaced by `b`.
@@ -1220,7 +1331,25 @@ pub fn closed(
             u.resize(3, XPoly::default());
             u1.push(u);
         }
-        let kvar = |k: usize| XPoly::var(cidx[k].expect("kept"), nsym);
+        // Each coefficient in units of 1/scale (an order's a_n is scaled
+        // back in `Closed::a`).
+        let kvar = |k: usize| -> Result<XPoly, String> {
+            let order = coefs[k].order() as usize - 1;
+            match (&forms[k], cidx[k]) {
+                (Some(f), _) => {
+                    let mut e = vec![0u8; nsym];
+                    for &(i, x) in &f.factors {
+                        e[i] += x;
+                    }
+                    Ok(XPoly {
+                        terms: vec![(e, f.coeff * scale[order] / ORDER_SCALE[order])],
+                    })
+                }
+                (None, Some(i)) => XPoly::var(i, nsym).scaled(scale[order]),
+                (None, None) => unreachable!("only kept coefficients"),
+            }
+        };
+        let kept = |k: usize| cidx[k].is_some() || forms[k].is_some();
         let pow = |u: &[XPoly], m: &[u8; 3]| -> Result<XPoly, String> {
             let mut p = XPoly::constant(1, nsym);
             for (v, &e) in m.iter().enumerate() {
@@ -1235,8 +1364,8 @@ pub fn closed(
         // the budget whole (sum_within).
         let mut parts2: BTreeMap<(usize, usize), Vec<XPoly>> = BTreeMap::new();
         for (k, c) in coefs.iter().enumerate() {
-            if cidx[k].is_some() && c.order() == 2 {
-                let t = mul(&kvar(k), &pow(&u1[c.dev], &c.mono)?)?;
+            if kept(k) && c.order() == 2 {
+                let t = mul(&kvar(k)?, &pow(&u1[c.dev], &c.mono)?)?;
                 parts2.entry((c.dev, c.out)).or_default().push(t);
             }
         }
@@ -1289,7 +1418,7 @@ pub fn closed(
             let mut prods: HashMap<(usize, [u8; 3]), XPoly> = HashMap::new();
             let mut parts3: BTreeMap<(usize, usize), Vec<XPoly>> = BTreeMap::new();
             for (k, c) in coefs.iter().enumerate() {
-                if cidx[k].is_none() || !(2..=3).contains(&c.order()) {
+                if !kept(k) || !(2..=3).contains(&c.order()) {
                     continue;
                 }
                 if let Entry::Vacant(v) = prods.entry((c.dev, c.mono)) {
@@ -1305,7 +1434,7 @@ pub fn closed(
                     };
                     v.insert(t);
                 }
-                let t = mul(&kvar(k), &prods[&(c.dev, c.mono)])?;
+                let t = mul(&kvar(k)?, &prods[&(c.dev, c.mono)])?;
                 parts3.entry((c.dev, c.out)).or_default().push(t);
             }
             let mut i3: BTreeMap<(usize, usize), XPoly> = BTreeMap::new();
@@ -1320,6 +1449,7 @@ pub fn closed(
     let _ = higher();
     let mut cl = Closed::new(syms, dx, num, powers, vid, max_terms);
     cl.coef_sym = cidx;
+    cl.scale = scale;
     Ok(Ok(cl))
 }
 
@@ -1899,13 +2029,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .collect();
 
     let mt = c.max_terms.min(DIST_TERM_LIMIT);
+    // The devices `coefs` expand: under an imposed region, that region's
+    // (its V_OD for the square-law forms).
+    let cdevs = if c.assumed.is_some() { model_devs } else { &devs };
     let build = |ss: &SsCircuit, symbols: &Symbols, free: bool| -> Option<Closed> {
         if c.over_budget {
             return None;
         }
         let sys = crate::ss::system(c.net, ss, c.excite);
         match closed(
-            ss, symbols, &sys, &devs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,
+            ss, symbols, &sys, cdevs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,
         ) {
             Ok(Ok(cl)) => Some(cl),
             _ => None,
@@ -2209,7 +2342,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             }
         }
         for (k, s) in cl.syms.iter().enumerate() {
-            if used[k] && s.role == Role::Coeff && !ksyms.iter().any(|q| q.name == s.name) {
+            if used[k] && matches!(s.role, Role::Coeff | Role::Overdrive) && !ksyms.iter().any(|q| q.name == s.name) {
                 ksyms.push(s);
             }
         }

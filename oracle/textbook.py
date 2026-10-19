@@ -260,8 +260,10 @@ def check_case(case: Case, verbose: bool) -> list[str]:
 
 
 def noise_pair(form: dict) -> tuple[sp.Expr, sp.Expr]:
-    """(thermal, shot) from the solver's inputLowFreq form."""
-    part = lambda p: parse(p["num"]) / parse(p["den"]) if p else sp.Integer(0)  # noqa: E731
+    """(thermal, shot) from the solver's inputLowFreq form, its channel
+    noise factor γ at ngspice's 2/3 (the hand forms write 2/3)."""
+    gamma = {sp.Symbol("gamma"): sp.Rational(2, 3)}
+    part = lambda p: (parse(p["num"]) / parse(p["den"])).subs(gamma) if p else sp.Integer(0)  # noqa: E731
     return part(form.get("thermal")), part(form.get("shot"))
 
 
@@ -326,6 +328,23 @@ def check_dist(case: Case, notes: list[str]) -> list[str]:
     def output_like(name: str) -> bool:
         return name.startswith("K") and ("d" in name.split("_")[0][1:] or "ce" in name)
 
+    def square_law(e: sp.Expr) -> sp.Expr:
+        """A saturated MOSFET the solver writes with V_OD (`Vod_M1` among its
+        symbols): its gate / drain coefficients as the square law gives them,
+        K_2g = gm/(2 V_OD), K_gd = 2/(ro V_OD), K_2gd = 1/(ro V_OD²), the
+        other g/d ones 0, each with its coefficient's sign (a PMOS's even
+        orders are negative). Its body coefficients stay."""
+        sign = {(t["element"], t["monomial"]): sp.sign(t["value"]) for t in dist.get("taylor", [])}
+        sub = {}
+        for x in e.free_symbols:
+            head, _, el = x.name.partition("_")
+            if not head.startswith("K") or f"Vod_{el}" not in present or "b" in head[1:]:
+                continue
+            gm, ro, v = sp.Symbol(f"gm_{el}"), sp.Symbol(f"ro_{el}"), sp.Symbol(f"Vod_{el}")
+            form = {"K2g": gm / (2 * v), "Kgd": 2 / (ro * v), "K2gd": 1 / (ro * v**2)}.get(head, 0)
+            sub[x] = sign.get((el, head[1:]), 1) * form
+        return e.subs(sub, simultaneous=True)
+
     for trial in range(2):
         point = {sp.Symbol(n): sp.Rational(rng.randint(1, 997), rng.randint(1, 997)) for n in sorted(present)}
 
@@ -333,7 +352,8 @@ def check_dist(case: Case, notes: list[str]) -> list[str]:
             """Absent Taylor coefficients → 0, absent r_o → ∞, the rest →
             the random point (r_o → r_o/eps, output-like K → eps·K when
             `scaled`)."""
-            e = m(e)
+            # After the matched renames: a pair's V_OD is its first member's.
+            e = square_law(m(e))
             sub = {}
             for x in e.free_symbols:
                 if x.name.startswith("K") and x.name not in present:

@@ -64,11 +64,19 @@ fn common_source_spectra_match_the_hand_formula() {
 fn common_source_closed_form() {
     let r = run(CS, &req(json!({ "input": "VIN", "output": "out", "noise": true })));
     let lf = &r["noise"]["inputLowFreq"];
-    // r_o cancels exactly: every source drives the same node.
-    let want = "4kT\\left(\\frac{2}{3 g_{m1}} + \\frac{1}{{g_{m1}}^{2} R_{D}}\\right)";
+    // r_o cancels exactly: every source drives the same node. The channel
+    // noise is 4kTγ g_m, γ a symbol at ngspice's 2/3.
+    let want = "4kT\\left(\\frac{\\gamma}{g_{m1}} + \\frac{1}{{g_{m1}}^{2} R_{D}}\\right)";
     assert_eq!(lf["exact"]["latex"], want);
     assert_eq!(lf["simplified"]["latex"], want);
     assert_eq!(lf["check"]["ok"], true);
+    let gamma = lf["currents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["latex"] == "\\gamma")
+        .expect("γ listed");
+    assert!(rel(gamma["value"].as_f64().unwrap(), 2.0 / 3.0) < 1e-15);
     let gm = dev(&r, "M1")["gm"].as_f64().unwrap();
     let v = FOUR_KT * (2.0 / (3.0 * gm) + 1.0 / (gm * gm * 1e4));
     assert!(rel(lf["exact"]["value"].as_f64().unwrap(), v) < 1e-12);
@@ -84,8 +92,8 @@ fn symbolic_mode_gives_the_closed_form_only() {
     assert_eq!(n["output"], json!([]));
     assert!(n["integrated"].is_null());
     let lf = &n["inputLowFreq"];
-    assert_eq!(lf["exact"]["thermal"]["num"], "3 + 2*gm_M1*RD");
-    assert_eq!(lf["exact"]["thermal"]["den"], "3*gm_M1^2*RD");
+    assert_eq!(lf["exact"]["thermal"]["num"], "gamma*gm_M1*RD + 1");
+    assert_eq!(lf["exact"]["thermal"]["den"], "gm_M1^2*RD");
     assert!(lf["exact"]["value"].is_null());
 }
 
@@ -152,7 +160,7 @@ M2 o2 inn tail 0 nm W=10u L=1u\nITAIL tail 0 100u\nVID inp inn DC 0 AC 1\nVCM in
     let lf = &r["noise"]["inputLowFreq"];
     assert_eq!(
         lf["simplified"]["latex"],
-        "4kT\\left(\\frac{4}{3 g_{m1,2}} + \\frac{2}{{g_{m1,2}}^{2} R_{D1,2}}\\right)"
+        "4kT\\left(\\frac{2 \\gamma}{g_{m1,2}} + \\frac{2}{{g_{m1,2}}^{2} R_{D1,2}}\\right)"
     );
     assert_eq!(lf["check"]["ok"], true);
     // Same circuit driven as a pair of sources (±1/2 each): same input noise.

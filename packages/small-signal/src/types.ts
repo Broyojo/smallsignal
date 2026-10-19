@@ -528,6 +528,7 @@ export interface NoiseSource {
 }
 
 /** A bias-current symbol in the shot-noise terms, e.g. I_{C1}. */
+/** A bias current of the closed form, or its channel noise factor γ (no unit). */
 export interface NoiseCurrent {
   name: string;
   latex: string;
@@ -634,7 +635,11 @@ export interface SmallSignalDistortion {
   order: number;
   /** HD2 and HD3 at each frequency (Volterra kernels). */
   vsFreq: DistortionVsFreqPoint[];
-  /** The devices' Taylor coefficients, e.g. K_{2g,M1} = ½∂²I_D/∂v_GS². */
+  /**
+   * The forms' device symbols: Taylor coefficients, e.g. K_{2g,M1} =
+   * ½∂²I_D/∂v_GS², and a saturated MOSFET's V_{OD1} (unit "V"), whose
+   * square law writes K_{2g} as g_m/(2 V_OD).
+   */
   symbols: {
     name: string;
     latex: string;
