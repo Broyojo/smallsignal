@@ -70,7 +70,7 @@ fn common_source_closed_form() {
     assert_eq!(lf["exact"]["latex"], want);
     assert_eq!(lf["simplified"]["latex"], want);
     assert_eq!(lf["check"]["ok"], true);
-    let gamma = lf["symbols"]
+    let gamma = lf["currents"]
         .as_array()
         .unwrap()
         .iter()
