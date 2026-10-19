@@ -258,14 +258,21 @@ test("textbook diff pair: Pins as inputs, hand analysis, then real bias values",
     "Hand analysis",
   );
   await formula(panel, "Gain");
-  for (const pin of ["Vin1", "Vin2", "Vb"])
-    await expect(panel.getByLabel(`${pin} DC voltage`)).toBeVisible();
+  // The missing values lead the panel, in Bias point.
+  const dc = (pin: string) =>
+    card(panel, "Bias point").getByLabel(`${pin} DC`, { exact: true });
+  for (const pin of ["Vin1", "Vin2", "Vb"]) await expect(dc(pin)).toBeVisible();
 
   // Level-1 defaults (W = L = 1u): Vb = 0.6 V gives a 1 µA tail; the pair
   // and the PMOS mirror then sit about 0.07 V and 0.1 V above threshold.
-  await panel.getByLabel("Vin1 DC voltage").fill("0.9");
-  await panel.getByLabel("Vin2 DC voltage").fill("0.9");
-  await panel.getByLabel("Vb DC voltage").fill("0.6");
+  for (const [pin, volts] of [
+    ["Vin1", "0.9"],
+    ["Vin2", "0.9"],
+    ["Vb", "0.6"],
+  ] as const) {
+    await dc(pin).fill(volts);
+    await dc(pin).press("Enter");
+  }
   await expect(panel.locator(".small-signal-alert.is-info")).toHaveCount(0);
   await expect(card(panel, "Bias point")).toBeVisible();
   const regions: Record<string, string> = {};
@@ -442,7 +449,11 @@ test("editing R1 in its menu re-solves: −gm(ro ∥ 20k), the panel stays", asy
   const dc = card(panel, "Bias point").getByRole("group", {
     name: "DC values",
   });
-  await expect(dc.getByRole("textbox")).not.toHaveCount(0);
+    await expect(dc.getByRole("textbox")).not.toHaveCount(0);
+  // More properties: Properties take the dock.
+  await page.getByTestId("hit-r1").click();
+  await menu.getByRole("button", { name: "More properties" }).click();
+  await expect(panel).toBeHidden();
 });
 
 test("model parameters are editable: the bias follows the square law", async ({

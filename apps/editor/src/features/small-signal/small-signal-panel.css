@@ -463,6 +463,7 @@
   column-gap: 8px;
 }
 
+.small-signal-device-menu-fields > h3,
 .small-signal-bias-settings > small {
   grid-column: 1 / -1;
 }

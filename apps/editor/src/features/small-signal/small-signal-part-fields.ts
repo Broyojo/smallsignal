@@ -18,8 +18,23 @@ export interface PartField {
   required: boolean;
 }
 
-/** The parameters the netlist reads, in menu order, with short labels. */
-const READ: Record<string, string> = {
+/** The parameters the netlist reads of each device class, in menu order. */
+const READ: Record<string, readonly string[]> = {
+  resistor: ["value"],
+  capacitor: ["value"],
+  inductor: ["value"],
+  "voltage-source": ["dc"],
+  "current-source": ["dc"],
+  vcvs: ["gain"],
+  vccs: ["gm"],
+  cccs: ["gain"],
+  ccvs: ["rm"],
+  mos: ["w", "l", "m"],
+  bjt: ["area", "m"],
+  diode: ["area", "m"],
+};
+
+const LABEL: Record<string, string> = {
   value: "Value",
   dc: "DC",
   w: "W",
@@ -31,7 +46,7 @@ const READ: Record<string, string> = {
   rm: "rm",
 };
 
-/** W and L: a bare number is microns here, not metres. */
+/** A bare W or L is microns here, not metres; M and area have none. */
 const NO_UNIT = new Set(["w", "l", "m", "area"]);
 
 const UNIT: Record<string, string> = { Ohm: "Ω", ohm: "Ω" };
@@ -49,7 +64,10 @@ function instanceIn(
   return document?.instances.find((item) => item.id === instanceId);
 }
 
-/** The part's editable values, empty for a part with none. */
+/**
+ * The part's editable values: those the netlist reads of its class, the
+ * descriptor's label, unit and placeholder where it has the parameter.
+ */
 export function partFields(
   project: CircuitProject,
   documentId: string | undefined,
@@ -59,22 +77,19 @@ export function partFields(
   if (!instance?.netlist) return [];
   const descriptor = deviceDescriptor(instance.symbolId, project);
   const drawn = instance.netlist.parameters;
-  return (descriptor?.parameters ?? [])
-    .filter((parameter) => parameter.name in READ)
-    .sort(
-      (a, b) =>
-        Object.keys(READ).indexOf(a.name) - Object.keys(READ).indexOf(b.name),
-    )
-    .map((parameter) => ({
-      name: parameter.name,
-      label: READ[parameter.name] ?? parameter.label,
-      unit: NO_UNIT.has(parameter.name)
+  return (READ[descriptor?.deviceClass ?? ""] ?? []).map((name) => {
+    const parameter = descriptor?.parameters.find((item) => item.name === name);
+    return {
+      name,
+      label: LABEL[name] ?? name,
+      unit: NO_UNIT.has(name)
         ? ""
-        : (UNIT[parameter.unitHint ?? ""] ?? parameter.unitHint ?? ""),
-      value: drawn[parameter.name] ?? "",
-      placeholder: parameter.placeholder ?? parameter.defaultValue ?? "",
-      required: parameter.required,
-    }));
+        : (UNIT[parameter?.unitHint ?? ""] ?? parameter?.unitHint ?? ""),
+      value: drawn[name] ?? "",
+      placeholder: parameter?.placeholder ?? parameter?.defaultValue ?? "",
+      required: parameter?.required ?? false,
+    };
+  });
 }
 
 /** A Cell parameter, `{gain}`, passes as written. */

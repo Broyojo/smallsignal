@@ -198,6 +198,9 @@ export interface SmallSignalNetlist {
   notes: string[];
   /** Supply nets drawn with a VDD symbol and driven by an added DC source. */
   supplies: string[];
+  /** The DC each of `supplies` is held at: the supply voltage, or 0 V for
+   * a ground-like rail (VSS, GND). */
+  supplyVolts: Record<string, number>;
   /** Every supply rail the drawing marks (VDD symbols, supply and ground
    * rail nets), driven by an added source or a drawn one. */
   rails: string[];
@@ -733,6 +736,7 @@ function translate(
   // A supply rail with no voltage source on it is a fixed DC rail, which is
   // AC ground in the small-signal circuit.
   const supplies: string[] = [];
+  const supplyVolts: Record<string, number> = {};
   for (const supply of supplyNets) {
     const driven = sources.some(
       (source) => source.kind === "voltage" && source.nodes.includes(supply),
@@ -743,6 +747,7 @@ function translate(
     lines.push(`${name} ${supply} 0 DC ${volts}`);
     dcPath.add(supply);
     supplies.push(supply);
+    supplyVolts[supply] = volts;
     notes.push(`${supply} has no source: held at ${volts} V DC (AC ground)`);
   }
   if (missing.length)
@@ -765,6 +770,7 @@ function translate(
     missing,
     notes,
     supplies,
+    supplyVolts,
     rails: [...supplyNets].filter((net) => nets.has(net)).sort(),
     unconnected,
     unknownBias,

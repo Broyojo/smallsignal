@@ -242,11 +242,13 @@ function Toggle({
 export function ValueField({
   field,
   label,
+  readOnly = false,
   onCommit,
 }: {
   field: PartField;
   /** Read aloud: "R1 Value", "VINP DC". */
   label: string;
+  readOnly?: boolean | undefined;
   onCommit(text: string): boolean;
 }) {
   const [text, setText] = useState(field.value);
@@ -270,6 +272,7 @@ export function ValueField({
       <span>{field.label}</span>
       <input
         aria-label={label}
+        readOnly={readOnly}
         aria-invalid={invalid || undefined}
         value={text}
         placeholder={field.placeholder}
@@ -307,6 +310,7 @@ export function ValueField({
  */
 export function DeviceMenu({
   model,
+  part,
   fields,
   status,
   actions,
@@ -316,6 +320,8 @@ export function DeviceMenu({
   onClose,
 }: {
   model: DeviceMenuModel;
+  /** The clicked part, "M1": its values are its own, even when matched. */
+  part: string;
   /** Its values as drawn; empty for a part with none. */
   fields: readonly PartField[];
   status: DeviceMenuStatus;
@@ -500,13 +506,14 @@ export function DeviceMenu({
         <div
           className="small-signal-device-menu-section small-signal-device-menu-fields"
           role="group"
-          aria-label="Values"
+          aria-label={`${part} values`}
         >
+          {model.matchedWith.length ? <h3>{part}</h3> : null}
           {fields.map((field) => (
             <ValueField
               key={field.name}
               field={field}
-              label={`${model.label} ${field.label}`}
+              label={`${part} ${field.label}`}
               onCommit={(text) => actions.field(field, text)}
             />
           ))}
@@ -514,7 +521,7 @@ export function DeviceMenu({
       ) : null}
       {model.matchedWith.length ? (
         <p className="small-signal-muted">
-          Matched with {model.matchedWith.join(", ")}. Applies to all.
+          Matched with {model.matchedWith.join(", ")}. Assumptions apply to all.
         </p>
       ) : null}
       {model.passive ? (
