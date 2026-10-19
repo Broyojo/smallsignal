@@ -29,6 +29,10 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   marks every symbol of its elements. One stylesheet does the marking,
   so no formula re-renders. Copying a selection writes each formula as
   `$TeX$`, and a click selects a formula whole.
+- Bias point lists every DC value the bias is solved from, editable in
+  place: each source's DC (the input first: its signal rides on it), each
+  undriven Pin's, and the supply rails'. A drawn source's edit writes the
+  drawing. Distortion says its devices are expanded about this bias.
 - Bias point's **Show on drawing** labels, while the panel is open, each
   node's DC voltage on its longest wire in the open Cell (ground and
   supply rails aside) and each transistor drawn there with its bias
@@ -65,5 +69,6 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   OTA's plot with its poles, RHP zero and a readout equal to the card's
   1 kHz value; no plot without capacitors; g_m1 ringing M1, M1 marking
   its symbols, a copy writing TeX; Show on drawing on the inverter; the
-  "×" cost; the bias table at phone width; Esc in the device menu; the
+  "×" cost; the bias table at phone width; Esc in the device menu; R1's
+  value edited in its menu re-solving, M1's W and L, the DC values; the
   guide.

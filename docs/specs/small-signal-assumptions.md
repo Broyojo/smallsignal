@@ -38,7 +38,7 @@ Options choose how ≈ forms are made.
 - A region is refused, keeping the bias's linearization, when the channel
   is off (`M1 is off, cannot assume saturation`), and triode when V_DS ≥
   V_ov, where the triode current falls with V_DS (`M1 is saturated,
-  cannot assume triode`). So in numeric mode triode is either the bias's
+cannot assume triode`). So in numeric mode triode is either the bias's
   region or refused. The bias's own region changes nothing and drops the
   generic region warning.
 - Without an operating point a declared MOS region decides r_o or R_on
@@ -90,10 +90,10 @@ Options choose how ≈ forms are made.
   (Miller's RHP zero g_m/C is `assumed: null`, removed).
 - A split is refused, with a warning, for a capacitance not between two
   signal nodes (`No Miller split for CL, it is not between two signal
-  nodes`; ground, a supply or two merged nodes), with no DC signal at a or
+nodes`; ground, a supply or two merged nodes), with no DC signal at a or
   no DC solution (`K is undefined`), with none at b (`K is 0`; for an
   explicit capacitor, at either end), or absent from the model (`it is not
-  in the model`). A negative capacitance is allowed and warned:
+in the model`). A negative capacitance is allowed and warned:
   `Miller C_in of CC is negative, K > 1`,
   `Miller C_out of cgs of M1 is negative, 0 < K < 1`.
 - Matched elements share assumptions, terms, Miller splits and declared
@@ -140,10 +140,15 @@ Options choose how ≈ forms are made.
 
 ## Panel
 
-- While the panel is open, a plain click (no drag) on a transistor,
-  capacitor or diode drawn in the open Cell, its canvas badge, or its row's
-  name in the Assumptions table opens its device menu beside it (a sheet
-  along the bottom below 600 px). It offers the part's `assumable` terms
+- While the panel is open, a plain click (no drag) or a double-click on a
+  part the netlist reads, drawn in the open Cell, its canvas badge, or its
+  row's name in the Assumptions table opens its device menu beside it (a
+  sheet along the bottom below 600 px); a double-click no longer opens
+  Properties there, which **More properties** in the menu does. The menu
+  first lists the part's values the netlist reads (value; DC; W, L, M;
+  area; a controlled source's gain), each written to the drawing as one
+  undoable edit on Enter or leaving the field, refused unless a SPICE
+  number or a `{param}`. It then offers the part's `assumable` terms
   (leakage as one), C_gd or C_μ Miller where offered, a capacitor's or
   diode's open, short or Miller, and a MOSFET's region (Auto, Saturation,
   Triode), with its bias region, the solver's sentences about it and the
@@ -304,6 +309,7 @@ assumptions' deviation (null when the quantity is unbounded throughout),
 `[{elements, term, type, scope, alone, cumulative}]`, `scope` `part`,
 `group` or `type`: one item can cover several elements, which Apply
 writes one by one.
+
 - Types: [`packages/small-signal/src/types.ts`](../../packages/small-signal/src/types.ts).
   The editor netlist names each part's `instancePath` (instance ids from the
   top Cell down) so stored assumptions follow a part across renames.

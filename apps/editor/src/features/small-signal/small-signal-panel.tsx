@@ -105,6 +105,7 @@ import {
 } from "./small-signal-link";
 import {
   DeviceMenu,
+  ValueField,
   instanceHit,
   termText,
   type CanvasBadge,
@@ -114,6 +115,11 @@ import {
   type MenuToggle,
   type PassiveChoice,
 } from "./small-signal-device-menu";
+import {
+  fieldEdit,
+  partFields,
+  type PartField,
+} from "./small-signal-part-fields";
 import {
   browserStaleBuildRecovery,
   diagnoseModuleLoadFailure,
@@ -2552,6 +2558,38 @@ const TYPE_LABEL: Record<string, string> = {
   capacitor: "Capacitor",
   resistor: "Resistor",
   inductor: "Inductor",
+  "voltage-source": "Voltage source",
+  "current-source": "Current source",
+  vcvs: "VCVS",
+  vccs: "VCCS",
+  cccs: "CCCS",
+  ccvs: "CCVS",
+};
+
+/** A part with values and no assumptions: a resistor, a source. */
+export function valuesOnlyModel(
+  element: string,
+  kind: string | undefined,
+): DeviceMenuModel {
+  return {
+    label: element,
+    typeLabel: kind ? (TYPE_LABEL[kind] ?? kind) : "",
+    matchedWith: [],
+    defaultsLabel: null,
+    neglect: [],
+    miller: [],
+    passive: null,
+    region: null,
+  };
+}
+
+const NO_STATUS: DeviceMenuStatus = { bias: null, notes: [], cost: null };
+
+const NO_ASSUMPTION_ACTIONS: Omit<DeviceMenuActions, "field" | "more"> = {
+  toggle: () => undefined,
+  miller: () => undefined,
+  passive: () => undefined,
+  region: () => undefined,
 };
 
 /** "assumed saturated" / "assumed in triode": a card's region note. */
@@ -3145,6 +3183,55 @@ export function preferredOutput(
   );
 }
 
+/** One DC value the bias point is solved from. */
+export interface BiasSetting {
+  /** "Vin", a Pin's name, or the rails "VDD, VSS". */
+  label: string;
+  /** The value as written; empty when unknown. */
+  value: string;
+  unit: "V" | "A";
+  role: "input" | "supply" | null;
+  /** Shown, not set here (a rail held at 0 V). */
+  readOnly?: boolean;
+  /** Writes the value; false when it is not one. */
+  commit(text: string): boolean;
+}
+
+/**
+ * Where the bias point comes from: every source's DC value (the input's
+ * too: the signal rides on it), each undriven Pin's, and the rails'.
+ */
+export function BiasSettings({ settings }: { settings: BiasSetting[] }) {
+  return (
+    <div
+      className="small-signal-device-menu-fields small-signal-bias-settings"
+      role="group"
+      aria-label="DC values"
+    >
+      <small className="small-signal-muted">Set by these DC values</small>
+      {settings.map((setting) => (
+        <ValueField
+          key={setting.label}
+          field={{
+            name: setting.label,
+            label:
+              setting.role === "input"
+                ? `${setting.label} (input)`
+                : setting.label,
+            unit: setting.unit,
+            value: setting.value,
+            placeholder: "?",
+            required: true,
+          }}
+          readOnly={setting.readOnly}
+          label={`${setting.label} DC`}
+          onCommit={setting.commit}
+        />
+      ))}
+    </div>
+  );
+}
+
 function sourceLabel(source: SmallSignalSource): string {
   return source.pin ?? source.name;
 }
@@ -3361,7 +3448,7 @@ function Guide({
         <li>
           Read <b>Gain</b>, <b>Zin</b> and <b>Zout</b>, exact and ≈.
         </li>
-        <li>Click a transistor on the drawing to set its assumptions.</li>
+        <li>Click a part on the drawing to change its value or assumptions.</li>
         <li>
           Open <b>Suggestions</b> for assumptions within 1%. Point at a plot to
           read it.
@@ -3403,6 +3490,8 @@ export function SmallSignalPanel({
   onSelectInstances,
   instanceClick,
   onOpenExample,
+  onSetParameters,
+  onInspect,
 }: {
   project: CircuitProject;
   rootDocumentId?: string;
@@ -3410,10 +3499,22 @@ export function SmallSignalPanel({
   selectedInstanceIds?: readonly string[];
   /** Select instances of the open Cell on the canvas. */
   onSelectInstances?: (instanceIds: string[]) => void;
-  /** The last plain click on a part of the open Cell: opens its menu. */
-  instanceClick?: { instanceId: string; nonce: number } | null;
+  /** The last plain click on a part of the open Cell: opens its menu. A
+   * double-click (`open`) on a part with none opens Properties instead. */
+  instanceClick?: {
+    instanceId: string;
+    nonce: number;
+    open?: boolean;
+  } | null;
   /** Open a Library example by id (the guide's examples). */
   onOpenExample?: (id: string) => void;
+  /** Write a part's values (of the open Cell) to the drawing. */
+  onSetParameters?: (
+    instanceId: string,
+    edit: { set?: Record<string, string>; unset?: string[] },
+  ) => boolean;
+  /** A part's full Properties. */
+  onInspect?: (instanceId: string) => void;
 }) {
   // The guide: the empty state, and until a viewer first closes it.
   const [guideOpen, setGuideOpen] = useState(() => !loadGuideDismissed());
@@ -3911,12 +4012,6 @@ export function SmallSignalPanel({
         "region" in device ? device.region : "",
       ),
     );
-  const pinsNeedingBias = sources.filter(
-    (source) => source.pin && unknownBias.includes(source.pin),
-  );
-  const otherUnknown = unknownBias.filter(
-    (name) => !sources.some((source) => source.pin === name),
-  );
   const solved = resultForCircuit(lastResult, assumptionKey);
   const assumptionTableRows = netlist
     ? assumptionRows(
@@ -3952,21 +4047,34 @@ export function SmallSignalPanel({
   const menuRows = useRef(assumptionTableRows);
   menuRows.current = assumptionTableRows;
   const menuOpener = useRef<HTMLElement | null>(null);
+  const menuElements = useRef(netlist?.elements);
+  menuElements.current = netlist?.elements;
   const openMenu = useCallback((instanceId: string, keyboard: boolean) => {
-    const member = menuRows.current
-      .filter((row) => row.scope !== "type" && hasDeviceMenu(row.type))
-      .flatMap((row) => row.members)
-      .find((candidate) => candidate.instanceId === instanceId);
+    // A part with assumptions, else any drawn part the netlist reads.
+    const name =
+      menuRows.current
+        .filter((row) => row.scope !== "type" && hasDeviceMenu(row.type))
+        .flatMap((row) => row.members)
+        .find((candidate) => candidate.instanceId === instanceId)?.name ??
+      menuElements.current?.find(
+        (element) =>
+          element.instancePath.length === 1 &&
+          element.instancePath[0] === instanceId,
+      )?.name;
     menuOpener.current = keyboard
       ? (document.activeElement as HTMLElement | null)
       : null;
-    setMenu(member ? { instanceId, element: member.name, keyboard } : null);
+    setMenu(name ? { instanceId, element: name, keyboard } : null);
+    return name !== undefined;
   }, []);
+  const onInspectRef = useRef(onInspect);
+  onInspectRef.current = onInspect;
   const seenClick = useRef(instanceClick?.nonce ?? 0);
   useEffect(() => {
     if (!instanceClick || instanceClick.nonce === seenClick.current) return;
     seenClick.current = instanceClick.nonce;
-    openMenu(instanceClick.instanceId, false);
+    if (!openMenu(instanceClick.instanceId, false) && instanceClick.open)
+      onInspectRef.current?.(instanceClick.instanceId);
   }, [instanceClick, openMenu]);
   const menuId = useRef<string | null>(null);
   menuId.current = menu?.instanceId ?? null;
@@ -4019,7 +4127,139 @@ export function SmallSignalPanel({
       cost: gainCost ? `Gain ${gainCost}` : null,
     };
   };
-  const menuActions = (row: AssumptionRow): DeviceMenuActions => ({
+  const menuFields = menu
+    ? partFields(project, rootDocumentId, menu.instanceId)
+    : [];
+  const valueActions = (instanceId: string) => ({
+    field: (field: PartField, text: string) => {
+      const edit = fieldEdit(
+        field,
+        text,
+        (value) =>
+          // W and L as the netlist reads them: a bare number is microns.
+          parseSpiceNumber(value) !== null,
+      );
+      return edit !== null && (onSetParameters?.(instanceId, edit) ?? false);
+    },
+    more: onInspect ? () => onInspect(instanceId) : undefined,
+  });
+  // Every DC value the bias point is solved from, editable where it is.
+  const topLevel = (name: string) =>
+    netlist?.elements.find(
+      (element) => element.name === name && element.instancePath.length === 1,
+    )?.instancePath[0];
+  const inputOrder = differential
+    ? differential
+    : chosenInput
+      ? [chosenInput]
+      : [];
+  const inputNames = new Set(inputOrder);
+  // The input first (+ before −), then the rest as drawn.
+  const rank = (name: string) =>
+    inputNames.has(name) ? inputOrder.indexOf(name) : inputOrder.length;
+  const biasSettings: BiasSetting[] = [...sources]
+    .sort((a, b) => rank(a.name) - rank(b.name))
+    .map((source) => {
+      const unit = source.kind === "voltage" ? "V" : "A";
+      const role = inputNames.has(source.name) ? "input" : null;
+      if (source.pin) {
+        const pin = source.pin;
+        return {
+          label: pin,
+          value: pinBiasText[pin] ?? "",
+          unit,
+          role,
+          commit: (text) => {
+            // Empty: the Pin's bias is unknown again (hand analysis).
+            if (text.trim() && parseSpiceNumber(text) === null) return false;
+            setPinBiasText((previous) => {
+              const { [pin]: _cleared, ...rest } = previous;
+              return text.trim() ? { ...rest, [pin]: text.trim() } : rest;
+            });
+            return true;
+          },
+        };
+      }
+      const value = unknownBias.includes(source.name) ? "" : source.dc;
+      const id = topLevel(source.name);
+      return {
+        label: source.name,
+        value,
+        unit,
+        role,
+        commit: (text) => {
+          if (!id) return false;
+          const edit = fieldEdit(
+            {
+              name: "dc",
+              label: "DC",
+              unit,
+              value,
+              placeholder: "",
+              required: true,
+            },
+            text,
+            (typed) => parseSpiceNumber(typed) !== null,
+          );
+          return edit !== null && (onSetParameters?.(id, edit) ?? false);
+        },
+      };
+    });
+  // Rails at the supply voltage share its one value; a ground-like rail
+  // (VSS, GND) is held at 0 V and says so.
+  const supplies = netlist?.supplies ?? [];
+  const grounded = supplies.filter(
+    (rail) => netlist?.supplyVolts[rail] === 0 && supplyVoltage !== 0,
+  );
+  const raised = supplies.filter((rail) => !grounded.includes(rail));
+  if (raised.length)
+    biasSettings.push({
+      label: raised.join(", "),
+      value: supply,
+      unit: "V",
+      role: "supply",
+      commit: (text) => {
+        const volts = parseSpiceNumber(text);
+        if (volts === null || volts < 0) return false;
+        setSupply(text.trim());
+        return true;
+      },
+    });
+  if (grounded.length)
+    biasSettings.push({
+      label: grounded.join(", "),
+      value: "0",
+      unit: "V",
+      role: "supply",
+      readOnly: true,
+      commit: () => false,
+    });
+  // Called where it goes, after the toggle's state is declared.
+  const biasCard = () =>
+    biasSettings.length || (result && devices.length) ? (
+      <section className="small-signal-card" aria-label="Bias point">
+        <header>
+          <span>Bias point</span>
+          {result && devices.length ? (
+            <label className="small-signal-check small-signal-op-toggle">
+              <input
+                type="checkbox"
+                checked={opShown}
+                onChange={(event) => setOpShown(event.currentTarget.checked)}
+              />
+              Show on drawing
+            </label>
+          ) : null}
+        </header>
+        {biasSettings.length ? <BiasSettings settings={biasSettings} /> : null}
+        {result && devices.length ? (
+          <BiasTable devices={devices} regions={regionReports} />
+        ) : null}
+      </section>
+    ) : null;
+  const menuActions = (
+    row: AssumptionRow,
+  ): Omit<DeviceMenuActions, "field" | "more"> => ({
     toggle: (item) => {
       const column = item.id === "leakage" ? "leakage" : termColumn(item.id);
       updateAssumptions(
@@ -4310,7 +4550,7 @@ export function SmallSignalPanel({
             ) : handAnalysis && result ? (
               <div className="small-signal-alert is-info" role="status">
                 <p>Hand analysis: all transistors saturated.</p>
-                {pinsNeedingBias.length || otherUnknown.length ? (
+                {unknownBias.length ? (
                   <small>Add bias voltages for numbers.</small>
                 ) : null}
               </div>
@@ -4339,38 +4579,8 @@ export function SmallSignalPanel({
               />
             ) : null}
 
-            {pinsNeedingBias.length || otherUnknown.length ? (
-              <div className="small-signal-bias-inputs">
-                {pinsNeedingBias.map((source) => {
-                  const pin = source.pin ?? source.name;
-                  return (
-                    <label key={pin}>
-                      {pin} DC
-                      <input
-                        aria-label={`${pin} DC voltage`}
-                        aria-invalid={
-                          (pinBiasText[pin] ?? "").trim() !== "" &&
-                          parseSpiceNumber(pinBiasText[pin] ?? "") === null
-                            ? true
-                            : undefined
-                        }
-                        placeholder="V"
-                        value={pinBiasText[pin] ?? ""}
-                        onChange={(event) => {
-                          const text = event.currentTarget.value;
-                          setPinBiasText((prev) => ({ ...prev, [pin]: text }));
-                        }}
-                      />
-                    </label>
-                  );
-                })}
-                {otherUnknown.length ? (
-                  <small className="small-signal-muted">
-                    Set the DC value of {otherUnknown.join(", ")} in Properties.
-                  </small>
-                ) : null}
-              </div>
-            ) : null}
+            {/* Missing a bias value: its field leads, ahead of the forms. */}
+            {unknownBias.length ? biasCard() : null}
 
             {result?.gain ? (
               <QuantityCard
@@ -4412,24 +4622,7 @@ export function SmallSignalPanel({
               />
             ) : null}
 
-            {result && devices.length ? (
-              <section className="small-signal-card" aria-label="Bias point">
-                <header>
-                  <span>Bias point</span>
-                  <label className="small-signal-check small-signal-op-toggle">
-                    <input
-                      type="checkbox"
-                      checked={opShown}
-                      onChange={(event) =>
-                        setOpShown(event.currentTarget.checked)
-                      }
-                    />
-                    Show on drawing
-                  </label>
-                </header>
-                <BiasTable devices={devices} regions={regionReports} />
-              </section>
-            ) : null}
+            {unknownBias.length ? null : biasCard()}
 
             {assumptionTableRows.length || assumptionsStored ? (
               <details className="small-signal-options small-signal-assumptions-section">
@@ -4592,6 +4785,11 @@ export function SmallSignalPanel({
                     </p>
                   ) : (
                     <>
+                      <p className="small-signal-muted">
+                        Each device is expanded about the bias point: the DC
+                        values under Bias point. The input's sine rides on its
+                        DC.
+                      </p>
                       <div
                         className="small-signal-match"
                         role="group"
@@ -4775,12 +4973,26 @@ export function SmallSignalPanel({
         store={link}
         instanceOf={instanceOf}
       />
-      {menu && menuRow ? (
+      {menu ? (
         <DeviceMenu
           key={menu.instanceId}
-          model={deviceMenuModel(menuRow, menu.element, assumptionChoices)}
-          status={deviceStatus(menuRow)}
-          actions={menuActions(menuRow)}
+          model={
+            menuRow
+              ? deviceMenuModel(menuRow, menu.element, assumptionChoices)
+              : valuesOnlyModel(
+                  menu.element,
+                  netlist?.elements.find(
+                    (element) => element.name === menu.element,
+                  )?.kind,
+                )
+          }
+          part={menu.element}
+          fields={menuFields}
+          status={menuRow ? deviceStatus(menuRow) : NO_STATUS}
+          actions={{
+            ...(menuRow ? menuActions(menuRow) : NO_ASSUMPTION_ACTIONS),
+            ...valueActions(menu.instanceId),
+          }}
           anchor={menuAnchor}
           bounds={canvasBounds}
           focusOnOpen={menu.keyboard}

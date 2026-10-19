@@ -931,11 +931,13 @@ function WorkspaceEditor({
   const [netlistPreflightOpen, setNetlistPreflightOpen] = useState(false);
   const [projectPanel, setProjectPanel] =
     useState<EditorProjectPanelMode | null>("netlist");
-  // The last plain click on a part while Small-Signal is open: it opens
-  // that part's assumption menu (`nonce` tells a repeat click apart).
+  // The last plain click or double-click (`open`) on a part while
+  // Small-Signal is open: it opens that part's menu (`nonce` tells a repeat
+  // click apart).
   const [smallSignalClick, setSmallSignalClick] = useState<{
     instanceId: string;
     nonce: number;
+    open?: boolean;
   } | null>(null);
   const [netlistFocusedInstance, setNetlistFocusedInstance] = useState<{
     documentId: string;
@@ -5529,6 +5531,20 @@ function WorkspaceEditor({
                     selectedInstanceIds={selectedIds}
                     onSelectInstances={(ids) => selectOnly("instance", ids)}
                     instanceClick={smallSignalClick}
+                    onSetParameters={(instanceId, edit) =>
+                      transact([
+                        {
+                          kind: "patch_instance_netlist_parameters",
+                          instanceId,
+                          ...edit,
+                        },
+                      ]).ok
+                    }
+                    onInspect={(instanceId) => {
+                      // Properties take the dock the panel holds.
+                      setProjectPanel(null);
+                      inspectInstance(instanceId);
+                    }}
                     onOpenExample={(id) => {
                       // The examples load with their own chunk, as the
                       // Library loads them.
@@ -6853,6 +6869,18 @@ function WorkspaceEditor({
                 )?.definition.formulaPresentation;
                 if (presentation) {
                   beginInstanceFormulaEditing(instance, presentation);
+                  return;
+                }
+                // The small-signal panel keeps its place: the part's own
+                // menu edits its values, and links to Properties.
+                if (projectPanel === "small-signal") {
+                  // A part the analysis leaves out falls back to Properties
+                  // through the panel's onInspect.
+                  setSmallSignalClick((previous) => ({
+                    instanceId: instance.id,
+                    nonce: (previous?.nonce ?? 0) + 1,
+                    open: true,
+                  }));
                   return;
                 }
                 inspectInstance(instance.id);

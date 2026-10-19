@@ -1,12 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
-import {
-  awaitEditorReady,
-  closeProjectTools,
-  openProjectFile,
-  setComponentParameter,
-} from "./editor-fixtures.js";
+import { awaitEditorReady, openProjectFile } from "./editor-fixtures.js";
 
 // The Small-Signal panel as a person uses it: open a drawing, open the
 // panel, read the status, the formulas and the numbers.
@@ -263,14 +258,21 @@ test("textbook diff pair: Pins as inputs, hand analysis, then real bias values",
     "Hand analysis",
   );
   await formula(panel, "Gain");
-  for (const pin of ["Vin1", "Vin2", "Vb"])
-    await expect(panel.getByLabel(`${pin} DC voltage`)).toBeVisible();
+  // The missing values lead the panel, in Bias point.
+  const dc = (pin: string) =>
+    card(panel, "Bias point").getByLabel(`${pin} DC`, { exact: true });
+  for (const pin of ["Vin1", "Vin2", "Vb"]) await expect(dc(pin)).toBeVisible();
 
   // Level-1 defaults (W = L = 1u): Vb = 0.6 V gives a 1 µA tail; the pair
   // and the PMOS mirror then sit about 0.07 V and 0.1 V above threshold.
-  await panel.getByLabel("Vin1 DC voltage").fill("0.9");
-  await panel.getByLabel("Vin2 DC voltage").fill("0.9");
-  await panel.getByLabel("Vb DC voltage").fill("0.6");
+  for (const [pin, volts] of [
+    ["Vin1", "0.9"],
+    ["Vin2", "0.9"],
+    ["Vb", "0.6"],
+  ] as const) {
+    await dc(pin).fill(volts);
+    await dc(pin).press("Enter");
+  }
   await expect(panel.locator(".small-signal-alert.is-info")).toHaveCount(0);
   await expect(card(panel, "Bias point")).toBeVisible();
   const regions: Record<string, string> = {};
@@ -404,21 +406,26 @@ test("a page left behind by a deploy offers a reload instead of raw TeX", async 
   ).toHaveCount(0);
 });
 
-test("editing R1 re-solves: −gm(ro ∥ 20k)", async ({ page }) => {
-  let panel = await analyze(page, FIXTURES.csWired);
+test("editing R1 in its menu re-solves: −gm(ro ∥ 20k), the panel stays", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.csWired);
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
 
-  // Properties share the right-hand side with the panel: close it, edit R1
-  // as a person would, and reopen.
-  await page.getByTestId("small-signal-toggle").click();
-  await closeProjectTools(page);
-  await page.getByTestId("hit-r1").click();
-  const shelf = page.getByTestId("selection-shelf");
-  if ((await shelf.getAttribute("aria-expanded")) !== "true")
-    await shelf.click();
-  await setComponentParameter(page, "value", "20k");
+  // A double-click opens the part's menu, not Properties: the panel stays.
+  await page.getByTestId("hit-r1").dblclick();
+  const menu = page.getByTestId("small-signal-device-menu");
+  await expect(menu).toHaveAccessibleName("R1");
+  await expect(panel).toBeVisible();
+  const value = menu.getByRole("textbox", { name: "R1 Value" });
+  await expect(value).toHaveValue("10k");
+  // Not a number: refused, and the drawing keeps 10k.
+  await value.fill("k10");
+  await value.press("Enter");
+  await expect(value).toHaveAttribute("aria-invalid", "true");
+  await value.fill("20k");
+  await value.press("Enter");
 
-  panel = await openPanel(page);
   await expect(panel.locator(".small-signal-alert.is-ok")).toHaveText(
     "M1 is in saturation.",
   );
@@ -429,6 +436,24 @@ test("editing R1 re-solves: −gm(ro ∥ 20k)", async ({ page }) => {
     2,
   );
   expect(await formula(panel, "Gain")).toContain("\\parallel R_{1}");
+  // One edit of the drawing: undo takes it back.
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-4.19, 2);
+
+  // A transistor's menu has its size; the bias point, its DC values.
+  await page.getByTestId("hit-m1").click();
+  await expect(menu.getByRole("textbox", { name: "M1 W" })).toBeVisible();
+  await expect(menu.getByRole("textbox", { name: "M1 L" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  const dc = card(panel, "Bias point").getByRole("group", {
+    name: "DC values",
+  });
+    await expect(dc.getByRole("textbox")).not.toHaveCount(0);
+  // More properties: Properties take the dock.
+  await page.getByTestId("hit-r1").click();
+  await menu.getByRole("button", { name: "More properties" }).click();
+  await expect(panel).toBeHidden();
 });
 
 test("model parameters are editable: the bias follows the square law", async ({
@@ -1034,7 +1059,7 @@ test("device menu: a click on M1 neglects r_o there, and the card and the table 
   await page.getByTestId("hit-m1").click();
   const menu = deviceMenu(page);
   await expect(menu).toBeVisible();
-  await expect(menu).toHaveAccessibleName("M1 assumptions");
+  await expect(menu).toHaveAccessibleName("M1");
   // The part stays selected, its row too.
   await expect(page.getByTestId("hit-m1")).toHaveClass(/\bselected\b/u);
   const ro = menu.getByRole("button", { name: "Neglect r_o", exact: true });
@@ -1080,10 +1105,8 @@ test("device menu: a click on M1 neglects r_o there, and the card and the table 
   await name.focus();
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
-  // Focus lands on the first choice, not on Close.
-  await expect(
-    menu.getByRole("button", { name: "Neglect r_o", exact: true }),
-  ).toBeFocused();
+  // Focus lands on the first value, not on Close.
+  await expect(menu.getByRole("textbox", { name: "M1 W" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(name).toBeFocused();
 });
@@ -1177,12 +1200,13 @@ test("device menu: dragging a part moves it with no menu, a press elsewhere clos
   await expect
     .poll(async () => (await m1.boundingBox())?.x ?? 0)
     .toBeCloseTo(start.x, 0);
-  // A plain click opens the menu; a resistor opens none; a press on the
-  // empty canvas closes it and clears the selection as before.
+  // A plain click opens the menu; a resistor opens its own, with its
+  // value; a press on the empty canvas closes it and clears the selection
+  // as before.
   await m1.click();
-  await expect(deviceMenu(page)).toBeVisible();
+  await expect(deviceMenu(page)).toHaveAccessibleName("M1");
   await page.getByTestId("hit-r1").click();
-  await expect(deviceMenu(page)).toHaveCount(0);
+  await expect(deviceMenu(page)).toHaveAccessibleName("R1");
   await expect(page.getByTestId("hit-r1")).toHaveClass(/\bselected\b/u);
   await m1.click();
   await expect(deviceMenu(page)).toBeVisible();
@@ -1560,10 +1584,15 @@ test("link: pointing at g_m1 rings M1 on the drawing, pointing at M1 marks its s
     .locator('.small-signal-formula [data-sym="g_{m1}"]')
     .first();
   // Between strokes too: the pointer at the symbol's centre, not its ink.
-  const box = await symbol.boundingBox();
-  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  // The card may still swap its formula in (the ≈ form arrives later):
+  // measure again until the pointer rests on the shown one.
   const ring = page.locator('[data-small-signal-ring="M1"]');
-  await expect(ring).toBeVisible();
+  await expect(async () => {
+    const box = await symbol.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(ring).toBeVisible({ timeout: 1000 });
+  }).toPass();
   const r = await ring.boundingBox();
   const hit = await page.getByTestId("hit-M1").boundingBox();
   expect(r!.x).toBeLessThanOrEqual(hit!.x);
