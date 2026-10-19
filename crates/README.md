@@ -321,7 +321,7 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   `unavailable`. (ngspice's own `inoise_total` can be off by percent; compare
   with an integral of its spectrum.)
 - `inputLowFreq`: S_in at s → 0 from thermal and shot sources in closed form,
-  `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{2}{3 g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
+  `4kT·(…) + 2q·(…)`, e.g. `4kT\left(\frac{\gamma}{g_{m1}} + \frac{1}{{g_{m1}}^{2} R_{D}}\right)`
   for a CS stage. `exact`, `display` (junction leakage dropped when that moves
   it ≤ 1e-3) and `simplified` (r_o → ∞ leading order of the display form,
   in symbolic mode then g_mb → 0 with the same labels as above, then
@@ -330,7 +330,8 @@ S_in = S_out/|gain|² (V²/Hz, or A²/Hz for a current input). Response `noise`:
   each `{latex,
   value, thermal: {num, den}, shot: {num, den}, terms}`; `currents` lists the
   bias-current symbols I_{C1}, I_{B1}, I_{D1} (one per matched group, e.g.
-  I_{D1,2}); `check` compares the exact value with the numeric DC solve,
+  I_{D1,2}) and, with a MOSFET, the channel factor γ (`gamma`, unit "",
+  value 2/3); `check` compares the exact value with the numeric DC solve,
   within rounding and the match tolerance. Flicker is numeric only.
   `unavailable` says why when there is no DC limit: no gain at DC (also when
   it vanishes at the values or once matched symbols merge), singular at
@@ -407,8 +408,8 @@ transfer cofactors. Response `distortion`:
   .disto expands, adds the warning "HD vs frequency takes the capacitances
   of M1 as linear".
 - `taylor`: every nonzero coefficient `{element, current, monomial, order, value, kept}`;
-  `symbols`: the K symbols in the numerators of the a_n and HD_n shown in
-  closed form (`[]` when none is);
+  `symbols`: the K and V_OD symbols in the numerators of the a_n and HD_n
+  shown in closed form (`[]` when none is);
   `omissionError`; `check` `{ok, maxRelDiff, orders, matchBound}`: each
   exact a_n that materialized against the numeric reference (`orders` lists
   which; null when none did), allowing 4× `matchBound`, the relative effect

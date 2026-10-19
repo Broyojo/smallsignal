@@ -1194,7 +1194,7 @@ fn kind_latex(s: &Source, mult: f64) -> String {
             _ if mult != 1.0 => "\\frac{M K_F (I_D/M)^{A_F}}{f}".to_string(),
             _ => "\\frac{K_F I_D^{A_F}}{f}".to_string(),
         },
-        ("thermal", _) if s.element.to_ascii_uppercase().starts_with('M') => "\\frac{2}{3} 4kT g_m".to_string(),
+        ("thermal", _) if s.element.to_ascii_uppercase().starts_with('M') => "4kT \\gamma g_m".to_string(),
         ("thermal", _) => "\\frac{4kT}{R}".to_string(),
         ("shot_c", _) => "2qI_C".to_string(),
         ("shot_b", _) => "2qI_B".to_string(),

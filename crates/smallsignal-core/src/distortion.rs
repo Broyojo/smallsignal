@@ -2029,13 +2029,16 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         .collect();
 
     let mt = c.max_terms.min(DIST_TERM_LIMIT);
+    // The devices `coefs` expand: under an imposed region, that region's
+    // (its V_OD for the square-law forms).
+    let cdevs = if c.assumed.is_some() { model_devs } else { &devs };
     let build = |ss: &SsCircuit, symbols: &Symbols, free: bool| -> Option<Closed> {
         if c.over_budget {
             return None;
         }
         let sys = crate::ss::system(c.net, ss, c.excite);
         match closed(
-            ss, symbols, &sys, &devs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,
+            ss, symbols, &sys, cdevs, &coefs, &keep, free, c.out, c.rf, c.vid, c.order, mt,
         ) {
             Ok(Ok(cl)) => Some(cl),
             _ => None,

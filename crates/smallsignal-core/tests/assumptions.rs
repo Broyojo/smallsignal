@@ -522,6 +522,18 @@ M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBD
     let a1 = d["coefficients"][0]["value"].as_f64().unwrap();
     let g = v["gain"]["assumed"]["values"][0]["re"].as_f64().unwrap();
     assert!(rel(a1, g) < 1e-9, "{a1} {g}");
+    // Saturation imposed on M1 (triode at its bias): its square law, so
+    // its V_OD; the bias's own forms have none for it.
+    let vod = |r: &Value| {
+        r["distortion"]["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "Vod_M1")
+    };
+    assert!(vod(&v), "{}", d["symbols"]);
+    assert!(!vod(&plain), "{}", plain["distortion"]["symbols"]);
+    assert!(d["coefficients"][1]["latex"].as_str().unwrap().contains("V_{OD1}"));
 }
 
 #[test]
