@@ -458,9 +458,9 @@ export function formatEngineering(value: number, unit = ""): string {
   if (!Number.isFinite(value)) return String(value);
   if (value === 0) return `0${unit ? ` ${unit}` : ""}`;
   // Past the prefixes (a leakage current of 1e-20 A): an exponent, never
-  // "0.00002586 fA".
+  // "0.00002586 fA"; three figures, as wide as the prefixed values.
   if (Math.abs(value) < 1e-15)
-    return `${value.toExponential(3)}${unit ? ` ${unit}` : ""}`;
+    return `${value.toExponential(2)}${unit ? ` ${unit}` : ""}`;
   const prefixes = ["f", "p", "n", "µ", "m", "", "k", "M", "G", "T"];
   const exponent = Math.min(
     12,
@@ -652,7 +652,9 @@ function pointText(point: ComplexPoint, unit: string): string {
     return formatValue(point.re, unit);
   const magnitude = Math.hypot(point.re, point.im);
   const phase = (Math.atan2(point.im, point.re) * 180) / Math.PI;
-  return `${formatValue(magnitude, unit)} ∠ ${phase.toFixed(1)}°`;
+  // −0.04° reads 0.0°, not "-0.0°".
+  const degrees = phase.toFixed(1);
+  return `${formatValue(magnitude, unit)} ∠ ${Number(degrees) === 0 ? "0.0" : degrees}°`;
 }
 
 /** "2 poles, 1 zero"; "" when there are none. */
@@ -3864,7 +3866,7 @@ export function SmallSignalPanel({
     response && !isSmallSignalError(response) && responseKey === requestKey
       ? (response.op?.devices ?? {})
       : {},
-  );
+  ).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   const nonlinear = nonlinearCandidates.filter(
     (name) => !linearDevices.has(name),
   );
@@ -4000,7 +4002,10 @@ export function SmallSignalPanel({
         inputSource?.kind === "current" ? "i" : "v",
         inputSource ? sourceLabel(inputSource) : "",
       );
-  const devices = Object.entries(result?.op?.devices ?? {});
+  // Q1, Q2 … Q10, as a schematic numbers them.
+  const devices = Object.entries(result?.op?.devices ?? {}).sort(([a], [b]) =>
+    a.localeCompare(b, "en", { numeric: true }),
+  );
   const firstWithoutFormula = (["gain", "rin", "rout"] as const).find(
     (key) => result?.[key] && !result[key].exact,
   );

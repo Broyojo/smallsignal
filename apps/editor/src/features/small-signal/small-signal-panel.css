@@ -477,11 +477,24 @@
   color: var(--icm-text-muted);
 }
 
+/* The menu sits outside the panel: the panel's field look, restated. */
 .small-signal-device-menu-field > input {
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
   min-height: var(--icm-control-h);
   padding: 0.2rem 0.45rem;
+  border: 1px solid var(--icm-border);
+  border-radius: var(--icm-radius-sm);
+  background: var(--icm-surface);
+  color: var(--icm-text);
+  font: inherit;
   font-variant-numeric: tabular-nums;
+}
+
+.small-signal-device-menu-field > input:read-only {
+  background: var(--icm-surface-muted, var(--icm-surface));
+  color: var(--icm-text-muted);
 }
 
 .small-signal-device-menu-field > input[aria-invalid="true"] {
@@ -1128,18 +1141,13 @@
   pointer-events: none;
 }
 
-/* Under its wire: a net's name sits above it. */
+/* Placed by the overlay (under or beside its wire, clear of the others):
+   left and top are its box's corner. */
 .small-signal-op-net {
-  transform: translate(-50%, 3px);
   color: #1f5fa8;
 }
 
-.small-signal-op-net.is-vertical {
-  transform: translate(4px, -50%);
-}
-
 .small-signal-op-device {
-  transform: translate(3px, -100%);
   font-weight: 650;
 }
 
@@ -1188,12 +1196,7 @@
 
   .small-signal-bias-table th,
   .small-signal-bias-table td {
-    padding-right: 4px;
-  }
-
-  /* Still too wide: a value's unit goes under it. */
-  .small-signal-bias-table td {
-    white-space: normal;
+    padding-right: 3px;
   }
 
   .small-signal-bias-table [data-col="region"] {
@@ -1208,6 +1211,13 @@
 
   .small-signal-bias-inline .small-signal-bias-region {
     display: none;
+  }
+}
+
+/* Narrower still: a value's unit goes under it. */
+@container (max-width: 260px) {
+  .small-signal-bias-table td {
+    white-space: normal;
   }
 }
 

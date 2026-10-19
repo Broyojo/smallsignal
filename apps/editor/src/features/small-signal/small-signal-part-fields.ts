@@ -86,7 +86,11 @@ export function partFields(
         ? ""
         : (UNIT[parameter?.unitHint ?? ""] ?? parameter?.unitHint ?? ""),
       value: drawn[name] ?? "",
-      placeholder: parameter?.placeholder ?? parameter?.defaultValue ?? "",
+      // Area and M default to one device.
+      placeholder:
+        parameter?.placeholder ??
+        parameter?.defaultValue ??
+        (name === "area" || name === "m" ? "1" : ""),
       required: parameter?.required ?? false,
     };
   });
