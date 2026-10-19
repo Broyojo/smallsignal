@@ -61,5 +61,15 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      # The checked proofs of the last run. Lake replays a certificate whose
+      # regenerated file is unchanged (it compares content hashes), so only
+      # the circuits whose forms changed are checked again. The caps_ota5t
+      # proof alone takes over 20 minutes.
+      - uses: actions/cache@v4
+        if: steps.scope.outputs.run != 'false'
+        with:
+          path: lean/.lake/build
+          key: lean-build-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json', 'lean/lakefile.*') }}-${{ github.run_id }}
+          restore-keys: lean-build-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json', 'lean/lakefile.*') }}-
       - run: lean/check_all.sh
         if: steps.scope.outputs.run != 'false'
