@@ -111,11 +111,22 @@ function wireSegments(routes: readonly string[], view: DOMRect): WirePoint[] {
 function useCanvasGeometry(
   instances: readonly string[],
   nets: readonly OpNetLabel[],
+  /** Any operating-point label is shown: the drawing's text is measured
+   * for them to keep off (a device on rails alone has a label, no net). */
+  labelled: boolean,
 ): Geometry {
   const [state, setState] = useState<Geometry>(EMPTY);
-  const key = JSON.stringify([instances, nets.map((n) => [n.node, n.routes])]);
+  const key = JSON.stringify([
+    instances,
+    nets.map((n) => [n.node, n.routes]),
+    labelled,
+  ]);
   useEffect(() => {
-    const [ids, wanted] = JSON.parse(key) as [string[], [string, string[]][]];
+    const [ids, wanted, withText] = JSON.parse(key) as [
+      string[],
+      [string, string[]][],
+      boolean,
+    ];
     if (!ids.length && !wanted.length) {
       setState(EMPTY);
       return;
@@ -148,7 +159,7 @@ function useCanvasGeometry(
           if (at.length) wires.set(node, at);
         }
         const texts: Box[] = [];
-        if (wanted.length)
+        if (withText)
           for (const text of svg.querySelectorAll("text")) {
             const r = text.getBoundingClientRect();
             if (
@@ -317,7 +328,11 @@ export function CanvasOverlay({
       ...ringed,
     ]),
   ];
-  const geometry = useCanvasGeometry(ids, op?.nets ?? []);
+  const geometry = useCanvasGeometry(
+    ids,
+    op?.nets ?? [],
+    Boolean(op && (op.nets.length || op.devices.length)),
+  );
   const container = geometry.container;
   if (!container) return null;
   const left = (x: number) => x - container.rect.left;
