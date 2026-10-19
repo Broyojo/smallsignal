@@ -296,9 +296,13 @@ export function ValueField({
           }
         }}
       />
-      {field.unit ? (
-        <span className="small-signal-muted">{field.unit}</span>
-      ) : null}
+      {/* Always a cell: the grid is label, field, unit on every row. */}
+      <span
+        className="small-signal-muted"
+        aria-hidden={!field.unit || undefined}
+      >
+        {field.unit}
+      </span>
     </label>
   );
 }

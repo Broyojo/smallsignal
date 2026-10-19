@@ -1,6 +1,13 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { instanceHit, type CanvasBadge } from "./small-signal-device-menu";
+import {
+  devicePlaces,
+  placeLabels,
+  wirePlaces,
+  type Box,
+  type LabelRequest,
+} from "./small-signal-label-layout";
 import type { LinkStore } from "./small-signal-link";
 
 // Everything the panel draws on the canvas, in one layer that follows pans
@@ -28,12 +35,25 @@ export interface OpDeviceLabel {
 
 interface Geometry {
   rects: ReadonlyMap<string, DOMRect>;
-  /** A point on each net's longest visible wire segment, on screen. */
-  wires: ReadonlyMap<string, { x: number; y: number; vertical: boolean }>;
+  /** The drawing's own text on screen (names, values): labels keep off it. */
+  texts: readonly Box[];
+  /** Points on each net's longest visible wire segments, longest first. */
+  wires: ReadonlyMap<string, readonly WirePoint[]>;
   container: { element: HTMLElement; rect: DOMRect } | null;
 }
 
-const EMPTY: Geometry = { rects: new Map(), wires: new Map(), container: null };
+interface WirePoint {
+  x: number;
+  y: number;
+  vertical: boolean;
+}
+
+const EMPTY: Geometry = {
+  rects: new Map(),
+  texts: [],
+  wires: new Map(),
+  container: null,
+};
 
 /** Zoomed out past these, a label would only cover the drawing. */
 const MIN_WIRE_PX = 28;
@@ -46,12 +66,10 @@ function routeHit(id: string): SVGPolylineElement | null {
   );
 }
 
-function longestSegment(
-  routes: readonly string[],
-  view: DOMRect,
-): { x: number; y: number; vertical: boolean } | null {
-  let best: { x: number; y: number; vertical: boolean; length: number } | null =
-    null;
+/** A net's places for its label: a third and two thirds of the way along
+ * its three longest visible segments, longest first. */
+function wireSegments(routes: readonly string[], view: DOMRect): WirePoint[] {
+  const found: (WirePoint & { length: number })[] = [];
   for (const id of routes) {
     const line = routeHit(id);
     const ctm = line?.getScreenCTM();
@@ -67,22 +85,25 @@ function longestSegment(
         points.getItem(i).y,
       ).matrixTransform(ctm);
       const length = Math.hypot(b.x - a.x, b.y - a.y);
-      // A third of the way along: a net's name label usually sits at the
-      // middle of its wire.
-      const x = a.x + (b.x - a.x) / 3;
-      const y = a.y + (b.y - a.y) / 3;
-      const inside =
-        x > view.left && x < view.right && y > view.top && y < view.bottom;
-      if (inside && (!best || length > best.length))
-        best = {
-          x,
-          y,
-          vertical: Math.abs(b.y - a.y) > Math.abs(b.x - a.x),
-          length,
-        };
+      if (length < MIN_WIRE_PX) continue;
+      // Off the middle: a net's name label usually sits there.
+      for (const along of [1 / 3, 2 / 3]) {
+        const x = a.x + (b.x - a.x) * along;
+        const y = a.y + (b.y - a.y) * along;
+        if (x > view.left && x < view.right && y > view.top && y < view.bottom)
+          found.push({
+            x,
+            y,
+            vertical: Math.abs(b.y - a.y) > Math.abs(b.x - a.x),
+            length,
+          });
+      }
     }
   }
-  return best && best.length >= MIN_WIRE_PX ? best : null;
+  return found
+    .sort((p, q) => q.length - p.length)
+    .slice(0, 6)
+    .map(({ x, y, vertical }) => ({ x, y, vertical }));
 }
 
 /** Screen boxes of parts and wire midpoints, measured each frame while
@@ -90,11 +111,22 @@ function longestSegment(
 function useCanvasGeometry(
   instances: readonly string[],
   nets: readonly OpNetLabel[],
+  /** Any operating-point label is shown: the drawing's text is measured
+   * for them to keep off (a device on rails alone has a label, no net). */
+  labelled: boolean,
 ): Geometry {
   const [state, setState] = useState<Geometry>(EMPTY);
-  const key = JSON.stringify([instances, nets.map((n) => [n.node, n.routes])]);
+  const key = JSON.stringify([
+    instances,
+    nets.map((n) => [n.node, n.routes]),
+    labelled,
+  ]);
   useEffect(() => {
-    const [ids, wanted] = JSON.parse(key) as [string[], [string, string[]][]];
+    const [ids, wanted, withText] = JSON.parse(key) as [
+      string[],
+      [string, string[]][],
+      boolean,
+    ];
     if (!ids.length && !wanted.length) {
       setState(EMPTY);
       return;
@@ -121,14 +153,29 @@ function useCanvasGeometry(
           )
             rects.set(id, rect);
         }
-        const wires = new Map<
-          string,
-          { x: number; y: number; vertical: boolean }
-        >();
+        const wires = new Map<string, WirePoint[]>();
         for (const [node, routes] of wanted) {
-          const at = longestSegment(routes, view);
-          if (at) wires.set(node, at);
+          const at = wireSegments(routes, view);
+          if (at.length) wires.set(node, at);
         }
+        const texts: Box[] = [];
+        if (withText)
+          for (const text of svg.querySelectorAll("text")) {
+            const r = text.getBoundingClientRect();
+            if (
+              r.width > 0 &&
+              r.right > view.left &&
+              r.left < view.right &&
+              r.bottom > view.top &&
+              r.top < view.bottom
+            )
+              texts.push({
+                left: r.left,
+                top: r.top,
+                width: r.width,
+                height: r.height,
+              });
+          }
         const rect = element.getBoundingClientRect();
         const next = [
           rect.left,
@@ -138,12 +185,17 @@ function useCanvasGeometry(
               `${id}:${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.right)},${Math.round(r.bottom)}`,
           ),
           ...[...wires].map(
-            ([node, w]) => `${node}:${Math.round(w.x)},${Math.round(w.y)}`,
+            ([node, at]) =>
+              `${node}:${at.map((w) => `${Math.round(w.x)},${Math.round(w.y)}`).join(";")}`,
+          ),
+          ...texts.map(
+            (t) =>
+              `${Math.round(t.left)},${Math.round(t.top)},${Math.round(t.width)}`,
           ),
         ].join("|");
         if (next !== last) {
           last = next;
-          setState({ rects, wires, container: { element, rect } });
+          setState({ rects, texts, wires, container: { element, rect } });
         }
       }
       frame = requestAnimationFrame(measure);
@@ -155,6 +207,87 @@ function useCanvasGeometry(
 }
 
 const NO_LINK = () => null;
+
+/** Label height on screen: 15 px line, 1 px border each side. */
+const LABEL_HEIGHT = 17;
+
+let measure: CanvasRenderingContext2D | null | undefined;
+
+/** A label's width on screen, as its 10 px text draws (padding, border). */
+function labelWidth(text: string, bold: boolean): number {
+  if (measure === undefined)
+    measure = document.createElement("canvas").getContext("2d");
+  if (!measure) return text.length * 6 + 10;
+  const family = getComputedStyle(document.body).fontFamily;
+  measure.font = `${bold ? 650 : 400} 10px ${family}`;
+  return Math.ceil(measure.measureText(text).width) + 10;
+}
+
+/**
+ * Every operating-point label's box, none over another or a badge: an
+ * off or triode device first (the one to notice), then node voltages,
+ * then the devices that amplify.
+ */
+function layoutLabels(
+  op: { devices: readonly OpDeviceLabel[]; nets: readonly OpNetLabel[] } | null,
+  geometry: Geometry,
+  badges: readonly CanvasBadge[],
+): Map<string, Box> {
+  if (!op) return new Map();
+  const obstacles: Box[] = [...geometry.texts];
+  for (const box of badges.flatMap((badge) => {
+    const rect = geometry.rects.get(badge.instanceId);
+    if (!rect) return [];
+    const width = Math.max(18, labelWidth(badge.text, true));
+    // As the badge's CSS draws it: translate(-35%, -65%).
+    return [
+      {
+        left: rect.right - 0.35 * width,
+        top: rect.top - 0.65 * 18,
+        width,
+        height: 18,
+      },
+    ];
+  }))
+    obstacles.push(box);
+  const device = (label: OpDeviceLabel): LabelRequest[] => {
+    const rect = geometry.rects.get(label.instanceId);
+    if (!rect || Math.min(rect.width, rect.height) < MIN_PART_PX) return [];
+    const size = {
+      width: labelWidth(label.region, true),
+      height: LABEL_HEIGHT,
+    };
+    return [
+      {
+        id: `op-${label.instanceId}`,
+        ...size,
+        places: devicePlaces(rect, size),
+      },
+    ];
+  };
+  const amplifying = (label: OpDeviceLabel) =>
+    label.tone === "saturation" || label.tone === "active";
+  const nets = op.nets.flatMap((net): LabelRequest[] => {
+    const at = geometry.wires.get(net.node);
+    if (!at?.length) return [];
+    const size = { width: labelWidth(net.text, false), height: LABEL_HEIGHT };
+    return [
+      {
+        id: `net-${net.node}`,
+        ...size,
+        places: at.flatMap((point) => wirePlaces(point, size)),
+      },
+    ];
+  });
+  return placeLabels(
+    [
+      ...op.devices.filter((label) => !amplifying(label)).flatMap(device),
+      ...nets,
+      ...op.devices.filter(amplifying).flatMap(device),
+    ],
+    obstacles,
+  );
+}
 
 export function CanvasOverlay({
   badges,
@@ -195,11 +328,16 @@ export function CanvasOverlay({
       ...ringed,
     ]),
   ];
-  const geometry = useCanvasGeometry(ids, op?.nets ?? []);
+  const geometry = useCanvasGeometry(
+    ids,
+    op?.nets ?? [],
+    Boolean(op && (op.nets.length || op.devices.length)),
+  );
   const container = geometry.container;
   if (!container) return null;
   const left = (x: number) => x - container.rect.left;
   const top = (y: number) => y - container.rect.top;
+  const labels = layoutLabels(op, geometry, badges);
   return createPortal(
     <div
       className="small-signal-badges"
@@ -222,26 +360,27 @@ export function CanvasOverlay({
         ) : null;
       })}
       {op?.nets.map((net) => {
-        const at = geometry.wires.get(net.node);
-        return at ? (
+        const box = labels.get(`net-${net.node}`);
+        const at = geometry.wires.get(net.node)?.[0];
+        return box ? (
           <span
             key={`net-${net.node}`}
-            className={`small-signal-op-net${at.vertical ? " is-vertical" : ""}`}
+            className={`small-signal-op-net${at?.vertical ? " is-vertical" : ""}`}
             data-op-node={net.node}
-            style={{ left: left(at.x), top: top(at.y) }}
+            style={{ left: left(box.left), top: top(box.top) }}
           >
             {net.text}
           </span>
         ) : null;
       })}
       {op?.devices.map((device) => {
-        const rect = geometry.rects.get(device.instanceId);
-        return rect && Math.min(rect.width, rect.height) >= MIN_PART_PX ? (
+        const box = labels.get(`op-${device.instanceId}`);
+        return box ? (
           <span
             key={`op-${device.instanceId}`}
             className={`small-signal-op-device is-${device.tone}`}
             data-op-device={device.element}
-            style={{ left: left(rect.right), top: top(rect.bottom) }}
+            style={{ left: left(box.left), top: top(box.top) }}
           >
             {device.region}
           </span>

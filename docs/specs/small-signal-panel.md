@@ -38,7 +38,10 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   supply rails aside) and each transistor drawn there with its bias
   region (`sat`, `triode`, `off`, `active`), amber outside the
   amplifying region, where the part (10 px) or wire (28 px) is big enough
-  on screen to carry one. They follow pans and zooms in the layer of the
+  on screen to carry one. No label covers another, a badge or the
+  drawing's own text: each tries its places in turn (beside a part, along
+  its net's longest wires), an off or triode device first, then node
+  voltages, then amplifying devices; one with no free place is left off. They follow pans and zooms in the layer of the
   assumption badges. The choice is kept per viewer.
 - How to use: five numbered lines naming the panel's controls. It is the
   whole panel while nothing is drawn (with the 5T OTA example to place),

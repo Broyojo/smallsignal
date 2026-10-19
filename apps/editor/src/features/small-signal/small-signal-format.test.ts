@@ -131,6 +131,13 @@ describe("real values", () => {
     );
     expect(pointTextForTest({ f: 1000, re: -1, im: -0.5 }, "")).toContain("∠");
   });
+
+  it("writes a phase that rounds to zero as 0.0°, never -0.0°", async () => {
+    const { pointTextForTest } = await import("./small-signal-panel");
+    expect(pointTextForTest({ f: 1000, re: 1.67e6, im: -1000 }, "Ω")).toBe(
+      "1.67 MΩ ∠ 0.0°",
+    );
+  });
 });
 
 describe("model parameters", () => {

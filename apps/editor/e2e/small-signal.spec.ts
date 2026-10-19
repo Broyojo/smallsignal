@@ -445,11 +445,25 @@ test("editing R1 in its menu re-solves: −gm(ro ∥ 20k), the panel stays", asy
   await page.getByTestId("hit-m1").click();
   await expect(menu.getByRole("textbox", { name: "M1 W" })).toBeVisible();
   await expect(menu.getByRole("textbox", { name: "M1 L" })).toBeVisible();
+  // Label, field, unit on one row each, units or not (W, L and M have
+  // none), and the fields drawn as the panel draws its own.
+  for (const name of ["W", "L", "M"]) {
+    const field = menu.getByRole("textbox", { name: `M1 ${name}` });
+    const label = field.locator("xpath=../span[1]");
+    const [a, b] = [await label.boundingBox(), await field.boundingBox()];
+    expect(a!.y + a!.height / 2).toBeCloseTo(b!.y + b!.height / 2, 0);
+    expect(a!.x + a!.width).toBeLessThan(b!.x);
+  }
+  expect(
+    await menu
+      .getByRole("textbox", { name: "M1 W" })
+      .evaluate((input) => getComputedStyle(input).borderTopStyle),
+  ).toBe("solid");
   await page.keyboard.press("Escape");
   const dc = card(panel, "Bias point").getByRole("group", {
     name: "DC values",
   });
-    await expect(dc.getByRole("textbox")).not.toHaveCount(0);
+  await expect(dc.getByRole("textbox")).not.toHaveCount(0);
   // More properties: Properties take the dock.
   await page.getByTestId("hit-r1").click();
   await menu.getByRole("button", { name: "More properties" }).click();
