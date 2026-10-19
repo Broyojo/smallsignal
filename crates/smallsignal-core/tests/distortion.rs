@@ -39,11 +39,10 @@ fn square_law_common_source() {
     assert!(rel(coef(&r, 0), -2e-3 * 0.4 * 5e3) < 1e-12);
     assert!(rel(coef(&r, 1), -1e-3 * 5e3) < 1e-12);
     assert_eq!(coef(&r, 2), 0.0);
-    assert_eq!(d["coefficients"][1]["latex"], "-K_{2g,M1} R_{D}");
-    assert_eq!(
-        d["hd2"]["latex"],
-        "\\frac{A}{2}\\left|\\frac{K_{2g,M1}}{g_{m1}}\\right|"
-    );
+    // In the square law's own terms, as hand analysis writes it:
+    // K_2g = g_m/(2 V_OD), so a2 = −g_m R_D/(2 V_OD).
+    assert_eq!(d["coefficients"][1]["latex"], "-\\frac{g_{m1} R_{D}}{2 V_{OD1}}");
+    assert_eq!(d["hd2"]["latex"], "\\frac{A}{2}\\left|\\frac{1}{2 V_{OD1}}\\right|");
     // HD2 = A/(4 Vov).
     assert!(rel(d["hd2"]["value"].as_f64().unwrap(), 0.02 / (4.0 * 0.4)) < 1e-12);
     assert_eq!(d["hd3"]["value"], 0.0);
@@ -107,11 +106,9 @@ M2 o2 inn tail tail nm W=10u L=1u\nITAIL tail 0 200u\nVIP inp 0 DC 1.2 AC 1\nVIN
     assert_eq!(d["coefficients"][1]["latex"], "0");
     assert!(coef(&r, 1).abs() < 1e-12 * coef(&r, 0).abs());
     assert!(coef(&r, 2) != 0.0);
-    assert!(d["symbols"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|s| s["latex"] == "K_{2g,M1,2}"));
+    // The pair's one V_OD, as its g_m and r_o.
+    assert_eq!(d["symbols"][0]["latex"], "V_{OD1,2}");
+    assert_eq!(d["symbols"][0]["elements"], json!(["M1", "M2"]));
     assert_eq!(d["check"]["ok"], true);
 }
 
@@ -299,7 +296,7 @@ M4 out x vdd vdd pm W=20u L=1u\n.model nm nmos (level=1 kp=200u vto=0.5 lambda=0
     // Noise closed form: the textbook 5T OTA result in the limit.
     assert_eq!(
         r["noise"]["inputLowFreq"]["simplified"]["latex"],
-        "4kT\\left(\\frac{4}{3 g_{m1,2}} + \\frac{4 g_{m3,4}}{3 {g_{m1,2}}^{2}}\\right)"
+        "4kT\\left(\\frac{2 \\gamma}{g_{m1,2}} + \\frac{2 \\gamma g_{m3,4}}{{g_{m1,2}}^{2}}\\right)"
     );
 }
 
@@ -644,7 +641,7 @@ fn an_unaffordable_denominator_power_falls_back_per_quantity() {
         let s = &q["simplified"];
         assert!(s["latex"].is_string() && s["relError"].as_f64().unwrap() <= 0.05, "{q}");
     }
-    assert_eq!(d["symbols"][0]["name"], "K2g_M1");
+    assert_eq!(d["symbols"][0]["name"], "Vod_M1");
     // The exact a1, a2 that materialized are still checked against the
     // numeric reference; the full run checks all three.
     assert_eq!(d["check"]["ok"], true, "{}", d["check"]);
@@ -960,7 +957,7 @@ M1 o1 in 0 0 nm W=10u L=1u\nM2 o2 o1 0 0 nm W=10u L=1u\n.model nm nmos (level=1 
     let d = &r["distortion"];
     assert_eq!(
         d["coefficients"][1]["latex"],
-        "R_{D1} R_{D2} \\left(-K_{2g,M2} {g_{m1}}^{2} R_{D1} + K_{2g,M1} g_{m2}\\right)"
+        "\\frac{g_{m1} g_{m2} R_{D1} R_{D2} \\left(-g_{m1} R_{D1} V_{OD1} + V_{OD2}\\right)}{2 V_{OD1} V_{OD2}}"
     );
     assert!(rel(coef(&r, 1), d["coefficients"][1]["numeric"].as_f64().unwrap()) < 1e-12);
     assert_eq!(d["check"]["ok"], true);

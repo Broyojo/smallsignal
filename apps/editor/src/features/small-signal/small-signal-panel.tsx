@@ -1766,6 +1766,21 @@ function DistortionDetails({
             aria-label="Device coefficients"
           >
             <tbody>
+              {distortion.symbols
+                .filter((symbol) => symbol.unit === "V")
+                .map((symbol) => (
+                  <tr key={symbol.name}>
+                    <th scope="row">
+                      <Formula latex={symbol.latex} />
+                    </th>
+                    <td>
+                      {symbol.value === null
+                        ? ""
+                        : formatEngineering(symbol.value, "V")}
+                    </td>
+                    <td />
+                  </tr>
+                ))}
               {distortion.taylor.map((term) => {
                 const label = taylorLatex(term);
                 return (
@@ -1860,6 +1875,13 @@ function NoiseDetails({
           exact={displayIsExact ? (display?.latex ?? null) : exactLatex}
           assumed={assumed}
         />
+      ) : null}
+      {[display?.latex, simpler?.latex].some((latex) =>
+        latex?.includes("\\gamma"),
+      ) ? (
+        <small className="small-signal-muted">
+          γ = 2/3, the long-channel value.
+        </small>
       ) : null}
       {low && flicker ? (
         <small className="small-signal-muted">

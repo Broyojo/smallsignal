@@ -8,7 +8,7 @@
 //! | element  | source                       | PSD                          |
 //! |----------|------------------------------|------------------------------|
 //! | R        | thermal                      | 4kT/R                        |
-//! | MOSFET   | channel thermal (any region) | (2/3)·4kT·gm                 |
+//! | MOSFET   | channel thermal (any region) | 4kT·γ·gm, γ = 2/3            |
 //! | MOSFET   | flicker                      | KF·gm²/(Cox·M·W·L·f^AF)      |
 //! | BJT      | collector shot (c–e)         | 2q·\|Ic\|                    |
 //! | BJT      | base shot (b–e)              | 2q·\|Ib\|                    |
@@ -60,14 +60,20 @@ pub enum SymOf {
     Current(CurrentSym),
 }
 
-/// White PSD = scale · (num/den) · symbol.
+/// White PSD = scale · (num/den) · symbol (· γ for a MOS channel).
 #[derive(Clone, Debug)]
 pub struct SymPsd {
     pub scale: Scale,
     pub num: i128,
     pub den: i128,
     pub of: SymOf,
+    /// Times the channel noise factor γ, one symbol for every MOSFET.
+    pub gamma: bool,
 }
+
+/// The MOS channel noise factor: ngspice's long-channel 2/3 (level 1). A
+/// symbol, so hand forms read 4kTγ/g_m as textbooks write them.
+pub const CHANNEL_GAMMA: f64 = 2.0 / 3.0;
 
 #[derive(Clone, Debug)]
 pub struct Source {
@@ -141,6 +147,7 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                     num: 1,
                     den: 1,
                     of: SymOf::Param(nm.clone()),
+                    gamma: false,
                 }),
             ),
             Kind::M { model, w, l, mult, .. } => {
@@ -155,13 +162,14 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                     "thermal",
                     n[0],
                     n[2],
-                    FOUR_KT * 2.0 / 3.0 * gm,
+                    FOUR_KT * CHANNEL_GAMMA * gm,
                     None,
                     Some(SymPsd {
                         scale: Scale::FourKT,
-                        num: 2,
-                        den: 3,
+                        num: 1,
+                        den: 1,
                         of: SymOf::Param(format!("gm_{nm}")),
+                        gamma: true,
                     }),
                 );
                 if model.kf > 0.0 && gm > 0.0 {
@@ -189,6 +197,7 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                             num: 1,
                             den: 1,
                             of: current("I", sub, i),
+                            gamma: false,
                         }),
                     );
                 }
@@ -223,6 +232,7 @@ pub fn sources(net: &Netlist, op: Option<&Op>) -> Vec<Source> {
                             num: 1,
                             den: 1,
                             of: current("I", "D", id),
+                            gamma: false,
                         }),
                     );
                 }
@@ -889,6 +899,21 @@ pub fn low_freq(
             }
         }
     }
+    let gamma = srcs.iter().any(|s| s.sym.as_ref().is_some_and(|p| p.gamma)).then(|| {
+        syms.push(Sym {
+            name: "gamma".into(),
+            latex: "\\gamma".into(),
+            value: CHANNEL_GAMMA,
+            inverted: false,
+            reactive: false,
+            role: Role::Coeff,
+            unit: "",
+            elements: Vec::new(),
+            output_r: false,
+            leakage: false,
+        });
+        syms.len() - 1
+    });
     let nsym = syms.len();
     let x = |p: &Poly| -> Result<XPoly, String> { Ok(XPoly::from_poly(p, &symbols.class, nbase)?.padded(nsym)) };
     // XPoly::mul and XPoly::add, without a map keyed by Vec<u8>.
@@ -923,6 +948,10 @@ pub fn low_freq(
                 None => continue,
             },
             SymOf::Current(_) => XPoly::var(cur_index[k].expect("current symbol"), nsym),
+        };
+        let var = match gamma.filter(|_| ps.gamma) {
+            Some(g) => mul(&var, &XPoly::var(g, nsym))?,
+            None => var,
         };
         let nk = x(&fit(sub(&node_num(s.a)?, &node_num(s.b)?), max_terms)?)?;
         if nk.is_zero() {
@@ -1601,7 +1630,7 @@ fn low_freq_json(lf: &LowFreq, dc_ref: Option<(f64, f64)>, tol: f64) -> Value {
     };
     let symbols_json: Vec<Value> = syms
         .iter()
-        .filter(|s| s.role == Role::Current)
+        .filter(|s| matches!(s.role, Role::Current | Role::Coeff))
         .map(|s| json!({ "name": s.name, "latex": s.latex, "value": num_or_null(s.value), "unit": s.unit, "elements": s.elements }))
         .collect();
 

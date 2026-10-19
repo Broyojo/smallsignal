@@ -686,7 +686,7 @@ function engineering(text: string): number {
   return Number(match[1]) * scale[match[2] ?? ""]!;
 }
 
-test("noise: the input-referred PSD is 4kT(2/(3gm) + 1/(gm² R1)), and the band rms follows", async ({
+test("noise: the input-referred PSD is 4kT(γ/gm + 1/(gm² R1)), and the band rms follows", async ({
   page,
 }) => {
   const panel = await analyze(page, FIXTURES.csWired);
@@ -705,6 +705,9 @@ test("noise: the input-referred PSD is 4kT(2/(3gm) + 1/(gm² R1)), and the band 
     await image.evaluate((span) => span.querySelector("svg")?.clientWidth),
   ).toBeGreaterThan(0);
   expect(alt).toContain("g_{m1}");
+  // The channel noise factor as a symbol, with its value said once.
+  expect(alt).toContain("\\frac{\\gamma}{g_{m1}}");
+  await expect(noise).toContainText("γ = 2/3, the long-channel value.");
 
   // ngspice's constants, at its default 27 °C.
   const kT = 1.38064852e-23 * 300.15;
@@ -817,6 +820,18 @@ test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", as
     all.map((img) => img.getAttribute("data-tex") ?? ""),
   );
   expect(alts.some((alt) => /^a_\{3\} = 0$/u.test(alt))).toBe(true);
+  // a₂ in the square law's terms, as hand analysis writes it.
+  expect(alts).toContain("a_{2} = -\\frac{g_{m1} R_{1}}{2 V_{OD1}}");
+  await section.getByText("Device coefficients", { exact: true }).click();
+  const vod = section
+    .getByRole("table", { name: "Device coefficients" })
+    .locator("tr")
+    .first();
+  expect(
+    Math.abs(
+      engineering(await vod.locator("td").first().innerText()) / overdrive - 1,
+    ),
+  ).toBeLessThan(3e-3);
 
   // An unreadable amplitude solves nothing rather than use the default.
   await section.getByLabel("Distortion amplitude").fill("abc");

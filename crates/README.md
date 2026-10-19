@@ -276,14 +276,16 @@ to 1e-6 (`oracle/`):
 | element | source (`kind`) | PSD (A²/Hz) |
 |---|---|---|
 | R | `thermal` | 4kT/R |
-| MOSFET | `thermal` (every region) | (2/3)·4kT·gm |
+| MOSFET | `thermal` (every region) | 4kT·γ·gm, γ = 2/3 |
 | MOSFET | `flicker` | KF·gm²/(Cox·M·W·L·f^AF), Cox = 3.9ε₀/TOX (TOX default 1e-7) |
 | BJT | `shot_c` (c–e), `shot_b` (b–e) | 2q·\|Ic\|, 2q·\|Ib\| |
 | BJT | `flicker` (b–e) | M·KF·(\|Ib\|/M)^AF/f |
 | diode | `shot`, `flicker` | 2q·\|Id\|, M·KF·(\|Id\|/M)^AF/f |
 
-Device conductances (r_o, r_π, r_d, junction leakage) carry no noise, as in
-ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
+The closed form writes the channel factor as one symbol γ (plain `gamma`,
+listed in `inputLowFreq.currents` with value 2/3), so a CS stage reads
+4kT(γ/g_m + 1/(g_m² R_D)). Device conductances (r_o, r_π, r_d, junction
+leakage) carry no noise, as in ngspice. Junction currents include the DC solve's gmin·v, as ngspice's own
 noise does. (ngspice-47's level-1 flicker is the gm² form above, not SPICE2's
 KF·Id^AF/(Cox·L²·f). With TOX given and KP not, KP = UO·Cox, UO default 600.)
 
@@ -363,7 +365,13 @@ the DC model, so it has no higher-order coefficients. Names: `K_{2g,M1}` (plain 
 `K^{BS}_{2b,M1}` (`KBS2b_M1`); diode `K_{2,D1}`. Matched devices (any of their
 parameters merged into one symbol: g_m, or r_bs for a MOSFET in cutoff)
 with equal coefficients share one symbol
-(`K_{2g,M1,2}`), so a matched pair's even orders cancel exactly. Coefficients
+(`K_{2g,M1,2}`), so a matched pair's even orders cancel exactly. A
+saturated MOSFET's gate / drain coefficients are written in its square law's
+terms instead, with its overdrive `V_{OD1}` (plain `Vod_M1`, unit V, in
+`symbols`; matched devices share one): K_{2g} = g_m/(2V_OD), K_{g d} =
+2/(r_o V_OD), K_{2g d} = 1/(r_o V_OD²), so a CS stage's a₂ reads
+−g_m R_D/(2V_OD) as r_o → ∞; each is used only where it equals the
+coefficient's value. Body (b) coefficients keep their K. Coefficients
 that are exactly zero, or whose omission moves no requested a_n (n ≤
 `order`) by more than 1e-9 (proven on the full numeric model, smallest
 first), are left out of the closed
@@ -379,7 +387,7 @@ transfer cofactors. Response `distortion`:
   for a₁…a_order (`numeric` from the direct numeric solve, full model).
 - `hd2` = |a₂|A/(2|a₁|), `hd3` = |a₃|A²/(4|a₁|), `iip3` = √(4|a₁|/(3|a₃|)) (input
   amplitude), each `{latex, value, display, simplified}`,
-  latex like `\frac{A}{2}\left|\frac{K_{2g,M1}}{g_{m1}}\right|`. Infinite
+  latex like `\frac{A}{2}\left|\frac{1}{2 V_{OD1}}\right|`. Infinite
   (HD with a₁ = 0 and the other a_n ≠ 0, IIP3 with a₃ = 0) is
   `{latex: "\infty", value: null, display: {latex: "\infty", value: null},
   simplified: (same)}`. Null means unavailable: `hd3` and `iip3` for

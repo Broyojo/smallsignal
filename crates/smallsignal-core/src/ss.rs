@@ -19,6 +19,9 @@ pub enum Role {
     Resistor,
     Capacitor,
     Inductor,
+    /// A MOSFET's V_OD in distortion forms, written after the rest:
+    /// g_m R_D/(2 V_OD).
+    Overdrive,
 }
 
 #[derive(Clone, Debug)]
