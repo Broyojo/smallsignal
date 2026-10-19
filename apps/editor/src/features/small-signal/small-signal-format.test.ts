@@ -25,6 +25,7 @@ import {
   suggestionThreshold,
   withSuggestions,
   countText,
+  differentialNets,
   differentialPairs,
   formatDensity,
   formatDistortion,
@@ -94,6 +95,23 @@ describe("preferredOutput", () => {
     expect(
       preferredOutput(["0", "a", "vout", "vdd"], new Set(["vdd"]), []),
     ).toBe("vout");
+  });
+});
+
+describe("differentialNets", () => {
+  it("pairs outp/outn, out+/out−, vout1/vout2 and net1/net2", () => {
+    expect(differentialNets(["outn", "outp", "vb"])).toEqual([
+      ["outp", "outn"],
+    ]);
+    expect(differentialNets(["out+", "out-"])).toEqual([["out+", "out-"]]);
+    expect(differentialNets(["vout1", "vout2"])).toEqual([["vout1", "vout2"]]);
+    expect(differentialNets(["net1", "net2"])).toEqual([["net1", "net2"]]);
+  });
+
+  it("offers no pair unasked for c1/c2 or a number against a sign", () => {
+    expect(differentialNets(["c1", "c2"])).toEqual([]);
+    expect(differentialNets(["out1", "outn"])).toEqual([]);
+    expect(differentialNets(["out", "vb"])).toEqual([]);
   });
 });
 

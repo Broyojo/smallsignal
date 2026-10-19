@@ -133,6 +133,10 @@ is JSON, or `{"error": "..."}` on failure.
   passives with equal values (`kind: "passive"`).
 - Common factors of numerator and denominator cancel (exact multivariate GCD),
   so e.g. a matched diff pair reads −g_{m1,2}(r_{o1,2} ∥ R_{D1,2}).
+- A DC denominator that is a sum of conductances is written as their ∥
+  group, with a numerator sum in front when its terms share no factor:
+  the CMOS inverter reads −(g_{m1} + g_{m2})(r_{o1} ∥ r_{o2}), never
+  r_{o1}r_{o2}(g_{m1} + g_{m2})/(r_{o1} + r_{o2}).
 - `rout`: the impedance at out/ref with every independent source zeroed.
 - `sweep` (`{fLow?, fHigh?, perDecade?}`, `sweep.rs`): the frequencies
   fLow·10^(k/perDecade) up to fHigh, then fHigh itself when they end short

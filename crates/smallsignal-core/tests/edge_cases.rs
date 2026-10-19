@@ -634,7 +634,7 @@ fn simplified_parts_are_each_within_tolerance() {
     assert_eq!(r["gain"]["simplified"]["same"], false);
     assert_eq!(
         r["gain"]["simplified"]["latex"],
-        "-\\frac{r_{o1} r_{o2} \\left(g_{m1} + g_{m2}\\right)}{r_{o1} + r_{o2}}"
+        "-\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)"
     );
 }
 
@@ -666,7 +666,7 @@ fn named_forms_drop_no_nameless_part() {
     }
     assert_eq!(
         r["gain"]["simplified"]["latex"],
-        "-\\frac{r_{o1} r_{o2} \\left(g_{m1} + g_{m2}\\right)}{r_{o1} + r_{o2}}"
+        "-\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)"
     );
 }
 
