@@ -111,10 +111,16 @@ pub fn structure(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<Structured> {
     let hterms: Vec<&(Vec<u8>, i128)> = den.terms.iter().filter(|(e, _)| spow(e, syms) > 0).collect();
     let numd = divide(&nterms, g, &m, syms)?;
     let dend = divide(&hterms, g, &m, syms)?;
-    // `(a + b) (r_o ∥ R)` reads worse than the plain fraction; keep the
-    // rewrite to a numerator with at most one term per power of s.
-    if numd.windows(2).any(|w| w[0].spow == w[1].spow) {
-        return None;
+    // `-(g_{m1} + g_{m2}) (r_{o1} ∥ r_{o2})` reads as the textbook does, but
+    // a sum whose terms share a factor, `(a b + a c) (…)`, reads worse than
+    // the plain fraction.
+    let mut k = 0;
+    while k < numd.len() {
+        let grp: Vec<&DTerm> = numd[k..].iter().take_while(|t| t.spow == numd[k].spow).collect();
+        k += grp.len();
+        if grp.len() > 1 && (0..syms.len()).any(|i| grp.iter().all(|t| t.e[i] > 0)) {
+            return None;
+        }
     }
     let negate = !numd.is_empty() && numd.iter().all(|t| t.coeff < 0);
     let mut st = Structured {

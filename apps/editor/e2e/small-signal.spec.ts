@@ -32,6 +32,8 @@ const FIXTURES = {
     "packages/small-signal/test-fixtures/two-stage-miller-ota.icproj.json",
   inverter:
     "packages/small-signal/test-fixtures/cmos-inverter-triode.icproj.json",
+  fullyDifferential:
+    "apps/editor/src/examples/fully-differential-two-stage-op-amp.icproj.json",
 } as const;
 
 /**
@@ -317,6 +319,39 @@ test("textbook diff pair reads like hand analysis: differential, matched, gm(ro 
   await expect
     .poll(async () => formula(panel, "Gain"))
     .not.toContain("g_{m3,4}");
+});
+
+test("differential output: a drawn Vout1/Vout2 is read across, and any two nets can be", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.fullyDifferential);
+  const output = panel.getByLabel("Output", { exact: true });
+  // A differential input drives the drawn output pair by default.
+  await expect(output.locator("option:checked")).toHaveText("Vout1 − Vout2");
+  const across = /^\\frac\{v_\{\w*1\} - v_\{\w*2\}\}\{/u;
+  await expect.poll(() => formula(panel, "Gain")).toMatch(across);
+  const plus = panel.getByLabel("Output +", { exact: true });
+  const minus = panel.getByLabel("Output −", { exact: true });
+  await expect(plus).toHaveValue("Vout1");
+  await expect(minus).toHaveValue("Vout2");
+
+  // One side alone: the + and − pickers go.
+  await output.selectOption("Vout1");
+  await expect(minus).toHaveCount(0);
+  await expect
+    .poll(() => formula(panel, "Gain"))
+    .toMatch(/^\\frac\{v_\{\w*1\}\}\{/u);
+
+  // Any two nets: the difference entry, then either side.
+  await output.selectOption({ label: "Difference of two nets…" });
+  await expect(plus).toHaveValue("Vout1");
+  await minus.selectOption("Vout2");
+  await expect(output.locator("option:checked")).toHaveText("Vout1 − Vout2");
+  await expect.poll(() => formula(panel, "Gain")).toMatch(across);
+  // Ground on the minus side is the single-ended output again.
+  await minus.selectOption({ label: "ground" });
+  await expect(minus).toHaveCount(0);
+  await expect(output).toHaveValue("Vout1");
 });
 
 test("5T OTA with a real bias: saturated, matched, gm(ro ∥ ro)/(1 + CL(…)s)", async ({
@@ -1149,7 +1184,12 @@ test("device menu: saturation on the triode inverter gives −(g_m1 + g_m2)(r_o1
   await expect(gain.locator("[data-region-note]")).toHaveText(
     "M1 assumed saturated",
   );
-  await expect.poll(() => formula(panel, "Gain")).toContain("r_{o1}");
+  // The textbook form, with its parallel resistance.
+  await expect
+    .poll(() => formula(panel, "Gain"))
+    .toContain(
+      "-\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)",
+    );
   expect(await formula(panel, "Gain")).not.toContain("R_{on1}");
   // The header stays the full model's; the assumed value is the saturated
   // hand form with the bias table's (assumed) g_m and r_o.
@@ -1292,7 +1332,7 @@ test("named assumptions: the triode inverter's ≈ forms assume r_o2 → ∞, it
   // −(g_m1 + g_m2)(R_on1 ∥ r_o2), M1's channel 885 Ω.
   await expect.poll(() => cardValue(panel, "Gain")).toBeCloseTo(-0.4508, 3);
   expect(await formula(panel, "Gain")).toContain(
-    "= -\\frac{R_{on1} r_{o2} \\left(g_{m2} + g_{m1}\\right)}{r_{o2} + R_{on1}}",
+    "= -\\left(g_{m2} + g_{m1}\\right) \\left(R_{on1} \\parallel r_{o2}\\right)",
   );
   for (const [name, form] of [
     ["Gain", "-R_{on1} \\left(g_{m2} + g_{m1}\\right)"],

@@ -29,6 +29,12 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   marks every symbol of its elements. One stylesheet does the marking,
   so no formula re-renders. Copying a selection writes each formula as
   `$TeX$`, and a click selects a formula whole.
+- Output offers each net and each drawn differential pair (outp/outn,
+  out+/out−, vout1/vout2; not c1/c2), read across as V(+) − V(−);
+  "Difference of two nets…" picks any two. A differential output shows
+  its Output + and Output − below; − set to ground is single-ended again.
+  A differential input defaults to a drawn output pair whose name has
+  "out".
 - Bias point lists every DC value the bias is solved from, editable in
   place: each source's DC (the input first: its signal rides on it), each
   undriven Pin's, and the supply rails'. A drawn source's edit writes the

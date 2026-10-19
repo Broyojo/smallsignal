@@ -3247,19 +3247,49 @@ export function differentialPairs(
 ): Array<[SmallSignalSource, SmallSignalSource]> {
   const voltage = sources.filter((source) => source.kind === "voltage");
   const pairs: Array<[SmallSignalSource, SmallSignalSource]> = [];
-  const split = (label: string) => {
-    const match = /^(.*?)(\+|-|−|p|n|P|N|1|2)$/u.exec(label);
-    if (!match) return null;
-    const sign = match[2] ?? "";
-    const positive = ["+", "p", "P", "1"].includes(sign);
-    return { stem: match[1] ?? "", positive };
-  };
   for (const plus of voltage) {
-    const a = split(sourceLabel(plus));
+    const a = signSplit(sourceLabel(plus));
     if (!a?.positive || !a.stem) continue;
     const minus = voltage.find((other) => {
-      const b = split(sourceLabel(other));
+      const b = signSplit(sourceLabel(other));
       return other !== plus && b && !b.positive && b.stem === a.stem;
+    });
+    if (minus) pairs.push([plus, minus]);
+  }
+  return pairs;
+}
+
+/** "inp" → in, positive; "out2" → out, negative. */
+function signSplit(label: string) {
+  const match = /^(.*?)(\+|-|−|p|n|P|N|1|2)$/u.exec(label);
+  if (!match) return null;
+  const sign = match[2] ?? "";
+  return {
+    stem: match[1] ?? "",
+    positive: ["+", "p", "P", "1"].includes(sign),
+    numbered: sign === "1" || sign === "2",
+  };
+}
+
+/**
+ * Nets drawn as a differential output: outp / outn, out+ / out−, and
+ * numbered ones (vout1 / vout2, net1 / net2) whose stem is not a bare
+ * letter, so c1 / c2 of a pair is not offered unasked.
+ */
+export function differentialNets(nets: string[]): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (const plus of nets) {
+    const a = signSplit(plus);
+    if (!a?.positive || !a.stem || (a.numbered && a.stem.length < 2)) continue;
+    const minus = nets.find((other) => {
+      const b = signSplit(other);
+      return (
+        other !== plus &&
+        b &&
+        !b.positive &&
+        b.stem === a.stem &&
+        b.numbered === a.numbered
+      );
     });
     if (minus) pairs.push([plus, minus]);
   }
@@ -3482,6 +3512,8 @@ function Guide({
 }
 
 const DIFF_PREFIX = "diff:";
+/** The Output menu's entry for a difference not drawn as a pair. */
+const DIFFERENCE = "difference";
 const NO_ASSUMPTIONS: CircuitAssumptions = {};
 
 /** Symbolic small-signal analysis of the open Cell, solved in a worker. */
@@ -3584,7 +3616,8 @@ export function SmallSignalPanel({
   };
   const [input, setInput] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
-  const [reference, setReference] = useState("0");
+  // Null until picked: a drawn differential output is then the default.
+  const [reference, setReference] = useState<string | null>(null);
   const [frequencies, setFrequencies] = useState("1k");
   // Hand-analysis mode: no bias, every transistor taken as saturated.
   const [assumeSaturation, setAssumeSaturation] = useState(false);
@@ -3725,11 +3758,27 @@ export function SmallSignalPanel({
     ? (chosenInput.slice(DIFF_PREFIX.length).split("|") as [string, string])
     : null;
   const unmatch = [...unmatched].map((key) => key.split("="));
-  const chosenOutput =
-    output && nets.includes(output)
+  const outputPairs = differentialNets(
+    nets.filter(
+      (net) => net !== "0" && !(netlist?.supplies ?? []).includes(net),
+    ),
+  );
+  // A differential input drives a drawn differential output, read across
+  // it (outp − outn) until another output is picked.
+  const defaultPair =
+    output === null && reference === null && differential
+      ? outputPairs.find(([plus]) => /out/iu.test(plus))
+      : undefined;
+  const chosenOutput = defaultPair
+    ? defaultPair[0]
+    : output && nets.includes(output)
       ? output
       : preferredOutput(nets, sourceNodes, netlist?.supplies ?? []);
-  const chosenReference = nets.includes(reference) ? reference : "0";
+  const chosenReference = defaultPair
+    ? defaultPair[1]
+    : reference && reference !== chosenOutput && nets.includes(reference)
+      ? reference
+      : "0";
   // Ground and supply rails are AC ground: if nothing else exists, there is
   // nothing to measure (e.g. the output is drawn on ground).
   const noOutput = Boolean(netlist) && chosenOutput === "0";
@@ -4499,9 +4548,49 @@ export function SmallSignalPanel({
                 Output
                 <select
                   aria-label="Output"
-                  value={chosenOutput}
-                  onChange={(event) => setOutput(event.currentTarget.value)}
+                  value={
+                    chosenReference === "0"
+                      ? chosenOutput
+                      : `${DIFF_PREFIX}${chosenOutput}|${chosenReference}`
+                  }
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    if (value === DIFFERENCE) {
+                      setOutput(chosenOutput);
+                      setReference(
+                        nets.find(
+                          (net) => net !== "0" && net !== chosenOutput,
+                        ) ?? "0",
+                      );
+                    } else if (value.startsWith(DIFF_PREFIX)) {
+                      const [plus, minus] = value
+                        .slice(DIFF_PREFIX.length)
+                        .split("|");
+                      setOutput(plus ?? null);
+                      setReference(minus ?? "0");
+                    } else {
+                      setOutput(value);
+                      setReference("0");
+                    }
+                  }}
                 >
+                  {[
+                    ...outputPairs,
+                    ...(chosenReference !== "0" &&
+                    !outputPairs.some(
+                      ([plus, minus]) =>
+                        plus === chosenOutput && minus === chosenReference,
+                    )
+                      ? [[chosenOutput, chosenReference] as [string, string]]
+                      : []),
+                  ].map(([plus, minus]) => (
+                    <option
+                      key={`${plus}|${minus}`}
+                      value={`${DIFF_PREFIX}${plus}|${minus}`}
+                    >
+                      {plus} − {minus}
+                    </option>
+                  ))}
                   {nets
                     .filter((net) => net !== "0")
                     .map((net) => (
@@ -4509,9 +4598,43 @@ export function SmallSignalPanel({
                         {net}
                       </option>
                     ))}
+                  {nets.filter((net) => net !== "0").length > 1 ? (
+                    <option value={DIFFERENCE}>Difference of two nets…</option>
+                  ) : null}
                 </select>
               </label>
             </div>
+            {chosenReference !== "0" ? (
+              <div className="small-signal-io">
+                {(
+                  [
+                    ["Output +", chosenOutput, setOutput],
+                    ["Output −", chosenReference, setReference],
+                  ] as const
+                ).map(([label, value, set]) => (
+                  <label key={label}>
+                    {label}
+                    <select
+                      aria-label={label}
+                      value={value}
+                      onChange={(event) => set(event.currentTarget.value)}
+                    >
+                      {nets
+                        .filter((net) =>
+                          set === setOutput
+                            ? net !== "0" && net !== chosenReference
+                            : net !== chosenOutput,
+                        )
+                        .map((net) => (
+                          <option key={net} value={net}>
+                            {net === "0" ? "ground" : net}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            ) : null}
             {sources.length ? null : guide}
 
             {unconnected.length ? (
@@ -4886,22 +5009,6 @@ export function SmallSignalPanel({
                       setFrequencies(event.currentTarget.value)
                     }
                   />
-                </label>
-                <label>
-                  Measured against
-                  <select
-                    aria-label="Output reference"
-                    value={chosenReference}
-                    onChange={(event) =>
-                      setReference(event.currentTarget.value)
-                    }
-                  >
-                    {nets.map((net) => (
-                      <option key={net} value={net}>
-                        {net === "0" ? "ground" : net}
-                      </option>
-                    ))}
-                  </select>
                 </label>
                 {netlist.supplies.length ? (
                   <label>
