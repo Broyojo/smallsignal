@@ -5529,6 +5529,16 @@ function WorkspaceEditor({
                     selectedInstanceIds={selectedIds}
                     onSelectInstances={(ids) => selectOnly("instance", ids)}
                     instanceClick={smallSignalClick}
+                    onSetParameters={(instanceId, edit) =>
+                      transact([
+                        {
+                          kind: "patch_instance_netlist_parameters",
+                          instanceId,
+                          ...edit,
+                        },
+                      ]).ok
+                    }
+                    onInspect={inspectInstance}
                     onOpenExample={(id) => {
                       // The examples load with their own chunk, as the
                       // Library loads them.
@@ -6853,6 +6863,15 @@ function WorkspaceEditor({
                 )?.definition.formulaPresentation;
                 if (presentation) {
                   beginInstanceFormulaEditing(instance, presentation);
+                  return;
+                }
+                // The small-signal panel keeps its place: the part's own
+                // menu edits its values, and links to Properties.
+                if (projectPanel === "small-signal") {
+                  setSmallSignalClick((previous) => ({
+                    instanceId: instance.id,
+                    nonce: (previous?.nonce ?? 0) + 1,
+                  }));
                   return;
                 }
                 inspectInstance(instance.id);

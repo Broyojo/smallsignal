@@ -9,10 +9,12 @@ import {
 import { createPortal } from "react-dom";
 import type { AssumptionTerm } from "@icm/small-signal";
 import type { RegionChoice } from "./small-signal-assumption-store";
+import type { PartField } from "./small-signal-part-fields";
 
-// A part's assumptions where the part is drawn: an anchored menu beside it
-// on the canvas, and a badge on each part that has any in effect. Both
-// read and write the Assumptions table's store through the panel.
+// A part where it is drawn: an anchored menu beside it on the canvas with
+// its values and assumptions, and a badge on each part that has any
+// assumption in effect. Values write the drawing; assumptions read and
+// write the Assumptions table's store through the panel.
 
 /** A neglected term (or the leakage column) as a toggle. */
 export interface MenuToggle {
@@ -59,6 +61,10 @@ export interface DeviceMenuActions {
   miller(term: AssumptionTerm, on: boolean): void;
   passive(choice: PassiveChoice): void;
   region(region: RegionChoice | ""): void;
+  /** Writes a typed value to the drawing; false when it is not one. */
+  field(field: PartField, text: string): boolean;
+  /** The part's full Properties. */
+  more?: (() => void) | undefined;
 }
 
 const SUB: Record<string, string> = {
@@ -232,12 +238,76 @@ function Toggle({
   );
 }
 
+/** A value, applied on Enter or leaving the field; Esc closes unchanged. */
+export function ValueField({
+  field,
+  label,
+  onCommit,
+}: {
+  field: PartField;
+  /** Read aloud: "R1 Value", "VINP DC". */
+  label: string;
+  onCommit(text: string): boolean;
+}) {
+  const [text, setText] = useState(field.value);
+  const [invalid, setInvalid] = useState(false);
+  // The drawing changed under it (undo, another edit): show what it says.
+  useEffect(() => {
+    setText(field.value);
+    setInvalid(false);
+  }, [field.value]);
+  const commit = () => {
+    if (text.trim() === field.value.trim()) {
+      setInvalid(false);
+      return true;
+    }
+    const ok = onCommit(text);
+    setInvalid(!ok);
+    return ok;
+  };
+  return (
+    <label className="small-signal-device-menu-field">
+      <span>{field.label}</span>
+      <input
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        value={text}
+        placeholder={field.placeholder}
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        onChange={(event) => {
+          setText(event.currentTarget.value);
+          setInvalid(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            if (commit()) event.currentTarget.select();
+          }
+        }}
+        onBlur={() => {
+          if (!commit()) {
+            setText(field.value);
+            setInvalid(false);
+          }
+        }}
+      />
+      {field.unit ? (
+        <span className="small-signal-muted">{field.unit}</span>
+      ) : null}
+    </label>
+  );
+}
+
 /**
- * The menu itself: what the part neglects, its Miller splits, open or
- * short, and a MOSFET's region, each applied as soon as it is chosen.
+ * The menu itself: the part's values, what it neglects, its Miller
+ * splits, open or short, and a MOSFET's region, each applied as soon as it
+ * is chosen.
  */
 export function DeviceMenu({
   model,
+  fields,
   status,
   actions,
   anchor,
@@ -246,6 +316,8 @@ export function DeviceMenu({
   onClose,
 }: {
   model: DeviceMenuModel;
+  /** Its values as drawn; empty for a part with none. */
+  fields: readonly PartField[];
   status: DeviceMenuStatus;
   actions: DeviceMenuActions;
   /** The part's box on screen, measured every frame; null when gone. */
@@ -303,9 +375,16 @@ export function DeviceMenu({
     if (!focusOnOpen) return;
     // After the selection it came with has settled (the canvas may take
     // focus for it).
-    // The first choice, not Close: a toggle, else the checked option.
+    // The first choice, not Close: a value, a toggle, else the checked
+    // option.
     const frame = requestAnimationFrame(() => {
       const menu = ref.current;
+      const value = menu?.querySelector<HTMLInputElement>("input");
+      if (value) {
+        value.focus();
+        value.select();
+        return;
+      }
       (
         menu?.querySelector<HTMLElement>("button[aria-pressed]") ??
         menu?.querySelector<HTMLElement>('[role="radio"][tabindex="0"]') ??
@@ -387,7 +466,7 @@ export function DeviceMenu({
       ref={ref}
       className={`small-signal-device-menu${sheet ? " is-sheet" : ""}`}
       role="dialog"
-      aria-label={`${model.label} assumptions`}
+      aria-label={model.label}
       data-testid="small-signal-device-menu"
       style={
         sheet || !placement
@@ -417,6 +496,22 @@ export function DeviceMenu({
           ×
         </button>
       </header>
+      {fields.length ? (
+        <div
+          className="small-signal-device-menu-section small-signal-device-menu-fields"
+          role="group"
+          aria-label="Values"
+        >
+          {fields.map((field) => (
+            <ValueField
+              key={field.name}
+              field={field}
+              label={`${model.label} ${field.label}`}
+              onCommit={(text) => actions.field(field, text)}
+            />
+          ))}
+        </div>
+      ) : null}
       {model.matchedWith.length ? (
         <p className="small-signal-muted">
           Matched with {model.matchedWith.join(", ")}. Applies to all.
@@ -471,9 +566,18 @@ export function DeviceMenu({
           ))}
         </ul>
       ) : null}
-      {status.cost ? (
-        <footer className="small-signal-muted" data-cost>
-          {status.cost}
+      {status.cost || actions.more ? (
+        <footer className="small-signal-muted">
+          {status.cost ? <span data-cost>{status.cost}</span> : null}
+          {actions.more ? (
+            <button
+              type="button"
+              className="small-signal-link-button"
+              onClick={actions.more}
+            >
+              More properties
+            </button>
+          ) : null}
         </footer>
       ) : null}
     </section>

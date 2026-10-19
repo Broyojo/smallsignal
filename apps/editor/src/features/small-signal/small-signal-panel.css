@@ -442,8 +442,49 @@
 }
 
 .small-signal-device-menu > footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
   padding-top: 8px;
   border-top: 1px solid var(--icm-border);
+}
+
+.small-signal-device-menu > footer > button {
+  margin-left: auto;
+}
+
+/* Values: label, field, unit on one row each, fields aligned. */
+.small-signal-device-menu-fields {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.small-signal-bias-settings > small {
+  grid-column: 1 / -1;
+}
+
+.small-signal-device-menu-field,
+.small-signal-panel .small-signal-device-menu-field {
+  display: contents;
+}
+
+.small-signal-device-menu-field > span:first-child {
+  color: var(--icm-text-muted);
+}
+
+.small-signal-device-menu-field > input {
+  min-width: 0;
+  min-height: var(--icm-control-h);
+  padding: 0.2rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.small-signal-device-menu-field > input[aria-invalid="true"] {
+  border-color: var(--icm-error);
 }
 
 /* A part with assumptions: a tag at its top right on the canvas. */
