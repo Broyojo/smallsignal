@@ -1749,6 +1749,10 @@ fn representable(direct: f64, ln_x: impl Fn() -> f64, amp: f64, n: usize) -> Opt
 /// of the terms it is the sum of (`Probe::terms`).
 const ZERO_REL: f64 = 1e-12;
 
+/// An H_n below this fraction of its terms' rough size is checked for
+/// cancelling to roundoff at its frequency.
+const CANCEL_PROBE: f64 = 1e-6;
+
 /// An infinite quantity (HD with a1 = 0, IIP3 with a3 = 0): latex
 /// `\infty`, value null, and so its display and simplified forms.
 fn infinite() -> Value {
@@ -2430,10 +2434,11 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                             return num_or_null(direct);
                         }
                         // H_n cancels to roundoff of its terms (a balanced
-                        // circuit's even order): 0, as at low frequency. The
-                        // devices' parts are measured only where a_n cancels
-                        // (its node responses cancel too, so cannot tell).
-                        if zero(n) && {
+                        // circuit's even order): 0, as at low frequency.
+                        // Decided by the devices' parts at f (node responses
+                        // cancel too, so cannot tell), measured only for an
+                        // H_n far below the parts' size at DC or its nodes'.
+                        if h[n].norm() <= CANCEL_PROBE * terms[n].max(nt[n]) && {
                             let t = phys_probe
                                 .terms(&devs, &phys_coefs, &phys_all, f, c.order >= 3)
                                 .unwrap_or([0.0; 3]);

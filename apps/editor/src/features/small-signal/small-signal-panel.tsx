@@ -482,10 +482,11 @@ const StaleBuildContext = createContext<() => void>(() => {});
  * TeX one click from the clipboard, never shown as raw source.
  */
 function UntypesetFormula({
-  latex,
+  copy,
   reason,
 }: {
-  latex: string;
+  /** What its button copies (as `Formula`'s); null for no button. */
+  copy: string | null;
   reason: "too-long" | "unavailable";
 }) {
   const [copied, setCopied] = useState(false);
@@ -496,17 +497,19 @@ function UntypesetFormula({
           ? "Too long to display as an equation."
           : "The equation could not be displayed."}
       </span>
-      <button
-        type="button"
-        onClick={() => {
-          void navigator.clipboard?.writeText(latex).then(
-            () => setCopied(true),
-            () => setCopied(false),
-          );
-        }}
-      >
-        {copied ? "Copied" : "Copy LaTeX"}
-      </button>
+      {copy === null ? null : (
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard?.writeText(copy).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            );
+          }}
+        >
+          {copied ? "Copied" : "Copy LaTeX"}
+        </button>
+      )}
     </p>
   );
 }
@@ -569,7 +572,7 @@ function Formula({
   if (tooLong || !result?.ok)
     return (
       <UntypesetFormula
-        latex={latex}
+        copy={copy}
         reason={tooLong ? "too-long" : "unavailable"}
       />
     );
@@ -777,7 +780,7 @@ function MainFormula({
         {equals ? null : (
           <FullModelNote error={error} assumed leakage={leaky} />
         )}
-        {shown && leaky ? (
+        {shown && leaky && quantity.exact?.latex ? (
           <details className="small-signal-exact">
             <summary>{EXACT_ASSUMED}</summary>
             <ExactFormula symbol={symbol} quantity={quantity} />
@@ -799,8 +802,9 @@ function MainFormula({
       <small className="small-signal-muted">
         {invisible ? LEAKAGE_NOTE : `${LEAKAGE_NOTE} (${formatPercent(error)})`}
       </small>
-      {/* "=" is exact for the model without leakage: nothing to disclose. */}
-      {invisible ? null : (
+      {/* "=" is exact for the model without leakage: nothing to disclose;
+          nor is an exact form too large to typeset. */}
+      {invisible || !quantity.exact?.latex ? null : (
         <details className="small-signal-exact">
           <summary>Exact</summary>
           <ExactFormula symbol={symbol} quantity={quantity} />
@@ -1584,6 +1588,10 @@ function DistortionFormula({
       <>
         <Formula latex={`${symbol} = 0`} />
         <small className="small-signal-muted">terms cancel at this bias</small>
+        {assumed &&
+        !((simpler.fullModelError ?? Infinity) < INVISIBLE_ERROR) ? (
+          <FullModelNote error={simpler.fullModelError} assumed />
+        ) : null}
         {shown?.latex ? (
           <details className="small-signal-exact">
             <summary>General form</summary>
@@ -1791,8 +1799,7 @@ function DistortionDetails({
         latex={`v_{out} = a_{1} ${v}_{in} + a_{2} ${v}_{in}^{2}${distortion.order >= 3 ? ` + a_{3} ${v}_{in}^{3}` : ""}`}
       />
       {/* Once for every form below, not under each. */}
-      {!assumed &&
-      distortion.coefficients.some(
+      {distortion.coefficients.some(
         (coefficient) => coefficient.display?.same === false,
       ) ? (
         <small className="small-signal-muted">{LEAKAGE_NOTE}</small>
