@@ -911,6 +911,47 @@ test("distortion: the balanced inverter's a₂ is 0, a₁ reads in ∥, the menu
   );
 });
 
+test("re-solving keeps the panel's place: toggling Nonlinear or Matched neither jumps nor closes what is open", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.ota);
+  await formula(panel, "Gain");
+  await panel.getByText("Noise", { exact: true }).click();
+  await panel.getByText("Distortion", { exact: true }).click();
+  const section = panel.locator("details.small-signal-distortion");
+  await expect(section.locator('tr[data-quantity="hd2"]')).toBeVisible({
+    timeout: 15_000,
+  });
+  // Something opened inside, and the panel scrolled to its bottom.
+  const coefficients = section.locator("details", {
+    has: page.locator("summary", { hasText: /^Device coefficients$/u }),
+  });
+  await coefficients.locator("summary").click();
+  await expect(coefficients).toHaveAttribute("open", "");
+  // Each chip pressed where it is, from the keyboard (nothing scrolls to
+  // it): it stays where it was on screen through the re-solve, the old
+  // result staying up, marked busy, until the new one replaces it.
+  for (const chip of [
+    section
+      .getByRole("group", { name: "Nonlinear devices" })
+      .getByRole("button", { name: "M1" }),
+    panel.getByRole("button", { name: /M1 = M2/u }),
+  ]) {
+    await chip.scrollIntoViewIfNeeded();
+    await chip.focus();
+    const before = (await chip.boundingBox())!.y;
+    await chip.press("Enter");
+    await expect(
+      section.locator(".small-signal-result[aria-busy]"),
+    ).toHaveCount(1);
+    await expect(
+      section.locator(".small-signal-result[aria-busy]"),
+    ).toHaveCount(0, { timeout: 15_000 });
+    expect(Math.abs((await chip.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(coefficients).toHaveAttribute("open", "");
+  }
+});
+
 test("a wide exact formula scrolls inside the panel instead of being cut off", async ({
   page,
 }) => {

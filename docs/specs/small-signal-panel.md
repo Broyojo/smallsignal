@@ -45,6 +45,11 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   under an "≈" with an exact form to open onto. An a_n that cancels at the
   bias reads "a_n = 0", "terms cancel at this bias", its general form a
   click away.
+- A re-solve keeps the panel's place: Noise and Distortion keep their
+  last result up, dimmed and `aria-busy`, until the new one replaces it;
+  Distortion keeps the netlist's devices while an option (Matched)
+  re-solves; a formula keeps its drawing until its new one is typeset. A
+  chip toggled stays where it was, and what is open stays open.
 - A biased transistor or diode's device menu has a Nonlinear switch: the
   Distortion section's button for that part. Turning it on opens
   Distortion.

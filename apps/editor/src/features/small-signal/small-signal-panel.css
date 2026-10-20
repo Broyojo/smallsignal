@@ -163,6 +163,17 @@
   font-weight: 400;
 }
 
+/* A section's last result while the next is solved: dimmed after a beat,
+   so a quick re-solve does not flicker. */
+.small-signal-result {
+  transition: opacity 0s;
+}
+
+.small-signal-result.is-stale {
+  opacity: 0.5;
+  transition: opacity 120ms 150ms;
+}
+
 .small-signal-formula-scroll {
   overflow-x: auto;
   overscroll-behavior-x: contain;
