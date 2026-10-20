@@ -148,7 +148,8 @@ is JSON, or `{"error": "..."}` on failure.
   holds, exactly and ascending, the natural frequencies, the gain's
   zeros, and the gain's `unity` (its first fall through 1, for a voltage
   input) and `bandwidth` (its first fall to 1/√2 of its value at fLow),
-  each by bisection on log f. The response's `sweep` is `{fLow, fHigh,
+  each by bisection on log f between the points with the roots already in
+  (a sharp notch is bracketed at its zero). The response's `sweep` is `{fLow, fHigh,
   perDecade, f, unity, bandwidth}`, null in symbolic mode or without a C
   or L. Each of `gain`, `rin`, `rout` then has `sweep` `{full, approx,
   assumed}`, one `[re, im]` (null where not finite) per frequency:

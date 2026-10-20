@@ -1622,7 +1622,6 @@ test("bode: the two-stage OTA's gain plot marks its poles and zero, and the cros
   await page.mouse.move(at!.x + at!.width / 2, at!.y - 60);
   const readout = plot.getByTestId("small-signal-bode-readout");
   await expect(readout.locator("strong")).toHaveText("1 kHz");
-  await page.keyboard.up("Alt");
   const db = Number(
     (
       await readout
@@ -1634,6 +1633,12 @@ test("bode: the two-stage OTA's gain plot marks its poles and zero, and the cros
   );
   const gain = await cardValue(panel, "Gain");
   expect(Math.abs(db - 20 * Math.log10(Math.abs(gain)))).toBeLessThan(0.06);
+  // Released, it lands on the pole again at once.
+  await page.keyboard.up("Alt");
+  await expect(readout.locator("strong")).toHaveAttribute(
+    "data-snapped",
+    "pole",
+  );
   await page.mouse.move(5, 5);
   await expect(readout).toHaveCount(0);
   // Zin looks into a gate: nothing to plot.
@@ -1709,14 +1714,15 @@ test("bode: near a pole, the unity-gain or the −3 dB point the crosshair lands
   const lost = 180 * Math.round(dcPhase / 180) - (await full("phase"));
   expect(Math.abs(margin - (180 - lost))).toBeLessThan(0.11);
 
-  // Alt reads freely: no landing.
-  await page.keyboard.down("Alt");
+  // Alt reads freely, applied without moving: pressed over a landed
+  // point it lets go, released it lands again.
   await near(pole);
-  await expect(readout.locator("strong")).not.toHaveAttribute(
-    "data-snapped",
-    /./u,
-  );
+  const strong = readout.locator("strong");
+  await expect(strong).toHaveAttribute("data-snapped", "pole");
+  await page.keyboard.down("Alt");
+  await expect(strong).not.toHaveAttribute("data-snapped", /./u);
   await page.keyboard.up("Alt");
+  await expect(strong).toHaveAttribute("data-snapped", "pole");
 });
 
 test("bode: a circuit without capacitors has no plot", async ({ page }) => {

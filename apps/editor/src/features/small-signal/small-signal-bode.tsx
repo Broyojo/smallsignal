@@ -150,8 +150,27 @@ export function BodePlot({
 }: BodeProps) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(320);
-  const [hover, setHover] = useState<number | null>(null);
-  const [snapped, setSnapped] = useState<SnapTarget | null>(null);
+  // The pointer's x on the plot (null off it) and whether Alt is held:
+  // the crosshair and any snap follow from these and the current data, so
+  // a re-solve or resize never leaves a stale snap.
+  const [pointer, setPointer] = useState<{ px: number; alt: boolean } | null>(
+    null,
+  );
+  const pointing = pointer !== null;
+  useEffect(() => {
+    if (!pointing) return;
+    // Alt pressed or released over a still pointer applies at once.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") return;
+      setPointer((last) => last && { ...last, alt: event.altKey });
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+    };
+  }, [pointing]);
   useEffect(() => {
     const element = box.current;
     if (!element) return;
@@ -213,37 +232,47 @@ export function BodePlot({
     ...rootFrequencies(zeros).map((item) => ({ ...item, kind: "zero" })),
     ...rootFrequencies(poles).map((item) => ({ ...item, kind: "pole" })),
   ].filter(({ f }) => f >= fLow && f <= fHigh);
-  // Crossings only on a gain's dB axis.
-  const crossingTargets: SnapTarget[] = decibels
-    ? (["unity", "bandwidth"] as const).flatMap((kind) => {
-        const f = crossings?.[kind];
-        return f != null && f >= fLow && f <= fHigh ? [{ f, kind }] : [];
-      })
-    : [];
+  // Unity gain only on a dB axis (a voltage gain); −3 dB on either.
+  const crossingTargets: SnapTarget[] = (
+    decibels ? (["unity", "bandwidth"] as const) : (["bandwidth"] as const)
+  ).flatMap((kind) => {
+    const f = crossings?.[kind];
+    return f != null && f >= fLow && f <= fHigh ? [{ f, kind }] : [];
+  });
+  // A point is a target only where the sweep holds it exactly (an
+  // impedance's own zero may not be swept).
+  const swept = (f: number) =>
+    freqs.some((value) => Math.abs(value / f - 1) < 1e-9);
   const targets: SnapTarget[] = [
     ...marks.map(({ f, kind }) => ({ f, kind: kind as "pole" | "zero" })),
     ...crossingTargets,
-  ];
+  ].filter(({ f }) => swept(f));
 
   const onPointer = (event: ReactPointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / rect.width) * width;
-    if (px < LEFT - 4 || px > width - RIGHT + 4) {
-      setHover(null);
-      return;
-    }
-    // Alt (⌥) reads freely, as in drawing tools.
-    const near = event.altKey ? null : snapTarget(targets, px, xOfF, SNAP_PX);
-    setSnapped(near);
-    if (near) {
-      setHover(nearestIndex(freqs, near.f));
-      return;
-    }
-    const t = Math.min(1, Math.max(0, (px - LEFT) / plotWidth));
-    const f =
-      10 ** (Math.log10(fLow) + t * (Math.log10(fHigh) - Math.log10(fLow)));
-    setHover(nearestIndex(freqs, f));
+    setPointer(
+      px < LEFT - 4 || px > width - RIGHT + 4
+        ? null
+        : { px, alt: event.altKey },
+    );
   };
+  // Alt (⌥) reads freely, as in drawing tools.
+  const snapped =
+    pointer && !pointer.alt
+      ? snapTarget(targets, pointer.px, xOfF, SNAP_PX)
+      : null;
+  const hover = !pointer
+    ? null
+    : snapped
+      ? nearestIndex(freqs, snapped.f)
+      : nearestIndex(
+          freqs,
+          10 **
+            (Math.log10(fLow) +
+              Math.min(1, Math.max(0, (pointer.px - LEFT) / plotWidth)) *
+                (Math.log10(fHigh) - Math.log10(fLow))),
+        );
   const full = curves.find((curve) => curve.kind === "full");
   const margin =
     snapped?.kind === "unity" && hover !== null && full
@@ -288,10 +317,7 @@ export function BodePlot({
         aria-label={`${title}: magnitude and phase from ${bandText}`}
         onPointerMove={onPointer}
         onPointerDown={onPointer}
-        onPointerLeave={() => {
-          setHover(null);
-          setSnapped(null);
-        }}
+        onPointerLeave={() => setPointer(null)}
       >
         {/* Grid and axis labels, recessive. */}
         {magTicks.map((tick) => (

@@ -158,10 +158,16 @@ impl Sweep {
 
     /// Adds the points a plot's readout lands on, so each reads a solved
     /// value rather than an interpolation: the poles' and zeros' |p| (Hz)
-    /// within the band, the gain's first fall through 1 (`unity`, for a
-    /// unitless gain) and through 1/√2 of its value at fLow (`bandwidth`,
-    /// −3 dB), each found by bisection on log f. `gain` is |H| at f.
+    /// within the band, then the gain's first fall through 1 (`unity`, for
+    /// a unitless gain) and through 1/√2 of its value at fLow (`bandwidth`,
+    /// −3 dB), each found by bisection on log f between the points so far.
+    /// The roots go in first: a sharp notch or peak falls between grid
+    /// points but sits at its root, so its crossings are bracketed there.
+    /// `gain` is |H| at f.
     pub fn mark(&mut self, roots_hz: &[f64], gain: impl Fn(f64) -> Option<f64>, unitless: bool) {
+        let (lo, hi) = (self.f_low, self.f_high);
+        let inside = |f: &f64| f.is_finite() && *f >= lo && *f <= hi;
+        self.add(roots_hz.iter().copied().filter(inside));
         let mags: Vec<Option<f64>> = self.freqs.iter().map(|&f| gain(f)).collect();
         // The first fall through `level` between swept points, refined.
         let fall = |level: f64| -> Option<f64> {
@@ -187,17 +193,15 @@ impl Sweep {
             .filter(|m| m.is_finite() && *m > 0.0)
             .and_then(|m| fall(m / std::f64::consts::SQRT_2));
         self.unity = if unitless { fall(1.0) } else { None };
-        let inside = |f: &f64| f.is_finite() && *f >= self.f_low && *f <= self.f_high;
-        let extra: Vec<f64> = roots_hz
-            .iter()
-            .chain(self.unity.iter())
-            .chain(self.bandwidth.iter())
-            .copied()
-            .filter(inside)
-            .collect();
+        let crossings: Vec<f64> = self.unity.iter().chain(self.bandwidth.iter()).copied().collect();
+        self.add(crossings.into_iter());
+    }
+
+    /// Adds frequencies, ascending; one within rounding of another is that
+    /// one.
+    fn add(&mut self, extra: impl Iterator<Item = f64>) {
         self.freqs.extend(extra);
         self.freqs.sort_by(f64::total_cmp);
-        // A point within rounding of another is that point.
         self.freqs.dedup_by(|b, a| (*b / *a - 1.0).abs() < 1e-12);
     }
 }
@@ -275,6 +279,14 @@ mod tests {
             assert!(s.freqs.contains(&f), "{f}");
         }
         assert!(s.freqs.windows(2).all(|w| w[0] < w[1]));
+        // A notch at 3.3 kHz, deep and narrow between grid points: its
+        // zero brackets the fall through 1.
+        let mut n = band.resolve(&[], &[]);
+        let f0 = 3.3e3;
+        let notch = |f: f64| Some(10.0 * (1.0 - (f / f0).powi(2)).abs().max(1e-3 * f / f0).min(1.0) + 0.0);
+        n.mark(&[f0], notch, true);
+        let u = n.unity.expect("a crossing at the notch");
+        assert!(u < f0 && u > 0.9 * f0, "{u}");
         // An impedance has no unity crossing.
         let mut z = band.resolve(&[], &[]);
         z.mark(&[], gain, false);

@@ -237,10 +237,14 @@ export function snapTarget(
   return best;
 }
 
+/** How far from 0° or 180° a low-frequency phase still is one. */
+const REFERENCE_DEGREES = 10;
+
 /**
  * Phase margin at the unity-gain frequency: 180° less the phase lost since
- * low frequency, whose phase (0° or 180°, an inverting gain) is the
- * reference. Null without both phases.
+ * low frequency, whose phase (0°, or 180° for an inverting gain) is the
+ * reference. Null without both phases, or when the low-frequency phase is
+ * neither (a band-pass gain has no such margin).
  */
 export function phaseMargin(
   phase: readonly (number | null)[],
@@ -250,5 +254,6 @@ export function phaseMargin(
   const here = phase[at] ?? null;
   if (start === null || here === null) return null;
   const reference = 180 * Math.round(start / 180);
+  if (Math.abs(start - reference) > REFERENCE_DEGREES) return null;
   return 180 - (reference - here);
 }

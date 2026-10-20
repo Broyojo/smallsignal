@@ -19,11 +19,13 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
 - A card plots the full model, the assumed model while assumptions apply,
   and the ≈ form while the card shows one. It marks the full model's
   poles (×) and zeros (○) in the band, a right half-plane one in amber,
-  the gain's unity-gain and −3 dB points (rings on the full curve), and a
-  crosshair reads every curve at the nearest swept frequency. Within 8 px
-  of a marked point it lands on it (the nearest), names it ("Pole 1.1 kHz",
-  "Unity gain …", "−3 dB …") and at unity gain gives the phase margin,
-  180° less the phase lost since low frequency; Alt reads freely. No
+  the gain's −3 dB point and, on a dB axis, its unity-gain point (rings
+  on the full curve), and a crosshair reads every curve at the nearest
+  swept frequency. Within 8 px of a marked point the sweep holds exactly
+  it lands on it (the nearest), names it ("Pole 1.1 kHz", "Unity gain …",
+  "−3 dB …") and at unity gain gives the phase margin, 180° less the phase
+  lost since a 0° or 180° low frequency (none otherwise). Holding Alt reads
+  freely, applied as it is pressed or released. No
   plot without a sweep (symbolic, nothing reactive), for an unbounded
   quantity, or for a flat one.
 - Formulas are inline SVG whose symbols carry MathJax's `data-latex`. A

@@ -299,5 +299,7 @@ describe("Bode crosshair snapping", () => {
     // Inverting starts at 180°: the same lag gives the same margin.
     expect(phaseMargin([null, 180, 135, 60], 3)).toBe(60);
     expect(phaseMargin([0, null], 1)).toBeNull();
+    // A band-pass gain starting near +90° has no 0°/180° reference.
+    expect(phaseMargin([88, 20, -45], 2)).toBeNull();
   });
 });
