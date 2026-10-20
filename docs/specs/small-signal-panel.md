@@ -43,8 +43,9 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   leakage too small to see reads "=" with "neglecting junction leakage"
   (once per Distortion section) and no Exact disclosure; Exact appears only
   under an "≈" with an exact form to open onto. An a_n that cancels at the
-  bias reads "a_n = 0", "terms cancel at this bias", its general form a
-  click away.
+  bias reads "a_n = 0", "terms cancel at this bias", its general form (the
+  nested one where there is one) a click away. An a_n with a `nested`
+  form leads with it ("="), its display form a click away as Expanded.
 - A biased transistor or diode's device menu has a Nonlinear switch: the
   Distortion section's button for that part. Turning it on opens
   Distortion.

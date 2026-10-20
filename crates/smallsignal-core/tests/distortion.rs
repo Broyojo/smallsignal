@@ -42,6 +42,8 @@ fn square_law_common_source() {
     // In the square law's own terms, as hand analysis writes it:
     // K_2g = g_m/(2 V_OD), so a2 = −g_m R_D/(2 V_OD).
     assert_eq!(d["coefficients"][1]["latex"], "-\\frac{g_{m1} R_{D}}{2 V_{OD1}}");
+    // Already as short as hand analysis writes it: nothing nested.
+    assert!(d["coefficients"][1]["nested"].is_null());
     assert_eq!(d["hd2"]["latex"], "\\frac{A}{2}\\left|\\frac{1}{2 V_{OD1}}\\right|");
     // HD2 = A/(4 Vov).
     assert!(rel(d["hd2"]["value"].as_f64().unwrap(), 0.02 / (4.0 * 0.4)) < 1e-12);
@@ -89,6 +91,19 @@ M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBD
     assert_ne!(a[2]["simplified"]["method"], "cancels");
     // HD2 by frequency is 0 too, not roundoff.
     assert_eq!(d["vsFreq"][0]["hd2"], 0.0);
+    // a2 and a3 as hand analysis nests them: the output's r_o1 ∥ r_o2 times
+    // each device's square-law coefficients and control voltages, a1 and a2
+    // where those are the output; each equal to its display form.
+    let par = "\\left(r_{o1} \\parallel r_{o2}\\right) \\left[";
+    let a2n = a[1]["nested"]["latex"].as_str().unwrap();
+    assert!(a2n.starts_with(par), "{a2n}");
+    for part in ["\\frac{g_{m1}}{2 V_{OD1}}", "\\frac{g_{m2}}{2 V_{OD2}}", "a_{1}"] {
+        assert!(a2n.contains(part), "{a2n}");
+    }
+    let a3n = a[2]["nested"]["latex"].as_str().unwrap();
+    assert!(a3n.starts_with(par) && a3n.contains("a_{2}"), "{a3n}");
+    let a3 = a[2]["display"]["value"].as_f64().unwrap();
+    assert!(rel(a[2]["nested"]["value"].as_f64().unwrap(), a3) < 1e-9);
 }
 
 #[test]

@@ -1585,6 +1585,7 @@ function DistortionFormula({
     quantity.simplified?.latex && quantity.simplified.latex !== shown?.latex
       ? quantity.simplified
       : null;
+  const nested = quantity.nested?.latex ?? null;
   if (simpler?.method === "cancels") {
     // The devices' terms cancel at this bias (a balanced circuit's even
     // order): 0, with the general form a click away.
@@ -1596,12 +1597,29 @@ function DistortionFormula({
         !((simpler.fullModelError ?? Infinity) < INVISIBLE_ERROR) ? (
           <FullModelNote error={simpler.fullModelError} assumed />
         ) : null}
-        {shown?.latex ? (
+        {(nested ?? shown?.latex) ? (
           <details className="small-signal-exact">
             <summary>General form</summary>
-            <Formula latex={`${symbol} = ${shown.latex}`} />
+            <Formula latex={`${symbol} = ${nested ?? shown?.latex}`} />
           </details>
         ) : null}
+      </>
+    );
+  }
+  if (nested && shown?.latex) {
+    // The form hand analysis writes, equal to the display form, which is a
+    // click away expanded.
+    const cost = display?.fullModelError ?? null;
+    return (
+      <>
+        <Formula latex={`${symbol} = ${nested}`} />
+        {assumed && !(cost !== null && cost < INVISIBLE_ERROR) ? (
+          <FullModelNote error={cost} assumed />
+        ) : null}
+        <details className="small-signal-exact">
+          <summary>Expanded</summary>
+          <Formula latex={`${symbol} = ${shown.latex}`} />
+        </details>
       </>
     );
   }
