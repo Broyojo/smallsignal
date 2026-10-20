@@ -29,6 +29,19 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   marks every symbol of its elements. One stylesheet does the marking,
   so no formula re-renders. Copying a selection writes each formula as
   `$TeX$`, and a click selects a formula whole.
+- Each equation line has a copy button at its right edge, outside its
+  scroller, writing the whole equation's LaTeX (an "≈" line with its
+  symbol); faint until the line is hovered where there is hover. Symbol
+  tables have none.
+- "=" means exact for the model shown. A form exact but for junction
+  leakage too small to see reads "=" with "neglecting junction leakage"
+  (once per Distortion section) and no Exact disclosure; Exact appears only
+  under an "≈" with an exact form to open onto. An a_n that cancels at the
+  bias reads "a_n = 0", "terms cancel at this bias", its general form a
+  click away.
+- A biased transistor or diode's device menu has a Nonlinear switch: the
+  Distortion section's button for that part. Turning it on opens
+  Distortion.
 - Output offers each net and each drawn differential pair (outp/outn,
   out+/out−, vout1/vout2; not c1/c2), read across as V(+) − V(−);
   "Difference of two nets…" picks any two. A differential output shows
@@ -77,7 +90,8 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
 - In the browser (`apps/editor/e2e/small-signal.spec.ts`): the two-stage
   OTA's plot with its poles, RHP zero and a readout equal to the card's
   1 kHz value; no plot without capacitors; g_m1 ringing M1, M1 marking
-  its symbols, a copy writing TeX; Show on drawing on the inverter; the
+  its symbols, a copy writing TeX; the balanced inverter's a₂ = 0, a₁ in
+  ∥, its menu's Nonlinear switch and a copy button; Show on drawing on the inverter; the
   "×" cost; the bias table at phone width; Esc in the device menu; R1's
   value edited in its menu re-solving, M1's W and L, the DC values; the
   guide.

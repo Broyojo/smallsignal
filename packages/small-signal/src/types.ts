@@ -588,7 +588,8 @@ export interface DistortionForm {
   relError?: number | null;
   same?: boolean;
   leakageMatters?: boolean;
-  /** Simplified forms: how they were made, e.g. "leading order (ro ≫ R, 1/gm)". */
+  /** Simplified forms: how they were made, e.g. "leading order (ro ≫ R, 1/gm)";
+   * "cancels" when the terms cancel to roundoff at this bias (the form is 0). */
   method?: string;
   tolerance?: number;
   /** Under assumptions: relative distance from the full model's value. */

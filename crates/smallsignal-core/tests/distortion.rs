@@ -60,6 +60,37 @@ fn square_law_common_source() {
     assert_eq!(kept[0]["monomial"], "2g");
 }
 
+/// A CMOS inverter at its switching point, NMOS and PMOS of equal β and
+/// V_OD: a1 in parallel notation, and a2 0 (the devices' square-law terms
+/// cancel) with no junction leakage in its general form.
+#[test]
+fn balanced_inverter_reads_as_the_textbook() {
+    let net = "inv\nVDD vdd 0 1.8\nVIN in 0 DC 0.9 AC 1\nM1 out in 0 0 nch W=10u L=1u\n\
+M2 out in vdd vdd pch W=20u L=1u\n.model nch NMOS (LEVEL=1 KP=200u VTO=0.5 LAMBDA=0.05)\n\
+.model pch PMOS (LEVEL=1 KP=100u VTO=-0.5 LAMBDA=0.05)\n";
+    let r = run(
+        net,
+        &req(json!({ "input": "VIN", "output": "out", "nonlinear": ["M1", "M2"] })),
+    );
+    let d = &r["distortion"];
+    let a = &d["coefficients"];
+    assert_eq!(
+        a[0]["display"]["latex"],
+        "-\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)"
+    );
+    let a2 = &a[1]["display"]["latex"].as_str().unwrap();
+    assert!(!a2.contains("r_{bd"), "{a2}");
+    assert!(a2.contains("{\\left(r_{o1} + r_{o2}\\right)}^{2}"), "{a2}");
+    for q in [&a[1], &d["hd2"]] {
+        assert_eq!(q["simplified"]["latex"], "0");
+        assert_eq!(q["simplified"]["method"], "cancels");
+    }
+    // a3 is not a cancellation: its simplified form stays a formula.
+    assert_ne!(a[2]["simplified"]["method"], "cancels");
+    // HD2 by frequency is 0 too, not roundoff.
+    assert_eq!(d["vsFreq"][0]["hd2"], 0.0);
+}
+
 #[test]
 fn degenerated_and_follower_closed_forms() {
     // λ = 0, body tied to source: a2 = −K2g·RD/(1+T)³, a3 = 2K2g²·RS·RD/(1+T)⁵.

@@ -32,6 +32,8 @@ const FIXTURES = {
     "packages/small-signal/test-fixtures/two-stage-miller-ota.icproj.json",
   inverter:
     "packages/small-signal/test-fixtures/cmos-inverter-triode.icproj.json",
+  balancedInverter:
+    "packages/small-signal/test-fixtures/cmos-inverter-balanced.icproj.json",
   fullyDifferential:
     "apps/editor/src/examples/fully-differential-two-stage-op-amp.icproj.json",
 } as const;
@@ -849,6 +851,66 @@ test("distortion: square-law CS with λ = 0 has HD2 = A/(4 V_ov) and no HD3", as
   await expect(section).toContainText("Pick a device to expand.");
 });
 
+test("distortion: the balanced inverter's a₂ is 0, a₁ reads in ∥, the menu expands a part, and each equation copies as TeX", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const panel = await analyze(page, FIXTURES.balancedInverter);
+  await formula(panel, "Gain");
+  // The device menu says whether Distortion expands the part, and turning
+  // it off there turns it off in the section.
+  await page.getByTestId("hit-M1").click();
+  const menu = deviceMenu(page);
+  const switchM1 = menu.getByRole("button", { name: "M1 nonlinear" });
+  await expect(switchM1).toHaveAttribute("aria-pressed", "true");
+  await switchM1.click();
+  await expect(switchM1).toHaveAttribute("aria-pressed", "false");
+  const section = panel.locator("details.small-signal-distortion");
+  const devices = section.getByRole("group", {
+    name: "Nonlinear devices",
+    includeHidden: true,
+  });
+  await expect(
+    devices.getByRole("button", { name: "M1", includeHidden: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await switchM1.click();
+  await expect(
+    devices.getByRole("button", { name: "M1", includeHidden: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  // Turning a part on opens the section, where its effect shows.
+  await expect(section).toHaveAttribute("open", "");
+  await page.keyboard.press("Escape");
+
+  const images = section.locator(".small-signal-formula");
+  await expect(section.locator('tr[data-quantity="hd2"]')).toBeVisible({
+    timeout: 15_000,
+  });
+  const alts = await images.evaluateAll((all) =>
+    all.map((img) => img.getAttribute("data-tex") ?? ""),
+  );
+  expect(alts).toContain(
+    "a_{1} = -\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)",
+  );
+  // NMOS and PMOS square-law terms cancel: 0, and said why.
+  expect(alts).toContain("a_{2} = 0");
+  await expect(section).toContainText("terms cancel at this bias");
+  // "=" for a form exact without junction leakage: no "Exact" under it.
+  const a1 = section
+    .locator(".small-signal-formula-line")
+    .filter({ has: page.locator('[data-tex^="a_{1} ="]') });
+  await expect(section.locator("summary", { hasText: /^Exact$/u })).toHaveCount(
+    0,
+  );
+  // The copy button writes the whole equation.
+  await a1.hover();
+  await a1.getByRole("button", { name: "Copy LaTeX" }).click();
+  await expect(a1.getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "a_{1} = -\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)",
+  );
+});
+
 test("a wide exact formula scrolls inside the panel instead of being cut off", async ({
   page,
 }) => {
@@ -992,9 +1054,9 @@ test("assumptions: r_o neglected on M1 gives −gm R1 and its distance from the 
   await expect(gain.getByText(/from full model$/u)).toHaveText(
     "Assumed model, 2.0% from full model",
   );
-  await expect(gain.locator("details.small-signal-exact > summary")).toHaveText(
-    "Exact for these assumptions",
-  );
+  // The shown form is exact for the assumed model (junction leakage too
+  // small to see): no "Exact" disclosure under an "=".
+  await expect(gain.locator("details.small-signal-exact")).toHaveCount(0);
   // The header stays the full model; the table has both, from one solve.
   expect(await cardValue(panel, "Gain")).toBeCloseTo(
     -m1.gm * parallel(m1.ro, 10e3),

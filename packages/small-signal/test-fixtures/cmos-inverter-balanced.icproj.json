@@ -1,0 +1,732 @@
+{
+  "schemaVersion": 55,
+  "id": "project-cmos-inverter-triode",
+  "name": "CMOS inverter at its switching point",
+  "source": {
+    "entry": null,
+    "dialect": "none",
+    "sourcePolicy": "copy",
+    "files": []
+  },
+  "symbolLibrary": {
+    "id": "razavi-symbols",
+    "version": "1",
+    "hash": "razavi-reference-v1"
+  },
+  "structureRevision": 1,
+  "topDocumentId": "document-inverter",
+  "documents": [
+    {
+      "id": "document-inverter",
+      "name": "inverter",
+      "revision": 1,
+      "sourceStatus": "connectivity-modified",
+      "netlist": {
+        "name": "inverter",
+        "terminals": [],
+        "formalParameters": []
+      },
+      "instances": [
+        {
+          "id": "VDD",
+          "symbolId": "voltage-source",
+          "placement": {
+            "position": {
+              "x": 560,
+              "y": 120
+            },
+            "rotation": 90,
+            "mirror": "none"
+          },
+          "reference": "VDD",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "voltage-source"
+            },
+            "parameters": {
+              "dc": "1.8"
+            }
+          }
+        },
+        {
+          "id": "GND1",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 500,
+              "y": 120
+            },
+            "rotation": 90,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "VIN",
+          "symbolId": "voltage-source",
+          "placement": {
+            "position": {
+              "x": 200,
+              "y": 300
+            },
+            "rotation": 90,
+            "mirror": "none"
+          },
+          "reference": "VIN",
+          "netlist": {
+            "binding": {
+              "kind": "primitive",
+              "deviceClass": "voltage-source"
+            },
+            "parameters": {
+              "acMagnitude": "1",
+              "dc": "0.9"
+            }
+          }
+        },
+        {
+          "id": "GND2",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 140,
+              "y": 300
+            },
+            "rotation": 90,
+            "mirror": "none"
+          }
+        },
+        {
+          "id": "M2",
+          "symbolId": "pmos",
+          "placement": {
+            "position": {
+              "x": 380,
+              "y": 200
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-vdd"
+          },
+          "reference": "M2",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-27f716b14d59fc10"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "1",
+              "w": "20u"
+            }
+          }
+        },
+        {
+          "id": "M1",
+          "symbolId": "nmos",
+          "placement": {
+            "position": {
+              "x": 380,
+              "y": 340
+            },
+            "rotation": 0,
+            "mirror": "none"
+          },
+          "mosBulkBinding": {
+            "origin": "cell-default",
+            "netId": "net-gnd3"
+          },
+          "reference": "M1",
+          "netlist": {
+            "binding": {
+              "kind": "external-subcircuit",
+              "definitionId": "external-subcircuit-e5ee3d17d0c7c89a"
+            },
+            "parameters": {
+              "l": "1u",
+              "nf": "1",
+              "w": "10u"
+            }
+          }
+        },
+        {
+          "id": "GND3",
+          "symbolId": "ground",
+          "placement": {
+            "position": {
+              "x": 390,
+              "y": 420
+            },
+            "rotation": 0,
+            "mirror": "none"
+          }
+        }
+      ],
+      "nets": [
+        {
+          "id": "net-gnd1",
+          "terminals": [
+            {
+              "instanceId": "GND1",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "VDD",
+              "pinName": "-"
+            }
+          ]
+        },
+        {
+          "id": "net-gnd2",
+          "terminals": [
+            {
+              "instanceId": "GND2",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "VIN",
+              "pinName": "-"
+            }
+          ]
+        },
+        {
+          "id": "net-gnd3",
+          "terminals": [
+            {
+              "instanceId": "GND3",
+              "pinName": "0"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "B"
+            }
+          ]
+        },
+        {
+          "id": "net-vdd",
+          "terminals": [
+            {
+              "instanceId": "VDD",
+              "pinName": "+"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "S"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "B"
+            }
+          ]
+        },
+        {
+          "id": "net-in",
+          "terminals": [
+            {
+              "instanceId": "VIN",
+              "pinName": "+"
+            },
+            {
+              "instanceId": "M1",
+              "pinName": "G"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "G"
+            }
+          ]
+        },
+        {
+          "id": "net-out",
+          "terminals": [
+            {
+              "instanceId": "M1",
+              "pinName": "D"
+            },
+            {
+              "instanceId": "M2",
+              "pinName": "D"
+            }
+          ]
+        }
+      ],
+      "connectivityEvidence": [
+        {
+          "id": "connectivity-evidence-out",
+          "kind": "name-claim",
+          "netId": "net-out",
+          "name": "out",
+          "owner": {
+            "kind": "net-label",
+            "annotationId": "net-label-out"
+          },
+          "scope": "local"
+        },
+        {
+          "id": "connectivity-evidence-GND1",
+          "kind": "name-claim",
+          "netId": "net-gnd1",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND1"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-GND2",
+          "kind": "name-claim",
+          "netId": "net-gnd2",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND2"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        },
+        {
+          "id": "connectivity-evidence-GND3",
+          "kind": "name-claim",
+          "netId": "net-gnd3",
+          "name": "0",
+          "owner": {
+            "kind": "power-marker",
+            "objectId": "GND3"
+          },
+          "scope": "global",
+          "powerDomain": "ground"
+        }
+      ],
+      "routes": [
+        {
+          "id": "r-gnd1",
+          "netId": "net-gnd1",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "GND1",
+            "pinName": "0"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-gnd1",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "VDD",
+                  "pinName": "-"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-gnd2",
+          "netId": "net-gnd2",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "GND2",
+            "pinName": "0"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-gnd2",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "VIN",
+                  "pinName": "-"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-gnd3",
+          "netId": "net-gnd3",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M1",
+            "pinName": "S"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-gnd3",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "GND3",
+                  "pinName": "0"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-vdd",
+          "netId": "net-vdd",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "VDD",
+            "pinName": "+"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-vdd",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M2",
+                  "pinName": "S"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-in-vin",
+          "netId": "net-in",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "VIN",
+            "pinName": "+"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-in-vin",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "j-in"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-in-m1",
+          "netId": "net-in",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M1",
+            "pinName": "G"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-in-m1",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "j-in"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-in-m2",
+          "netId": "net-in",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M2",
+            "pinName": "G"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-in-m2",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "junction",
+                  "junctionId": "j-in"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        },
+        {
+          "id": "r-out",
+          "netId": "net-out",
+          "start": {
+            "kind": "terminal",
+            "instanceId": "M2",
+            "pinName": "D"
+          },
+          "legs": [
+            {
+              "id": "route-leg-r-out",
+              "to": {
+                "kind": "endpoint",
+                "endpoint": {
+                  "kind": "terminal",
+                  "instanceId": "M1",
+                  "pinName": "D"
+                }
+              },
+              "mode": "manual"
+            }
+          ]
+        }
+      ],
+      "junctions": [
+        {
+          "id": "j-in",
+          "netId": "net-in",
+          "position": {
+            "x": 300,
+            "y": 270
+          },
+          "role": "branch"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "net-label-out",
+          "kind": "net-label",
+          "binding": {
+            "kind": "net-name",
+            "netId": "net-out"
+          },
+          "anchor": {
+            "kind": "route",
+            "routeId": "r-out",
+            "legId": "route-leg-r-out",
+            "t": 0.5,
+            "normalOffset": -10,
+            "direction": "forward",
+            "orientation": "follow",
+            "fallbackPosition": {
+              "x": 420,
+              "y": 270
+            }
+          },
+          "netId": "net-out",
+          "alignment": "middle",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-VDD",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "VDD"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VDD",
+            "localOffset": {
+              "x": 20,
+              "y": -30
+            },
+            "fallbackPosition": {
+              "x": 580,
+              "y": 90
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-VIN",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "VIN"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "VIN",
+            "localOffset": {
+              "x": 20,
+              "y": -30
+            },
+            "fallbackPosition": {
+              "x": 220,
+              "y": 270
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M2",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M2"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M2",
+            "localOffset": {
+              "x": 20,
+              "y": -30
+            },
+            "fallbackPosition": {
+              "x": 400,
+              "y": 170
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        },
+        {
+          "id": "instance-label-M1",
+          "kind": "instance-label",
+          "binding": {
+            "kind": "instance-reference",
+            "instanceId": "M1"
+          },
+          "anchor": {
+            "kind": "object",
+            "objectId": "M1",
+            "localOffset": {
+              "x": 20,
+              "y": -30
+            },
+            "fallbackPosition": {
+              "x": 400,
+              "y": 310
+            }
+          },
+          "alignment": "start",
+          "rotation": 0,
+          "locked": false
+        }
+      ],
+      "presentation": {
+        "styleProfileId": "razavi-textbook-v1",
+        "grid": 10,
+        "compactness": "normal"
+      },
+      "mosBulkDefaults": {
+        "nmosNetId": "net-gnd3",
+        "pmosNetId": "net-vdd"
+      },
+      "layoutGroups": [],
+      "constraints": [],
+      "noConnects": [],
+      "drafting": {
+        "objects": []
+      }
+    }
+  ],
+  "externalSubcircuitDefinitions": [
+    {
+      "id": "external-subcircuit-e5ee3d17d0c7c89a",
+      "name": "sky130_fd_pr__nfet_01v8",
+      "terminals": [
+        {
+          "id": "external-subcircuit-terminal-353df4da271bcc2b",
+          "name": "D",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-353df3da271bca78",
+          "name": "G",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-353df6da271bcf91",
+          "name": "S",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-353df5da271bcdde",
+          "name": "B",
+          "direction": "passive"
+        }
+      ],
+      "formalParameters": [
+        {
+          "name": "w",
+          "defaultValue": "1"
+        },
+        {
+          "name": "l",
+          "defaultValue": "0.15"
+        },
+        {
+          "name": "nf",
+          "defaultValue": "1"
+        },
+        {
+          "name": "m",
+          "defaultValue": "1"
+        }
+      ],
+      "interfaceStatus": "declared"
+    },
+    {
+      "id": "external-subcircuit-27f716b14d59fc10",
+      "name": "sky130_fd_pr__pfet_01v8",
+      "terminals": [
+        {
+          "id": "external-subcircuit-terminal-7921a0096089118d",
+          "name": "D",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-79219f0960890fda",
+          "name": "G",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-79219e0960890e27",
+          "name": "S",
+          "direction": "passive"
+        },
+        {
+          "id": "external-subcircuit-terminal-79219d0960890c74",
+          "name": "B",
+          "direction": "passive"
+        }
+      ],
+      "formalParameters": [
+        {
+          "name": "w",
+          "defaultValue": "1"
+        },
+        {
+          "name": "l",
+          "defaultValue": "0.15"
+        },
+        {
+          "name": "nf",
+          "defaultValue": "1"
+        },
+        {
+          "name": "m",
+          "defaultValue": "1"
+        }
+      ],
+      "interfaceStatus": "declared"
+    }
+  ],
+  "simulationFolders": []
+}

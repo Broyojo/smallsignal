@@ -1475,7 +1475,7 @@ fn k_definition(
     }
     let (mn, md) = e.to_mna(&shown.syms);
     let (n, d) = e.plain(&shown.syms);
-    let latex = structured(&mn, &md, &shown.syms).unwrap_or_else(|| e.latex(&shown.syms));
+    let latex = crate::structure::checked(&mn, &md, &shown.syms).unwrap_or_else(|| e.latex(&shown.syms));
     // Its symbols, for `params` (a junction the forms leave out may be one).
     let used: Vec<Sym> = (0..shown.syms.len())
         .filter(|&k| num.terms.iter().chain(&den.terms).any(|(e, _)| e[k] > 0))
@@ -3136,46 +3136,6 @@ pub(crate) fn hand_form(num: &XPoly, den: &XPoly, syms: &[Sym]) -> (XPoly, XPoly
     }
 }
 
-/// Value of an MNA-form symbol polynomial with displayed symbol values
-/// `vals` (resistances as R).
-fn xeval(p: &XPoly, syms: &[Sym], vals: &[f64], s: Complex64) -> Complex64 {
-    let mut acc = Complex64::new(0.0, 0.0);
-    for (e, c) in &p.terms {
-        let mut v = *c as f64;
-        for (k, &x) in e.iter().enumerate() {
-            if x > 0 {
-                let m = if syms[k].inverted { 1.0 / vals[k] } else { vals[k] };
-                v *= m.powi(x as i32);
-            }
-        }
-        acc += v * s.powu(sym::spow(e, syms));
-    }
-    acc
-}
-
-/// Conventional (∥) notation for num/den, kept only if it is the same
-/// function: checked at random symbol values and random complex s.
-fn structured(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<String> {
-    let st = crate::structure::structure(num, den, syms)?;
-    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
-    let mut rnd = || {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        0.5 + (seed % 1_000_000) as f64 / 1_000_000.0
-    };
-    for _ in 0..4 {
-        let vals: Vec<f64> = syms.iter().map(|_| rnd()).collect();
-        let s = Complex64::new(rnd() - 1.0, rnd());
-        let want = xeval(num, syms, &vals, s) / xeval(den, syms, &vals, s);
-        let got = st.eval(syms, &vals, s);
-        if (got - want).norm() > 1e-10 * want.norm().max(1e-300) {
-            return None;
-        }
-    }
-    Some(st.latex)
-}
-
 fn node_num(sys: &System, node: usize, max_terms: usize) -> Result<Poly, String> {
     match sys.node_col[node] {
         Some(c) => sys.cramer(c, max_terms),
@@ -3280,7 +3240,7 @@ impl Quantities<'_> {
                 if e.term_count() <= LATEX_TERM_LIMIT {
                     let (en, ed) = e.plain(syms);
                     let expanded = e.latex(syms);
-                    let latex = structured(n, d, syms).unwrap_or_else(|| expanded.clone());
+                    let latex = crate::structure::checked(n, d, syms).unwrap_or_else(|| expanded.clone());
                     json!({ "latex": latex, "latexExpanded": expanded, "num": en, "den": ed })
                 } else {
                     json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
@@ -3510,7 +3470,7 @@ impl Quantities<'_> {
                 let (n, d) = e.plain(syms);
                 let expanded = e.latex(syms);
                 let (mn, md) = e.to_mna(syms);
-                let latex = structured(&mn, &md, syms).unwrap_or_else(|| expanded.clone());
+                let latex = crate::structure::checked(&mn, &md, syms).unwrap_or_else(|| expanded.clone());
                 json!({ "latex": latex, "latexExpanded": expanded, "num": n, "den": d })
             } else {
                 json!({ "latex": null, "latexExpanded": null, "num": null, "den": null })
