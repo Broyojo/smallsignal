@@ -37,6 +37,10 @@ pub struct Sweep {
     pub f_high: f64,
     pub per_decade: u32,
     pub freqs: Vec<f64>,
+    /// The gain's unity (0 dB) and −3 dB frequencies, where it has them
+    /// (`mark`).
+    pub unity: Option<f64>,
+    pub bandwidth: Option<f64>,
 }
 
 impl SweepRequest {
@@ -76,6 +80,8 @@ impl SweepRequest {
             f_high,
             per_decade,
             freqs,
+            unity: None,
+            bandwidth: None,
         }
     }
 }
@@ -138,12 +144,65 @@ pub fn points(values: impl Iterator<Item = Option<Complex64>>) -> Value {
     )
 }
 
+/// Bisection steps on log f for a crossing: far below f64's resolution.
+const CROSSING_STEPS: u32 = 64;
+
 impl Sweep {
     pub fn json(&self) -> Value {
         json!({
             "fLow": self.f_low, "fHigh": self.f_high,
             "perDecade": self.per_decade, "f": self.freqs,
+            "unity": self.unity, "bandwidth": self.bandwidth,
         })
+    }
+
+    /// Adds the points a plot's readout lands on, so each reads a solved
+    /// value rather than an interpolation: the poles' and zeros' |p| (Hz)
+    /// within the band, then the gain's first fall through 1 (`unity`, for
+    /// a unitless gain) and through 1/√2 of its value at fLow (`bandwidth`,
+    /// −3 dB), each found by bisection on log f between the points so far.
+    /// The roots go in first: a sharp notch or peak falls between grid
+    /// points but sits at its root, so its crossings are bracketed there.
+    /// `gain` is |H| at f.
+    pub fn mark(&mut self, roots_hz: &[f64], gain: impl Fn(f64) -> Option<f64>, unitless: bool) {
+        let (lo, hi) = (self.f_low, self.f_high);
+        let inside = |f: &f64| f.is_finite() && *f >= lo && *f <= hi;
+        self.add(roots_hz.iter().copied().filter(inside));
+        let mags: Vec<Option<f64>> = self.freqs.iter().map(|&f| gain(f)).collect();
+        // The first fall through `level` between swept points, refined.
+        let fall = |level: f64| -> Option<f64> {
+            let k = (1..self.freqs.len()).find(|&k| match (mags[k - 1], mags[k]) {
+                (Some(a), Some(b)) => a >= level && b < level,
+                _ => false,
+            })?;
+            let (mut lo, mut hi) = (self.freqs[k - 1].ln(), self.freqs[k].ln());
+            for _ in 0..CROSSING_STEPS {
+                let mid = 0.5 * (lo + hi);
+                if gain(mid.exp())? >= level {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            Some((0.5 * (lo + hi)).exp())
+        };
+        self.bandwidth = mags
+            .first()
+            .copied()
+            .flatten()
+            .filter(|m| m.is_finite() && *m > 0.0)
+            .and_then(|m| fall(m / std::f64::consts::SQRT_2));
+        self.unity = if unitless { fall(1.0) } else { None };
+        let crossings: Vec<f64> = self.unity.iter().chain(self.bandwidth.iter()).copied().collect();
+        self.add(crossings.into_iter());
+    }
+
+    /// Adds frequencies, ascending; one within rounding of another is that
+    /// one.
+    fn add(&mut self, extra: impl Iterator<Item = f64>) {
+        self.freqs.extend(extra);
+        self.freqs.sort_by(f64::total_cmp);
+        self.freqs.dedup_by(|b, a| (*b / *a - 1.0).abs() < 1e-12);
     }
 }
 
@@ -196,6 +255,42 @@ mod tests {
         assert_eq!((s.f_low, s.f_high), (100.0, 1e9));
         let none = SweepRequest::default().resolve(&[0.0], &[1e3]);
         assert_eq!((none.f_low, none.f_high), DEFAULT_BAND);
+    }
+
+    #[test]
+    fn marks_land_on_the_crossings_and_roots() {
+        // A one-pole gain of 100 at 1 kHz: −3 dB at about 1 kHz, unity near
+        // 100 kHz.
+        let band = SweepRequest {
+            f_low: Some(10.0),
+            f_high: Some(1e7),
+            per_decade: None,
+        };
+        let mut s = band.resolve(&[], &[]);
+        let gain = |f: f64| Some(100.0 / (1.0 + (f / 1e3).powi(2)).sqrt());
+        s.mark(&[1e3, 5e4], gain, true);
+        let bw = s.bandwidth.unwrap();
+        let unity = s.unity.unwrap();
+        // −3 dB from the gain at fLow (10 Hz), a hair above the pole.
+        let want = 1e3 * (2.0 * (1.0 + 1e-4) - 1.0f64).sqrt();
+        assert!((bw / want - 1.0).abs() < 1e-9, "{bw}");
+        assert!((unity / (1e3 * (1e4f64 - 1.0).sqrt()) - 1.0).abs() < 1e-9, "{unity}");
+        for f in [bw, unity, 5e4] {
+            assert!(s.freqs.contains(&f), "{f}");
+        }
+        assert!(s.freqs.windows(2).all(|w| w[0] < w[1]));
+        // A notch at 3.3 kHz, deep and narrow between grid points: its
+        // zero brackets the fall through 1.
+        let mut n = band.resolve(&[], &[]);
+        let f0 = 3.3e3;
+        let notch = |f: f64| Some(10.0 * (1.0 - (f / f0).powi(2)).abs().max(1e-3 * f / f0).min(1.0) + 0.0);
+        n.mark(&[f0], notch, true);
+        let u = n.unity.expect("a crossing at the notch");
+        assert!(u < f0 && u > 0.9 * f0, "{u}");
+        // An impedance has no unity crossing.
+        let mut z = band.resolve(&[], &[]);
+        z.mark(&[], gain, false);
+        assert_eq!(z.unity, None);
     }
 
     #[test]

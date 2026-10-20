@@ -16,8 +16,10 @@ import {
   isFlat,
   magnitudeTicks,
   nearestIndex,
+  phaseMargin,
   phaseTicks,
   rootFrequencies,
+  snapTarget,
   unwrapPhase,
 } from "./small-signal-bode-data";
 
@@ -272,4 +274,32 @@ describe.skipIf(!built)("Bode points are the solver's numbers", () => {
       }
     });
   }
+});
+
+describe("Bode crosshair snapping", () => {
+  // 100 px per decade from 1 Hz.
+  const xOf = (f: number) => 100 * Math.log10(f);
+  const targets = [
+    { f: 1e3, kind: "pole" as const },
+    { f: 1.2e3, kind: "bandwidth" as const },
+    { f: 1e5, kind: "unity" as const },
+  ];
+
+  it("lands on the nearest marked point within the radius, else none", () => {
+    expect(snapTarget(targets, 302, xOf, 8)?.kind).toBe("pole");
+    // Between the pole (300) and −3 dB (307.9): the nearer one.
+    expect(snapTarget(targets, 306, xOf, 8)?.kind).toBe("bandwidth");
+    expect(snapTarget(targets, 497, xOf, 8)?.kind).toBe("unity");
+    expect(snapTarget(targets, 400, xOf, 8)).toBeNull();
+  });
+
+  it("phase margin is 180° less the phase lost since low frequency", () => {
+    // Non-inverting, −120° at unity: 60°.
+    expect(phaseMargin([0, -45, -120], 2)).toBe(60);
+    // Inverting starts at 180°: the same lag gives the same margin.
+    expect(phaseMargin([null, 180, 135, 60], 3)).toBe(60);
+    expect(phaseMargin([0, null], 1)).toBeNull();
+    // A band-pass gain starting near +90° has no 0°/180° reference.
+    expect(phaseMargin([88, 20, -45], 2)).toBeNull();
+  });
 });

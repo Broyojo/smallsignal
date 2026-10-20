@@ -8,21 +8,27 @@ import {
 import type { Root, SweepPoint } from "@icm/small-signal";
 import {
   CURVE_LABEL,
+  SNAP_LABEL,
   bodeCurves,
   frequencyTicks,
   isFlat,
   magnitudeTicks,
   nearestIndex,
+  phaseMargin,
   phaseTicks,
   rootFrequencies,
+  snapTarget,
   type BodeCurve,
   type CurveKind,
+  type SnapTarget,
 } from "./small-signal-bode-data";
 
 // A compact Bode plot on a result card: |H| over a log frequency axis and
 // the phase under it, the full model's curve with the assumed model's and
 // the ≈ form's over it, poles (×) and zeros (○) on the frequency axis, and
-// a crosshair that reads every curve at one swept frequency.
+// a crosshair that reads every curve at one swept frequency, landing on a
+// pole, zero, unity-gain or −3 dB point when near one (the solver sweeps
+// each exactly) unless Alt is held.
 
 const MAG_HEIGHT = 96;
 const PHASE_HEIGHT = 54;
@@ -31,6 +37,8 @@ const LEFT = 40;
 const RIGHT = 8;
 const TOP = 16;
 const AXIS = 16;
+/** How near (px) a marked point pulls the crosshair onto it. */
+const SNAP_PX = 8;
 
 /** "1k", "10meg"-free: the editor's engineering prefixes, as on the cards. */
 function hzLabel(decade: number): string {
@@ -113,6 +121,8 @@ export interface BodeProps {
   ohms: boolean;
   poles: readonly Root[] | null | undefined;
   zeros: readonly Root[] | null | undefined;
+  /** The gain's unity and −3 dB frequencies (Hz), swept exactly. */
+  crossings?: { unity: number | null; bandwidth: number | null } | null;
   format: (value: number, unit: string) => string;
 }
 
@@ -135,11 +145,32 @@ export function BodePlot({
   ohms,
   poles,
   zeros,
+  crossings,
   format,
 }: BodeProps) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(320);
-  const [hover, setHover] = useState<number | null>(null);
+  // The pointer's x on the plot (null off it) and whether Alt is held:
+  // the crosshair and any snap follow from these and the current data, so
+  // a re-solve or resize never leaves a stale snap.
+  const [pointer, setPointer] = useState<{ px: number; alt: boolean } | null>(
+    null,
+  );
+  const pointing = pointer !== null;
+  useEffect(() => {
+    if (!pointing) return;
+    // Alt pressed or released over a still pointer applies at once.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") return;
+      setPointer((last) => last && { ...last, alt: event.altKey });
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+    };
+  }, [pointing]);
   useEffect(() => {
     const element = box.current;
     if (!element) return;
@@ -201,19 +232,52 @@ export function BodePlot({
     ...rootFrequencies(zeros).map((item) => ({ ...item, kind: "zero" })),
     ...rootFrequencies(poles).map((item) => ({ ...item, kind: "pole" })),
   ].filter(({ f }) => f >= fLow && f <= fHigh);
+  // Unity gain only on a dB axis (a voltage gain); −3 dB on either.
+  const crossingTargets: SnapTarget[] = (
+    decibels ? (["unity", "bandwidth"] as const) : (["bandwidth"] as const)
+  ).flatMap((kind) => {
+    const f = crossings?.[kind];
+    return f != null && f >= fLow && f <= fHigh ? [{ f, kind }] : [];
+  });
+  // A point is a target only where the sweep holds it exactly (an
+  // impedance's own zero may not be swept).
+  const swept = (f: number) =>
+    freqs.some((value) => Math.abs(value / f - 1) < 1e-9);
+  const targets: SnapTarget[] = [
+    ...marks.map(({ f, kind }) => ({ f, kind: kind as "pole" | "zero" })),
+    ...crossingTargets,
+  ].filter(({ f }) => swept(f));
 
   const onPointer = (event: ReactPointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / rect.width) * width;
-    if (px < LEFT - 4 || px > width - RIGHT + 4) {
-      setHover(null);
-      return;
-    }
-    const t = Math.min(1, Math.max(0, (px - LEFT) / plotWidth));
-    const f =
-      10 ** (Math.log10(fLow) + t * (Math.log10(fHigh) - Math.log10(fLow)));
-    setHover(nearestIndex(freqs, f));
+    setPointer(
+      px < LEFT - 4 || px > width - RIGHT + 4
+        ? null
+        : { px, alt: event.altKey },
+    );
   };
+  // Alt (⌥) reads freely, as in drawing tools.
+  const snapped =
+    pointer && !pointer.alt
+      ? snapTarget(targets, pointer.px, xOfF, SNAP_PX)
+      : null;
+  const hover = !pointer
+    ? null
+    : snapped
+      ? nearestIndex(freqs, snapped.f)
+      : nearestIndex(
+          freqs,
+          10 **
+            (Math.log10(fLow) +
+              Math.min(1, Math.max(0, (pointer.px - LEFT) / plotWidth)) *
+                (Math.log10(fHigh) - Math.log10(fLow))),
+        );
+  const full = curves.find((curve) => curve.kind === "full");
+  const margin =
+    snapped?.kind === "unity" && hover !== null && full
+      ? phaseMargin(full.phase, hover)
+      : null;
   const hx = hover === null ? null : x(hover);
   const magLabel = (value: number) =>
     decibels
@@ -253,7 +317,7 @@ export function BodePlot({
         aria-label={`${title}: magnitude and phase from ${bandText}`}
         onPointerMove={onPointer}
         onPointerDown={onPointer}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={() => setPointer(null)}
       >
         {/* Grid and axis labels, recessive. */}
         {magTicks.map((tick) => (
@@ -378,8 +442,27 @@ export function BodePlot({
             </g>
           );
         })}
+        {/* Unity-gain and −3 dB points on the full model's magnitude. */}
+        {crossingTargets.map((target) => {
+          const index = nearestIndex(freqs, target.f);
+          const m = full?.log[index];
+          return m == null ? null : (
+            <circle
+              key={target.kind}
+              className="small-signal-bode-crossing"
+              data-crossing={target.kind}
+              cx={xOfF(target.f)}
+              cy={yMag(m)}
+              r={2.5}
+            >
+              <title>{`${SNAP_LABEL[target.kind]} ${format(target.f, "Hz")}`}</title>
+            </circle>
+          );
+        })}
         {hx !== null && hover !== null ? (
-          <g className="small-signal-bode-cursor">
+          <g
+            className={`small-signal-bode-cursor${snapped ? " is-snapped" : ""}`}
+          >
             <line x1={hx} x2={hx} y1={magTop} y2={phaseBottom} />
             {curves.map((curve) => {
               const m = curve.log[hover];
@@ -405,7 +488,10 @@ export function BodePlot({
             (hx ?? 0) > width / 2 ? { left: LEFT + 4 } : { right: RIGHT + 4 }
           }
         >
-          <strong>{format(freqs[hover] ?? fLow, "Hz")}</strong>
+          <strong data-snapped={snapped?.kind}>
+            {snapped ? `${SNAP_LABEL[snapped.kind]} ` : ""}
+            {format(freqs[hover] ?? fLow, "Hz")}
+          </strong>
           <table>
             <tbody>
               {curves.map((curve) => {
@@ -429,6 +515,11 @@ export function BodePlot({
               })}
             </tbody>
           </table>
+          {margin !== null ? (
+            <span data-quantity="phase-margin">
+              Phase margin {margin.toFixed(1).replace(/^-/u, "−")}°
+            </span>
+          ) : null}
         </div>
       ) : null}
     </figure>

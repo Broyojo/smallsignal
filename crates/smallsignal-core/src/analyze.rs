@@ -413,7 +413,28 @@ pub fn analyze(text: &str, req: &Request) -> Result<Value, String> {
                     .map(|r| crate::sweep::roots_hz(&r))
                     .unwrap_or_default()
             };
-            Some(sw.resolve(&roots, &freqs))
+            let mut sweep = sw.resolve(&roots, &freqs);
+            // The readout's landing points: the natural frequencies, the
+            // gain's zeros, and its unity and −3 dB frequencies.
+            let w: Vec<(usize, i128)> = [(out, 1), (rf, -1)]
+                .into_iter()
+                .filter_map(|(node, w)| fsys.gain.node_col[node].map(|c| (c, w)))
+                .collect();
+            let natural = circuit_roots(&fsys.gain, &full).unwrap_or_default();
+            let zeros = pencil_roots(
+                &fsys.gain,
+                &full,
+                Some(&w),
+                crate::pencil::s_orders(&fsys.gain, &full, Some(&w), None),
+            )
+            .unwrap_or_default();
+            let roots: Vec<f64> = crate::sweep::roots_hz(&natural)
+                .into_iter()
+                .chain(crate::sweep::roots_hz(&zeros))
+                .collect();
+            let gain = |f: f64| probe.gain_at(&fsys, &full, jw(f)).map(|(h, _)| h.norm());
+            sweep.mark(&roots, gain, input_is_v);
+            Some(sweep)
         }
         _ => None,
     };

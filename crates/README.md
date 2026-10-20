@@ -147,15 +147,20 @@ is JSON, or `{"error": "..."}` on failure.
   decades). Without fLow and fHigh, whole decades from one below
   the lowest to one above the highest of the full model's natural
   frequencies (|root| of det A, every source zeroed) and the requested
-  `freqs`, or 1 Hz to 100 GHz when it has none. The response's `sweep`
-  is `{fLow, fHigh, perDecade, f}`, null in symbolic mode or without a C
+  `freqs`, or 1 Hz to 100 GHz when it has none. Inside the band `f` also
+  holds, exactly and ascending, the natural frequencies, the gain's
+  zeros, and the gain's `unity` (its first fall through 1, for a voltage
+  input) and `bandwidth` (its first fall to 1/√2 of its value at fLow),
+  each by bisection on log f between the points with the roots already in
+  (a sharp notch is bracketed at its zero). The response's `sweep` is `{fLow, fHigh,
+  perDecade, f, unity, bandwidth}`, null in symbolic mode or without a C
   or L. Each of `gain`, `rin`, `rout` then has `sweep` `{full, approx,
   assumed}`, one `[re, im]` (null where not finite) per frequency:
   `full` exactly as `values` at those frequencies, `approx` the
   `simplified` form (null when it is the exact one), `assumed` (under
   `assume`) exactly as `assumed.values`; absent for a quantity infinite
-  throughout. ngspice's .ac at the swept frequencies: `oracle/compare.py`
-  (sidecar `sweep`).
+  throughout. ngspice's .ac at the generator's frequencies, the rest
+  only marked ones: `oracle/compare.py` (sidecar `sweep`).
 - Each quantity also carries `display`: the exact expression with junction
   leakage (r_bs, r_bd, r_μ) taken to zero conductance (their monomials dropped,
   then cancelled and normalized as usual), with `maxRelError` against the full
