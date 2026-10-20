@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 // --- Taylor arithmetic: three variables, total degree ≤ 3 ------------------
 
@@ -1632,17 +1632,28 @@ pub fn closed(
         for (key, parts) in parts2 {
             i2.insert(key, sum_within(parts, mt)?);
         }
-        // Each device output's transimpedance to the output (over D).
-        let mut trans: BTreeMap<(usize, usize), XPoly> = BTreeMap::new();
-        for (dv, d) in devs.iter().enumerate() {
-            for (o, ot) in d.outs.iter().enumerate() {
-                let to = |n: usize, unit: &mut dyn FnMut(usize, usize) -> Result<XPoly, String>| {
-                    fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?)
-                };
-                let t = fit(to(out, &mut unit)?.sub_owned(to(rf, &mut unit)?)?)?;
+        // The transimpedance to the output (over D) of each device output
+        // a kept coefficient drives. Only for the nested form: over the
+        // budget, it is left out and the flat forms stand.
+        let driven: Vec<(usize, usize)> = coefs
+            .iter()
+            .enumerate()
+            .filter(|&(k, _)| kept(k))
+            .map(|(_, c)| (c.dev, c.out))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let trans: Option<BTreeMap<(usize, usize), XPoly>> = (|| {
+            let mut trans = BTreeMap::new();
+            for &(dv, o) in &driven {
+                let ot = &devs[dv].outs[o];
+                let mut to = |n: usize| fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?);
+                let t = fit(to(out)?.sub_owned(to(rf)?)?)?;
                 trans.insert((dv, o), t);
             }
-        }
+            Ok::<_, String>(trans)
+        })()
+        .ok();
         // The terms of a_n as hand analysis writes them: each kept
         // coefficient with the control voltages it multiplies (1 for
         // order 1, 2 for order 2).
@@ -1659,7 +1670,9 @@ pub fn closed(
                 });
             }
         }
-        nested[1] = nested_form(&syms, &dx, vid, &terms2, &u1, None, &trans, &a1_num, None, scale[1], mt);
+        nested[1] = trans
+            .as_ref()
+            .and_then(|t| nested_form(&syms, &dx, vid, &terms2, &u1, None, t, &a1_num, None, scale[1], mt));
         // Response of node n to the order-2 currents: numerator over D³.
         let mut respond = |n: usize, cur: &BTreeMap<(usize, usize), XPoly>| -> Result<XPoly, String> {
             let mut parts = Vec::new();
@@ -1761,19 +1774,21 @@ pub fn closed(
                     _ => {}
                 }
             }
-            nested[2] = nested_form(
-                &syms,
-                &dx,
-                vid,
-                &terms3,
-                &u1,
-                Some(&u2),
-                &trans,
-                &a1_num,
-                Some(&num[1]),
-                scale[1],
-                mt,
-            );
+            nested[2] = trans.as_ref().and_then(|t| {
+                nested_form(
+                    &syms,
+                    &dx,
+                    vid,
+                    &terms3,
+                    &u1,
+                    Some(&u2),
+                    t,
+                    &a1_num,
+                    Some(&num[1]),
+                    scale[1],
+                    mt,
+                )
+            });
         }
         Ok(())
     };
@@ -2618,11 +2633,13 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
             .into_iter()
             .flatten()
             .find_map(|cl| cl.nested.get(n).cloned().flatten());
-        if let (Some((latex, value)), Some(shown), Some(sv)) = (nested, shown, shown_value) {
+        if let (Some((latex, value)), Some(sv)) = (nested, shown_value) {
             let size = cancels(n, 1.0).unwrap_or(sv.abs());
-            // Shown where it is shorter, or the display form is long.
+            // Shown where it is shorter, or the display form is long (or
+            // too large to typeset at all).
             let long = q["display"]["terms"].as_u64().is_some_and(|t| t > NESTED_TERMS);
-            if (value - sv).abs() <= NESTED_REL * size && (latex.len() < shown.len() || long) {
+            let shorter = shown.is_some_and(|s| latex.len() < s.len());
+            if (value - sv).abs() <= NESTED_REL * size && (shorter || long) {
                 q["nested"] = json!({ "latex": latex, "value": value });
             }
         }

@@ -1606,20 +1606,28 @@ function DistortionFormula({
       </>
     );
   }
-  if (nested && shown?.latex) {
+  // "=" for the nested form only where the display form it equals is
+  // exact, or neglects leakage too small to see; otherwise the display
+  // form keeps its "≈" and Exact.
+  const nestedExact =
+    quantity.display?.same === true ||
+    (quantity.display?.relError ?? Infinity) < INVISIBLE_ERROR;
+  if (nested && nestedExact) {
     // The form hand analysis writes, equal to the display form, which is a
-    // click away expanded.
-    const cost = display?.fullModelError ?? null;
+    // click away expanded (when it can be typeset).
+    const cost = quantity.display?.fullModelError ?? null;
     return (
       <>
         <Formula latex={`${symbol} = ${nested}`} />
         {assumed && !(cost !== null && cost < INVISIBLE_ERROR) ? (
           <FullModelNote error={cost} assumed />
         ) : null}
-        <details className="small-signal-exact">
-          <summary>Expanded</summary>
-          <Formula latex={`${symbol} = ${shown.latex}`} />
-        </details>
+        {shown?.latex ? (
+          <details className="small-signal-exact">
+            <summary>Expanded</summary>
+            <Formula latex={`${symbol} = ${shown.latex}`} />
+          </details>
+        ) : null}
       </>
     );
   }
