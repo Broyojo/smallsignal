@@ -547,8 +547,11 @@ function Formula({
     profileId: ANALOG_CANVAS_MATH_PROFILE_ID,
     bold: false,
   };
+  // The last typeset formula, with what its copy button wrote: shown in
+  // place (as a whole) while a new one is typeset.
   const [prepared, setPrepared] = useState<{
     latex: string;
+    copy: string | null;
     result: FormulaTypesetResult;
   }>();
   const tooLong = latex.length > FORMULA_MAX_LATEX_LENGTH;
@@ -565,7 +568,7 @@ function Formula({
       bold: false,
     }).then(
       (next) => {
-        if (active) setPrepared({ latex, result: next });
+        if (active) setPrepared({ latex, copy, result: next });
       },
       (error: unknown) => {
         if (active) setFailed(latex);
@@ -581,7 +584,7 @@ function Formula({
     return () => {
       active = false;
     };
-  }, [latex, tooLong, onStale]);
+  }, [latex, copy, tooLong, onStale]);
   // While the typesetter loads, the formula it replaces stays (a re-solve
   // never shrinks the panel under the reader), else the space is held
   // quietly; raw TeX reads as broken. Only a formula that cannot be
@@ -591,7 +594,7 @@ function Formula({
       <TypesetFormula
         latex={prepared.latex}
         artifact={prepared.result.artifact}
-        copy={copy}
+        copy={prepared.copy}
       />
     ) : (
       <span className="small-signal-formula-pending" aria-busy="true" />

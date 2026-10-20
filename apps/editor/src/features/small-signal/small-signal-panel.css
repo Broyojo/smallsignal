@@ -165,7 +165,11 @@
 
 /* A section's last result while the next is solved: dimmed after a beat,
    so a quick re-solve does not flicker. */
+/* The section's own one-column grid, so its parts keep their spacing. */
 .small-signal-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   transition: opacity 0s;
 }
 
