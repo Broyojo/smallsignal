@@ -569,7 +569,10 @@ fn factored(ts: &[Term], syms: &[Sym]) -> (String, bool) {
     // A leading minus on every term is the caller's to show, so keep g > 0.
     let g = g.max(1);
     if degree(&common) == 0 && smin == 0 && g == 1 {
-        return (poly_str(ts, syms, Style::Latex), false);
+        return match powers(ts, syms) {
+            Some(p) => (p, true),
+            None => (poly_str(ts, syms, Style::Latex), false),
+        };
     }
     let rest: Vec<Term> = ts
         .iter()
@@ -589,12 +592,115 @@ fn factored(ts: &[Term], syms: &[Sym]) -> (String, bool) {
         lmag: 0.0,
         sign: 1.0,
     };
-    let body = format!(
-        "{} \\left({}\\right)",
-        mono_str(&head, true, syms, Style::Latex),
-        poly_str(&rest, syms, Style::Latex)
-    );
+    let head = mono_str(&head, true, syms, Style::Latex);
+    let body = match powers(&rest, syms) {
+        Some(p) if head == "1" => p,
+        Some(p) => format!("{head} {p}"),
+        None => format!("{head} \\left({}\\right)", poly_str(&rest, syms, Style::Latex)),
+    };
     (body, true)
+}
+
+/// Largest sum `powers` tries to factor.
+const POWERS_MAX_TERMS: usize = 64;
+
+/// An s-free sum that is a product of powers of plain sums of symbols over
+/// disjoint symbols, written so: 2 r_o1 r_o2 + r_o1² + r_o2² is
+/// (r_o1 + r_o2)², and g_m1 r_o1 + g_m1 r_o2 + g_m2 r_o1 + g_m2 r_o2 is
+/// (g_m1 + g_m2)(r_o1 + r_o2). None unless the expansion reproduces every
+/// term exactly, or when nothing would be factored.
+fn powers(ts: &[Term], syms: &[Sym]) -> Option<String> {
+    if ts.len() < 2 || ts.len() > POWERS_MAX_TERMS || ts.iter().any(|t| t.spow != 0 || t.coeff <= 0) {
+        return None;
+    }
+    let n = syms.len();
+    // Two symbols are one sum's when exchanging one for the other maps a
+    // term onto another.
+    let mut class: Vec<usize> = (0..n).collect();
+    fn root(class: &mut [usize], mut v: usize) -> usize {
+        while class[v] != v {
+            class[v] = class[class[v]];
+            v = class[v];
+        }
+        v
+    }
+    for a in ts {
+        for b in ts {
+            let diff: Vec<(usize, i32)> = (0..n)
+                .map(|k| (k, b.e[k] as i32 - a.e[k] as i32))
+                .filter(|&(_, d)| d != 0)
+                .collect();
+            if let [(v, -1), (w, 1)] | [(w, 1), (v, -1)] = diff[..] {
+                let (rv, rw) = (root(&mut class, v), root(&mut class, w));
+                class[rv] = rw;
+            }
+        }
+    }
+    let used: Vec<usize> = (0..n).filter(|&k| ts.iter().any(|t| t.e[k] > 0)).collect();
+    let mut groups: Vec<(Vec<usize>, u32)> = Vec::new();
+    for &k in &used {
+        let r = root(&mut class, k);
+        match groups.iter_mut().find(|(g, _)| root(&mut class, g[0]) == r) {
+            Some((g, _)) => g.push(k),
+            None => groups.push((vec![k], 0)),
+        }
+    }
+    for (g, p) in groups.iter_mut() {
+        let deg = |t: &Term| g.iter().map(|&k| t.e[k] as u32).sum::<u32>();
+        *p = deg(&ts[0]);
+        if *p == 0 || ts.iter().any(|t| deg(t) != *p) {
+            return None;
+        }
+    }
+    if groups.iter().all(|(g, p)| g.len() == 1 || *p == 1) && groups.iter().filter(|(g, _)| g.len() > 1).count() < 2 {
+        return None;
+    }
+    // Expand Π (Σ g)^p and compare.
+    let mut prod: Vec<(Vec<u8>, i128)> = vec![(vec![0u8; n], 1)];
+    for (g, p) in &groups {
+        for _ in 0..*p {
+            let mut next: Vec<(Vec<u8>, i128)> = Vec::new();
+            for (e, c) in &prod {
+                for &k in g {
+                    let mut f = e.clone();
+                    f[k] = f[k].checked_add(1)?;
+                    match next.iter_mut().find(|(x, _)| *x == f) {
+                        Some((_, d)) => *d = d.checked_add(*c)?,
+                        None => next.push((f, *c)),
+                    }
+                }
+            }
+            if next.len() > POWERS_MAX_TERMS {
+                return None;
+            }
+            prod = next;
+        }
+    }
+    if prod.len() != ts.len() || !ts.iter().all(|t| prod.iter().any(|(e, c)| *e == t.e && *c == t.coeff)) {
+        return None;
+    }
+    // Ordered as a term's symbols are (g_m before r_o …).
+    let order = |k: usize| (syms[k].role, k);
+    for (g, _) in groups.iter_mut() {
+        g.sort_by_key(|&k| order(k));
+    }
+    groups.sort_by_key(|(g, _)| order(g[0]));
+    let parts: Vec<String> = groups
+        .iter()
+        .map(|(g, p)| {
+            if g.len() == 1 {
+                return power_latex(&syms[g[0]].latex, *p as u8);
+            }
+            let sum: Vec<&str> = g.iter().map(|&k| syms[k].latex.as_str()).collect();
+            let body = format!("\\left({}\\right)", sum.join(" + "));
+            if *p == 1 {
+                body
+            } else {
+                format!("{{{body}}}^{{{p}}}")
+            }
+        })
+        .collect();
+    Some(parts.join(" "))
 }
 
 /// Polynomial grouped by powers of s: `a + b + (c + d) s + e s^{2}`.
@@ -657,6 +763,34 @@ mod tests {
             output_r: false,
             leakage: false,
         }
+    }
+
+    fn terms(ts: &[(&[u8], i128)]) -> Vec<Term> {
+        let logs = Logs::new(&[sym("a", 1.0), sym("b", 1.0), sym("c", 1.0), sym("d", 1.0)]);
+        ts.iter().map(|(e, c)| term(*c, e.to_vec(), 0, &logs)).collect()
+    }
+
+    #[test]
+    fn powers_of_sums_are_factored_only_when_exact() {
+        let syms = [sym("a", 1.0), sym("b", 1.0), sym("c", 1.0), sym("d", 1.0)];
+        // a² + 2ab + b² = (a + b)².
+        let sq = terms(&[(&[2, 0, 0, 0], 1), (&[1, 1, 0, 0], 2), (&[0, 2, 0, 0], 1)]);
+        assert_eq!(powers(&sq, &syms).as_deref(), Some("{\\left(a + b\\right)}^{2}"));
+        // ac + ad + bc + bd = (a + b)(c + d).
+        let pr = terms(&[
+            (&[1, 0, 1, 0], 1),
+            (&[1, 0, 0, 1], 1),
+            (&[0, 1, 1, 0], 1),
+            (&[0, 1, 0, 1], 1),
+        ]);
+        assert_eq!(
+            powers(&pr, &syms).as_deref(),
+            Some("\\left(a + b\\right) \\left(c + d\\right)")
+        );
+        // a² + ab + b² is no power; a + b needs no factoring.
+        let no = terms(&[(&[2, 0, 0, 0], 1), (&[1, 1, 0, 0], 1), (&[0, 2, 0, 0], 1)]);
+        assert_eq!(powers(&no, &syms), None);
+        assert_eq!(powers(&terms(&[(&[1, 0, 0, 0], 1), (&[0, 1, 0, 0], 1)]), &syms), None);
     }
 
     /// A common factor whose cancellation leaves as many terms as before is

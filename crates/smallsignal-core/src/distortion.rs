@@ -1716,7 +1716,9 @@ fn form(e: Option<&Expr>, syms: &[Sym], shape: &Shape) -> Value {
         None => (json!("0"), json!({ "num": "0", "den": "1" })),
         Some(e) => {
             let latex = if terms <= crate::analyze::LATEX_TERM_LIMIT {
-                json!((shape.wrap)(&e.latex(syms)))
+                let (n, d) = e.to_mna(syms);
+                let l = crate::structure::checked(&n, &d, syms).unwrap_or_else(|| e.latex(syms));
+                json!((shape.wrap)(&l))
             } else {
                 Value::Null
             };
@@ -1759,8 +1761,18 @@ fn infinite() -> Value {
 /// LEAKAGE_REL; from `noleak`, a closed form on the leakage-free model, when
 /// the exact one is too large), and simplified (the r_o → ∞ leading order
 /// of the display form, then the coarsest magnitude pruning, within `tol`
-/// of the reference value).
-fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &Shape, tol: f64) -> Value {
+/// of the reference value). `cancels`: the size of the terms the reference
+/// is a sum of, when they cancel to roundoff (a balanced circuit's a2): a
+/// form is then measured against that size, not the roundoff, and the
+/// simplified form is 0.
+fn quantity(
+    exact: Option<View>,
+    noleak: Option<View>,
+    reference: f64,
+    cancels: Option<f64>,
+    shape: &Shape,
+    tol: f64,
+) -> Value {
     // 0/0 (a ratio over a1 when a1 = 0, e.g. an input blocked at s → 0):
     // undefined, not the zero its numerator alone would give; x/0:
     // infinite. The exact form (or the numeric reference) decides; the
@@ -1776,7 +1788,9 @@ fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &S
         return infinite();
     }
     let rel = |a: f64| {
-        if reference != 0.0 {
+        if let Some(size) = cancels {
+            (a - reference).abs() / size
+        } else if reference != 0.0 {
             (a - reference).abs() / reference.abs()
         } else {
             a.abs()
@@ -1851,6 +1865,11 @@ fn quantity(exact: Option<View>, noleak: Option<View>, reference: f64, shape: &S
             }
         }
         None => q["display"] = Value::Null,
+    }
+    if cancels.is_some() {
+        q["simplified"] = json!({ "latex": "0", "plain": { "num": "0", "den": "1" }, "terms": 0, "value": 0.0,
+                                  "relError": num_or_null(rel(0.0)), "method": "cancels", "tolerance": tol });
+        return q;
     }
     let Some((be, syms, bn, bd)) = base else {
         q["simplified"] = q["display"].clone();
@@ -2239,19 +2258,22 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         }
     };
     let af = |n: usize| a_full.get(n).copied().unwrap_or(0.0);
+    // With a1 = 0 a ratio over it is infinite, or 0/0 (unavailable) when
+    // a_n is 0 too, to roundoff of its terms.
+    let zero = |n: usize| a(n).abs() <= ZERO_REL * terms[n];
+    // a_n's terms cancel (a balanced circuit's even order): their size,
+    // times `k` (the shape's scale), for `quantity`.
+    let cancels = |n: usize, k: f64| (n > 0 && terms[n] > 0.0 && zero(n)).then(|| terms[n] * k.abs());
     let mut coefs_json = Vec::new();
     for n in 0..c.order as usize {
         let (e, nl) = both(&|cl| cl.a(n), false);
-        let mut q = quantity(e, nl, a(n), &Shape { wrap: &id, map: &ident }, c.tol);
+        let mut q = quantity(e, nl, a(n), cancels(n, 1.0), &Shape { wrap: &id, map: &ident }, c.tol);
         q["order"] = json!(n + 1);
         q["numeric"] = json!(af(n));
         full_error(&mut q, af(n));
         coefs_json.push(q);
     }
     resp.insert("coefficients".into(), json!(coefs_json));
-    // With a1 = 0 a ratio over it is infinite, or 0/0 (unavailable) when
-    // a_n is 0 too, to roundoff of its terms.
-    let zero = |n: usize| a(n).abs() <= ZERO_REL * terms[n];
     // HD_n at this amplitude: infinite (a1 = 0) or 0/0 by structure, else
     // the scaled value; None when it exceeds f64 (a huge amplitude), which
     // is unavailable, not infinite.
@@ -2270,7 +2292,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     let m2 = |x: f64| representable(x.abs() * amp / 2.0, || x.abs().ln(), amp, 1).unwrap_or(f64::INFINITY);
     let (e, nl) = both(&|cl| cl.ratio(1), false);
     let hd2 = match hd_ref(1) {
-        Some(r) => quantity(e, nl, r, &Shape { wrap: &w2, map: &m2 }, c.tol),
+        Some(r) => quantity(
+            e,
+            nl,
+            r,
+            cancels(1, m2(1.0 / a(0))),
+            &Shape { wrap: &w2, map: &m2 },
+            c.tol,
+        ),
         None => {
             overflowed.push("HD2");
             Value::Null
@@ -2284,7 +2313,14 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
         let m3 = |x: f64| representable(x.abs() * amp * amp / 4.0, || x.abs().ln(), amp, 2).unwrap_or(f64::INFINITY);
         let (e, nl) = both(&|cl| cl.ratio(2), false);
         let hd3 = match hd_ref(2) {
-            Some(r) => quantity(e, nl, r, &Shape { wrap: &w3, map: &m3 }, c.tol),
+            Some(r) => quantity(
+                e,
+                nl,
+                r,
+                cancels(2, m3(1.0 / a(0))),
+                &Shape { wrap: &w3, map: &m3 },
+                c.tol,
+            ),
             None => {
                 overflowed.push("HD3");
                 Value::Null
@@ -2307,6 +2343,7 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                     (true, false) => 0.0,
                     _ => (4.0 * a(0).abs() / (3.0 * a(2).abs())).sqrt(),
                 },
+                None,
                 &Shape { wrap: &wi, map: &mi },
                 c.tol,
             )
@@ -2391,6 +2428,18 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
                         };
                         if a1 == 0.0 {
                             return num_or_null(direct);
+                        }
+                        // H_n cancels to roundoff of its terms (a balanced
+                        // circuit's even order): 0, as at low frequency. The
+                        // devices' parts are measured only where a_n cancels
+                        // (its node responses cancel too, so cannot tell).
+                        if zero(n) && {
+                            let t = phys_probe
+                                .terms(&devs, &phys_coefs, &phys_all, f, c.order >= 3)
+                                .unwrap_or([0.0; 3]);
+                            h[n].norm() <= ZERO_REL * t[n]
+                        } {
+                            return json!(0.0);
                         }
                         match representable(direct, || h[n].norm().ln() - a1.ln(), amp, n) {
                             Some(v) => num_or_null(v),

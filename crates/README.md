@@ -136,7 +136,10 @@ is JSON, or `{"error": "..."}` on failure.
 - A DC denominator that is a sum of conductances is written as their ∥
   group, with a numerator sum in front when its terms share no factor:
   the CMOS inverter reads −(g_{m1} + g_{m2})(r_{o1} ∥ r_{o2}), never
-  r_{o1}r_{o2}(g_{m1} + g_{m2})/(r_{o1} + r_{o2}).
+  r_{o1}r_{o2}(g_{m1} + g_{m2})/(r_{o1} + r_{o2}). Every closed form
+  (gain, Z, noise, distortion) is written this way when it applies.
+- A sum that is a product of powers of plain sums over disjoint symbols is
+  written factored: (r_{o1} + r_{o2})², (g_{m1} + g_{m2})(r_{o1} + r_{o2}).
 - `rout`: the impedance at out/ref with every independent source zeroed.
 - `sweep` (`{fLow?, fHigh?, perDecade?}`, `sweep.rs`): the frequencies
   fLow·10^(k/perDecade) up to fHigh, then fHigh itself when they end short
@@ -444,3 +447,7 @@ transfer cofactors. Response `distortion`:
 - `display`/`simplified` work as for the other quantities; simplified is the
   r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
   as output conductances), then magnitude pruning, within `tolerance`.
+- An a_n (and its HD) whose terms cancel to roundoff (|a_n| ≤ 1e-12 of their
+  size; a balanced inverter's a₂) has `simplified` 0 with `method:
+  "cancels"`, and every form is measured against that size, not the
+  roundoff. HD at a frequency where H_n cancels so is 0.

@@ -322,6 +322,7 @@ export function DeviceMenu({
   bounds,
   focusOnOpen,
   onClose,
+  nonlinear = null,
 }: {
   model: DeviceMenuModel;
   /** The clicked part, "M1": its values are its own, even when matched. */
@@ -338,6 +339,9 @@ export function DeviceMenu({
   focusOnOpen: boolean;
   /** Esc, the close button, or a press elsewhere. */
   onClose(restoreFocus: boolean): void;
+  /** Whether Distortion expands this part (a biased transistor or diode);
+   * null when it cannot. */
+  nonlinear?: { on: boolean; set(on: boolean): void } | null;
 }) {
   const ref = useRef<HTMLElement>(null);
   const [placement, setPlacement] = useState<Placement | null>(null);
@@ -566,6 +570,24 @@ export function DeviceMenu({
             text={(option) => REGION_LABEL[option]}
             onChange={actions.region}
           />
+        </div>
+      ) : null}
+      {nonlinear ? (
+        <div
+          className="small-signal-device-menu-section"
+          role="group"
+          aria-label="Distortion"
+        >
+          <h3>Distortion</h3>
+          <div className="small-signal-chips">
+            <Toggle
+              pressed={nonlinear.on}
+              label={`${part} nonlinear`}
+              onClick={() => nonlinear.set(!nonlinear.on)}
+            >
+              Nonlinear
+            </Toggle>
+          </div>
         </div>
       ) : null}
       {status.notes.length ? (

@@ -505,13 +505,21 @@ function UntypesetFormula({
           );
         }}
       >
-        {copied ? "Copied" : "Copy TeX"}
+        {copied ? "Copied" : "Copy LaTeX"}
       </button>
     </p>
   );
 }
 
-function Formula({ latex }: { latex: string }) {
+function Formula({
+  latex,
+  copy = latex,
+}: {
+  latex: string;
+  /** The TeX its copy button writes (the whole equation, for a line that
+   * shows only its right side); null for no button. */
+  copy?: string | null;
+}) {
   const onStale = useContext(StaleBuildContext);
   const request: FormulaRequest = {
     latex,
@@ -565,7 +573,48 @@ function Formula({ latex }: { latex: string }) {
         reason={tooLong ? "too-long" : "unavailable"}
       />
     );
-  return <TypesetFormula latex={latex} artifact={result.artifact} />;
+  return (
+    <TypesetFormula latex={latex} artifact={result.artifact} copy={copy} />
+  );
+}
+
+/** How long the copy button shows its check mark. */
+const COPIED_MS = 1200;
+
+/** Copies an equation's TeX; a check mark for a moment says it did. */
+function CopyTex({ tex }: { tex: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      className="small-signal-copy"
+      aria-label={copied ? "Copied" : "Copy LaTeX"}
+      title="Copy LaTeX"
+      data-copied={copied || undefined}
+      onClick={() => {
+        void navigator.clipboard?.writeText(tex).then(
+          () => setCopied(true),
+          () => setCopied(false),
+        );
+      }}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        {copied ? (
+          <path d="M3 8.5l3 3 7-7" />
+        ) : (
+          <>
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+            <path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5" />
+          </>
+        )}
+      </svg>
+    </button>
+  );
 }
 
 /**
@@ -577,12 +626,14 @@ function Formula({ latex }: { latex: string }) {
 function TypesetFormula({
   latex,
   artifact,
+  copy,
 }: {
   latex: string;
   artifact: FormulaArtifact;
+  copy: string | null;
 }) {
   const svg = useMemo(() => withSymbolKeys(artifact.svg), [artifact.svg]);
-  return (
+  const scroll = (
     <div className="small-signal-formula-scroll">
       <span
         className="small-signal-formula"
@@ -595,6 +646,15 @@ function TypesetFormula({
         }}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
+    </div>
+  );
+  if (copy === null) return scroll;
+  // The button sits outside the scroller: a long equation never carries it
+  // out of view.
+  return (
+    <div className="small-signal-formula-line">
+      {scroll}
+      <CopyTex tex={copy} />
     </div>
   );
 }
@@ -674,6 +734,9 @@ function rootText(root: Root): string {
 /** Below this the leakage-free form is indistinguishable at 4 digits. */
 const INVISIBLE_ERROR = 1e-6;
 
+/** Under a form that leaves out junction leakage (r_bd, r_bs, r_μ). */
+const LEAKAGE_NOTE = "neglecting junction leakage";
+
 /**
  * The main equation: the exact form without gmin-level junction leakage when
  * that leakage is negligible (said so when it is not invisible), else the
@@ -714,7 +777,7 @@ function MainFormula({
         {equals ? null : (
           <FullModelNote error={error} assumed leakage={leaky} />
         )}
-        {shown ? (
+        {shown && leaky ? (
           <details className="small-signal-exact">
             <summary>{EXACT_ASSUMED}</summary>
             <ExactFormula symbol={symbol} quantity={quantity} />
@@ -733,15 +796,16 @@ function MainFormula({
       <Formula
         latex={`${symbol} ${invisible ? "=" : "\\approx"} ${shown.latex}`}
       />
+      <small className="small-signal-muted">
+        {invisible ? LEAKAGE_NOTE : `${LEAKAGE_NOTE} (${formatPercent(error)})`}
+      </small>
+      {/* "=" is exact for the model without leakage: nothing to disclose. */}
       {invisible ? null : (
-        <small className="small-signal-muted">
-          neglecting junction leakage ({formatPercent(error)})
-        </small>
+        <details className="small-signal-exact">
+          <summary>Exact</summary>
+          <ExactFormula symbol={symbol} quantity={quantity} />
+        </details>
       )}
-      <details className="small-signal-exact">
-        <summary>Exact</summary>
-        <ExactFormula symbol={symbol} quantity={quantity} />
-      </details>
     </>
   );
 }
@@ -1192,17 +1256,22 @@ function QuantityCard({
                 ? leadNote(simplerNote, simpler.fullModelError)
                 : simplerNote)}
           </small>
-          <details className="small-signal-exact">
-            <summary>{assumed ? EXACT_ASSUMED : "Exact"}</summary>
-            <ExactFormula symbol={symbol} quantity={quantity} />
-          </details>
+          {exact.latex ? (
+            <details className="small-signal-exact">
+              <summary>{assumed ? EXACT_ASSUMED : "Exact"}</summary>
+              <ExactFormula symbol={symbol} quantity={quantity} />
+            </details>
+          ) : null}
         </>
       ) : (
         <>
           <MainFormula symbol={symbol} quantity={quantity} assumed={assumed} />
           {simpler ? (
             <div className="small-signal-simpler">
-              <Formula latex={`\\approx ${simpler.latex}`} />
+              <Formula
+                latex={`\\approx ${simpler.latex}`}
+                copy={`${symbol} \\approx ${simpler.latex}`}
+              />
               <small>{note ?? simplerNote}</small>
             </div>
           ) : null}
@@ -1390,8 +1459,9 @@ interface ShownForm {
  *   else "≈" and the leakage it neglects, with the simpler form under it;
  * - the simpler form first when the shown one is long or missing (as on
  *   the result cards);
- * - "Exact" a click away when the lead is not exact: the exact form, or a
- *   note that it is too large to typeset. Nothing inexact is labelled exact.
+ * - "Exact" a click away when the lead is "≈" and an exact form can be
+ *   typeset; never under an "=" (exact without junction leakage too small
+ *   to see). Nothing inexact is labelled exact.
  * Under assumptions every form is the assumed model's: "≈", with its
  * distance from the full model in place of the leakage note.
  */
@@ -1403,6 +1473,7 @@ function LeadFormula({
   simplerNote,
   exact,
   assumed = false,
+  leakageNoted = false,
 }: {
   symbol: string;
   shown: ShownForm | null;
@@ -1412,19 +1483,16 @@ function LeadFormula({
   /** The exact form's LaTeX; null when it is too large to typeset. */
   exact: string | null;
   assumed?: boolean;
+  /** The section says once that its forms neglect junction leakage. */
+  leakageNoted?: boolean;
 }) {
-  const exactDisclosure = (
+  // Only when there is an exact form to open onto.
+  const exactDisclosure = exact ? (
     <details className="small-signal-exact">
       <summary>{assumed ? EXACT_ASSUMED : "Exact"}</summary>
-      {exact ? (
-        <Formula latex={`${symbol} = ${exact}`} />
-      ) : (
-        <p className="small-signal-muted">
-          The exact expression is too large to typeset.
-        </p>
-      )}
+      <Formula latex={`${symbol} = ${exact}`} />
     </details>
-  );
+  ) : null;
   const long =
     !shown?.latex ||
     (shown.terms ?? 0) > 6 ||
@@ -1446,7 +1514,7 @@ function LeadFormula({
     // No form small enough to typeset: say so rather than show nothing.
     return (
       <>
-        <Formula latex={`${symbol} = \\ldots`} />
+        <Formula latex={`${symbol} = \\ldots`} copy={null} />
         <small className="small-signal-muted">too large to typeset</small>
       </>
     );
@@ -1467,18 +1535,21 @@ function LeadFormula({
         costless ? null : (
           <FullModelNote error={fullModelError} assumed leakage={!equals} />
         )
-      ) : equals ? null : (
+      ) : shownIsExact || (equals && leakageNoted) ? null : (
         <small className="small-signal-muted">
-          neglecting junction leakage ({formatPercent(error)})
+          {equals ? LEAKAGE_NOTE : `${LEAKAGE_NOTE} (${formatPercent(error)})`}
         </small>
       )}
       {simpler?.latex ? (
         <div className="small-signal-simpler">
-          <Formula latex={`\\approx ${simpler.latex}`} />
+          <Formula
+            latex={`\\approx ${simpler.latex}`}
+            copy={`${symbol} \\approx ${simpler.latex}`}
+          />
           <small>{simplerNote}</small>
         </div>
       ) : null}
-      {shownIsExact ? null : exactDisclosure}
+      {shownIsExact || equals ? null : exactDisclosure}
     </>
   );
 }
@@ -1506,6 +1577,22 @@ function DistortionFormula({
     quantity.simplified?.latex && quantity.simplified.latex !== shown?.latex
       ? quantity.simplified
       : null;
+  if (simpler?.method === "cancels") {
+    // The devices' terms cancel at this bias (a balanced circuit's even
+    // order): 0, with the general form a click away.
+    return (
+      <>
+        <Formula latex={`${symbol} = 0`} />
+        <small className="small-signal-muted">terms cancel at this bias</small>
+        {shown?.latex ? (
+          <details className="small-signal-exact">
+            <summary>General form</summary>
+            <Formula latex={`${symbol} = ${shown.latex}`} />
+          </details>
+        ) : null}
+      </>
+    );
+  }
   return (
     <LeadFormula
       symbol={symbol}
@@ -1519,6 +1606,7 @@ function DistortionFormula({
       }
       exact={shownIsExact ? (shown?.latex ?? null) : quantity.latex}
       assumed={assumed}
+      leakageNoted
     />
   );
 }
@@ -1702,6 +1790,13 @@ function DistortionDetails({
       <Formula
         latex={`v_{out} = a_{1} ${v}_{in} + a_{2} ${v}_{in}^{2}${distortion.order >= 3 ? ` + a_{3} ${v}_{in}^{3}` : ""}`}
       />
+      {/* Once for every form below, not under each. */}
+      {!assumed &&
+      distortion.coefficients.some(
+        (coefficient) => coefficient.display?.same === false,
+      ) ? (
+        <small className="small-signal-muted">{LEAKAGE_NOTE}</small>
+      ) : null}
       {distortion.coefficients.map((coefficient) => (
         <DistortionFormula
           key={coefficient.order}
@@ -1771,7 +1866,7 @@ function DistortionDetails({
                 .map((symbol) => (
                   <tr key={symbol.name}>
                     <th scope="row">
-                      <Formula latex={symbol.latex} />
+                      <Formula latex={symbol.latex} copy={null} />
                     </th>
                     <td>
                       {symbol.value === null
@@ -1789,7 +1884,7 @@ function DistortionDetails({
                     className={term.kept ? undefined : "small-signal-muted"}
                   >
                     <th scope="row">
-                      <Formula latex={label} />
+                      <Formula latex={label} copy={null} />
                     </th>
                     <td>
                       {formatEngineering(
@@ -5135,6 +5230,23 @@ export function SmallSignalPanel({
           bounds={canvasBounds}
           focusOnOpen={menu.keyboard}
           onClose={closeMenu}
+          nonlinear={
+            nonlinearCandidates.includes(menu.element)
+              ? {
+                  on: !linearDevices.has(menu.element),
+                  set: (on) => {
+                    setLinearDevices((previous) => {
+                      const next = new Set(previous);
+                      if (on) next.delete(menu.element);
+                      else next.add(menu.element);
+                      return next;
+                    });
+                    // Where its effect shows.
+                    if (on) setDistortionOpen(true);
+                  },
+                }
+              : null
+          }
         />
       ) : null}
     </StaleBuildContext.Provider>

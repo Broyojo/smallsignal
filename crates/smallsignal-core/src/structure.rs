@@ -286,6 +286,46 @@ impl Structured {
     }
 }
 
+/// Value of an MNA-form symbol polynomial with displayed symbol values
+/// `vals` (resistances as R).
+fn xeval(p: &XPoly, syms: &[Sym], vals: &[f64], s: Complex64) -> Complex64 {
+    let mut acc = Complex64::new(0.0, 0.0);
+    for (e, c) in &p.terms {
+        let mut v = *c as f64;
+        for (k, &x) in e.iter().enumerate() {
+            if x > 0 {
+                let m = if syms[k].inverted { 1.0 / vals[k] } else { vals[k] };
+                v *= m.powi(x as i32);
+            }
+        }
+        acc += v * s.powu(spow(e, syms));
+    }
+    acc
+}
+
+/// Conventional (∥) notation for num/den, kept only if it is the same
+/// function: checked at random symbol values and random complex s.
+pub fn checked(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<String> {
+    let st = structure(num, den, syms)?;
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut rnd = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        0.5 + (seed % 1_000_000) as f64 / 1_000_000.0
+    };
+    for _ in 0..4 {
+        let vals: Vec<f64> = syms.iter().map(|_| rnd()).collect();
+        let s = Complex64::new(rnd() - 1.0, rnd());
+        let want = xeval(num, syms, &vals, s) / xeval(den, syms, &vals, s);
+        let got = st.eval(syms, &vals, s);
+        if (got - want).norm() > 1e-10 * want.norm().max(1e-300) {
+            return None;
+        }
+    }
+    Some(st.latex)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
