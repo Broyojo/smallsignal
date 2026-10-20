@@ -125,6 +125,13 @@ import {
   diagnoseModuleLoadFailure,
   recoverFromStaleBuild,
 } from "../../components/stale-build-recovery";
+import {
+  ParametersTable,
+  SymbolValueTip,
+  deviceValues,
+  modelUnit,
+  valueText,
+} from "./small-signal-values";
 import "./small-signal-panel.css";
 
 const SOLVE_DEBOUNCE_MS = 120;
@@ -389,7 +396,12 @@ function ModelFields({
     const invalid = typed.trim() !== "" && modelValue(name, typed) === null;
     return (
       <label key={name}>
-        {name}
+        <span>
+          {name}
+          {modelUnit(name) ? (
+            <span className="small-signal-muted"> {modelUnit(name)}</span>
+          ) : null}
+        </span>
         <input
           aria-label={`${MODEL_TITLE[kind]} ${name}`}
           aria-invalid={invalid || undefined}
@@ -4586,6 +4598,11 @@ export function SmallSignalPanel({
   return (
     <StaleBuildContext.Provider value={markStale}>
       <SymbolHighlight link={link} />
+      <SymbolValueTip
+        link={link}
+        params={result?.params ?? []}
+        format={formatEngineering}
+      />
       <section
         ref={panelRef}
         className="small-signal-panel"
@@ -4891,6 +4908,17 @@ export function SmallSignalPanel({
             ) : null}
 
             {unknownBias.length ? null : biasCard()}
+            {result?.params?.length ? (
+              <details className="small-signal-options small-signal-parameters">
+                <summary>Parameters</summary>
+                <div>
+                  <ParametersTable
+                    params={result.params}
+                    format={formatEngineering}
+                  />
+                </div>
+              </details>
+            ) : null}
 
             {assumptionTableRows.length || assumptionsStored ? (
               <details className="small-signal-options small-signal-assumptions-section">
@@ -5249,6 +5277,15 @@ export function SmallSignalPanel({
           bounds={canvasBounds}
           focusOnOpen={menu.keyboard}
           onClose={closeMenu}
+          values={(() => {
+            const op = result?.op?.devices[menu.element];
+            return op
+              ? deviceValues(menu.element, op).map((value) => ({
+                  latex: value.latex,
+                  text: valueText(value.value, value.unit, formatEngineering),
+                }))
+              : [];
+          })()}
           nonlinear={
             nonlinearCandidates.includes(menu.element)
               ? {

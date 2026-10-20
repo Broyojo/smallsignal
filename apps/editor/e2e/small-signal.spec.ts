@@ -1793,6 +1793,51 @@ test("bode: a circuit without capacitors has no plot", async ({ page }) => {
   await expect(panel.getByTestId("small-signal-bode")).toHaveCount(0);
 });
 
+test("values: a transistor's capacitances in its menu and in Parameters, and the Models fields with their units", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { CGDO: "3e-10", CGSO: "3e-10" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.csWired);
+  await formula(panel, "Gain");
+  // The device menu lists M1's small-signal values, its overlap C_gd too.
+  await page.getByTestId("hit-m1").click();
+  const values = deviceMenu(page).getByRole("group", {
+    name: "M1 small-signal values",
+  });
+  for (const name of ["gm1", "ro1", "Cgs1", "Cgd1", "Cdb1"])
+    await expect(values.getByText(name, { exact: true })).toBeVisible();
+  const cgd = values.locator('[data-value="C_{gd1}"] dd');
+  await expect(cgd).toHaveText(/^[\d.]+ fF$/u);
+  const cgdText = await cgd.innerText();
+  await page.keyboard.press("Escape");
+  // Parameters has every symbol the equations use, the same C_gd1.
+  await panel.getByText("Parameters", { exact: true }).click();
+  const table = panel.getByRole("table", { name: "Parameters" });
+  await expect(table.locator('tr[data-param="cgd_M1"] td').first()).toHaveText(
+    cgdText,
+  );
+  await expect(table.locator('tr[data-param="gm_M1"]')).toHaveCount(1);
+  // Models: each field says its unit.
+  const models = panel.locator("details.small-signal-options", {
+    has: page.locator("summary", { hasText: /^Models/u }),
+  });
+  await models.locator("summary").first().click();
+  await expect(
+    models.locator("label", { hasText: /^KP\s*A\/V²/u }).first(),
+  ).toBeVisible();
+  // NMOS Capacitances is open: CGSO and CGDO are set.
+  await expect(
+    models.locator("label", { hasText: /^CGSO\s*F\/m/u }).first(),
+  ).toBeVisible();
+});
+
 test("link: pointing at g_m1 rings M1 on the drawing, pointing at M1 marks its symbols, and a copy writes TeX", async ({
   page,
 }) => {
@@ -1811,6 +1856,14 @@ test("link: pointing at g_m1 rings M1 on the drawing, pointing at M1 marks its s
     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
     await expect(ring).toBeVisible({ timeout: 1000 });
   }).toPass();
+  // Its value beside the pointer, as the bias table has it.
+  const tip = page.getByTestId("small-signal-value-tip");
+  await expect(tip).toHaveText(/^gm1 = [\d.]+ [µm]S$/u);
+  // "74.87 µS" in both: the same value, as the same text.
+  const gm = await card(panel, "Bias point")
+    .locator('tr[data-device="M1"] td[data-quantity="gm"]')
+    .innerText();
+  expect((await tip.innerText()).split("= ")[1]).toBe(gm);
   const r = await ring.boundingBox();
   const hit = await page.getByTestId("hit-M1").boundingBox();
   expect(r!.x).toBeLessThanOrEqual(hit!.x);
