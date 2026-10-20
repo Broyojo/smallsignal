@@ -419,6 +419,8 @@ const SWEEP_KEYS = allKeys<SmallSignalSweep>()([
   "fHigh",
   "perDecade",
   "f",
+  "unity",
+  "bandwidth",
 ] as const);
 const QUANTITY_SWEEP_KEYS = allKeys<QuantitySweep>()([
   "full",
@@ -636,7 +638,23 @@ describe.skipIf(!built)(
       // Whole decades around the poles (1.1 kHz to 132 MHz) and 1 kHz.
       expect(result.sweep.fLow).toBe(100);
       expect(result.sweep.fHigh).toBe(1e10);
-      expect(n).toBe(8 * 20 + 1);
+      // 20 per decade, plus the poles, zeros, unity and −3 dB in the band,
+      // each exactly.
+      const { unity, bandwidth } = result.sweep;
+      expect(unity).toBeGreaterThan(100);
+      expect(bandwidth).toBeGreaterThan(100);
+      expect(bandwidth).toBeLessThan(unity);
+      expect(result.sweep.f).toContain(unity);
+      expect(result.sweep.f).toContain(bandwidth);
+      for (const pole of result.gain.poles) {
+        const f = Math.hypot(pole.re, pole.im);
+        if (f >= 100 && f <= 1e10)
+          expect(
+            Math.min(...result.sweep.f.map((x: number) => Math.abs(x / f - 1))),
+          ).toBeLessThan(1e-6);
+      }
+      expect(n).toBeGreaterThan(8 * 20 + 1);
+      expect([...result.sweep.f].sort((a, b) => a - b)).toEqual(result.sweep.f);
       for (const name of ["gain", "rout"]) {
         const q = result[name];
         declared(q);

@@ -1069,6 +1069,19 @@
   stroke-width: 2;
 }
 
+/* Landed on a marked point: a solid line, so the snap reads as one. */
+.small-signal-bode-cursor.is-snapped line {
+  stroke: var(--icm-accent);
+  stroke-opacity: 0.8;
+}
+
+/* Unity-gain and −3 dB points: small rings on the full model's curve. */
+.small-signal-bode-crossing {
+  fill: var(--icm-surface);
+  stroke: var(--small-signal-curve-full);
+  stroke-width: 1.5;
+}
+
 .small-signal-bode-cursor .is-full circle {
   fill: var(--small-signal-curve-full);
 }

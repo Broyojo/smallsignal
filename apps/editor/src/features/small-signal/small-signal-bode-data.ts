@@ -199,3 +199,56 @@ export function nearestIndex(freqs: readonly number[], f: number): number {
   });
   return best;
 }
+
+/** A point the crosshair snaps to, at its frequency (Hz). */
+export interface SnapTarget {
+  f: number;
+  kind: "pole" | "zero" | "unity" | "bandwidth";
+}
+
+/** How a snapped point is named in the readout. */
+export const SNAP_LABEL: Record<SnapTarget["kind"], string> = {
+  pole: "Pole",
+  zero: "Zero",
+  unity: "Unity gain",
+  bandwidth: "−3 dB",
+};
+
+/**
+ * The target nearest to the pointer's x, within `radius` px, else null:
+ * near a marked point the crosshair lands on it, elsewhere it follows the
+ * pointer.
+ */
+export function snapTarget(
+  targets: readonly SnapTarget[],
+  px: number,
+  xOf: (f: number) => number,
+  radius: number,
+): SnapTarget | null {
+  let best: SnapTarget | null = null;
+  let distance = radius;
+  for (const target of targets) {
+    const d = Math.abs(xOf(target.f) - px);
+    if (d <= distance) {
+      distance = d;
+      best = target;
+    }
+  }
+  return best;
+}
+
+/**
+ * Phase margin at the unity-gain frequency: 180° less the phase lost since
+ * low frequency, whose phase (0° or 180°, an inverting gain) is the
+ * reference. Null without both phases.
+ */
+export function phaseMargin(
+  phase: readonly (number | null)[],
+  at: number,
+): number | null {
+  const start = phase.find((value) => value !== null) ?? null;
+  const here = phase[at] ?? null;
+  if (start === null || here === null) return null;
+  const reference = 180 * Math.round(start / 180);
+  return 180 - (reference - here);
+}

@@ -560,18 +560,38 @@ def sweep_point(p: list | None, f: float) -> dict:
 
 
 def compare_sweep(got: dict, want: dict, side: dict, cir: Path, rep: Report):
-    """Sidecar `sweep`: the swept frequencies are the generator's, every
-    `full` point equals ngspice's .ac there, and under `assume` every
-    `assumed` point equals indep.py's rebuild of the assumed circuit."""
+    """Sidecar `sweep`: the swept frequencies are the generator's plus the
+    marked ones (a reported pole's or zero's |p|, `unity`, `bandwidth`),
+    ascending; every `full` point equals ngspice's .ac at the generator's,
+    and under `assume` every `assumed` point equals indep.py's rebuild of
+    the assumed circuit."""
     import mpmath
 
     import indep
 
-    freqs = (got.get("sweep") or {}).get("f") or []
+    sweep = got.get("sweep") or {}
+    freqs = sweep.get("f") or []
     ref = want["sweep"]["f"]
-    if len(freqs) != len(ref) or not all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(freqs, ref)):
-        rep.failures.append(f"sweep.f: {len(freqs)} points, want {len(ref)} at the generator's frequencies")
+    # Each generator frequency's index among the solver's.
+    at: list[int] = []
+    for f in ref:
+        k = next((i for i, x in enumerate(freqs) if math.isclose(x, f, rel_tol=1e-12)), None)
+        if k is None:
+            rep.failures.append(f"sweep.f: {f:g} Hz of the generator's frequencies is missing")
+            return
+        at.append(k)
+    if any(b <= a for a, b in zip(freqs, freqs[1:])):
+        rep.failures.append("sweep.f: not strictly ascending")
         return
+    marked = [x for x in (sweep.get("unity"), sweep.get("bandwidth")) if x is not None]
+    for q in ("gain", "rin", "rout"):
+        for key in ("poles", "zeros"):
+            marked += [math.hypot(r["re"], r["im"]) for r in ((got.get(q) or {}).get(key) or [])]
+    taken = set(at)
+    for i, x in enumerate(freqs):
+        if i not in taken and not any(math.isclose(x, m, rel_tol=1e-6) for m in marked):
+            rep.failures.append(f"sweep.f: {x:g} Hz is neither the generator's nor a marked point")
+            return
     assume = side.get("assume") or {}
     applied = {(x["element"], x["term"]) for x in assume.get("ignore", [])}
     mill = [(x["element"], x.get("term")) for x in assume.get("miller", [])]
@@ -581,16 +601,16 @@ def compare_sweep(got: dict, want: dict, side: dict, cir: Path, rep: Report):
             continue
         curves = (got.get(q) or {}).get("sweep") or {}
         full = curves.get("full") or []
-        if len(full) != len(ref):
-            rep.failures.append(f"sweep.{q}.full: {len(full)} points, want {len(ref)}")
+        if len(full) != len(freqs):
+            rep.failures.append(f"sweep.{q}.full: {len(full)} points, want {len(freqs)}")
             continue
         for k, w in enumerate(want["sweep"][q]):
-            rep.complex(f"sweep.{q}@{w['f']:g}", sweep_point(full[k], w["f"]), w, kind)
+            rep.complex(f"sweep.{q}@{w['f']:g}", sweep_point(full[at[k]], w["f"]), w, kind)
         if not assume:
             continue
         assumed = curves.get("assumed") or []
-        if len(assumed) != len(ref):
-            rep.failures.append(f"sweep.{q}.assumed: {len(assumed)} points, want {len(ref)}")
+        if len(assumed) != len(freqs):
+            rep.failures.append(f"sweep.{q}.assumed: {len(assumed)} points, want {len(freqs)}")
             continue
         restored = {(r["element"], r["term"]) for r in ((got[q].get("assumed") or {}).get("restored") or [])}
         # K as the solver's own (compare_assume checks it against indep.py).
@@ -604,7 +624,7 @@ def compare_sweep(got: dict, want: dict, side: dict, cir: Path, rep: Report):
                 continue
             w = ({"re": None, "im": None, "inf": True} if mpmath.isinf(abs(x))
                  else {"re": float(mpmath.re(x)), "im": float(mpmath.im(x))})
-            rep.complex(f"sweep.{q}.assumed@{f:g}", sweep_point(assumed[k], f), w, kind)
+            rep.complex(f"sweep.{q}.assumed@{f:g}", sweep_point(assumed[at[k]], f), w, kind)
 
 
 def compare_suggest(got: dict, want: dict, side: dict, cir: Path, rep: Report, cmd: list[str]):

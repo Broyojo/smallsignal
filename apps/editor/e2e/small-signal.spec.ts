@@ -1617,9 +1617,12 @@ test("bode: the two-stage OTA's gain plot marks its poles and zero, and the cros
   await plot.scrollIntoViewIfNeeded();
   const tick = plot.locator("text", { hasText: /^1k$/u });
   const at = await tick.boundingBox();
+  // The 1.1 kHz pole is pixels away: Alt reads there without landing on it.
+  await page.keyboard.down("Alt");
   await page.mouse.move(at!.x + at!.width / 2, at!.y - 60);
   const readout = plot.getByTestId("small-signal-bode-readout");
   await expect(readout.locator("strong")).toHaveText("1 kHz");
+  await page.keyboard.up("Alt");
   const db = Number(
     (
       await readout
@@ -1636,6 +1639,84 @@ test("bode: the two-stage OTA's gain plot marks its poles and zero, and the cros
   // Zin looks into a gate: nothing to plot.
   await expect(bode(panel, "Input impedance")).toHaveCount(0);
   await expect(bode(panel, "Output impedance")).toBeVisible();
+});
+
+test("bode: near a pole, the unity-gain or the −3 dB point the crosshair lands on it and names it", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.twoStage);
+  await formula(panel, "Gain");
+  const plot = bode(panel, "Gain");
+  await plot.scrollIntoViewIfNeeded();
+  const readout = plot.getByTestId("small-signal-bode-readout");
+  const full = (quantity: string) =>
+    readout
+      .locator(`tr[data-curve="full"] [data-quantity="${quantity}"]`)
+      .innerText()
+      .then((text) => Number(text.replace("−", "-").replace(/ dB|°/u, "")));
+  // On the mark's x, at the magnitude panel's middle: in the panel's
+  // narrow plot the −3 dB point sits a pixel from the dominant pole, unity
+  // gain as near the second pole, so each is read where it is drawn (the
+  // nearest target wins).
+  const near = async (target: Locator, dx = 0) => {
+    const box = (await target.boundingBox())!;
+    const frame = (await plot
+      .locator(".small-signal-bode-frame")
+      .first()
+      .boundingBox())!;
+    await page.mouse.move(
+      box.x + box.width / 2 + dx,
+      frame.y + frame.height / 2,
+    );
+  };
+  // DC: the plot's left edge.
+  const frame = (await plot
+    .locator(".small-signal-bode-frame")
+    .first()
+    .boundingBox())!;
+  await page.mouse.move(frame.x + 1, frame.y + frame.height / 2);
+  const dc = await full("magnitude");
+  const dcPhase = await full("phase");
+
+  const pole = plot.locator('[data-root="pole"]').first();
+  await near(pole);
+  await expect(readout.locator("strong")).toHaveAttribute(
+    "data-snapped",
+    "pole",
+  );
+  await expect(readout.locator("strong")).toHaveText(/^Pole /u);
+  // A few px off, the crosshair still lands on a marked point there.
+  await near(pole, 5);
+  await expect(readout.locator("strong")).toHaveAttribute(
+    "data-snapped",
+    /^(pole|bandwidth)$/u,
+  );
+
+  await near(plot.locator('[data-crossing="bandwidth"]'));
+  await expect(readout.locator("strong")).toHaveText(/^−3 dB /u);
+  expect(Math.abs((await full("magnitude")) - (dc - 3.01))).toBeLessThan(0.06);
+
+  await near(plot.locator('[data-crossing="unity"]'));
+  await expect(readout.locator("strong")).toHaveText(/^Unity gain /u);
+  expect(Math.abs(await full("magnitude"))).toBeLessThan(0.06);
+  // Phase margin: 180° less the phase lost since DC.
+  const margin = Number(
+    (await readout.locator('[data-quantity="phase-margin"]').innerText())
+      .replace("Phase margin ", "")
+      .replace("−", "-")
+      .replace("°", ""),
+  );
+  const lost = 180 * Math.round(dcPhase / 180) - (await full("phase"));
+  expect(Math.abs(margin - (180 - lost))).toBeLessThan(0.11);
+
+  // Alt reads freely: no landing.
+  await page.keyboard.down("Alt");
+  await near(pole);
+  await expect(readout.locator("strong")).not.toHaveAttribute(
+    "data-snapped",
+    /./u,
+  );
+  await page.keyboard.up("Alt");
 });
 
 test("bode: a circuit without capacitors has no plot", async ({ page }) => {

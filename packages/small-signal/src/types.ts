@@ -112,7 +112,13 @@ export interface SmallSignalSweep {
   fLow: number;
   fHigh: number;
   perDecade: number;
+  /** Also holds, exactly, the natural frequencies, the gain's zeros, and
+   * `unity` and `bandwidth` (a plot's readout lands on them). */
   f: number[];
+  /** The gain's first fall through 1 (a voltage or current gain), Hz. */
+  unity?: number | null;
+  /** Its first fall to 1/√2 of its value at fLow (−3 dB), Hz. */
+  bandwidth?: number | null;
 }
 
 /** One swept value, [re, im]; null where it is not finite. */

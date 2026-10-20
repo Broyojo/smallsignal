@@ -1106,6 +1106,7 @@ function QuantityCard({
   miller,
   regions,
   sweep,
+  crossings = null,
 }: {
   title: string;
   symbol: string;
@@ -1121,6 +1122,8 @@ function QuantityCard({
   regions?: readonly RegionReport[] | undefined;
   /** The swept frequencies of `quantity.sweep`, for its Bode plot. */
   sweep?: readonly number[] | undefined;
+  /** The gain's unity and −3 dB frequencies, for its plot to land on. */
+  crossings?: { unity: number | null; bandwidth: number | null } | null;
 }) {
   const imposed = assumed ? regionNote(regions) : null;
   // The simpler form appears only when it actually dropped terms, and never
@@ -1227,6 +1230,7 @@ function QuantityCard({
           ohms={unit === "Ω"}
           poles={quantity.poles}
           zeros={quantity.zeros}
+          crossings={crossings}
           format={formatEngineering}
         />
       ) : null}
@@ -4747,6 +4751,14 @@ export function SmallSignalPanel({
                 miller={result.assumptions?.miller}
                 regions={regionReports}
                 sweep={result.sweep?.f}
+                crossings={
+                  result.sweep
+                    ? {
+                        unity: result.sweep.unity ?? null,
+                        bandwidth: result.sweep.bandwidth ?? null,
+                      }
+                    : null
+                }
               />
             ) : null}
             {result?.rin ? (
