@@ -181,7 +181,11 @@ export function EditorAppChrome({
             onClick={openGallery}
           >
             <span className="app-brand-mark" aria-hidden="true" />
-            <h1 title="Analog Canvas">Analog Canvas</h1>
+            {/* Analog Canvas, and under it what this fork adds. */}
+            <span className="app-brand-name">
+              <h1 title="Analog Canvas">Analog Canvas</h1>
+              <span className="app-brand-sub">SmallSignal</span>
+            </span>
           </a>
           {projectHome}
           {/* The one thing called Gallery: where circuits are browsed,
@@ -548,6 +552,12 @@ export function EditorAppChrome({
               />
               <span className="tokenzhang-link-label">TokenZhang</span>
             </a>
+          </div>
+          <div className="tokenzhang-credit smallsignal-credit">
+            <span className="tokenzhang-credit-kicker">SmallSignal by</span>
+            <span className="smallsignal-credit-names">
+              David Andrews &amp; Caden Xu
+            </span>
           </div>
         </div>
       </div>

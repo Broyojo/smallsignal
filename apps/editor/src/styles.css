@@ -257,6 +257,26 @@ body {
   color: var(--icm-accent);
 }
 
+/* The product's name with this fork's tool under it, on two tight lines
+   inside the menubar's height. */
+.app-brand-name {
+  display: grid;
+  min-width: 0;
+}
+
+.app-brand-name h1 {
+  line-height: 1.05;
+}
+
+.app-brand-sub {
+  color: var(--icm-accent);
+  font-size: var(--icm-font-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .app-brand-copy {
   min-width: 0;
   overflow: hidden;
@@ -462,6 +482,13 @@ body {
 .app-chrome-actions .tokenzhang-link-icon {
   width: 12px;
   height: 12px;
+}
+
+.smallsignal-credit-names {
+  color: var(--icm-text);
+  font-size: var(--icm-font-xs);
+  font-weight: 500;
+  line-height: 1.1;
 }
 
 @media (max-width: 900px) {
