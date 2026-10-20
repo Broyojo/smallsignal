@@ -710,6 +710,16 @@
   color: var(--icm-accent);
 }
 
+/* A toggle that is on says so with a check, readable without an off one
+   beside it (all on reads as switches, not tags). */
+.small-signal-match button[aria-pressed="true"]::before,
+.small-signal-chip[aria-pressed="true"]::before {
+  /* aria-pressed already says it to a screen reader. */
+  content: "✓" / "";
+  margin-right: 4px;
+  font-weight: 650;
+}
+
 /* Models: one compact grid of parameters per device kind. */
 .small-signal-model {
   display: grid;
