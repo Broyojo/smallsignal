@@ -14,6 +14,12 @@ export interface FormulaRequest {
   /** Drawing text defaults: bold sans-serif, upright unless explicitly italic. */
   bold?: boolean;
   italic?: boolean;
+  /**
+   * A block formula wider than this many ems breaks at its top-level
+   * operators, continuation lines indented; one that still does not fit
+   * comes back on one line.
+   */
+  breakWidth?: number;
 }
 
 export interface FormulaArtifact {
@@ -59,6 +65,9 @@ export function formulaSourceHash(request: FormulaRequest): string {
     request.bold ?? true,
     request.italic ?? false,
     request.latex,
+    ...(request.breakWidth === undefined
+      ? []
+      : [`break ${request.breakWidth}`]),
   ].join("\u0000");
   return `${fnv1a32(source, 0x811c9dc5)}${fnv1a32(source, 0x9e3779b9)}`;
 }
@@ -70,6 +79,15 @@ export function validateFormulaRequest(
     return {
       code: "FORMULA_INVALID_REQUEST",
       message: `Unsupported formula profile: ${request.profileId}`,
+    };
+  }
+  if (
+    request.breakWidth !== undefined &&
+    !(Number.isFinite(request.breakWidth) && request.breakWidth > 0)
+  ) {
+    return {
+      code: "FORMULA_INVALID_REQUEST",
+      message: `Invalid break width: ${request.breakWidth}`,
     };
   }
   return validateFormulaSource(request.latex);

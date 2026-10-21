@@ -961,7 +961,7 @@ test("re-solving keeps the panel's place: toggling Nonlinear or Matched neither 
   }
 });
 
-test("a wide exact formula scrolls inside the panel instead of being cut off", async ({
+test("a wide formula wraps to the panel at its + and −, re-wraps when the panel narrows, and copies whole", async ({
   page,
 }) => {
   const panel = await analyze(page, FIXTURES.csWired);
@@ -980,28 +980,50 @@ test("a wide exact formula scrolls inside the panel instead of being cut off", a
   await expect(panel.locator(".small-signal-formula-pending")).toHaveCount(0, {
     timeout: 15_000,
   });
-  const boxes = await scrollers.evaluateAll((all) =>
-    all.map((box) => {
-      const before = box.scrollLeft;
-      box.scrollLeft = box.scrollWidth;
-      const moved = box.scrollLeft > before;
-      box.scrollLeft = before;
-      return {
-        right: box.getBoundingClientRect().right,
-        overflows: box.scrollWidth > box.clientWidth,
-        moved,
-      };
-    }),
-  );
-  const panelRight = await panel.evaluate(
-    (element) => element.getBoundingClientRect().right,
-  );
-  // Every box ends inside the panel; the ones wider than it scroll.
-  for (const box of boxes) {
-    expect(box.right).toBeLessThanOrEqual(panelRight + 0.5);
+  const measure = () =>
+    scrollers.evaluateAll((all) =>
+      all.map((box) => {
+        const before = box.scrollLeft;
+        box.scrollLeft = box.scrollWidth;
+        const moved = box.scrollLeft > before;
+        box.scrollLeft = before;
+        return {
+          right: box.getBoundingClientRect().right,
+          overflows: box.scrollWidth > box.clientWidth + 1,
+          moved,
+          lines: box.querySelectorAll("[data-mjx-linebox]").length,
+          tex: box.querySelector("[data-tex]")?.getAttribute("data-tex") ?? "",
+        };
+      }),
+    );
+  const panelRight = () =>
+    panel.evaluate((element) => element.getBoundingClientRect().right);
+  // Some equation breaks into lines; every box ends inside the panel, and
+  // one that still overflows (a long fraction) scrolls.
+  await expect
+    .poll(async () => (await measure()).some((box) => box.lines > 1), {
+      timeout: 10_000,
+    })
+    .toBe(true);
+  const wide = await measure();
+  const right = await panelRight();
+  for (const box of wide) {
+    expect(box.right).toBeLessThanOrEqual(right + 0.5);
     expect(box.moved).toBe(box.overflows);
   }
-  expect(boxes.some((box) => box.overflows)).toBe(true);
+  // Its LaTeX is the whole equation, unbroken.
+  const broken = wide.find((box) => box.lines > 1)!;
+  expect(broken.tex).not.toMatch(/\\\\|linebreak/u);
+  // A narrower panel breaks it into more lines.
+  const lines = () =>
+    measure().then(
+      (boxes) => boxes.find((box) => box.tex === broken.tex)?.lines ?? 0,
+    );
+  const handle = page.getByTestId("properties-resize-handle");
+  await handle.focus();
+  for (let step = 0; step < 3; step += 1)
+    await page.keyboard.press("Shift+ArrowRight");
+  await expect.poll(lines, { timeout: 10_000 }).toBeGreaterThan(broken.lines);
 });
 
 test("a 25-BJT op-amp: the bias point and the numbers, without formulas", async ({
