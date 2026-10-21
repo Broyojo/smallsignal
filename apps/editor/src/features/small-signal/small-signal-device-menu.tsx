@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import type { AssumptionTerm } from "@icm/small-signal";
 import type { RegionChoice } from "./small-signal-assumption-store";
 import type { PartField } from "./small-signal-part-fields";
+import { SymbolLabel } from "./small-signal-values";
 
 // A part where it is drawn: an anchored menu beside it on the canvas with
 // its values and assumptions, and a badge on each part that has any
@@ -325,6 +326,7 @@ export function DeviceMenu({
   focusOnOpen,
   onClose,
   nonlinear = null,
+  values = [],
 }: {
   model: DeviceMenuModel;
   /** The clicked part, "M1": its values are its own, even when matched. */
@@ -341,6 +343,9 @@ export function DeviceMenu({
   focusOnOpen: boolean;
   /** Esc, the close button, or a press elsewhere. */
   onClose(restoreFocus: boolean): void;
+  /** Its small-signal values at the bias (g_m, r_o, every capacitance),
+   * empty without one. */
+  values?: readonly { latex: string; text: string }[];
   /** Whether Distortion expands this part (a biased transistor or diode);
    * null when it cannot. */
   nonlinear?: { on: boolean; set(on: boolean): void } | null;
@@ -536,6 +541,25 @@ export function DeviceMenu({
               onCommit={(text) => actions.field(field, text)}
             />
           ))}
+        </div>
+      ) : null}
+      {values.length ? (
+        <div
+          className="small-signal-device-menu-section small-signal-device-values"
+          role="group"
+          aria-label={`${part} small-signal values`}
+        >
+          <h3>Small-signal</h3>
+          <dl>
+            {values.map((value) => (
+              <div key={value.latex} data-value={value.latex}>
+                <dt>
+                  <SymbolLabel latex={value.latex} />
+                </dt>
+                <dd>{value.text}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       ) : null}
       {model.matchedWith.length ? (

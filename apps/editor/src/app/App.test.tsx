@@ -255,6 +255,10 @@ describe("editor shell", () => {
     expect(markup).not.toContain('data-testid="canvas-shortcut-hints"');
     expect(markup).toContain('class="app-chrome-actions"');
     expect(markup).toContain("Presented by");
+    expect(markup).toContain('<h1 title="SmallSignal">SmallSignal</h1>');
+    expect(markup).toContain("on Analog Canvas");
+    expect(markup).toContain('href="https://broyojo.com"');
+    expect(markup).toContain("Caden Xu");
     expect(markup).toContain('href="https://tokenzhang.com"');
     expect(markup).toContain('src="/tokenzhang-favicon.png"');
     const navigationEnd = markup.indexOf("</nav>");

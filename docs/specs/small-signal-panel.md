@@ -42,6 +42,17 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   marks every symbol of its elements. One stylesheet does the marking,
   so no formula re-renders. Copying a selection writes each formula as
   `$TeX$`, and a click selects a formula whole.
+- Every symbol's value is one gesture away: pointing at a symbol in a
+  formula (Distortion's K and V_OD too) shows "C_gs3 = 23.0 fF" beside the
+  pointer, kept inside the viewport (a matched symbol also names its
+  members; a tap's stays until the next tap); a transistor's or diode's
+  device menu lists its small-signal values at the bias (MOS g_m, g_mb,
+  r_o or a triode R_on, C_gs, C_gd, C_gb, C_db, C_sb; BJT g_m, r_π, r_o,
+  C_π, C_μ, C_cs; diode r_d, C_j), zeros included, each the equations' own
+  symbol and the assumed model's value where they use it; and a collapsed
+  Parameters section lists every symbol of the equations with its value
+  and elements. Without a bias a value is unknown ("—"), never ∞. Bias point stays the compact
+  summary. Each Models field shows its unit (m, F/m, F/m², F, V, s, A/V²).
 - Each equation line has a copy button at its right edge, outside its
   scroller, writing the whole equation's LaTeX (an "≈" line with its
   symbol); faint until the line is hovered where there is hover. Symbol
@@ -50,8 +61,14 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   leakage too small to see reads "=" with "neglecting junction leakage"
   (once per Distortion section) and no Exact disclosure; Exact appears only
   under an "≈" with an exact form to open onto. An a_n that cancels at the
-  bias reads "a_n = 0", "terms cancel at this bias", its general form a
-  click away.
+  bias reads "a_n = 0", "terms cancel at this bias", its general form (the
+  nested one where there is one) a click away. An a_n with a `nested`
+  form leads with it ("="), its display form a click away as Expanded.
+- A re-solve keeps the panel's place: Noise and Distortion keep their
+  last result up, dimmed and `aria-busy`, until the new one replaces it;
+  Distortion keeps the netlist's devices while an option (Matched)
+  re-solves; a formula keeps its drawing until its new one is typeset. A
+  chip toggled stays where it was, and what is open stays open.
 - A biased transistor or diode's device menu has a Nonlinear switch: the
   Distortion section's button for that part. Turning it on opens
   Distortion.

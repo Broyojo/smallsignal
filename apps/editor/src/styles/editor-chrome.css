@@ -1428,6 +1428,12 @@
     display: none;
   }
 
+  /* The SmallSignal credit has no mark to collapse to: it waits for room
+     with the wording. */
+  .app-chrome-actions .smallsignal-credit {
+    display: none;
+  }
+
   .app-chrome-actions .tokenzhang-link-icon {
     width: 16px;
     height: 16px;
@@ -1490,7 +1496,8 @@
     gap: var(--icm-space-1);
   }
 
-  .app-chrome-main .gallery-home-link h1 {
+  .app-chrome-main .gallery-home-link h1,
+  .app-chrome-main .app-brand-sub {
     display: none;
   }
 

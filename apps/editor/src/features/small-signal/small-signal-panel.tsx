@@ -3,11 +3,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import type { CircuitProject } from "@icm/model";
 import {
@@ -37,6 +39,7 @@ import {
   type ModelKind,
   type ModelOverrides,
   type SmallSignalSource,
+  type SmallSignalParam,
   type SmallSignalQuantity,
   type SmallSignalRequest,
   type SmallSignalResult,
@@ -125,6 +128,13 @@ import {
   diagnoseModuleLoadFailure,
   recoverFromStaleBuild,
 } from "../../components/stale-build-recovery";
+import {
+  ParametersTable,
+  SymbolValueTip,
+  deviceValues,
+  modelUnit,
+  valueText,
+} from "./small-signal-values";
 import "./small-signal-panel.css";
 
 const SOLVE_DEBOUNCE_MS = 120;
@@ -378,6 +388,7 @@ function ModelFields({
   text: ModelText;
   onChange: (text: ModelText) => void;
 }) {
+  const idPrefix = useId();
   // Every edited kind shows, used here or not: nothing applies unseen.
   const shown = (Object.keys(MODEL_TITLE) as ModelKind[]).filter(
     (kind) =>
@@ -387,11 +398,21 @@ function ModelFields({
   const field = (kind: ModelKind, name: string, fallback: number) => {
     const typed = text[kind]?.[name] ?? "";
     const invalid = typed.trim() !== "" && modelValue(name, typed) === null;
+    const unitId = `${idPrefix}-${kind}-${name}`;
     return (
       <label key={name}>
-        {name}
+        <span>
+          {name}
+          {modelUnit(name) ? (
+            <span id={unitId} className="small-signal-muted">
+              {" "}
+              {modelUnit(name)}
+            </span>
+          ) : null}
+        </span>
         <input
           aria-label={`${MODEL_TITLE[kind]} ${name}`}
+          aria-describedby={modelUnit(name) ? unitId : undefined}
           aria-invalid={invalid || undefined}
           title={invalid ? rangeText(name) : undefined}
           autoCapitalize="off"
@@ -514,6 +535,22 @@ function UntypesetFormula({
   );
 }
 
+/**
+ * A section's last result while its next is solved: kept in place (so the
+ * panel neither jumps nor closes what was open in it), dimmed and marked
+ * busy until the current one replaces it.
+ */
+function Stale({ stale, children }: { stale: boolean; children: ReactNode }) {
+  return (
+    <div
+      className={`small-signal-result${stale ? " is-stale" : ""}`}
+      aria-busy={stale || undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 function Formula({
   latex,
   copy = latex,
@@ -530,8 +567,11 @@ function Formula({
     profileId: ANALOG_CANVAS_MATH_PROFILE_ID,
     bold: false,
   };
+  // The last typeset formula, with what its copy button wrote: shown in
+  // place (as a whole) while a new one is typeset.
   const [prepared, setPrepared] = useState<{
     latex: string;
+    copy: string | null;
     result: FormulaTypesetResult;
   }>();
   const tooLong = latex.length > FORMULA_MAX_LATEX_LENGTH;
@@ -548,7 +588,7 @@ function Formula({
       bold: false,
     }).then(
       (next) => {
-        if (active) setPrepared({ latex, result: next });
+        if (active) setPrepared({ latex, copy, result: next });
       },
       (error: unknown) => {
         if (active) setFailed(latex);
@@ -564,11 +604,21 @@ function Formula({
     return () => {
       active = false;
     };
-  }, [latex, tooLong, onStale]);
-  // While the typesetter loads, hold the space quietly; raw TeX reads as
-  // broken. Only a formula that cannot be typeset shows its source.
+  }, [latex, copy, tooLong, onStale]);
+  // While the typesetter loads, the formula it replaces stays (a re-solve
+  // never shrinks the panel under the reader), else the space is held
+  // quietly; raw TeX reads as broken. Only a formula that cannot be
+  // typeset shows its source.
   if (!tooLong && !result && failed !== latex)
-    return <span className="small-signal-formula-pending" aria-busy="true" />;
+    return prepared?.result.ok ? (
+      <TypesetFormula
+        latex={prepared.latex}
+        artifact={prepared.result.artifact}
+        copy={prepared.copy}
+      />
+    ) : (
+      <span className="small-signal-formula-pending" aria-busy="true" />
+    );
   if (tooLong || !result?.ok)
     return (
       <UntypesetFormula
@@ -1585,6 +1635,7 @@ function DistortionFormula({
     quantity.simplified?.latex && quantity.simplified.latex !== shown?.latex
       ? quantity.simplified
       : null;
+  const nested = quantity.nested?.latex ?? null;
   if (simpler?.method === "cancels") {
     // The devices' terms cancel at this bias (a balanced circuit's even
     // order): 0, with the general form a click away.
@@ -1596,9 +1647,34 @@ function DistortionFormula({
         !((simpler.fullModelError ?? Infinity) < INVISIBLE_ERROR) ? (
           <FullModelNote error={simpler.fullModelError} assumed />
         ) : null}
-        {shown?.latex ? (
+        {(nested ?? shown?.latex) ? (
           <details className="small-signal-exact">
             <summary>General form</summary>
+            <Formula latex={`${symbol} = ${nested ?? shown?.latex}`} />
+          </details>
+        ) : null}
+      </>
+    );
+  }
+  // "=" for the nested form only where the display form it equals is
+  // exact, or neglects leakage too small to see; otherwise the display
+  // form keeps its "≈" and Exact.
+  const nestedExact =
+    quantity.display?.same === true ||
+    (quantity.display?.relError ?? Infinity) < INVISIBLE_ERROR;
+  if (nested && nestedExact) {
+    // The form hand analysis writes, equal to the display form, which is a
+    // click away expanded (when it can be typeset).
+    const cost = quantity.display?.fullModelError ?? null;
+    return (
+      <>
+        <Formula latex={`${symbol} = ${nested}`} />
+        {assumed && !(cost !== null && cost < INVISIBLE_ERROR) ? (
+          <FullModelNote error={cost} assumed />
+        ) : null}
+        {shown?.latex ? (
+          <details className="small-signal-exact">
+            <summary>Expanded</summary>
             <Formula latex={`${symbol} = ${shown.latex}`} />
           </details>
         ) : null}
@@ -3793,6 +3869,9 @@ export function SmallSignalPanel({
   const [noiseBand, setNoiseBand] = useState("");
   const [noiseResponse, setNoiseResponse] =
     useState<SmallSignalResponse | null>(null);
+  // The job it answers: an older one stays up, dimmed, until the new one
+  // arrives (as Distortion's), so a re-solve never collapses the section.
+  const [noiseResponseKey, setNoiseResponseKey] = useState<string | null>(null);
   const noiseClientRef = useRef<SmallSignalClient | null>(null);
   // Distortion likewise has its own worker, so stopping one never stops
   // the other.
@@ -3825,8 +3904,9 @@ export function SmallSignalPanel({
   >({ V: "", A: "" });
   const [distortionResponse, setDistortionResponse] =
     useState<SmallSignalResponse | null>(null);
-  // The job the distortion response answers: shown only while it is the
-  // current one, so a new amplitude never sits beside old numbers.
+  // The job the distortion response answers: an older one stays up,
+  // dimmed and marked busy, until the current one arrives, so a re-solve
+  // keeps the section's place and what is open in it.
   const [distortionResponseKey, setDistortionResponseKey] = useState<
     string | null
   >(null);
@@ -4002,10 +4082,9 @@ export function SmallSignalPanel({
     overBudget,
   );
   useEffect(() => {
-    // A new job, or none: drop the old result and any solve in flight, so
-    // the section never shows numbers for a different circuit or band.
+    // A new job, or none: drop any solve in flight. The old result stays,
+    // shown stale, until this one's arrives.
     const current = ++noiseGeneration.current;
-    setNoiseResponse(null);
     if (!noiseKey) return;
     const [key, range, over] = JSON.parse(noiseKey) as [
       string,
@@ -4027,6 +4106,7 @@ export function SmallSignalPanel({
           if (current !== noiseGeneration.current) return;
           noiseBusy.current = false;
           setNoiseResponse(next);
+          setNoiseResponseKey(noiseKey);
         });
     }, SOLVE_DEBOUNCE_MS);
     return () => {
@@ -4042,9 +4122,17 @@ export function SmallSignalPanel({
   }, [noiseKey]);
 
   // Every transistor and diode with a bias point can be expanded.
-  // Devices from the response to this very request, never an older one.
+  // Devices from a response to this very netlist: one solved before an
+  // option changed (Matched) still lists them, so Distortion keeps its
+  // place while the new one solves; another circuit's never does.
+  const sameNetlist =
+    responseKey !== null &&
+    requestKey !== null &&
+    (responseKey === requestKey ||
+      (JSON.parse(responseKey) as [string])[0] ===
+        (JSON.parse(requestKey) as [string])[0]);
   const nonlinearCandidates = Object.keys(
-    response && !isSmallSignalError(response) && responseKey === requestKey
+    response && !isSmallSignalError(response) && sameNetlist
       ? (response.op?.devices ?? {})
       : {},
   ).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
@@ -4076,9 +4164,9 @@ export function SmallSignalPanel({
       ? JSON.stringify([requestKey, nonlinear, amplitude, overBudget])
       : null;
   useEffect(() => {
-    // A new job, or none: drop the old result and any solve in flight.
+    // A new job, or none: drop any solve in flight (the old result stays,
+    // shown stale).
     const current = ++distortionGeneration.current;
-    setDistortionResponse(null);
     if (!distortionKey) return;
     const [key, devices, size, over] = JSON.parse(distortionKey) as [
       string,
@@ -4502,10 +4590,32 @@ export function SmallSignalPanel({
 
   // Formula ↔ drawing: what is hovered, in a store only the highlights read.
   const [link] = useState<LinkStore>(createLinkStore);
-  const symbols = useMemo(
-    () => symbolElements(result?.params),
-    [result?.params],
-  );
+  // The symbols the formulas write: the solve's, and while its forms show,
+  // Distortion's coefficients (K, V_OD).
+  const shownDistortion =
+    distortionResponse &&
+    distortionResponseKey === distortionKey &&
+    !isSmallSignalError(distortionResponse)
+      ? distortionResponse.distortion
+      : undefined;
+  const valueParams = useMemo<SmallSignalParam[]>(() => {
+    const params = result?.params ?? [];
+    const names = new Set(params.map((param) => param.name));
+    return [
+      ...params,
+      ...(shownDistortion?.symbols ?? [])
+        .filter((symbol) => !names.has(symbol.name))
+        .map((symbol) => ({
+          name: symbol.name,
+          latex: symbol.latex,
+          value: symbol.value ?? Number.NaN,
+          unit: symbol.unit,
+          element: symbol.elements[0] ?? "",
+          elements: symbol.elements,
+        })),
+    ];
+  }, [result?.params, shownDistortion?.symbols]);
+  const symbols = useMemo(() => symbolElements(valueParams), [valueParams]);
   // The drawn part (in the open Cell) each element is, or sits inside.
   const instanceOf = useMemo(
     () =>
@@ -4586,6 +4696,11 @@ export function SmallSignalPanel({
   return (
     <StaleBuildContext.Provider value={markStale}>
       <SymbolHighlight link={link} />
+      <SymbolValueTip
+        link={link}
+        params={valueParams}
+        format={formatEngineering}
+      />
       <section
         ref={panelRef}
         className="small-signal-panel"
@@ -4891,6 +5006,17 @@ export function SmallSignalPanel({
             ) : null}
 
             {unknownBias.length ? null : biasCard()}
+            {valueParams.length ? (
+              <details className="small-signal-options small-signal-parameters">
+                <summary>Parameters</summary>
+                <div>
+                  <ParametersTable
+                    params={valueParams}
+                    format={formatEngineering}
+                  />
+                </div>
+              </details>
+            ) : null}
 
             {assumptionTableRows.length || assumptionsStored ? (
               <details className="small-signal-options small-signal-assumptions-section">
@@ -5016,23 +5142,31 @@ export function SmallSignalPanel({
                 <div>
                   {!noiseResponse ? (
                     <span className="small-signal-formula-pending" />
-                  ) : isSmallSignalError(noiseResponse) ? (
-                    <p className="small-signal-muted">{noiseResponse.error}</p>
-                  ) : noiseResponse.noise ? (
-                    <>
-                      <ExtraWarnings
-                        warnings={noiseResponse.warnings}
-                        shown={result.warnings}
-                      />
-                      <NoiseDetails
-                        noise={noiseResponse.noise}
-                        current={inputSource?.kind === "current"}
-                        band={noiseBand}
-                        onBand={setNoiseBand}
-                        assumed={Boolean(anyAssumed(noiseResponse.assumptions))}
-                      />
-                    </>
-                  ) : null}
+                  ) : (
+                    <Stale stale={noiseResponseKey !== noiseKey}>
+                      {isSmallSignalError(noiseResponse) ? (
+                        <p className="small-signal-muted">
+                          {noiseResponse.error}
+                        </p>
+                      ) : noiseResponse.noise ? (
+                        <>
+                          <ExtraWarnings
+                            warnings={noiseResponse.warnings}
+                            shown={result.warnings}
+                          />
+                          <NoiseDetails
+                            noise={noiseResponse.noise}
+                            current={inputSource?.kind === "current"}
+                            band={noiseBand}
+                            onBand={setNoiseBand}
+                            assumed={Boolean(
+                              anyAssumed(noiseResponse.assumptions),
+                            )}
+                          />
+                        </>
+                      ) : null}
+                    </Stale>
+                  )}
                 </div>
               </details>
             ) : null}
@@ -5108,28 +5242,31 @@ export function SmallSignalPanel({
                         <p className="small-signal-muted">
                           Enter an amplitude above 0.
                         </p>
-                      ) : !distortionResponse ||
-                        distortionResponseKey !== distortionKey ? (
+                      ) : !distortionResponse ? (
                         <span className="small-signal-formula-pending" />
-                      ) : isSmallSignalError(distortionResponse) ? (
-                        <p className="small-signal-muted">
-                          {distortionResponse.error}
-                        </p>
-                      ) : distortionResponse.distortion ? (
-                        <>
-                          <ExtraWarnings
-                            warnings={distortionResponse.warnings}
-                            shown={result.warnings}
-                          />
-                          <DistortionDetails
-                            distortion={distortionResponse.distortion}
-                            current={currentInput}
-                            assumed={Boolean(
-                              anyAssumed(distortionResponse.assumptions),
-                            )}
-                          />
-                        </>
-                      ) : null}
+                      ) : (
+                        <Stale stale={distortionResponseKey !== distortionKey}>
+                          {isSmallSignalError(distortionResponse) ? (
+                            <p className="small-signal-muted">
+                              {distortionResponse.error}
+                            </p>
+                          ) : distortionResponse.distortion ? (
+                            <>
+                              <ExtraWarnings
+                                warnings={distortionResponse.warnings}
+                                shown={result.warnings}
+                              />
+                              <DistortionDetails
+                                distortion={distortionResponse.distortion}
+                                current={currentInput}
+                                assumed={Boolean(
+                                  anyAssumed(distortionResponse.assumptions),
+                                )}
+                              />
+                            </>
+                          ) : null}
+                        </Stale>
+                      )}
                     </>
                   )}
                 </div>
@@ -5249,6 +5386,20 @@ export function SmallSignalPanel({
           bounds={canvasBounds}
           focusOnOpen={menu.keyboard}
           onClose={closeMenu}
+          values={(() => {
+            const op = result?.op?.devices[menu.element];
+            return op
+              ? deviceValues(
+                  menu.element,
+                  op,
+                  result?.params,
+                  regionReports?.find((r) => r.element === menu.element),
+                ).map((value) => ({
+                  latex: value.latex,
+                  text: valueText(value.value, value.unit, formatEngineering),
+                }))
+              : [];
+          })()}
           nonlinear={
             nonlinearCandidates.includes(menu.element)
               ? {

@@ -895,6 +895,15 @@ test("distortion: the balanced inverter's a₂ is 0, a₁ reads in ∥, the menu
   // NMOS and PMOS square-law terms cancel: 0, and said why.
   expect(alts).toContain("a_{2} = 0");
   await expect(section).toContainText("terms cancel at this bias");
+  // a₃ as hand analysis nests it, the flat form a click away.
+  expect(
+    alts.some((alt) =>
+      alt.startsWith("a_{3} = \\left(r_{o1} \\parallel r_{o2}\\right) \\left["),
+    ),
+  ).toBe(true);
+  await expect(
+    section.locator("summary", { hasText: /^Expanded$/u }),
+  ).toHaveCount(1);
   // "=" for a form exact without junction leakage: no "Exact" under it.
   const a1 = section
     .locator(".small-signal-formula-line")
@@ -909,6 +918,47 @@ test("distortion: the balanced inverter's a₂ is 0, a₁ reads in ∥, the menu
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "a_{1} = -\\left(g_{m1} + g_{m2}\\right) \\left(r_{o1} \\parallel r_{o2}\\right)",
   );
+});
+
+test("re-solving keeps the panel's place: toggling Nonlinear or Matched neither jumps nor closes what is open", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.ota);
+  await formula(panel, "Gain");
+  await panel.getByText("Noise", { exact: true }).click();
+  await panel.getByText("Distortion", { exact: true }).click();
+  const section = panel.locator("details.small-signal-distortion");
+  await expect(section.locator('tr[data-quantity="hd2"]')).toBeVisible({
+    timeout: 15_000,
+  });
+  // Something opened inside, and the panel scrolled to its bottom.
+  const coefficients = section.locator("details", {
+    has: page.locator("summary", { hasText: /^Device coefficients$/u }),
+  });
+  await coefficients.locator("summary").click();
+  await expect(coefficients).toHaveAttribute("open", "");
+  // Each chip pressed where it is, from the keyboard (nothing scrolls to
+  // it): it stays where it was on screen through the re-solve, the old
+  // result staying up, marked busy, until the new one replaces it.
+  for (const chip of [
+    section
+      .getByRole("group", { name: "Nonlinear devices" })
+      .getByRole("button", { name: "M1" }),
+    panel.getByRole("button", { name: /M1 = M2/u }),
+  ]) {
+    await chip.scrollIntoViewIfNeeded();
+    await chip.focus();
+    const before = (await chip.boundingBox())!.y;
+    await chip.press("Enter");
+    await expect(
+      section.locator(".small-signal-result[aria-busy]"),
+    ).toHaveCount(1);
+    await expect(
+      section.locator(".small-signal-result[aria-busy]"),
+    ).toHaveCount(0, { timeout: 15_000 });
+    expect(Math.abs((await chip.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(coefficients).toHaveAttribute("open", "");
+  }
 });
 
 test("a wide exact formula scrolls inside the panel instead of being cut off", async ({
@@ -1249,6 +1299,9 @@ test("device menu: saturation on the triode inverter gives −(g_m1 + g_m2)(r_o1
   await expect(
     menu.getByRole("button", { name: "Neglect r_o", exact: true }),
   ).toHaveCount(0);
+  // Its values call the channel R_on too, as the equations do.
+  const values = menu.getByRole("group", { name: "M1 small-signal values" });
+  await expect(values.locator('[data-value="R_{on1}"]')).toHaveCount(1);
   await menu.getByRole("radio", { name: "Saturation", exact: true }).click();
   await expect(
     menu.getByRole("radio", { name: "Saturation", exact: true }),
@@ -1290,6 +1343,13 @@ test("device menu: saturation on the triode inverter gives −(g_m1 + g_m2)(r_o1
   expect(assumed / (-(m1.gm + m2.gm) * parallel(m1.ro, m2.ro))).toBeCloseTo(
     1,
     2,
+  );
+  // The menu's values are the assumed model's: r_o, the formula's g_m.
+  await expect(values.locator('[data-value="r_{o1}"]')).toHaveCount(1);
+  await expect(values.locator('[data-value="g_{m1}"] dd')).toHaveText(
+    await bias
+      .locator('tr[data-device="M1"] td[data-quantity="gm"]')
+      .innerText(),
   );
   // r_o is now M1's to neglect, and the badge says what was imposed.
   await expect(
@@ -1793,6 +1853,51 @@ test("bode: a circuit without capacitors has no plot", async ({ page }) => {
   await expect(panel.getByTestId("small-signal-bode")).toHaveCount(0);
 });
 
+test("values: a transistor's capacitances in its menu and in Parameters, and the Models fields with their units", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "smallsignal.models",
+      JSON.stringify({ nmos: { CGDO: "3e-10", CGSO: "3e-10" } }),
+    );
+  });
+  const panel = await analyze(page, FIXTURES.csWired);
+  await formula(panel, "Gain");
+  // The device menu lists M1's small-signal values, its overlap C_gd too.
+  await page.getByTestId("hit-m1").click();
+  const values = deviceMenu(page).getByRole("group", {
+    name: "M1 small-signal values",
+  });
+  for (const name of ["gm1", "ro1", "Cgs1", "Cgd1", "Cdb1"])
+    await expect(values.getByText(name, { exact: true })).toBeVisible();
+  const cgd = values.locator('[data-value="C_{gd1}"] dd');
+  await expect(cgd).toHaveText(/^[\d.]+ fF$/u);
+  const cgdText = await cgd.innerText();
+  await page.keyboard.press("Escape");
+  // Parameters has every symbol the equations use, the same C_gd1.
+  await panel.getByText("Parameters", { exact: true }).click();
+  const table = panel.getByRole("table", { name: "Parameters" });
+  await expect(table.locator('tr[data-param="cgd_M1"] td').first()).toHaveText(
+    cgdText,
+  );
+  await expect(table.locator('tr[data-param="gm_M1"]')).toHaveCount(1);
+  // Models: each field says its unit.
+  const models = panel.locator("details.small-signal-options", {
+    has: page.locator("summary", { hasText: /^Models/u }),
+  });
+  await models.locator("summary").first().click();
+  await expect(
+    models.locator("label", { hasText: /^KP\s*A\/V²/u }).first(),
+  ).toBeVisible();
+  // NMOS Capacitances is open: CGSO and CGDO are set.
+  await expect(
+    models.locator("label", { hasText: /^CGSO\s*F\/m/u }).first(),
+  ).toBeVisible();
+});
+
 test("link: pointing at g_m1 rings M1 on the drawing, pointing at M1 marks its symbols, and a copy writes TeX", async ({
   page,
 }) => {
@@ -1811,6 +1916,14 @@ test("link: pointing at g_m1 rings M1 on the drawing, pointing at M1 marks its s
     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
     await expect(ring).toBeVisible({ timeout: 1000 });
   }).toPass();
+  // Its value beside the pointer, as the bias table has it.
+  const tip = page.getByTestId("small-signal-value-tip");
+  await expect(tip).toHaveText(/^gm1 = [\d.]+ [µm]S$/u);
+  // "74.87 µS" in both: the same value, as the same text.
+  const gm = await card(panel, "Bias point")
+    .locator('tr[data-device="M1"] td[data-quantity="gm"]')
+    .innerText();
+  expect((await tip.innerText()).split("= ")[1]).toBe(gm);
   const r = await ring.boundingBox();
   const hit = await page.getByTestId("hit-M1").boundingBox();
   expect(r!.x).toBeLessThanOrEqual(hit!.x);

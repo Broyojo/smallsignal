@@ -257,6 +257,26 @@ body {
   color: var(--icm-accent);
 }
 
+/* The tool's name with the editor it is built on under it, on two tight
+   lines inside the menubar's height. */
+.app-brand-name {
+  display: grid;
+  min-width: 0;
+}
+
+.app-brand-name h1 {
+  line-height: 1.05;
+}
+
+.app-brand-sub {
+  color: var(--icm-text-muted);
+  font-size: var(--icm-font-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .app-brand-copy {
   min-width: 0;
   overflow: hidden;
@@ -464,8 +484,16 @@ body {
   height: 12px;
 }
 
+.smallsignal-credit-names {
+  color: var(--icm-text);
+  font-size: var(--icm-font-xs);
+  font-weight: 500;
+  line-height: 1.1;
+}
+
 @media (max-width: 900px) {
-  .gallery-chrome .gallery-home-link h1 {
+  .gallery-chrome .gallery-home-link h1,
+  .gallery-chrome .app-brand-sub {
     display: none;
   }
 

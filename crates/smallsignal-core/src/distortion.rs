@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 // --- Taylor arithmetic: three variables, total degree ≤ 3 ------------------
 
@@ -908,6 +908,9 @@ pub struct Closed {
     pub coef_sym: Vec<Option<usize>>,
     /// a_n's numerator is `scale[n]` times a_n's (`ORDER_SCALE`).
     scale: [i128; 3],
+    /// a_n written as hand analysis nests it (`nested_form`), per order;
+    /// None where there is none.
+    pub nested: [Option<(String, f64)>; 3],
     /// Term budget of every product (as `closed` was given).
     max_terms: usize,
     /// D^0, D^1, … as far as computed, and whether the next power is over
@@ -983,6 +986,7 @@ impl Closed {
             vid,
             coef_sym: Vec::new(),
             scale: [1; 3],
+            nested: [None, None, None],
             max_terms,
             dpow: RefCell::new((Vec::new(), false)),
             a_memo: (0..n).map(|_| OnceCell::new()).collect(),
@@ -1228,6 +1232,259 @@ fn coef_symbols(
     idx
 }
 
+/// One term of a nested a_n: a Taylor coefficient (in units of 1/`scale`)
+/// of a device output, times control voltages, each `(order, control)`: of
+/// order 1 (per unit input) or 2 (per unit input squared).
+struct NestedTerm {
+    k: XPoly,
+    scale: i128,
+    dev: usize,
+    out: usize,
+    factors: Vec<(u8, usize)>,
+}
+
+/// A monomial's control voltages, each of order `order`.
+fn mono_factors(mono: &[u8; 3], order: u8) -> Vec<(u8, usize)> {
+    (0..3)
+        .flat_map(|v| std::iter::repeat_n((order, v), mono[v] as usize))
+        .collect()
+}
+
+/// num/den without junction leakage, cancelled: its LaTeX (∥ where it
+/// applies) without its sign, whether that is negative, and its (signed)
+/// value.
+fn part(num: &XPoly, den: &XPoly, syms: &[Sym]) -> Option<(String, bool, f64)> {
+    if num.is_zero() {
+        return None;
+    }
+    let (n, d) = drop_leak(num, den, syms);
+    let (n, d) = if n.is_zero() || d.is_zero() {
+        (num.clone(), den.clone())
+    } else {
+        (n, d)
+    };
+    let (n, d) = cancel(&n, &d);
+    let e = Expr::from_mna(&n, &d, syms);
+    let value = e.eval(Complex64::new(0.0, 0.0)).re;
+    let latex = crate::structure::checked(&n, &d, syms).unwrap_or_else(|| e.latex(syms));
+    Some(match latex.strip_prefix('-') {
+        Some(rest) => (rest.to_string(), true, value),
+        None => (latex, false, value),
+    })
+}
+
+/// Whether a part reads at a glance: a product or quotient of symbols, or
+/// a ∥ group, with no sum in it.
+fn plain_part(latex: &str) -> bool {
+    !latex.contains(" + ") && !latex.contains(" - ")
+}
+
+/// `\\frac{n}{d}` as (n, d) when that is the whole of `latex`.
+fn split_frac(latex: &str) -> Option<(&str, &str)> {
+    let rest = latex.strip_prefix("\\frac{")?;
+    let close = |t: &str| -> Option<usize> {
+        let mut depth = 1;
+        for (i, c) in t.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    let i = close(rest)?;
+    let tail = rest[i + 1..].strip_prefix('{')?;
+    let j = close(tail)?;
+    (j + 1 == tail.len()).then_some((&rest[..i], &tail[..j]))
+}
+
+/// A factor as it multiplies: bare when a single product, else in
+/// parentheses.
+fn factor_latex(latex: &str) -> String {
+    if latex.contains(" + ") || latex.contains(" - ") || latex.contains("\\parallel") {
+        format!("\\left({latex}\\right)")
+    } else {
+        latex.to_string()
+    }
+}
+
+/// a_n as hand analysis writes it: Σ over each output's transimpedance T
+/// to the output of T·[Σ K·(control voltages)], a control voltage that is
+/// the output itself written a₁ (order 1) or a₂ (order 2), one that is the
+/// input 1, outputs sharing T (or −T) under one bracket. Its value comes
+/// with it, for the caller to hold against a_n. None with nothing to
+/// write, or when a transimpedance or control voltage is itself a sum
+/// (a degenerated stage's): nesting then only moves the fractions. `u1`/`u2`: each device's control voltages (numerators over D,
+/// and over vid²·`s2`·D³ for order 2, `s2` its coefficients' scale).
+#[allow(clippy::too_many_arguments)]
+fn nested_form(
+    syms: &[Sym],
+    dx: &XPoly,
+    vid: i128,
+    terms: &[NestedTerm],
+    u1: &[Vec<XPoly>],
+    u2: Option<&[Vec<XPoly>]>,
+    trans: &BTreeMap<(usize, usize), XPoly>,
+    a1: &XPoly,
+    a2: Option<&XPoly>,
+    s2: i128,
+    mt: usize,
+) -> Option<(String, f64)> {
+    let nsym = syms.len();
+    let den1 = dx.scaled(vid).ok()?;
+    let den2 = dx.mul(dx, mt).ok()?.mul(dx, mt).ok()?.scaled(vid * vid * s2).ok()?;
+    let a1v = part(a1, &den1, syms)?.2;
+    let a2v = a2.map(|p| part(p, &den2, syms).map_or(0.0, |(_, _, v)| v));
+    // A control voltage: None when 0, else (latex, negative, value).
+    let control = |order: u8, dev: usize, v: usize| -> Option<Option<(String, bool, f64)>> {
+        let (p, den, out, outv, name) = match order {
+            1 => (&u1[dev][v], &den1, a1, a1v, "a_{1}"),
+            _ => (&u2?[dev][v], &den2, a2?, a2v?, "a_{2}"),
+        };
+        if p.is_zero() {
+            return Some(None);
+        }
+        if p == out {
+            return Some(Some((name.to_string(), false, outv)));
+        }
+        if *p == out.neg() {
+            return Some(Some((name.to_string(), true, -outv)));
+        }
+        let (l, neg, v) = part(p, den, syms)?;
+        if !plain_part(&l) {
+            return None;
+        }
+        Some(Some((if l == "1" { String::new() } else { factor_latex(&l) }, neg, v)))
+    };
+    // Groups by transimpedance (up to sign): T, then (sign, body) terms.
+    struct Group {
+        t: XPoly,
+        terms: Vec<(i64, String)>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
+    let mut value = 0.0;
+    for term in terms {
+        let t = trans.get(&(term.dev, term.out))?;
+        if t.is_zero() {
+            continue;
+        }
+        let (kl, kneg, kv) = part(&term.k, &XPoly::constant(term.scale, nsym), syms)?;
+        let mut sign = if kneg { -1i64 } else { 1 };
+        let mut factors: Vec<String> = Vec::new();
+        let mut fv = 1.0;
+        let mut zero = false;
+        for &(order, v) in &term.factors {
+            match control(order, term.dev, v)? {
+                None => {
+                    zero = true;
+                    break;
+                }
+                Some((l, neg, v)) => {
+                    if neg {
+                        sign = -sign;
+                    }
+                    fv *= v;
+                    if !l.is_empty() {
+                        factors.push(l);
+                    }
+                }
+            }
+        }
+        if zero {
+            continue;
+        }
+        value += part(t, dx, syms)?.2 * kv * fv;
+        // Equal factors as powers.
+        factors.sort();
+        let mut fs: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < factors.len() {
+            let n = factors[i..].iter().take_while(|f| **f == factors[i]).count();
+            fs.push(if n == 1 {
+                factors[i].clone()
+            } else {
+                format!("{{{}}}^{{{n}}}", factors[i])
+            });
+            i += n;
+        }
+        let fs = fs.join(" ");
+        // Factors join a fraction's numerator: 2 a₁/(r_o V_OD), not
+        // 2/(r_o V_OD) · a₁.
+        let body = match (split_frac(&kl), fs.is_empty()) {
+            (_, true) => kl,
+            (Some((n, d)), false) => {
+                let n = if n == "1" { fs } else { format!("{n} {fs}") };
+                format!("\\frac{{{n}}}{{{d}}}")
+            }
+            (None, false) if kl == "1" => fs,
+            (None, false) => format!("{kl} {fs}"),
+        };
+        let g = match groups.iter().position(|g| g.t == *t || g.t == t.neg()) {
+            Some(g) => {
+                if groups[g].t != *t {
+                    sign = -sign;
+                }
+                g
+            }
+            None => {
+                groups.push(Group {
+                    t: t.clone(),
+                    terms: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        match groups[g].terms.iter_mut().find(|(_, b)| *b == body) {
+            Some((m, _)) => *m += sign,
+            None => groups[g].terms.push((sign, body)),
+        }
+    }
+    let mut out = String::new();
+    for g in &groups {
+        let (tl, tneg, _) = part(&g.t, dx, syms)?;
+        if !plain_part(&tl) {
+            return None;
+        }
+        // Lower orders first: the a₁ terms before the a₂ ones.
+        let mut terms: Vec<&(i64, String)> = g.terms.iter().filter(|(m, _)| *m != 0).collect();
+        terms.sort_by_key(|(_, b)| b.contains("a_{2}"));
+        if terms.is_empty() {
+            continue;
+        }
+        let mut inner = String::new();
+        for (m, body) in terms {
+            let m = if tneg { -m } else { *m };
+            let mag = m.unsigned_abs();
+            let text = if mag == 1 {
+                body.clone()
+            } else {
+                format!("{mag} {body}")
+            };
+            if inner.is_empty() {
+                inner.push_str(if m < 0 { "-" } else { "" });
+            } else {
+                inner.push_str(if m < 0 { " - " } else { " + " });
+            }
+            inner.push_str(&text);
+        }
+        if !out.is_empty() {
+            out.push_str(" + ");
+        }
+        if tl == "1" {
+            out.push_str(&format!("\\left({inner}\\right)"));
+        } else {
+            out.push_str(&format!("{} \\left[{inner}\\right]", factor_latex(&tl)));
+        }
+    }
+    (!out.is_empty()).then_some((out, value))
+}
+
 /// Builds a1..a_order in closed form (with the leakage-free coefficients
 /// when `free`). Err(reason) inside Ok when there is no DC limit.
 #[allow(clippy::too_many_arguments)]
@@ -1312,6 +1569,8 @@ pub fn closed(
     let mul = |a: &XPoly, b: &XPoly| a.mul(b, mt);
     let sub = |a: &XPoly, b: &XPoly| fit(a.sub(b)?);
     let na = fit(n1(out)?.sub_owned(n1(rf)?)?)?;
+    let a1_num = na.clone();
+    let mut nested: [Option<(String, f64)>; 3] = [None, None, None];
     let mut num = vec![na];
     let mut powers = vec![1];
     // Each higher order needs the lower ones' parts, and the budget holds
@@ -1373,6 +1632,47 @@ pub fn closed(
         for (key, parts) in parts2 {
             i2.insert(key, sum_within(parts, mt)?);
         }
+        // The transimpedance to the output (over D) of each device output
+        // a kept coefficient drives. Only for the nested form: over the
+        // budget, it is left out and the flat forms stand.
+        let driven: Vec<(usize, usize)> = coefs
+            .iter()
+            .enumerate()
+            .filter(|&(k, _)| kept(k))
+            .map(|(_, c)| (c.dev, c.out))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let trans: Option<BTreeMap<(usize, usize), XPoly>> = (|| {
+            let mut trans = BTreeMap::new();
+            for &(dv, o) in &driven {
+                let ot = &devs[dv].outs[o];
+                let mut to = |n: usize| fit(unit(n, ot.b)?.sub_owned(unit(n, ot.a)?)?);
+                let t = fit(to(out)?.sub_owned(to(rf)?)?)?;
+                trans.insert((dv, o), t);
+            }
+            Ok::<_, String>(trans)
+        })()
+        .ok();
+        // The terms of a_n as hand analysis writes them: each kept
+        // coefficient with the control voltages it multiplies (1 for
+        // order 1, 2 for order 2).
+        let leaky_k = |k: usize| cidx[k].is_some_and(|i| syms[i].leakage);
+        let mut terms2: Vec<NestedTerm> = Vec::new();
+        for (k, c) in coefs.iter().enumerate() {
+            if kept(k) && c.order() == 2 && !leaky_k(k) {
+                terms2.push(NestedTerm {
+                    k: kvar(k)?,
+                    scale: scale[1],
+                    dev: c.dev,
+                    out: c.out,
+                    factors: mono_factors(&c.mono, 1),
+                });
+            }
+        }
+        nested[1] = trans
+            .as_ref()
+            .and_then(|t| nested_form(&syms, &dx, vid, &terms2, &u1, None, t, &a1_num, None, scale[1], mt));
         // Response of node n to the order-2 currents: numerator over D³.
         let mut respond = |n: usize, cur: &BTreeMap<(usize, usize), XPoly>| -> Result<XPoly, String> {
             let mut parts = Vec::new();
@@ -1443,6 +1743,52 @@ pub fn closed(
             }
             num.push(fit(respond(out, &i3)?.sub_owned(respond(rf, &i3)?)?)?);
             powers.push(5);
+            let mut terms3: Vec<NestedTerm> = Vec::new();
+            for (k, c) in coefs.iter().enumerate() {
+                if !kept(k) || leaky_k(k) {
+                    continue;
+                }
+                match c.order() {
+                    3 => terms3.push(NestedTerm {
+                        k: kvar(k)?,
+                        scale: scale[2],
+                        dev: c.dev,
+                        out: c.out,
+                        factors: mono_factors(&c.mono, 1),
+                    }),
+                    2 => {
+                        // K₂·(u₁u₂ + u₂u₁): one term per order.
+                        let ix: Vec<usize> = (0..3)
+                            .flat_map(|v| std::iter::repeat_n(v, c.mono[v] as usize))
+                            .collect();
+                        for (a, b) in [(ix[0], ix[1]), (ix[1], ix[0])] {
+                            terms3.push(NestedTerm {
+                                k: kvar(k)?,
+                                scale: scale[1],
+                                dev: c.dev,
+                                out: c.out,
+                                factors: vec![(1, a), (2, b)],
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            nested[2] = trans.as_ref().and_then(|t| {
+                nested_form(
+                    &syms,
+                    &dx,
+                    vid,
+                    &terms3,
+                    &u1,
+                    Some(&u2),
+                    t,
+                    &a1_num,
+                    Some(&num[1]),
+                    scale[1],
+                    mt,
+                )
+            });
         }
         Ok(())
     };
@@ -1450,6 +1796,7 @@ pub fn closed(
     let mut cl = Closed::new(syms, dx, num, powers, vid, max_terms);
     cl.coef_sym = cidx;
     cl.scale = scale;
+    cl.nested = nested;
     Ok(Ok(cl))
 }
 
@@ -1748,6 +2095,12 @@ fn representable(direct: f64, ln_x: impl Fn() -> f64, amp: f64, n: usize) -> Opt
 /// Relative size below which an a_n (H_n) is 0 to roundoff: of the size
 /// of the terms it is the sum of (`Probe::terms`).
 const ZERO_REL: f64 = 1e-12;
+
+/// How near a nested a_n's value must be to the display form's.
+const NESTED_REL: f64 = 1e-9;
+
+/// A display form of more terms than this gives way to the nested form.
+const NESTED_TERMS: u64 = 6;
 
 /// An H_n below this fraction of its terms' rough size is checked for
 /// cancelling to roundoff at its frequency.
@@ -2272,6 +2625,24 @@ pub fn report(c: &Ctx, warnings: &mut Vec<String>) -> Result<Value, String> {
     for n in 0..c.order as usize {
         let (e, nl) = both(&|cl| cl.a(n), false);
         let mut q = quantity(e, nl, a(n), cancels(n, 1.0), &Shape { wrap: &id, map: &ident }, c.tol);
+        // The nested form, where it is shorter than the display form and
+        // is its value (to 1e-9 of it, or of its terms when they cancel).
+        let shown = q["display"]["latex"].as_str().map(str::to_owned);
+        let shown_value = q["display"]["value"].as_f64();
+        let nested = [&exact, &noleak]
+            .into_iter()
+            .flatten()
+            .find_map(|cl| cl.nested.get(n).cloned().flatten());
+        if let (Some((latex, value)), Some(sv)) = (nested, shown_value) {
+            let size = cancels(n, 1.0).unwrap_or(sv.abs());
+            // Shown where it is shorter, or the display form is long (or
+            // too large to typeset at all).
+            let long = q["display"]["terms"].as_u64().is_some_and(|t| t > NESTED_TERMS);
+            let shorter = shown.is_some_and(|s| latex.len() < s.len());
+            if (value - sv).abs() <= NESTED_REL * size && (shorter || long) {
+                q["nested"] = json!({ "latex": latex, "value": value });
+            }
+        }
         q["order"] = json!(n + 1);
         q["numeric"] = json!(af(n));
         full_error(&mut q, af(n));

@@ -611,9 +611,7 @@ test("a gallery tile opens its circuit in the editor", async ({ page }) => {
   // The brand mark is the single way back; a second toolbar link said the
   // same thing twice.
   await expect(page.getByTestId("toolbar-gallery-link")).toHaveCount(0);
-  await expect(page.locator(".gallery-home-link h1")).toHaveText(
-    "Analog Canvas",
-  );
+  await expect(page.locator(".gallery-home-link h1")).toHaveText("SmallSignal");
   const brandLink = page.locator(".gallery-home-link");
   await expect(brandLink).toHaveAttribute("href", "/");
   await brandLink.click();

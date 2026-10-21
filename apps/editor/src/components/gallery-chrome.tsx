@@ -29,7 +29,10 @@ export function GalleryChrome({
           data-testid="gallery-editor-link"
         >
           <span className="app-brand-mark" aria-hidden="true" />
-          <h1>Analog Canvas</h1>
+          <span className="app-brand-name">
+            <h1>SmallSignal</h1>
+            <span className="app-brand-sub">on Analog Canvas</span>
+          </span>
         </a>
         <a
           className="gallery-editor-link"
