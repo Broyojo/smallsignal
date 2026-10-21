@@ -1,6 +1,6 @@
 {
-  "name": "Analog Canvas",
-  "short_name": "Analog Canvas",
+  "name": "SmallSignal",
+  "short_name": "SmallSignal",
   "description": "Local-first circuit schematic editor",
   "id": "./",
   "start_url": "./",
