@@ -202,12 +202,18 @@ export function valueText(
 export function SymbolValueTip({
   link,
   params,
+  commonParams,
   format,
 }: {
   link: LinkStore;
   params: readonly SmallSignalParam[];
+  /** The values of a common-mode card's symbols (`data-mode="common"`),
+   * which can differ from the differential solve's (a Miller K). */
+  commonParams?: readonly SmallSignalParam[] | undefined;
   format: Format;
 }) {
+  // Whether the pointer is over the common-mode card.
+  const inCommon = useRef(false);
   const state = useSyncExternalStore(link.subscribe, link.get, link.get);
   const pointed =
     state?.source === "formula" ? (state.symbols[0] ?? null) : null;
@@ -215,9 +221,12 @@ export function SymbolValueTip({
   pointedRef.current = pointed;
   const [held, setHeld] = useState<string | null>(null);
   const latex = pointed ?? held;
-  const param = latex
-    ? params.find((p) => symbolKey(p.latex) === symbolKey(latex))
-    : undefined;
+  const find = (list: readonly SmallSignalParam[] | undefined) =>
+    latex
+      ? list?.find((p) => symbolKey(p.latex) === symbolKey(latex))
+      : undefined;
+  const param =
+    (inCommon.current ? find(commonParams) : undefined) ?? find(params);
   const shown =
     param && (known(param.value) || (param.elements?.length ?? 0) > 1);
   const shownRef = useRef(false);
@@ -225,6 +234,9 @@ export function SymbolValueTip({
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     const move = (event: PointerEvent) => {
+      inCommon.current = Boolean(
+        (event.target as Element | null)?.closest?.('[data-mode="common"]'),
+      );
       if (event.type === "pointerdown" || shownRef.current)
         setAt({ x: event.clientX, y: event.clientY });
     };

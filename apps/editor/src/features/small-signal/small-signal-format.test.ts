@@ -11,6 +11,7 @@ import {
   type CircuitAssumptions,
 } from "./small-signal-assumption-store";
 import {
+  cmrrPoints,
   noneText,
   readApprox,
   subscriptParts,
@@ -739,5 +740,28 @@ describe("named-assumption ≈ forms", () => {
     expect(noneText({ latex: "x", tolerance: 0.05 })).toBe(
       "No simple form within 5.0%.",
     );
+  });
+});
+
+describe("CMRR", () => {
+  it("is |A_d / A_cm| in dB at each frequency both gains have, ∞ for an exactly zero A_cm", () => {
+    const ad = [
+      { f: 0, re: -300, im: 0 },
+      { f: 1e3, re: -296.7, im: 0 },
+      { f: 1e6, re: 0, im: -10 },
+    ];
+    const acm = [
+      { f: 1e3, re: -0.002429, im: 0 },
+      { f: 1e6, re: 0, im: 0 },
+    ];
+    const [low, high] = cmrrPoints(ad, acm);
+    expect(low!.f).toBe(1e3);
+    expect(low!.db).toBeCloseTo(20 * Math.log10(296.7 / 0.002429), 6);
+    expect(high).toEqual({ f: 1e6, db: Number.POSITIVE_INFINITY });
+    expect(cmrrPoints(ad, undefined)).toEqual([]);
+    // An output the differential drive never reaches: no rejection at all.
+    expect(
+      cmrrPoints([{ f: 1e3, re: 0, im: 0 }], [{ f: 1e3, re: 0.5, im: 0 }]),
+    ).toEqual([{ f: 1e3, db: Number.NEGATIVE_INFINITY }]);
   });
 });

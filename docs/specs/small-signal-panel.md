@@ -84,6 +84,11 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   its Output + and Output − below; − set to ground is single-ended again.
   A differential input defaults to a drawn output pair whose name has
   "out".
+- A differential input also has a **Common-mode gain** card under Gain:
+  v_out/v_cm with both inputs driven together (the solver's `mode`
+  "common", its own solve), with formulas, plot and assumptions as Gain's,
+  and CMRR = |A_d/A_cm| in dB at the panel's frequencies (∞ where A_cm is
+  exactly 0). A single-source input has none.
 - Bias point lists every DC value the bias is solved from, editable in
   place: each source's DC (the input first: its signal rides on it), each
   undriven Pin's, and the supply rails'. A drawn source's edit writes the
@@ -142,4 +147,6 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   re-wrapping; on the CS stage, diff pair, 5T OTA, two-stage OTA and CMOS
   inverter every tag on the drawing touching or led to its net or part,
   covering nothing, and marking its target when pointed at; tag
-  placement: `small-signal-label-layout.test.ts`.
+  placement: `small-signal-label-layout.test.ts`; the diff pair's A_cm =
+  −1/(2 g_m1,2 r_o5) against its bias and its CMRR against the two gains;
+  CMRR: `small-signal-format.test.ts`.
