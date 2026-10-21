@@ -117,7 +117,7 @@ export function AnalyticsPage() {
 
   useEffect(() => {
     const previousTitle = document.title;
-    document.title = "Analytics — Analog Canvas";
+    document.title = "Analytics — SmallSignal";
     document.body.classList.add("analytics-body");
     let robots = document.querySelector<HTMLMetaElement>('meta[name="robots"]');
     const previousRobots = robots?.content;

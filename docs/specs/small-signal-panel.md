@@ -53,6 +53,12 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   Parameters section lists every symbol of the equations with its value
   and elements. Without a bias a value is unknown ("—"), never ∞. Bias point stays the compact
   summary. Each Models field shows its unit (m, F/m, F/m², F, V, s, A/V²).
+- An equation wider than its line breaks to the line's width between its
+  terms (at an operator of its top level or of a \left…\right group, never
+  inside a fraction, script or root), continuation lines indented 2em, and
+  breaks again as the panel resizes. One that barely breaks (one long
+  fraction) stays on one line; what is still wider scrolls sideways. Copy
+  and `data-tex` keep the whole equation.
 - Each equation line has a copy button at its right edge, outside its
   scroller, writing the whole equation's LaTeX (an "≈" line with its
   symbol); faint until the line is hovered where there is hover. Symbol
@@ -88,15 +94,23 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   undriven Pin's, and the supply rails'. A drawn source's edit writes the
   drawing. Distortion says its devices are expanded about this bias.
 - Bias point's **Show on drawing** labels, while the panel is open, each
-  node's DC voltage on its longest wire in the open Cell (ground and
+  node's DC voltage on one of its wires in the open Cell (ground and
   supply rails aside) and each transistor drawn there with its bias
   region (`sat`, `triode`, `off`, `active`), amber outside the
   amplifying region, where the part (10 px) or wire (28 px) is big enough
-  on screen to carry one. No label covers another, a badge or the
-  drawing's own text: each tries its places in turn (beside a part, along
-  its net's longest wires), an off or triode device first, then node
-  voltages, then amplifying devices; one with no free place is left off. They follow pans and zooms in the layer of the
-  assumption badges. The choice is kept per viewer.
+  on screen to carry one. The choice is kept per viewer.
+- Everything the panel puts on the drawing (assumption badges, node
+  voltages, regions) is one kind of tag, placed by one layout in view: a
+  badge over its part's top right corner (else another corner), a voltage
+  on its wire (centred on it, clear of its ends), a region against its
+  part; where that is taken, a voltage or region a leader's length away
+  draws a line to it, and with no free place is left off (a badge, a
+  control, keeps its corner). No tag covers another, a part or the
+  drawing's own text. Placed in turn: badges, an off or triode device,
+  node voltages, amplifying devices. Pointing at a tag marks what it
+  belongs to (rings the part and marks its symbols, or marks the net's
+  wires), also when the tag moves under a still pointer; a part pointed
+  at, in a formula or a table marks its tags. They follow pans and zooms.
 - How to use: five numbered lines naming the panel's controls. It is the
   whole panel while nothing is drawn (with the 5T OTA example to place),
   sits under Input and Output when no source can drive the circuit, and
@@ -129,6 +143,10 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   ∥, its menu's Nonlinear switch and a copy button; Show on drawing on the inverter; the
   "×" cost; the bias table at phone width; Esc in the device menu; R1's
   value edited in its menu re-solving, M1's W and L, the DC values; the
-  guide; the dock returning to the panel; the diff pair's A_cm =
+  guide; the dock returning to the panel; a wide equation wrapping and
+  re-wrapping; on the CS stage, diff pair, 5T OTA, two-stage OTA and CMOS
+  inverter every tag on the drawing touching or led to its net or part,
+  covering nothing, and marking its target when pointed at; tag
+  placement: `small-signal-label-layout.test.ts`; the diff pair's A_cm =
   −1/(2 g_m1,2 r_o5) against its bias and its CMRR against the two gains;
   CMRR: `small-signal-format.test.ts`.

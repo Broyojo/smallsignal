@@ -5,6 +5,7 @@ import "@mathjax/src/js/input/tex/ams/AmsConfiguration.js";
 import "@mathjax/src/js/input/tex/cases/CasesConfiguration.js";
 import "@mathjax/src/js/input/tex/configmacros/ConfigMacrosConfiguration.js";
 import { mathjax } from "@mathjax/src/js/mathjax.js";
+import type { MmlNode } from "@mathjax/src/js/core/MmlTree/MmlNode.js";
 // Every formula is set in the drawing's sans face, so its glyphs ship with the
 // formula chunk itself.
 import "@mathjax/mathjax-newcm-font/js/svg/dynamic/sans-serif.js";
@@ -218,6 +219,31 @@ class SchematicFormulaFont extends MathJaxNewcmFont {
   }
 }
 
+/**
+ * Lets a formula break only between its terms, as a textbook sets a long
+ * equation: at the operators of its top level or of a \\left…\\right group
+ * in it, never inside a fraction, script or root. Each line after the
+ * first is indented 2em.
+ */
+function markTermBreaks(node: MmlNode, open: boolean): void {
+  for (const child of node.childNodes as MmlNode[]) {
+    if (child.isKind("mo")) {
+      if (open) {
+        child.attributes.set("indentalign", "left");
+        child.attributes.set("indentshift", "2em");
+        child.attributes.set("indentalignfirst", "left");
+        child.attributes.set("indentshiftfirst", "0");
+      } else child.attributes.set("linebreak", "nobreak");
+    } else if (!child.isToken) {
+      const group =
+        child.isKind("mrow") ||
+        child.isKind("mstyle") ||
+        child.isKind("TeXAtom");
+      markTermBreaks(child, open && group);
+    }
+  }
+}
+
 function renderError(error: unknown): FormulaTypesetResult {
   return {
     ok: false,
@@ -248,11 +274,25 @@ export function createFormulaTypesetter(
   const font = new SchematicFormulaFont(
     options.loadFontFile ?? loadFormulaFontFile,
   );
+  // The break width of the conversion in progress (ems); null for one line.
+  let breakWidth: number | null = null;
+  input.postFilters.add((args: unknown) => {
+    if (breakWidth === null) return;
+    const { root } = (args as { data: { root: MmlNode } }).data;
+    root.attributes.set("overflow", "linebreak");
+    // The artifact's ems take an ex as half of one (`extractSvg`); MathJax's
+    // ex is the font's x-height.
+    const ems = (breakWidth * 2 * font.params.x_height).toFixed(3);
+    root.attributes.set("maxwidth", `${ems}em`);
+    markTermBreaks(root, true);
+  });
+
   // A Formula artifact is one self-contained SVG. MathJax 4 enables inline
   // line breaking by default and otherwise emits sibling SVG fragments around
   // operators (for example, `x` and `+y`). That shape cannot be embedded as a
   // single drafting object, so keep the expression on one MathJax line and let
-  // the editor's formula source panel handle horizontal overflow.
+  // the editor's formula source panel handle horizontal overflow. A block
+  // formula given a break width breaks inside its one SVG instead.
   const output = new SVG({
     fontData: font,
     fontCache: "none",
@@ -264,6 +304,27 @@ export function createFormulaTypesetter(
   });
 
   function convert(request: FormulaRequest): FormulaTypesetResult {
+    if (request.breakWidth === undefined || request.display !== "block")
+      return convertLine(request, null);
+    const broken = convertLine(request, request.breakWidth);
+    if (!broken.ok) return broken;
+    const line = convertLine(request, null);
+    if (!line.ok) return line;
+    // Kept when it fits, or when breaking helps even though one term is
+    // too wide; a formula that barely breaks (one long fraction) scrolls
+    // on one line as it always has.
+    const fits =
+      broken.artifact.width / CANONICAL_FORMULA_FONT_SIZE <=
+      request.breakWidth + 0.01;
+    return fits || broken.artifact.width < 0.75 * line.artifact.width
+      ? broken
+      : line;
+  }
+
+  function convertLine(
+    request: FormulaRequest,
+    width: number | null,
+  ): FormulaTypesetResult {
     const command =
       request.bold === false
         ? request.italic
@@ -274,12 +335,29 @@ export function createFormulaTypesetter(
           : "mathbfsf";
     // A surrounding default keeps explicit \mathrm/\mathit/etc. authored
     // inside the expression effective. Do not rewrite the stored LaTeX.
-    const node = document.convert(`\\${command}{${request.latex}}`, {
-      display: request.display === "block",
-      em: CANONICAL_FORMULA_FONT_SIZE,
-      ex: CANONICAL_FORMULA_FONT_SIZE / 2,
-      containerWidth: 4096,
-    });
+    // Broken lines start at the left; a single line keeps its defaults.
+    const { displayAlign, displayIndent } = output.options as {
+      displayAlign: string;
+      displayIndent: string;
+    };
+    breakWidth = width;
+    if (width !== null)
+      Object.assign(output.options, {
+        displayAlign: "left",
+        displayIndent: "0",
+      });
+    let node;
+    try {
+      node = document.convert(`\\${command}{${request.latex}}`, {
+        display: request.display === "block",
+        em: CANONICAL_FORMULA_FONT_SIZE,
+        ex: CANONICAL_FORMULA_FONT_SIZE / 2,
+        containerWidth: 4096,
+      });
+    } finally {
+      breakWidth = null;
+      Object.assign(output.options, { displayAlign, displayIndent });
+    }
     const markup = adaptor.outerHTML(node);
     if (markup.includes('data-mml-node="merror"')) {
       return {

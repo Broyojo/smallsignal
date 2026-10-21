@@ -529,7 +529,15 @@ export function EditorAppChrome({
               >
                 David Andrews
               </a>{" "}
-              &amp; Caden Xu
+              &amp;{" "}
+              <a
+                className="tokenzhang-link"
+                href="https://cornell.digication.com/cadenxu/about-me"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Caden Xu
+              </a>
             </span>
           </div>
           <div className="tokenzhang-credit">
