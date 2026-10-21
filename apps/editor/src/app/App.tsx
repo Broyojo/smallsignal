@@ -929,8 +929,12 @@ function WorkspaceEditor({
   } | null>(null);
   const canvasContextMenuSuppressed = useRef(false);
   const [netlistPreflightOpen, setNetlistPreflightOpen] = useState(false);
+  // Small-Signal is the dock's home: it opens with the editor and with each
+  // circuit, and the dock comes back to it when what covered it closes.
+  // Only its own button hides it (`smallSignalHiddenRef`).
   const [projectPanel, setProjectPanel] =
-    useState<EditorProjectPanelMode | null>("netlist");
+    useState<EditorProjectPanelMode | null>("small-signal");
+  const smallSignalHiddenRef = useRef(false);
   // The last plain click or double-click (`open`) on a part while
   // Small-Signal is open: it opens that part's menu (`nonce` tells a repeat
   // click apart).
@@ -952,7 +956,7 @@ function WorkspaceEditor({
   }, [canvasSelectionKey]);
   useEffect(() => {
     // Explicit inspector actions (Q, double-click, Issues, import review)
-    // take precedence over the Netlist panel opened at startup.
+    // take precedence over the panel opened at startup.
     if (selectionOpen) setProjectPanel(null);
   }, [selectionOpen]);
   const propertiesOpenBeforeProjectPanelRef = useRef(false);
@@ -1117,6 +1121,28 @@ function WorkspaceEditor({
     setProjectPanel,
     projectRunHistory,
   });
+  // With nothing else in the dock, it shows Small-Signal again; not where
+  // the dock covers the drawing (compact), so closing a panel shows it, nor
+  // beside the simulation workspace, which empties the dock for its room.
+  useEffect(() => {
+    if (
+      !compactLayout &&
+      !analogSimulationOpen &&
+      projectPanel === null &&
+      !selectionOpen &&
+      !documentSettingsOpen &&
+      !importReviewOpen &&
+      !smallSignalHiddenRef.current
+    )
+      setProjectPanel("small-signal");
+  }, [
+    compactLayout,
+    analogSimulationOpen,
+    projectPanel,
+    selectionOpen,
+    documentSettingsOpen,
+    importReviewOpen,
+  ]);
   const [codeDraftDirty, setCodeDraftDirty] = useState(false);
   const noteCodeDraftDirty = useCallback((dirty: boolean) => {
     setCodeDraftDirty(dirty);
@@ -1254,11 +1280,12 @@ function WorkspaceEditor({
       setDocumentStack([]);
       setViewBox(nextViewBox, nextDocument.presentation.grid);
       resetInteractionState();
-      // Each newly opened circuit starts with its netlist. Ordinary edits and
-      // user-driven panel changes do not reset the workspace.
+      // Each newly opened circuit starts with its analysis. Ordinary edits
+      // and user-driven panel changes do not reset the workspace.
       propertiesOpenBeforeProjectPanelRef.current = false;
+      smallSignalHiddenRef.current = false;
       setSelectionOpen(false);
-      setProjectPanel("netlist");
+      setProjectPanel("small-signal");
       if (compactLayout) setCompactLibraryPanelOpen(false);
       return nextDocument;
     },
@@ -3743,10 +3770,17 @@ function WorkspaceEditor({
 
   function closeProjectPanel(): void {
     setProjectPanel(null);
-    setSelectionOpen(propertiesOpenBeforeProjectPanelRef.current);
+    // Properties it covered come back once; where the dock covers the
+    // drawing, the drawing does.
+    setSelectionOpen(
+      propertiesOpenBeforeProjectPanelRef.current && !compactLayout,
+    );
+    propertiesOpenBeforeProjectPanelRef.current = false;
   }
 
   function toggleProjectPanel(mode: EditorProjectPanelMode): void {
+    if (mode === "small-signal")
+      smallSignalHiddenRef.current = projectPanel === mode;
     if (projectPanel === mode) {
       closeProjectPanel();
       return;

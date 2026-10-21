@@ -271,7 +271,7 @@ test("a part set down beside a pin is pulled onto it and connects", async ({
   expect(netOf(port.id, "P")).toBe(netOf("M1", "G"));
 });
 
-test("new circuits open Library and Netlist, keep the saved preference, and mirror Library annotations in the menu", async ({
+test("new circuits open Library and Small-Signal, keep the saved preference, and mirror Library annotations in the menu", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -284,8 +284,8 @@ test("new circuits open Library and Netlist, keep the saved preference, and mirr
     "data-open",
     "true",
   );
-  await expect(page.getByTestId("refresh-netlist-panel")).toBeVisible();
-  for (const toggle of ["library-toggle", "netlist-panel-toggle"])
+  await expect(page.getByTestId("small-signal-panel")).toBeVisible();
+  for (const toggle of ["library-toggle", "small-signal-toggle"])
     await expect(page.getByTestId(toggle)).toHaveAttribute(
       "aria-pressed",
       "true",

@@ -629,12 +629,12 @@ test("keeps the text editor clear of a docked panel and a long formula inside it
 }) => {
   await page.setViewportSize({ width: 720, height: 720 });
   await openEditor(page);
-  const netlist = page.getByRole("button", {
-    name: "Netlist",
+  const panel = page.getByRole("button", {
+    name: "Small-Signal",
     exact: true,
     pressed: true,
   });
-  if (await netlist.isVisible()) await netlist.click();
+  if (await panel.isVisible()) await panel.click();
   while (
     Number.parseInt((await page.getByLabel("Current zoom").textContent())!) > 25
   ) {

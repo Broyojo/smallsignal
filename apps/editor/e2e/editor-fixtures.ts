@@ -41,13 +41,17 @@ export async function closeProjectTools(page: Page): Promise<void> {
   await awaitEditorReady(page);
   const dock = page.getByRole("complementary", { name: "Project tools" });
   if (!(await dock.isVisible())) return;
-  // A panel is closed by the control that opened it. Netlist is the one the
-  // editor starts in; Project Code is the other toolbar panel.
-  for (const testId of ["netlist-panel-toggle", "project-code-toggle"]) {
+  // A panel is closed by the control that opened it. Closing Netlist or
+  // Project Code shows Small-Signal, the panel the editor starts in, whose
+  // own toggle empties the dock.
+  for (const testId of [
+    "netlist-panel-toggle",
+    "project-code-toggle",
+    "small-signal-toggle",
+  ]) {
     const toggle = page.getByTestId(testId);
     if ((await toggle.getAttribute("aria-pressed")) !== "true") continue;
     await toggle.click();
-    break;
   }
   await page.locator(".app-workspace").evaluate(async (element) => {
     await Promise.all(

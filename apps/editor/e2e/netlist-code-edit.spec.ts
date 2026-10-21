@@ -8,6 +8,7 @@ import {
   renameProject,
   openEditor,
   openProject,
+  showNetlistPanel,
 } from "./editor-fixtures.js";
 import { placedInstance } from "./canvas-fixtures.js";
 
@@ -58,6 +59,7 @@ const netlistAlert = (page: Page) =>
 /** Open the editor, wait until it is ready, then open this Project. */
 async function openEditorOn(page: Page, project: object) {
   await openProject(page, project);
+  await showNetlistPanel(page);
 }
 
 test("selects an export entry independently of saved Top and edits only that Cell", async ({
@@ -101,6 +103,7 @@ test("restores process and device choices, applies defaults and keeps edit/undo 
     page,
     "/editor?example=current-mirror-loaded-differential-pair",
   );
+  await showNetlistPanel(page);
   const code = page.getByLabel("Netlist code", { exact: true });
   // The editor works in SKY130, so the example opens bound to that process.
   await expect(code).toContainText("sky130_fd_pr__nfet_01v8");
@@ -178,9 +181,11 @@ test("explicit inspectors yield to Netlist for a replacement while ordinary edit
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toHaveCount(0);
 
-  // Opening a different Project deliberately returns to its live Netlist,
+  // Opening a different Project deliberately returns to its analysis,
   // regardless of the inspector the previous Project left open.
   await openProjectFile(page, fixture());
+  await expect(page.getByTestId("small-signal-panel")).toBeVisible();
+  await showNetlistPanel(page);
   await expect(code).toBeVisible();
   await expect(code).toContainText("R2");
 
@@ -226,11 +231,8 @@ test("opens editable netlist by default, links cards and parts both ways, and sy
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await openEditor(page);
-  await expect(page.getByTestId("netlist-panel-toggle")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
   await openProjectFile(page, fixture());
+  await showNetlistPanel(page);
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toHaveAttribute("contenteditable", "true");
   await expect(code).toContainText("R1");

@@ -152,9 +152,10 @@ in the model`). A negative capacitance is allowed and warned:
   (leakage as one), C_gd or C_μ Miller where offered, a capacitor's or
   diode's open, short or Miller, and a MOSFET's region (Auto, Saturation,
   Triode), with its bias region, the solver's sentences about it and the
-  gain's distance from the full model. Choices apply at once. Esc, Close
-  or a press elsewhere closes it (Esc does nothing else in the editor);
-  from the keyboard focus moves in and back.
+  gain's distance from the full model. Choices apply at once. Esc, Close,
+  a press elsewhere or a key typed at the drawing closes it (Esc does
+  nothing else in the editor; any other key then does what it does
+  there); from the keyboard focus moves in and back.
 - The menu and the table write one store: a matched group's row applies
   to every member and the menu says so; a type default shows dashed, from
   "All NMOS". Regions are per part only: a type default would impose one

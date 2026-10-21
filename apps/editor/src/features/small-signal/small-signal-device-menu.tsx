@@ -68,6 +68,8 @@ export interface DeviceMenuActions {
   more?: (() => void) | undefined;
 }
 
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "Tab"]);
+
 const SUB: Record<string, string> = {
   cgs: "gs",
   cgd: "gd",
@@ -415,7 +417,16 @@ export function DeviceMenu({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape") {
+        // A key typed at the drawing (C, I, W, Delete, …) is the drawing's
+        // shortcut: the menu steps aside for it.
+        if (
+          !MODIFIER_KEYS.has(event.key) &&
+          !ref.current?.contains(document.activeElement)
+        )
+          onClose(false);
+        return;
+      }
       // The menu's own Esc: the canvas keeps its selection.
       event.stopImmediatePropagation();
       event.preventDefault();

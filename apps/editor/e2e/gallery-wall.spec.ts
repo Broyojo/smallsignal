@@ -6,7 +6,7 @@
 
 import { expect, test } from "./gallery-test.js";
 import { test as localTest } from "@playwright/test";
-import type { Locator, Page, Route } from "@playwright/test";
+import type { Locator, Page, Request, Route } from "@playwright/test";
 import { serializeProject } from "@icm/project-protocol";
 import {
   awaitEditorReady,
@@ -55,6 +55,35 @@ async function serveWall(
 /** The address of ENTRY's wall preview at this revision. */
 const previewSrc = (revision: string) =>
   `/api/gallery/${ENTRY.id}/preview.svg?v=${revision}&render=formula-label-v5`;
+
+/**
+ * The page's network at rest for 500 ms, as `networkidle`, leaving out the
+ * solver's worker: its script and module requests never report finished.
+ */
+function trackNetwork(page: Page) {
+  const open = new Set<Request>();
+  const worker = (request: Request) =>
+    /worker|\.wasm$/u.test(new URL(request.url()).pathname);
+  page.on("request", (request) => {
+    if (!worker(request)) open.add(request);
+  });
+  page.on("requestfinished", (request) => open.delete(request));
+  page.on("requestfailed", (request) => open.delete(request));
+  return {
+    async quiet(quietMs = 500) {
+      let since = Date.now();
+      await expect
+        .poll(
+          () => {
+            if (open.size) since = Date.now();
+            return Date.now() - since >= quietMs;
+          },
+          { intervals: [50], timeout: 15_000 },
+        )
+        .toBe(true);
+    },
+  };
+}
 
 test("Shelf defers Gallery reads until its tab is opened", async ({ page }) => {
   const reads: string[] = [];
@@ -397,6 +426,7 @@ test("a Gallery link opened again selects its own tab and keeps a changed copy",
     });
   });
   page.on("dialog", (dialog) => dialog.accept());
+  const network = trackNetwork(page);
   const count = page.getByTestId("active-instance-count");
 
   await openEditor(page, `/g/${id}`);
@@ -423,7 +453,8 @@ test("a Gallery link opened again selects its own tab and keeps a changed copy",
     "true",
   );
   await expect(count).toHaveText("1");
-  await page.waitForLoadState("networkidle");
+  // Every request the visit starts has finished.
+  await network.quiet();
   expect(reads).toBe(readsBefore);
 });
 

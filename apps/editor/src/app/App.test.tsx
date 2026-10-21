@@ -350,7 +350,7 @@ describe("editor shell", () => {
     expect(markup.indexOf('href="/analytics"')).toBeGreaterThan(statusbar);
   });
 
-  it("opens Netlist beside shapes quick-place without a searchable catalog", () => {
+  it("opens Small-Signal beside shapes quick-place without a searchable catalog", () => {
     const project = createEmptyProject("selection-shelf", "Selection Shelf");
     const markup = renderToStaticMarkup(
       <App services={services} project={project} />,
@@ -359,7 +359,9 @@ describe("editor shell", () => {
     expect(markup).toContain(
       '<section class="selection-shelf" aria-label="Project tools">',
     );
-    expect(markup).toContain('aria-label="Live netlist"');
+    // The panel itself loads lazily; its toolbar button shows it open.
+    expect(markup).toContain('aria-label="Small-Signal" aria-pressed="true"');
+    expect(markup).not.toContain('aria-label="Live netlist"');
     // The toolbar button that opens a panel is the one that closes it.
     expect(markup).not.toContain('aria-label="Close project tools"');
     expect(markup).not.toContain('data-testid="selection-shelf"');

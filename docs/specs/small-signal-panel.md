@@ -12,6 +12,13 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
 
 ## Rules
 
+- The panel is the right dock's home: it is open when the editor starts
+  and when a circuit or project tab opens. Netlist, Project Code or
+  Properties cover it, and closing them shows it again (Properties a
+  project panel covered come back once first); only its own toolbar
+  button hides it, until the next circuit opens. Analog Simulation clears
+  the dock while it is open. Where the dock covers the drawing (compact
+  layout), closing a panel shows the drawing.
 - Every plotted point is a solver value: the main solve sends `sweep: {}`
   and each card plots its quantity's `sweep` curves as returned, |H| in dB
   (Ω on a log axis for an impedance or a current input's gain) over the
@@ -117,4 +124,4 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   ∥, its menu's Nonlinear switch and a copy button; Show on drawing on the inverter; the
   "×" cost; the bias table at phone width; Esc in the device menu; R1's
   value edited in its menu re-solving, M1's W and L, the DC values; the
-  guide.
+  guide; the dock returning to the panel.
