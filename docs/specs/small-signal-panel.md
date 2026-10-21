@@ -53,6 +53,12 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   Parameters section lists every symbol of the equations with its value
   and elements. Without a bias a value is unknown ("—"), never ∞. Bias point stays the compact
   summary. Each Models field shows its unit (m, F/m, F/m², F, V, s, A/V²).
+- An equation wider than its line breaks to the line's width between its
+  terms (at an operator of its top level or of a \left…\right group, never
+  inside a fraction, script or root), continuation lines indented 2em, and
+  breaks again as the panel resizes. One that barely breaks (one long
+  fraction) stays on one line; what is still wider scrolls sideways. Copy
+  and `data-tex` keep the whole equation.
 - Each equation line has a copy button at its right edge, outside its
   scroller, writing the whole equation's LaTeX (an "≈" line with its
   symbol); faint until the line is hovered where there is hover. Symbol
@@ -132,7 +138,8 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   ∥, its menu's Nonlinear switch and a copy button; Show on drawing on the inverter; the
   "×" cost; the bias table at phone width; Esc in the device menu; R1's
   value edited in its menu re-solving, M1's W and L, the DC values; the
-  guide; the dock returning to the panel; on the CS stage, diff pair, 5T
-  OTA, two-stage OTA and CMOS inverter every tag on the drawing touching
-  or led to its net or part, covering nothing, and marking its target
-  when pointed at; tag placement: `small-signal-label-layout.test.ts`.
+  guide; the dock returning to the panel; a wide equation wrapping and
+  re-wrapping; on the CS stage, diff pair, 5T OTA, two-stage OTA and CMOS
+  inverter every tag on the drawing touching or led to its net or part,
+  covering nothing, and marking its target when pointed at; tag
+  placement: `small-signal-label-layout.test.ts`.

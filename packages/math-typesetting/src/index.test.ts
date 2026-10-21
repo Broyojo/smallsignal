@@ -152,6 +152,56 @@ describe("Analog Canvas formula typesetter", () => {
     },
   );
 
+  it("breaks a long block formula between its terms to its break width, in one SVG", async () => {
+    const typesetter = createFormulaTypesetter();
+    const latex = String.raw`a_{3} = \frac{g_{m1}^{2} r_{o1}}{2} + g_{m2} r_{o2} K_{3g} - \left(g_{m1} + g_{m2}\right) \left(r_{o1} \parallel r_{o2}\right) + \frac{C_{gs1} C_{gd1}}{C_{L}} + g_{mb1} r_{o1} r_{o2}`;
+    const request: FormulaRequest = { ...baseRequest, latex, display: "block" };
+    const line = await typesetter.typeset(request);
+    const broken = await typesetter.typeset({ ...request, breakWidth: 16 });
+    if (!line.ok || !broken.ok) throw new Error("typeset failed");
+    expect(line.artifact.width / 100).toBeGreaterThan(16);
+    expect(broken.artifact.width / 100).toBeLessThanOrEqual(16);
+    expect(broken.artifact.height).toBeGreaterThan(2 * line.artifact.height);
+    expect(countSvgTags(broken.artifact.svg)).toBe(
+      countSvgTags(line.artifact.svg),
+    );
+    expect(formulaSourceHash({ ...request, breakWidth: 16 })).not.toBe(
+      formulaSourceHash(request),
+    );
+    // A fraction's terms never break: its numerator stays one line, so
+    // the formula is no narrower than it.
+    const fraction = await typesetter.typeset({
+      ...request,
+      latex: String.raw`H = \frac{g_{m1} r_{o1} r_{o2} + g_{m2} g_{m3} r_{o1} r_{o2} r_{o3}}{2} + 1`,
+      breakWidth: 4,
+    });
+    const numerator = await typesetter.typeset({
+      ...request,
+      latex: String.raw`g_{m1} r_{o1} r_{o2} + g_{m2} g_{m3} r_{o1} r_{o2} r_{o3}`,
+    });
+    if (!fraction.ok || !numerator.ok) throw new Error("typeset failed");
+    expect(fraction.artifact.width).toBeGreaterThanOrEqual(
+      numerator.artifact.width,
+    );
+  });
+
+  it("leaves a formula that cannot break small enough on one line", async () => {
+    const typesetter = createFormulaTypesetter();
+    const request: FormulaRequest = {
+      ...baseRequest,
+      display: "block",
+      latex: String.raw`\frac{g_{m1} r_{o1} r_{o2} + g_{m2} g_{m3} r_{o1} r_{o2} r_{o3}}{1 + s C_{L} r_{o2} + s C_{gd1} r_{o1} + s^{2} C_{L} C_{gd1} r_{o1} r_{o2}}`,
+    };
+    const line = await typesetter.typeset(request);
+    const kept = await typesetter.typeset({ ...request, breakWidth: 8 });
+    if (!line.ok || !kept.ok) throw new Error("typeset failed");
+    expect(kept.artifact.width).toBe(line.artifact.width);
+    expect(kept.artifact.height).toBe(line.artifact.height);
+    expect(
+      await typesetter.typeset({ ...request, breakWidth: 0 }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("rejects malformed source instead of persisting an error glyph", async () => {
     const result = await createFormulaTypesetter().typeset({
       ...baseRequest,

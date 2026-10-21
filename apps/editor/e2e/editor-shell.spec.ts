@@ -347,7 +347,7 @@ test("keeps the command surface compact, its menus dismissable, and publishes PW
   expect(
     await (await page.request.get("/manifest.webmanifest")).json(),
   ).toMatchObject({
-    name: "Analog Canvas",
+    name: "SmallSignal",
     display: "standalone",
     theme_color: "#2383e2",
     icons: [
@@ -427,7 +427,7 @@ test("shows first-party visitor analytics without tracking the dashboard itself"
   await expect(page.getByRole("heading", { name: "Analytics" })).toBeVisible();
   await expect(page.getByText("Registered accounts")).toBeVisible();
   await expect(page.getByText("42", { exact: true })).toBeVisible();
-  await expect(page).toHaveTitle("Analytics — Analog Canvas");
+  await expect(page).toHaveTitle("Analytics — SmallSignal");
   await expect(
     page.getByRole("link", { name: "Back to editor" }),
   ).toHaveAttribute("href", "/");

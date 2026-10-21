@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -16,6 +17,7 @@ import {
   ANALOG_CANVAS_MATH_PROFILE_ID,
   CANONICAL_FORMULA_FONT_SIZE,
   cachedFormulaResult,
+  formulaSourceHash,
   prepareFormula,
   type FormulaArtifact,
   type FormulaRequest,
@@ -578,6 +580,46 @@ function Formula({
   const [failed, setFailed] = useState<string | null>(null);
   const result =
     prepared?.latex === latex ? prepared.result : cachedFormulaResult(request);
+  // An equation wider than its line breaks to the line's width (ems), as
+  // measured; re-typeset as the panel resizes. The one-line form shows
+  // until its broken form is ready, and a narrower one keeps the last.
+  const [fit, setFit] = useState<number | null>(null);
+  const natural = result?.ok
+    ? result.artifact.width / CANONICAL_FORMULA_FONT_SIZE
+    : null;
+  const breakWidth =
+    copy !== null && fit !== null && natural !== null && natural > fit
+      ? fit
+      : undefined;
+  const brokenRequest =
+    breakWidth === undefined ? null : { ...request, breakWidth };
+  const brokenKey = brokenRequest ? formulaSourceHash(brokenRequest) : null;
+  const [broken, setBroken] = useState<{
+    latex: string;
+    key: string;
+    result: FormulaTypesetResult;
+  }>();
+  const brokenResult = brokenRequest
+    ? broken?.key === brokenKey
+      ? broken.result
+      : (cachedFormulaResult(brokenRequest) ??
+        (broken?.latex === latex ? broken.result : undefined))
+    : undefined;
+  useEffect(() => {
+    if (!brokenRequest || !brokenKey) return;
+    let active = true;
+    void prepareFormula(brokenRequest).then(
+      (next) => {
+        if (active) setBroken({ latex, key: brokenKey, result: next });
+      },
+      // The one-line form stays.
+      () => undefined,
+    );
+    return () => {
+      active = false;
+    };
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- brokenKey names the request
+  }, [brokenKey]);
   useEffect(() => {
     if (tooLong) return;
     let active = true;
@@ -627,7 +669,12 @@ function Formula({
       />
     );
   return (
-    <TypesetFormula latex={latex} artifact={result.artifact} copy={copy} />
+    <TypesetFormula
+      latex={latex}
+      artifact={brokenResult?.ok ? brokenResult.artifact : result.artifact}
+      copy={copy}
+      onFit={copy === null ? undefined : setFit}
+    />
   );
 }
 
@@ -673,22 +720,44 @@ function CopyTex({ tex }: { tex: string }) {
 /**
  * A typeset formula, inline so each symbol can be pointed at (its device
  * lights up on the drawing); copying a selection writes the TeX
- * (`copyWithTex`). Long expressions keep their size and scroll sideways
- * rather than shrinking past legibility.
+ * (`copyWithTex`). Long expressions keep their size: an equation line
+ * breaks to its width, and what cannot break scrolls sideways rather than
+ * shrinking past legibility.
  */
 function TypesetFormula({
   latex,
   artifact,
   copy,
+  onFit,
 }: {
   latex: string;
   artifact: FormulaArtifact;
   copy: string | null;
+  /** The line's width in ems (of the formula's size), by half ems, as it
+   * changes. */
+  onFit?: ((ems: number) => void) | undefined;
 }) {
   const svg = useMemo(() => withSymbolKeys(artifact.svg), [artifact.svg]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const formulaRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const formula = formulaRef.current;
+    if (!onFit || !scroller || !formula) return;
+    const measure = () => {
+      const em = Number.parseFloat(getComputedStyle(formula).fontSize);
+      if (em > 0 && scroller.clientWidth > 0)
+        onFit(Math.floor((2 * scroller.clientWidth) / em) / 2);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [onFit]);
   const scroll = (
-    <div className="small-signal-formula-scroll">
+    <div ref={scrollRef} className="small-signal-formula-scroll">
       <span
+        ref={formulaRef}
         className="small-signal-formula"
         role="img"
         aria-label={latex}
