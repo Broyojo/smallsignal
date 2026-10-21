@@ -2011,6 +2011,147 @@ test("operating point: Show on drawing labels the node voltages and each transis
   await expect(page.locator("[data-op-device]")).toHaveCount(0);
 });
 
+for (const [name, path, dcValues, imposed] of [
+  ["CS stage", FIXTURES.csWired, []],
+  [
+    "diff pair",
+    FIXTURES.diffPair,
+    [
+      ["Vin1", "0.9"],
+      ["Vin2", "0.9"],
+      ["Vb", "0.6"],
+    ],
+  ],
+  ["5T OTA", FIXTURES.ota, []],
+  ["two-stage OTA", FIXTURES.twoStage, []],
+  ["CMOS inverter", FIXTURES.inverter, [], "M1"],
+] as const)
+  test(`on the drawing (${name}): every label touches or leads to its net or part, covers nothing, and points at it`, async ({
+    page,
+  }) => {
+    const panel = await analyze(page, path);
+    const bias = card(panel, "Bias point");
+    await expect(bias).toBeVisible({ timeout: 20_000 });
+    for (const [pin, volts] of dcValues) {
+      const dc = bias.getByLabel(`${pin} DC`, { exact: true });
+      await dc.fill(volts);
+      await dc.press("Enter");
+    }
+    await expect(panel.locator(".small-signal-alert.is-info")).toHaveCount(0);
+    // An assumption's badge is a tag like the rest.
+    if (imposed) {
+      await page.getByTestId(`hit-${imposed}`).click();
+      await deviceMenu(page)
+        .getByRole("radio", { name: "Saturation", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
+      await expect(
+        page.locator(`[data-small-signal-badge="${imposed}"]`),
+      ).toBeVisible();
+    }
+    await bias.getByLabel("Show on drawing").check();
+    const labels = page.locator(
+      "[data-op-node], [data-op-device], [data-small-signal-badge]",
+    );
+    await expect(labels.first()).toBeVisible();
+    // Settled: the layout follows the drawing each frame.
+    await page.waitForTimeout(300);
+    type Rect = { left: number; top: number; right: number; bottom: number };
+    const rect = (r: DOMRect | Rect): Rect => ({
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+    });
+    const shown = await labels.evaluateAll((all) =>
+      all.map((element) => {
+        const r = element.getBoundingClientRect();
+        return {
+          node: element.getAttribute("data-op-node"),
+          instance:
+            element.getAttribute("data-op-instance") ??
+            element.getAttribute("data-small-signal-instance"),
+          leader: element.hasAttribute("data-leader"),
+          box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+        };
+      }),
+    );
+    const marks = await page
+      .locator('[data-testid="schematic-canvas"] text')
+      .evaluateAll((all) =>
+        all.flatMap((element) => {
+          const r = element.getBoundingClientRect();
+          return r.width > 0
+            ? [{ left: r.left, top: r.top, right: r.right, bottom: r.bottom }]
+            : [];
+        }),
+      );
+    const overlap = (a: Rect, b: Rect) =>
+      a.left < b.right - 0.5 &&
+      b.left < a.right - 0.5 &&
+      a.top < b.bottom - 0.5 &&
+      b.top < a.bottom - 0.5;
+    const gap = (a: Rect, b: Rect) =>
+      Math.hypot(
+        Math.max(0, a.left - b.right, b.left - a.right),
+        Math.max(0, a.top - b.bottom, b.top - a.bottom),
+      );
+    // A leader takes a label at most this far from what it describes.
+    const reach = (leader: boolean) => (leader ? 24 : 3);
+    shown.forEach((label, index) => {
+      for (const other of shown.slice(index + 1))
+        expect(overlap(label.box, other.box)).toBe(false);
+      for (const mark of marks) expect(overlap(label.box, mark)).toBe(false);
+    });
+    for (const label of shown) {
+      await page.mouse.move(
+        (label.box.left + label.box.right) / 2,
+        (label.box.top + label.box.bottom) / 2,
+      );
+      if (label.instance) {
+        // Against its part (or led to it), which pointing at it rings.
+        const part = await page
+          .locator(
+            `[data-canvas-hit-kind="instance"][data-canvas-hit-id="${label.instance}"]`,
+          )
+          .boundingBox();
+        const box = {
+          ...part!,
+          right: part!.x + part!.width,
+          bottom: part!.y + part!.height,
+          left: part!.x,
+          top: part!.y,
+        };
+        expect(gap(label.box, rect(box))).toBeLessThanOrEqual(
+          reach(label.leader),
+        );
+        await expect(
+          page.locator(`[data-small-signal-ring="${label.instance}"]`),
+        ).toBeVisible();
+      } else {
+        // On its net's wire (or led to it), which pointing at it marks.
+        const wires = page.locator(`[data-net-mark="${label.node}"]`);
+        await expect(wires.first()).toBeAttached();
+        const lines = await wires.evaluateAll((all) =>
+          all.map((line) => {
+            const r = line.getBoundingClientRect();
+            return {
+              left: r.left,
+              top: r.top,
+              right: r.right,
+              bottom: r.bottom,
+            };
+          }),
+        );
+        // A mark's box is its stroke's: 5 px wide about the wire.
+        const nearest = Math.min(...lines.map((line) => gap(label.box, line)));
+        expect(nearest).toBeLessThanOrEqual(reach(label.leader));
+      }
+    }
+    await page.mouse.move(2, 2);
+    await expect(page.locator("[data-net-mark]")).toHaveCount(0);
+  });
+
 test("costs: twice the full model's value and more read as a multiple, never thousands of percent", async ({
   page,
 }) => {

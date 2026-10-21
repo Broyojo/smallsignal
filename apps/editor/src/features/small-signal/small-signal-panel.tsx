@@ -5430,6 +5430,7 @@ export function SmallSignalPanel({
         op={op}
         store={link}
         instanceOf={instanceOf}
+        symbolsOf={(element) => elementSymbols(symbols, [element])}
       />
       {menu ? (
         <DeviceMenu
