@@ -1176,7 +1176,8 @@
   font-size: var(--icm-font-xs);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
-  white-space: nowrap;
+  max-width: calc(100vw - 16px);
+  overflow-wrap: anywhere;
 }
 
 .small-signal-bode-readout table {
@@ -1321,7 +1322,8 @@
   font-size: var(--icm-font-xs);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
-  white-space: nowrap;
+  max-width: calc(100vw - 16px);
+  overflow-wrap: anywhere;
 }
 
 /* A device's small-signal values in its menu: two columns of symbol and

@@ -1249,6 +1249,9 @@ test("device menu: saturation on the triode inverter gives −(g_m1 + g_m2)(r_o1
   await expect(
     menu.getByRole("button", { name: "Neglect r_o", exact: true }),
   ).toHaveCount(0);
+  // Its values call the channel R_on too, as the equations do.
+  const values = menu.getByRole("group", { name: "M1 small-signal values" });
+  await expect(values.locator('[data-value="R_{on1}"]')).toHaveCount(1);
   await menu.getByRole("radio", { name: "Saturation", exact: true }).click();
   await expect(
     menu.getByRole("radio", { name: "Saturation", exact: true }),
@@ -1290,6 +1293,13 @@ test("device menu: saturation on the triode inverter gives −(g_m1 + g_m2)(r_o1
   expect(assumed / (-(m1.gm + m2.gm) * parallel(m1.ro, m2.ro))).toBeCloseTo(
     1,
     2,
+  );
+  // The menu's values are the assumed model's: r_o, the formula's g_m.
+  await expect(values.locator('[data-value="r_{o1}"]')).toHaveCount(1);
+  await expect(values.locator('[data-value="g_{m1}"] dd')).toHaveText(
+    await bias
+      .locator('tr[data-device="M1"] td[data-quantity="gm"]')
+      .innerText(),
   );
   // r_o is now M1's to neglect, and the badge says what was imposed.
   await expect(

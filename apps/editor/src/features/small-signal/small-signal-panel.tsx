@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -37,6 +38,7 @@ import {
   type ModelKind,
   type ModelOverrides,
   type SmallSignalSource,
+  type SmallSignalParam,
   type SmallSignalQuantity,
   type SmallSignalRequest,
   type SmallSignalResult,
@@ -385,6 +387,7 @@ function ModelFields({
   text: ModelText;
   onChange: (text: ModelText) => void;
 }) {
+  const idPrefix = useId();
   // Every edited kind shows, used here or not: nothing applies unseen.
   const shown = (Object.keys(MODEL_TITLE) as ModelKind[]).filter(
     (kind) =>
@@ -394,16 +397,21 @@ function ModelFields({
   const field = (kind: ModelKind, name: string, fallback: number) => {
     const typed = text[kind]?.[name] ?? "";
     const invalid = typed.trim() !== "" && modelValue(name, typed) === null;
+    const unitId = `${idPrefix}-${kind}-${name}`;
     return (
       <label key={name}>
         <span>
           {name}
           {modelUnit(name) ? (
-            <span className="small-signal-muted"> {modelUnit(name)}</span>
+            <span id={unitId} className="small-signal-muted">
+              {" "}
+              {modelUnit(name)}
+            </span>
           ) : null}
         </span>
         <input
           aria-label={`${MODEL_TITLE[kind]} ${name}`}
+          aria-describedby={modelUnit(name) ? unitId : undefined}
           aria-invalid={invalid || undefined}
           title={invalid ? rangeText(name) : undefined}
           autoCapitalize="off"
@@ -4514,10 +4522,32 @@ export function SmallSignalPanel({
 
   // Formula ↔ drawing: what is hovered, in a store only the highlights read.
   const [link] = useState<LinkStore>(createLinkStore);
-  const symbols = useMemo(
-    () => symbolElements(result?.params),
-    [result?.params],
-  );
+  // The symbols the formulas write: the solve's, and while its forms show,
+  // Distortion's coefficients (K, V_OD).
+  const shownDistortion =
+    distortionResponse &&
+    distortionResponseKey === distortionKey &&
+    !isSmallSignalError(distortionResponse)
+      ? distortionResponse.distortion
+      : undefined;
+  const valueParams = useMemo<SmallSignalParam[]>(() => {
+    const params = result?.params ?? [];
+    const names = new Set(params.map((param) => param.name));
+    return [
+      ...params,
+      ...(shownDistortion?.symbols ?? [])
+        .filter((symbol) => !names.has(symbol.name))
+        .map((symbol) => ({
+          name: symbol.name,
+          latex: symbol.latex,
+          value: symbol.value ?? Number.NaN,
+          unit: symbol.unit,
+          element: symbol.elements[0] ?? "",
+          elements: symbol.elements,
+        })),
+    ];
+  }, [result?.params, shownDistortion?.symbols]);
+  const symbols = useMemo(() => symbolElements(valueParams), [valueParams]);
   // The drawn part (in the open Cell) each element is, or sits inside.
   const instanceOf = useMemo(
     () =>
@@ -4600,7 +4630,7 @@ export function SmallSignalPanel({
       <SymbolHighlight link={link} />
       <SymbolValueTip
         link={link}
-        params={result?.params ?? []}
+        params={valueParams}
         format={formatEngineering}
       />
       <section
@@ -4908,12 +4938,12 @@ export function SmallSignalPanel({
             ) : null}
 
             {unknownBias.length ? null : biasCard()}
-            {result?.params?.length ? (
+            {valueParams.length ? (
               <details className="small-signal-options small-signal-parameters">
                 <summary>Parameters</summary>
                 <div>
                   <ParametersTable
-                    params={result.params}
+                    params={valueParams}
                     format={formatEngineering}
                   />
                 </div>
@@ -5280,7 +5310,12 @@ export function SmallSignalPanel({
           values={(() => {
             const op = result?.op?.devices[menu.element];
             return op
-              ? deviceValues(menu.element, op).map((value) => ({
+              ? deviceValues(
+                  menu.element,
+                  op,
+                  result?.params,
+                  regionReports?.find((r) => r.element === menu.element),
+                ).map((value) => ({
                   latex: value.latex,
                   text: valueText(value.value, value.unit, formatEngineering),
                 }))
