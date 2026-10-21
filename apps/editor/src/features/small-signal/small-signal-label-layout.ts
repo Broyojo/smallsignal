@@ -39,6 +39,8 @@ export interface LabelRequest {
   places: readonly Place[];
   /** The obstacle it describes (its own part), which it may touch. */
   own?: string;
+  /** Kept at its first place when none is free (a badge, a control). */
+  force?: true;
 }
 
 /** A fixed mark labels keep off; `id` names a part. */
@@ -101,6 +103,20 @@ export function placeLabels(
         leader: place.leader === true,
       });
       break;
+    }
+    const first = request.places[0];
+    if (request.force && first && !placed.has(request.id)) {
+      const box = { ...first, width: request.width, height: request.height };
+      taken.push(box);
+      placed.set(request.id, {
+        left: box.left,
+        top: box.top,
+        width: box.width,
+        height: box.height,
+        target: first.target ??
+          request.target ?? { ...box, width: 0, height: 0 },
+        leader: first.leader === true,
+      });
     }
   }
   return placed;
@@ -181,6 +197,25 @@ export function wirePlaces(
     target,
   }));
   return { on, off };
+}
+
+/**
+ * An assumption badge: over its part's top right corner, else its top
+ * left, then just outside either top corner.
+ */
+export function badgePlaces(
+  part: { left: number; top: number; right: number; bottom: number },
+  size: { width: number; height: number },
+): Place[] {
+  const { width, height } = size;
+  // As it always sat: a third over the part, two thirds above it.
+  const top = part.top - 0.65 * height;
+  return [
+    { left: part.right - 0.35 * width, top },
+    { left: part.left - 0.65 * width, top },
+    { left: part.right + GAP, top: part.top - height - GAP },
+    { left: part.left - width - GAP, top: part.top - height - GAP },
+  ];
 }
 
 /** The leader from a label to its target: between their nearest points. */

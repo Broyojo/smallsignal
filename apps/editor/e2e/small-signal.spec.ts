@@ -1989,7 +1989,7 @@ test("operating point: Show on drawing labels the node voltages and each transis
   await expect(page.locator("[data-op-device]")).toHaveCount(0);
 });
 
-for (const [name, path, dcValues] of [
+for (const [name, path, dcValues, imposed] of [
   ["CS stage", FIXTURES.csWired, []],
   [
     "diff pair",
@@ -2002,7 +2002,7 @@ for (const [name, path, dcValues] of [
   ],
   ["5T OTA", FIXTURES.ota, []],
   ["two-stage OTA", FIXTURES.twoStage, []],
-  ["CMOS inverter", FIXTURES.inverter, []],
+  ["CMOS inverter", FIXTURES.inverter, [], "M1"],
 ] as const)
   test(`on the drawing (${name}): every label touches or leads to its net or part, covers nothing, and points at it`, async ({
     page,
@@ -2016,8 +2016,21 @@ for (const [name, path, dcValues] of [
       await dc.press("Enter");
     }
     await expect(panel.locator(".small-signal-alert.is-info")).toHaveCount(0);
+    // An assumption's badge is a tag like the rest.
+    if (imposed) {
+      await page.getByTestId(`hit-${imposed}`).click();
+      await deviceMenu(page)
+        .getByRole("radio", { name: "Saturation", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
+      await expect(
+        page.locator(`[data-small-signal-badge="${imposed}"]`),
+      ).toBeVisible();
+    }
     await bias.getByLabel("Show on drawing").check();
-    const labels = page.locator("[data-op-node], [data-op-device]");
+    const labels = page.locator(
+      "[data-op-node], [data-op-device], [data-small-signal-badge]",
+    );
     await expect(labels.first()).toBeVisible();
     // Settled: the layout follows the drawing each frame.
     await page.waitForTimeout(300);
@@ -2033,16 +2046,16 @@ for (const [name, path, dcValues] of [
         const r = element.getBoundingClientRect();
         return {
           node: element.getAttribute("data-op-node"),
-          instance: element.getAttribute("data-op-instance"),
+          instance:
+            element.getAttribute("data-op-instance") ??
+            element.getAttribute("data-small-signal-instance"),
           leader: element.hasAttribute("data-leader"),
           box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
         };
       }),
     );
     const marks = await page
-      .locator(
-        '[data-testid="schematic-canvas"] text, [data-small-signal-badge]',
-      )
+      .locator('[data-testid="schematic-canvas"] text')
       .evaluateAll((all) =>
         all.flatMap((element) => {
           const r = element.getBoundingClientRect();

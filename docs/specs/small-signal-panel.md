@@ -89,15 +89,17 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   amplifying region, where the part (10 px) or wire (28 px) is big enough
   on screen to carry one. The choice is kept per viewer.
 - Everything the panel puts on the drawing (assumption badges, node
-  voltages, regions) is one kind of tag, placed by one layout: a voltage
-  sits on its wire (centred on it, clear of its ends), a region against
-  its part; where that is taken, a tag a leader's length away draws a
-  line to it; with no free place it is left off. No tag covers another,
-  a badge, a part or the drawing's own text. Placed in turn: an off or
-  triode device, node voltages, amplifying devices. Pointing at a tag
-  marks what it belongs to (rings the part and marks its symbols, or
-  marks the net's wires), and a part pointed at, in a formula or a table
-  marks its tag. They follow pans and zooms in the layer of the badges.
+  voltages, regions) is one kind of tag, placed by one layout in view: a
+  badge over its part's top right corner (else another corner), a voltage
+  on its wire (centred on it, clear of its ends), a region against its
+  part; where that is taken, a voltage or region a leader's length away
+  draws a line to it, and with no free place is left off (a badge, a
+  control, keeps its corner). No tag covers another, a part or the
+  drawing's own text. Placed in turn: badges, an off or triode device,
+  node voltages, amplifying devices. Pointing at a tag marks what it
+  belongs to (rings the part and marks its symbols, or marks the net's
+  wires), also when the tag moves under a still pointer; a part pointed
+  at, in a formula or a table marks its tags. They follow pans and zooms.
 - How to use: five numbered lines naming the panel's controls. It is the
   whole panel while nothing is drawn (with the 5T OTA example to place),
   sits under Input and Output when no source can drive the circuit, and

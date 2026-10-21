@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  badgePlaces,
   devicePlaces,
   leaderLine,
   placeLabels,
@@ -67,5 +68,20 @@ describe("labels on the drawing", () => {
 
   it("has no place on a wire too short for the label", () => {
     expect(wirePlaces({ x: 0, y: 0 }, { x: 0, y: 20 }, size).on).toEqual([]);
+  });
+
+  it("moves a badge off another badge, and keeps one with no free place at its corner", () => {
+    const part = { left: 100, top: 100, right: 120, bottom: 130 };
+    const target = { left: 100, top: 100, width: 20, height: 30 };
+    const places = badgePlaces(part, size);
+    const placed = placeLabels([
+      { id: "a", ...size, target, force: true, places },
+      { id: "b", ...size, target, force: true, places },
+      { id: "c", ...size, target, force: true, places: places.slice(0, 1) },
+    ]);
+    expect(placed.get("a")).toMatchObject(places[0]!);
+    // Its part is narrower than two badges: past the part's top left.
+    expect(placed.get("b")).toMatchObject(places[3]!);
+    expect(placed.get("c")).toMatchObject(places[0]!);
   });
 });

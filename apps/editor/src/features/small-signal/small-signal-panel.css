@@ -605,9 +605,10 @@
   box-shadow: 0 0 0 2px rgb(var(--icm-accent-rgb) / 25%);
 }
 
+/* Placed by the overlay with the other tags: left and top are its box's
+   corner (over its part's top right, where it has room). */
 .small-signal-badge {
   min-width: 18px;
-  transform: translate(-35%, -65%);
   border-color: rgb(var(--icm-accent-rgb) / 45%);
   background: var(--icm-accent-tint);
   color: var(--icm-accent);

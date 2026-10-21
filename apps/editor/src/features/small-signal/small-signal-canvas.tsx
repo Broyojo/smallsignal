@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 import { instanceHit, type CanvasBadge } from "./small-signal-device-menu";
 import {
+  badgePlaces,
   devicePlaces,
   leaderLine,
   placeLabels,
@@ -83,8 +90,34 @@ const visible = (
   r.bottom > view.top &&
   r.top < view.bottom;
 
-/** A net's wire segments on screen that reach into the view, longest
- * first. */
+/** The part of segment a–b inside the view (Liang–Barsky), or null. */
+function clipSegment(a: Point, b: Point, view: DOMRect): Segment | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  let low = 0;
+  let high = 1;
+  for (const [p, q] of [
+    [-dx, a.x - view.left],
+    [dx, view.right - a.x],
+    [-dy, a.y - view.top],
+    [dy, view.bottom - a.y],
+  ] as const) {
+    if (p === 0) {
+      if (q < 0) return null;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) low = Math.max(low, t);
+    else high = Math.min(high, t);
+    if (low > high) return null;
+  }
+  return {
+    a: { x: a.x + dx * low, y: a.y + dy * low },
+    b: { x: a.x + dx * high, y: a.y + dy * high },
+  };
+}
+
+/** A net's wire segments on screen, clipped to the view, longest first. */
 function wireSegments(routes: readonly string[], view: DOMRect): Segment[] {
   const found: (Segment & { length: number })[] = [];
   for (const id of routes) {
@@ -101,20 +134,11 @@ function wireSegments(routes: readonly string[], view: DOMRect): Segment[] {
         points.getItem(i).x,
         points.getItem(i).y,
       ).matrixTransform(ctm);
-      const box = {
-        left: Math.min(a.x, b.x),
-        right: Math.max(a.x, b.x),
-        top: Math.min(a.y, b.y),
-        bottom: Math.max(a.y, b.y),
-      };
-      if (
-        !visible({ ...box, right: box.right + 1, bottom: box.bottom + 1 }, view)
-      )
-        continue;
+      const seen = clipSegment(a, b, view);
+      if (!seen) continue;
       found.push({
-        a: { x: a.x, y: a.y },
-        b: { x: b.x, y: b.y },
-        length: Math.hypot(b.x - a.x, b.y - a.y),
+        ...seen,
+        length: Math.hypot(seen.b.x - seen.a.x, seen.b.y - seen.a.y),
       });
     }
   }
@@ -249,34 +273,37 @@ function labelWidth(text: string, bold: boolean): number {
   return Math.ceil(measure.measureText(text).width) + 10;
 }
 
-/** A badge's box on screen, as its CSS draws it: at its part's top right,
- * translate(-35%, -65%). */
-function badgeBox(badge: CanvasBadge, rect: DOMRect): Box {
-  const width = Math.max(18, labelWidth(badge.text, true));
-  return {
-    left: rect.right - 0.35 * width,
-    top: rect.top - 0.65 * LABEL_HEIGHT,
-    width,
-    height: LABEL_HEIGHT,
-  };
-}
-
 /**
- * Every operating-point label, none over another, a badge, a part or the
- * drawing's text: an off or triode device first (the one to notice), then
- * node voltages, then the devices that amplify.
+ * Every tag on the drawing, none over another, a part or the drawing's
+ * text: the assumption badges first (each kept even with no free place:
+ * it is a control), then an off or triode device (the one to notice),
+ * node voltages, and the devices that amplify.
  */
 function layoutLabels(
   op: { devices: readonly OpDeviceLabel[]; nets: readonly OpNetLabel[] } | null,
   geometry: Geometry,
   badges: readonly CanvasBadge[],
 ): Map<string, PlacedLabel> {
-  if (!op) return new Map();
   const obstacles: Obstacle[] = [...geometry.texts, ...geometry.parts];
-  for (const badge of badges) {
+  const badgeTags = badges.flatMap((badge): LabelRequest[] => {
     const rect = geometry.rects.get(badge.instanceId);
-    if (rect) obstacles.push(badgeBox(badge, rect));
-  }
+    if (!rect) return [];
+    const size = {
+      width: Math.max(18, labelWidth(badge.text, true)),
+      height: LABEL_HEIGHT,
+    };
+    return [
+      {
+        id: `badge-${badge.instanceId}`,
+        ...size,
+        target: boxOf(rect),
+        own: badge.instanceId,
+        force: true,
+        places: badgePlaces(rect, size),
+      },
+    ];
+  });
+  if (!op) return placeLabels(badgeTags, obstacles);
   const device = (label: OpDeviceLabel): LabelRequest[] => {
     const rect = geometry.rects.get(label.instanceId);
     if (!rect || Math.min(rect.width, rect.height) < MIN_PART_PX) return [];
@@ -320,6 +347,7 @@ function layoutLabels(
   });
   return placeLabels(
     [
+      ...badgeTags,
       ...op.devices.filter((label) => !amplifying(label)).flatMap(device),
       ...nets,
       ...op.devices.filter(amplifying).flatMap(device),
@@ -374,31 +402,29 @@ export function CanvasOverlay({
   const geometry = useCanvasGeometry(
     ids,
     op?.nets ?? [],
-    Boolean(op && (op.nets.length || op.devices.length)),
+    Boolean(badges.length || (op && (op.nets.length || op.devices.length))),
   );
   const container = geometry.container;
   const labels = container
     ? layoutLabels(op, geometry, badges)
     : new Map<string, PlacedLabel>();
+  const marks = (element: string): LinkState => ({
+    source: "label",
+    elements: [element],
+    symbols: symbolsOf(element),
+  });
   // Pointing at a label marks what it describes: the part (and its
   // symbols) or the net's wires. Found by box, so the labels never take
   // a press from the drawing under them.
   const hits = useRef<{ box: Box; state: LinkState }[]>([]);
   hits.current = [
+    ...badges.flatMap((badge) => {
+      const box = labels.get(`badge-${badge.instanceId}`);
+      return box ? [{ box, state: marks(badge.element) }] : [];
+    }),
     ...(op?.devices ?? []).flatMap((device) => {
       const box = labels.get(`op-${device.instanceId}`);
-      return box
-        ? [
-            {
-              box,
-              state: {
-                source: "label" as const,
-                elements: [device.element],
-                symbols: symbolsOf(device.element),
-              },
-            },
-          ]
-        : [];
+      return box ? [{ box, state: marks(device.element) }] : [];
     }),
     ...(op?.nets ?? []).flatMap((net) => {
       const box = labels.get(`net-${net.node}`);
@@ -417,24 +443,41 @@ export function CanvasOverlay({
         : [];
     }),
   ];
+  // The last pointer position: a tag that moves (a zoom, a pan, a
+  // re-solve) under a still pointer is hit-tested again.
+  const pointer = useRef<Point | null>(null);
+  const hitTest = useCallback(() => {
+    const at = pointer.current;
+    const hit = at
+      ? hits.current.find(
+          ({ box }) =>
+            at.x >= box.left &&
+            at.x <= box.left + box.width &&
+            at.y >= box.top &&
+            at.y <= box.top + box.height,
+        )
+      : undefined;
+    if (hit) store.set(hit.state);
+    else if (store.get()?.source === "label") store.set(null);
+  }, [store]);
   useEffect(() => {
     const move = (event: PointerEvent) => {
-      const hit = hits.current.find(
-        ({ box }) =>
-          event.clientX >= box.left &&
-          event.clientX <= box.left + box.width &&
-          event.clientY >= box.top &&
-          event.clientY <= box.top + box.height,
-      );
-      if (hit) store.set(hit.state);
-      else if (store.get()?.source === "label") store.set(null);
+      pointer.current = { x: event.clientX, y: event.clientY };
+      hitTest();
+    };
+    const leave = () => {
+      pointer.current = null;
+      hitTest();
     };
     window.addEventListener("pointermove", move);
+    document.documentElement.addEventListener("pointerleave", leave);
     return () => {
       window.removeEventListener("pointermove", move);
+      document.documentElement.removeEventListener("pointerleave", leave);
       if (store.get()?.source === "label") store.set(null);
     };
-  }, [store]);
+  }, [store, hitTest]);
+  useEffect(hitTest);
   if (!container) return null;
   const left = (x: number) => x - container.rect.left;
   const top = (y: number) => y - container.rect.top;
@@ -522,17 +565,22 @@ export function CanvasOverlay({
         ) : null;
       })}
       {badges.map((badge) => {
-        const rect = geometry.rects.get(badge.instanceId);
-        return rect ? (
+        const box = labels.get(`badge-${badge.instanceId}`);
+        return box ? (
           <button
             key={badge.instanceId}
             type="button"
-            className={`small-signal-tag small-signal-badge${badge.warn ? " is-warn" : ""}`}
+            className={`small-signal-tag small-signal-badge${badge.warn ? " is-warn" : ""}${linkedElements.has(badge.element) ? " is-linked" : ""}`}
             data-small-signal-badge={badge.element}
+            data-small-signal-instance={badge.instanceId}
             aria-label={badge.description}
             aria-expanded={open === badge.instanceId}
             title={badge.description}
-            style={{ left: left(rect.right), top: top(rect.top) }}
+            style={{
+              left: left(box.left),
+              top: top(box.top),
+              minWidth: box.width,
+            }}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => onOpen(badge, event.detail === 0)}
           >
