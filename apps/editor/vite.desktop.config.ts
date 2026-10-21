@@ -56,7 +56,12 @@ export default defineConfig({
         handler: (html) =>
           html
             .replace("/src/main.tsx", "/src/entries/desktop.tsx")
-            .replace(/\s*<link rel="manifest"[^>]*>/u, ""),
+            .replace(/\s*<link rel="manifest"[^>]*>/u, "")
+            // The desktop app keeps its name; the web shell is SmallSignal.
+            .replace(
+              "<title>SmallSignal</title>",
+              "<title>Analog Canvas</title>",
+            ),
       },
     },
   ],
