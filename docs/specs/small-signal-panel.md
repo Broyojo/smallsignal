@@ -83,15 +83,21 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   undriven Pin's, and the supply rails'. A drawn source's edit writes the
   drawing. Distortion says its devices are expanded about this bias.
 - Bias point's **Show on drawing** labels, while the panel is open, each
-  node's DC voltage on its longest wire in the open Cell (ground and
+  node's DC voltage on one of its wires in the open Cell (ground and
   supply rails aside) and each transistor drawn there with its bias
   region (`sat`, `triode`, `off`, `active`), amber outside the
   amplifying region, where the part (10 px) or wire (28 px) is big enough
-  on screen to carry one. No label covers another, a badge or the
-  drawing's own text: each tries its places in turn (beside a part, along
-  its net's longest wires), an off or triode device first, then node
-  voltages, then amplifying devices; one with no free place is left off. They follow pans and zooms in the layer of the
-  assumption badges. The choice is kept per viewer.
+  on screen to carry one. The choice is kept per viewer.
+- Everything the panel puts on the drawing (assumption badges, node
+  voltages, regions) is one kind of tag, placed by one layout: a voltage
+  sits on its wire (centred on it, clear of its ends), a region against
+  its part; where that is taken, a tag a leader's length away draws a
+  line to it; with no free place it is left off. No tag covers another,
+  a badge, a part or the drawing's own text. Placed in turn: an off or
+  triode device, node voltages, amplifying devices. Pointing at a tag
+  marks what it belongs to (rings the part and marks its symbols, or
+  marks the net's wires), and a part pointed at, in a formula or a table
+  marks its tag. They follow pans and zooms in the layer of the badges.
 - How to use: five numbered lines naming the panel's controls. It is the
   whole panel while nothing is drawn (with the 5T OTA example to place),
   sits under Input and Output when no source can drive the circuit, and
@@ -124,4 +130,7 @@ device menu are [small-signal-assumptions.md](small-signal-assumptions.md).
   ∥, its menu's Nonlinear switch and a copy button; Show on drawing on the inverter; the
   "×" cost; the bias table at phone width; Esc in the device menu; R1's
   value edited in its menu re-solving, M1's W and L, the DC values; the
-  guide; the dock returning to the panel.
+  guide; the dock returning to the panel; on the CS stage, diff pair, 5T
+  OTA, two-stage OTA and CMOS inverter every tag on the drawing touching
+  or led to its net or part, covering nothing, and marking its target
+  when pointed at; tag placement: `small-signal-label-layout.test.ts`.

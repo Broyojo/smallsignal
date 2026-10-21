@@ -5,12 +5,15 @@ import type { SmallSignalParam } from "@icm/small-signal";
 // what is hovered, so only the highlight itself re-renders.
 
 export interface LinkState {
-  /** Where the hover is: a formula symbol, a part on the canvas, a table row. */
-  source: "formula" | "canvas" | "table";
+  /** Where the hover is: a formula symbol, a part on the canvas, a table
+   * row, a label the panel put on the drawing. */
+  source: "formula" | "canvas" | "table" | "label";
   /** The netlist elements to mark on the drawing. */
   elements: readonly string[];
   /** The symbols (LaTeX, as the formulas write them) to mark in formulas. */
   symbols: readonly string[];
+  /** The nets whose wires to mark (a node voltage's label). */
+  nodes?: readonly string[];
 }
 
 export interface LinkStore {
@@ -25,7 +28,8 @@ const same = (a: LinkState | null, b: LinkState | null) =>
     b !== null &&
     a.source === b.source &&
     a.elements.join("\n") === b.elements.join("\n") &&
-    a.symbols.join("\n") === b.symbols.join("\n"));
+    a.symbols.join("\n") === b.symbols.join("\n") &&
+    (a.nodes ?? []).join("\n") === (b.nodes ?? []).join("\n"));
 
 export function createLinkStore(): LinkStore {
   let state: LinkState | null = null;
