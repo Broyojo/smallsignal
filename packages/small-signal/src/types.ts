@@ -697,6 +697,9 @@ export interface SmallSignalResult {
   matchCandidates?: MatchCandidate[];
   /** Every symbol in the equations and the elements it stands for. */
   params?: SmallSignalParam[];
+  /** The input drive the gain and Zin are for: one source, or a
+   * differential input's differential or common mode. */
+  mode?: "single" | "differential" | "common";
   gain?: SmallSignalQuantity;
   rin?: SmallSignalQuantity;
   rout?: SmallSignalQuantity;

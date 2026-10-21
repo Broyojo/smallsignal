@@ -1989,6 +1989,48 @@ test("operating point: Show on drawing labels the node voltages and each transis
   await expect(page.locator("[data-op-device]")).toHaveCount(0);
 });
 
+test("common mode: a differential input also gets A_cm = −1/(2 g_m1,2 r_o5) and its CMRR; one source gets neither", async ({
+  page,
+}) => {
+  const panel = await analyze(page, FIXTURES.diffPair);
+  const bias = card(panel, "Bias point");
+  for (const [pin, volts] of [
+    ["Vin1", "0.9"],
+    ["Vin2", "0.9"],
+    ["Vb", "0.6"],
+  ] as const) {
+    const dc = bias.getByLabel(`${pin} DC`, { exact: true });
+    await dc.fill(volts);
+    await dc.press("Enter");
+  }
+  await expect(panel.locator(".small-signal-alert.is-info")).toHaveCount(0);
+  const common = card(panel, "Common-mode gain");
+  await expect
+    .poll(() => formula(panel, "Common-mode gain"))
+    .toContain("\\frac{1}{2 g_{m1,2} r_{o5}}");
+  // The mirror's g_m and the tail's r_o set it, as the textbook has it.
+  const m1 = await biasLine(panel, "M1");
+  const m5 = await biasLine(panel, "M5");
+  const acm = await cardValue(panel, "Common-mode gain");
+  expect(acm / (-1 / (2 * m1.gm * m5.ro))).toBeCloseTo(1, 1);
+  // CMRR from the two cards' gains.
+  const ad = await cardValue(panel, "Gain");
+  const cmrr = Number(
+    await common.locator("[data-cmrr]").getAttribute("data-cmrr"),
+  );
+  expect(cmrr).toBeCloseTo(20 * Math.log10(Math.abs(ad / acm)), 0);
+  await expect(common.locator(".small-signal-cmrr")).toHaveText(
+    /^CMRR \d+\.\d dB/u,
+  );
+  // A single-ended input has no common mode.
+  const single = await analyze(
+    await page.context().newPage(),
+    FIXTURES.csWired,
+  );
+  await formula(single, "Gain");
+  await expect(card(single, "Common-mode gain")).toHaveCount(0);
+});
+
 test("costs: twice the full model's value and more read as a multiple, never thousands of percent", async ({
   page,
 }) => {
@@ -2001,7 +2043,10 @@ test("costs: twice the full model's value and more read as a multiple, never tho
     .selectOption("miller");
   const note = card(panel, "Gain").locator('[data-approx="named"]');
   await expect(note).toHaveText(/^ro ≫ R, 1\/gm, \d+\.\d× from full model$/u);
-  await expect(panel).not.toContainText(/\d{3,}% from full model/u);
+  // 200% and more is a multiple (100%: an assumption that zeroes A_cm).
+  await expect(panel).not.toContainText(
+    /\b(?:[2-9]\d{2}|\d{4,})% from full model/u,
+  );
   // Zout has no simpler form: its own form is exact for the assumed model.
   const zout = card(panel, "Output impedance");
   await expect(zout.locator('[data-approx="none"]')).toHaveText(

@@ -631,6 +631,44 @@ function Formula({
   );
 }
 
+/**
+ * Under the common-mode gain: what drives it, and CMRR = |A_d/A_cm| at
+ * the panel's frequencies (one line for one frequency, else a table).
+ */
+function CmrrNote({
+  points,
+}: {
+  points: readonly { f: number; db: number }[];
+}) {
+  const [first] = points;
+  return (
+    <>
+      <small className="small-signal-muted" data-cm-note>
+        Both inputs driven together by v<sub>cm</sub>.
+      </small>
+      {points.length === 1 && first ? (
+        <p className="small-signal-cmrr" data-cmrr={first.db}>
+          CMRR <strong>{cmrrText(first.db)}</strong>
+          {first.f > 0 ? (
+            <small> at {formatEngineering(first.f, "Hz")}</small>
+          ) : null}
+        </p>
+      ) : points.length ? (
+        <table className="small-signal-values" aria-label="CMRR">
+          <tbody>
+            {points.map((point) => (
+              <tr key={point.f} data-cmrr={point.db}>
+                <th scope="row">CMRR {formatEngineering(point.f, "Hz")}</th>
+                <td>{cmrrText(point.db)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </>
+  );
+}
+
 /** How long the copy button shows its check mark. */
 const COPIED_MS = 1200;
 
@@ -1225,6 +1263,7 @@ function QuantityCard({
   regions,
   sweep,
   crossings = null,
+  children,
 }: {
   title: string;
   symbol: string;
@@ -1242,6 +1281,8 @@ function QuantityCard({
   sweep?: readonly number[] | undefined;
   /** The gain's unity and −3 dB frequencies, for its plot to land on. */
   crossings?: { unity: number | null; bandwidth: number | null } | null;
+  /** More about the quantity, at the card's end (a CMRR). */
+  children?: ReactNode;
 }) {
   const imposed = assumed ? regionNote(regions) : null;
   // The simpler form appears only when it actually dropped terms, and never
@@ -1380,8 +1421,35 @@ function QuantityCard({
       ) : rootCount ? (
         <small className="small-signal-muted">{rootCount}</small>
       ) : null}
+      {children}
     </section>
   );
+}
+
+/**
+ * CMRR = |A_d / A_cm| at each frequency both gains have, in dB; ∞ where the
+ * common-mode gain is exactly 0 (a balanced circuit read differentially).
+ */
+export function cmrrPoints(
+  differential: readonly ComplexPoint[] | undefined,
+  common: readonly ComplexPoint[] | undefined,
+): { f: number; db: number }[] {
+  const size = (point: ComplexPoint) =>
+    point.re === null || point.im === null
+      ? Number.POSITIVE_INFINITY
+      : Math.hypot(point.re, point.im);
+  return (differential ?? []).flatMap((point) => {
+    const other = common?.find((each) => each.f === point.f);
+    if (!other) return [];
+    const ratio = size(point) / size(other);
+    return Number.isNaN(ratio)
+      ? []
+      : [{ f: point.f, db: 20 * Math.log10(ratio) }];
+  });
+}
+
+function cmrrText(db: number): string {
+  return Number.isFinite(db) ? `${db.toFixed(1)} dB` : "∞";
 }
 
 const NOISE_KIND: Record<string, string> = {
@@ -3924,6 +3992,15 @@ export function SmallSignalPanel({
   const suggestClientRef = useRef<SmallSignalClient | null>(null);
   const suggestBusy = useRef(false);
   const suggestGeneration = useRef(0);
+  // A differential input's common-mode solve: both inputs driven alike, on
+  // its own worker so the differential result never waits for it.
+  const commonClientRef = useRef<SmallSignalClient | null>(null);
+  const commonBusy = useRef(false);
+  const commonGeneration = useRef(0);
+  const [commonResponse, setCommonResponse] = useState<{
+    key: string;
+    response: SmallSignalResponse;
+  } | null>(null);
 
   useEffect(() => {
     // Start loading the typesetter now, before the first result arrives.
@@ -3944,6 +4021,8 @@ export function SmallSignalPanel({
       distortionClientRef.current = null;
       suggestClientRef.current?.dispose();
       suggestClientRef.current = null;
+      commonClientRef.current?.dispose();
+      commonClientRef.current = null;
     };
   }, []);
 
@@ -4062,6 +4141,33 @@ export function SmallSignalPanel({
     }, SOLVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // requestKey covers the netlist text and every request field.
+  }, [requestKey]);
+
+  useEffect(() => {
+    const current = ++commonGeneration.current;
+    if (!requestKey) return;
+    const [text, job] = JSON.parse(requestKey) as [string, SmallSignalRequest];
+    if (!job.inputNeg) return;
+    const timer = setTimeout(() => {
+      commonClientRef.current ??= createSmallSignalClient();
+      commonBusy.current = true;
+      void commonClientRef.current
+        .analyze(text, { ...job, mode: "common", rout: false, sweep: {} })
+        .then((next) => {
+          if (current !== commonGeneration.current) return;
+          commonBusy.current = false;
+          setCommonResponse({ key: requestKey, response: next });
+        });
+    }, SOLVE_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      // As for Noise: a solve no longer wanted stops with its worker.
+      if (commonBusy.current) {
+        commonClientRef.current?.dispose();
+        commonClientRef.current = null;
+        commonBusy.current = false;
+      }
+    };
   }, [requestKey]);
 
   // The main solve found the exact forms over the term budget: the Noise
@@ -4254,6 +4360,17 @@ export function SmallSignalPanel({
   const error =
     response && isSmallSignalError(response) && !blocked
       ? response.error
+      : null;
+  // The common-mode result for this very job (an older one, shown while
+  // the next is solved, is the last for this input pair).
+  const commonResult =
+    result &&
+    differential &&
+    commonResponse &&
+    !isSmallSignalError(commonResponse.response) &&
+    commonResponse.response.mode === "common" &&
+    (commonResponse.key === requestKey || solving)
+      ? commonResponse.response
       : null;
   const inputSource = sources.find(
     (source) => source.name === (differential ? differential[0] : chosenInput),
@@ -4977,6 +5094,26 @@ export function SmallSignalPanel({
                     : null
                 }
               />
+            ) : null}
+            {commonResult?.gain ? (
+              <QuantityCard
+                title="Common-mode gain"
+                symbol={`\\frac{${outputLabel}}{v_{cm}}`}
+                quantity={commonResult.gain}
+                unit={inputSource?.kind === "current" ? "Ω" : ""}
+                noFormulaNote={!commonResult.gain.exact}
+                assumed={assumedOf(commonResult.gain)}
+                miller={commonResult.assumptions?.miller}
+                regions={regionReports}
+                sweep={commonResult.sweep?.f}
+              >
+                <CmrrNote
+                  points={cmrrPoints(
+                    result?.gain?.values,
+                    commonResult.gain.values,
+                  )}
+                />
+              </QuantityCard>
             ) : null}
             {result?.rin ? (
               <QuantityCard

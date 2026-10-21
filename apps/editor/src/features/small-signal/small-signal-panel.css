@@ -1365,3 +1365,10 @@
 .small-signal-device-values dd {
   margin: 0;
 }
+
+/* Common-mode rejection under the common-mode gain. */
+.small-signal-cmrr {
+  margin: 0;
+  font-size: var(--icm-font-sm);
+  font-variant-numeric: tabular-nums;
+}
