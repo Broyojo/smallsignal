@@ -4219,20 +4219,45 @@ export function SmallSignalPanel({
     // requestKey covers the netlist text and every request field.
   }, [requestKey]);
 
+  // The main solve found the exact forms over the term budget: the Noise
+  // and Distortion solves, which show neither, skip them at once.
+  const overBudget = Boolean(
+    response &&
+    !isSmallSignalError(response) &&
+    responseKey === requestKey &&
+    response.gain?.skipped,
+  );
+  const numericOnly = (over: boolean) => (over ? { maxTerms: 1 } : {});
+  // A differential input's common-mode solve waits, like Noise, for the
+  // main solve's budget status: never an exact solve beside one over it.
+  const commonKey =
+    requestKey &&
+    responseKey === requestKey &&
+    differential &&
+    response &&
+    !isSmallSignalError(response)
+      ? JSON.stringify([requestKey, overBudget])
+      : null;
   useEffect(() => {
     const current = ++commonGeneration.current;
-    if (!requestKey) return;
-    const [text, job] = JSON.parse(requestKey) as [string, SmallSignalRequest];
-    if (!job.inputNeg) return;
+    if (!commonKey) return;
+    const [key, over] = JSON.parse(commonKey) as [string, boolean];
+    const [text, job] = JSON.parse(key) as [string, SmallSignalRequest];
     const timer = setTimeout(() => {
       commonClientRef.current ??= createSmallSignalClient();
       commonBusy.current = true;
       void commonClientRef.current
-        .analyze(text, { ...job, mode: "common", rout: false, sweep: {} })
+        .analyze(text, {
+          ...job,
+          mode: "common",
+          rout: false,
+          sweep: {},
+          ...numericOnly(over),
+        })
         .then((next) => {
           if (current !== commonGeneration.current) return;
           commonBusy.current = false;
-          setCommonResponse({ key: requestKey, response: next });
+          setCommonResponse({ key, response: next });
         });
     }, SOLVE_DEBOUNCE_MS);
     return () => {
@@ -4244,17 +4269,7 @@ export function SmallSignalPanel({
         commonBusy.current = false;
       }
     };
-  }, [requestKey]);
-
-  // The main solve found the exact forms over the term budget: the Noise
-  // and Distortion solves, which show neither, skip them at once.
-  const overBudget = Boolean(
-    response &&
-    !isSmallSignalError(response) &&
-    responseKey === requestKey &&
-    response.gain?.skipped,
-  );
-  const numericOnly = (over: boolean) => (over ? { maxTerms: 1 } : {});
+  }, [commonKey]);
   const band = noiseBandRange(noiseBand);
   const noiseKey = noiseJobKey(
     noiseOpen,
@@ -5187,7 +5202,9 @@ export function SmallSignalPanel({
                 symbol={`\\frac{${outputLabel}}{v_{cm}}`}
                 quantity={commonResult.gain}
                 unit={inputSource?.kind === "current" ? "Ω" : ""}
-                noFormulaNote={!commonResult.gain.exact}
+                noFormulaNote={
+                  !commonResult.gain.exact && firstWithoutFormula === undefined
+                }
                 assumed={
                   anyAssumed(commonResult.assumptions)
                     ? commonResult.gain.assumed
