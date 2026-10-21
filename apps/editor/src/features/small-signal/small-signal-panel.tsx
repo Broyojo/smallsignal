@@ -1333,6 +1333,7 @@ function QuantityCard({
   sweep,
   crossings = null,
   children,
+  mode,
 }: {
   title: string;
   symbol: string;
@@ -1352,6 +1353,9 @@ function QuantityCard({
   crossings?: { unity: number | null; bandwidth: number | null } | null;
   /** More about the quantity, at the card's end (a CMRR). */
   children?: ReactNode;
+  /** A differential input's common-mode solve: its symbols' values are
+   * that solve's. */
+  mode?: "common" | undefined;
 }) {
   const imposed = assumed ? regionNote(regions) : null;
   // The simpler form appears only when it actually dropped terms, and never
@@ -1393,7 +1397,7 @@ function QuantityCard({
     ? ""
     : countText(quantity.poleCount, quantity.zeroCount);
   return (
-    <section className="small-signal-card" aria-label={title}>
+    <section className="small-signal-card" aria-label={title} data-mode={mode}>
       <header>
         <span>{title}</span>
         {value ? (
@@ -1517,8 +1521,11 @@ export function cmrrPoints(
   });
 }
 
+/** ∞ for an exactly zero A_cm, −∞ dB for an exactly zero A_d (an output
+ * the differential drive never reaches). */
 function cmrrText(db: number): string {
-  return Number.isFinite(db) ? `${db.toFixed(1)} dB` : "∞";
+  if (Number.isFinite(db)) return `${db.toFixed(1)} dB`;
+  return db > 0 ? "∞" : "−∞ dB";
 }
 
 const NOISE_KIND: Record<string, string> = {
@@ -4430,17 +4437,23 @@ export function SmallSignalPanel({
     response && isSmallSignalError(response) && !blocked
       ? response.error
       : null;
-  // The common-mode result for this very job (an older one, shown while
-  // the next is solved, is the last for this input pair).
-  const commonResult =
-    result &&
-    differential &&
-    commonResponse &&
-    !isSmallSignalError(commonResponse.response) &&
-    commonResponse.response.mode === "common" &&
-    (commonResponse.key === requestKey || solving)
+  // The common-mode response for this very job (an older one stays,
+  // shown while the next is solved); CMRR only pairs the two gains of one
+  // job.
+  const commonCurrent = commonResponse?.key === requestKey;
+  const commonShown =
+    result && differential && commonResponse && (commonCurrent || solving)
       ? commonResponse.response
       : null;
+  const commonResult =
+    commonShown &&
+    !isSmallSignalError(commonShown) &&
+    commonShown.mode === "common"
+      ? commonShown
+      : null;
+  const commonError =
+    commonShown && isSmallSignalError(commonShown) ? commonShown.error : null;
+  const cmrrCurrent = commonCurrent && responseKey === requestKey;
   const inputSource = sources.find(
     (source) => source.name === (differential ? differential[0] : chosenInput),
   );
@@ -4799,8 +4812,10 @@ export function SmallSignalPanel({
           element: symbol.elements[0] ?? "",
           elements: symbol.elements,
         })),
+      // A common-mode form's own symbols (a Miller K of that drive).
+      ...(commonResult?.params ?? []).filter((param) => !names.has(param.name)),
     ];
-  }, [result?.params, shownDistortion?.symbols]);
+  }, [result?.params, shownDistortion?.symbols, commonResult?.params]);
   const symbols = useMemo(() => symbolElements(valueParams), [valueParams]);
   // The drawn part (in the open Cell) each element is, or sits inside.
   const instanceOf = useMemo(
@@ -4885,6 +4900,7 @@ export function SmallSignalPanel({
       <SymbolValueTip
         link={link}
         params={valueParams}
+        commonParams={commonResult?.params}
         format={formatEngineering}
       />
       <section
@@ -5167,22 +5183,52 @@ export function SmallSignalPanel({
             {commonResult?.gain ? (
               <QuantityCard
                 title="Common-mode gain"
+                mode="common"
                 symbol={`\\frac{${outputLabel}}{v_{cm}}`}
                 quantity={commonResult.gain}
                 unit={inputSource?.kind === "current" ? "Ω" : ""}
                 noFormulaNote={!commonResult.gain.exact}
-                assumed={assumedOf(commonResult.gain)}
+                assumed={
+                  anyAssumed(commonResult.assumptions)
+                    ? commonResult.gain.assumed
+                    : undefined
+                }
                 miller={commonResult.assumptions?.miller}
-                regions={regionReports}
+                regions={commonResult.assumptions?.regions}
                 sweep={commonResult.sweep?.f}
+                crossings={
+                  commonResult.sweep
+                    ? {
+                        unity: commonResult.sweep.unity ?? null,
+                        bandwidth: commonResult.sweep.bandwidth ?? null,
+                      }
+                    : null
+                }
               >
                 <CmrrNote
-                  points={cmrrPoints(
-                    result?.gain?.values,
-                    commonResult.gain.values,
-                  )}
+                  points={
+                    cmrrCurrent
+                      ? cmrrPoints(
+                          result?.gain?.values,
+                          commonResult.gain.values,
+                        )
+                      : []
+                  }
                 />
               </QuantityCard>
+            ) : commonError ? (
+              <section
+                className="small-signal-card"
+                aria-label="Common-mode gain"
+                data-mode="common"
+              >
+                <header>
+                  <span>Common-mode gain</span>
+                </header>
+                <p className="small-signal-muted" role="alert">
+                  {commonError}
+                </p>
+              </section>
             ) : null}
             {result?.rin ? (
               <QuantityCard

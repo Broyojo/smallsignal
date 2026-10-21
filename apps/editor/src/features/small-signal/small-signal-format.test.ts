@@ -759,5 +759,9 @@ describe("CMRR", () => {
     expect(low!.db).toBeCloseTo(20 * Math.log10(296.7 / 0.002429), 6);
     expect(high).toEqual({ f: 1e6, db: Number.POSITIVE_INFINITY });
     expect(cmrrPoints(ad, undefined)).toEqual([]);
+    // An output the differential drive never reaches: no rejection at all.
+    expect(
+      cmrrPoints([{ f: 1e3, re: 0, im: 0 }], [{ f: 1e3, re: 0.5, im: 0 }]),
+    ).toEqual([{ f: 1e3, db: Number.NEGATIVE_INFINITY }]);
   });
 });
