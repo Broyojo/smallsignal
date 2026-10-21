@@ -423,7 +423,9 @@ test("a Gallery link opened again selects its own tab and keeps a changed copy",
     "true",
   );
   await expect(count).toHaveText("1");
-  await page.waitForLoadState("networkidle");
+  // Time for a read the visit would start. Not networkidle: the solver's
+  // worker script never reports finished, so it never fires.
+  await page.waitForTimeout(1000);
   expect(reads).toBe(readsBefore);
 });
 

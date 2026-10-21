@@ -17,6 +17,7 @@ import {
   expectComponentCodeField,
   openEditor,
   openProject,
+  closeProjectTools,
 } from "./editor-fixtures.js";
 import {
   exportedDocument,
@@ -556,6 +557,8 @@ test("batch Code lists differing values, edits them atomically and refuses incom
     "batch-values.icproj.json",
   );
   await expectStatus(page, "Opened batch-values.icproj.json");
+  // Small-Signal's part menu would open beside R1, over R2.
+  await closeProjectTools(page);
   await page.getByTestId("hit-R1").click();
   await page.getByTestId("hit-R2").click({ modifiers: ["Shift"] });
   await openSelectionShelf(page);

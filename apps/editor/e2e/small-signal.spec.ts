@@ -1967,3 +1967,52 @@ test("guide: it is the empty panel, closes once for good, and ? brings it back",
   await help.click();
   await expect(panel.getByTestId("small-signal-guide")).toHaveCount(0);
 });
+
+test("dock: Small-Signal is home, back when what covered it closes, hidden only by its own button", async ({
+  page,
+}) => {
+  await openEditor(page);
+  const toggle = page.getByTestId("small-signal-toggle");
+  const panel = page.getByTestId("small-signal-panel");
+  const dock = page.getByRole("complementary", { name: "Project tools" });
+  const netlist = page.getByTestId("netlist-panel-toggle");
+  await expect(panel).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  const open = () =>
+    openProjectFile(
+      page,
+      fixture(FIXTURES.inverter),
+      "cmos-inverter-triode.icproj.json",
+    );
+  await open();
+  await expect(panel).toBeVisible();
+  for (const other of [netlist, page.getByTestId("project-code-toggle")]) {
+    await other.click();
+    await expect(panel).toBeHidden();
+    await other.click();
+    await expect(panel).toBeVisible();
+  }
+  // A key typed at the drawing is its shortcut: the part's menu steps aside.
+  const menu = page.getByTestId("small-signal-device-menu");
+  await page.getByTestId("hit-M1").click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("w");
+  await expect(menu).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  // A part's Properties take the dock and give it back.
+  await page.getByTestId("hit-M1").click();
+  await page.getByRole("button", { name: "More properties" }).click();
+  await expect(panel).toBeHidden();
+  await page.keyboard.press("q");
+  await expect(panel).toBeVisible();
+  // Hidden by its own button, it stays hidden behind another panel.
+  await toggle.click();
+  await expect(dock).toBeHidden();
+  await netlist.click();
+  await netlist.click();
+  await expect(dock).toBeHidden();
+  // The next circuit opens onto it.
+  await open();
+  await page.getByRole("button", { name: "Continue without saving" }).click();
+  await expect(panel).toBeVisible();
+});

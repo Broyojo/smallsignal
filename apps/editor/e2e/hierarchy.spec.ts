@@ -332,7 +332,8 @@ test("applies and places an external model in a compact narrow Manager", async (
   await openCellManagerTab(page, "External Circuits");
   await manager.getByRole("button", { name: /compact/ }).click();
   await manager.getByRole("button", { name: "Place", exact: true }).click();
-  await page.getByRole("button", { name: "Netlist", exact: true }).click();
+  // The dock covers a compact drawing: its starting panel is put away.
+  await page.getByTestId("small-signal-toggle").click();
   await placeFirstAt(page, { x: 200, y: 250 });
   await openCellManagerTab(page, "External Circuits");
   await manager.getByRole("button", { name: /compact/ }).click();

@@ -382,6 +382,7 @@ test("grows and shrinks the live netlist with content, scrolling only at the vie
 }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/editor");
+  await showNetlistPanel(page);
   const panel = page.getByRole("region", { name: "Live netlist", exact: true });
   const viewport = panel.locator(".netlist-code-viewport");
   const editor = viewport.locator(".project-source-editor");
@@ -425,6 +426,7 @@ test("grows and shrinks the live netlist with content, scrolling only at the vie
       });
     }
     await openProjectFile(page, serializeProject(project));
+    await showNetlistPanel(page);
     await expect(viewport).toHaveAttribute(
       "data-line-count",
       String(count + 4),
@@ -620,8 +622,8 @@ test("edits output configuration without creating another electrical authority, 
   config.format = "spice";
   config.profiles.abstract.devices.resistor.parameters = {};
   await code.fill(JSON.stringify(config));
-  await page.getByTestId("netlist-panel-toggle").click();
   await openProjectFile(page, serializeProject(project));
+  await showNetlistPanel(page);
   const live = page.getByLabel("Netlist code", { exact: true });
   // The panel shows the draft, value unknown; output itself stays blocked.
   await expect(live).toContainText("* Draft:");
@@ -692,6 +694,7 @@ test("refreshes a legacy circuit with missing device defaults in one click", asy
     });
   await openProject(page, serializeProject(project));
   await expectStatus(page, "Opened");
+  await showNetlistPanel(page);
   const code = page.getByLabel("Netlist code", { exact: true });
   await expect(code).toContainText("* Draft:");
   await expect(code).toContainText("w=? l=?");
