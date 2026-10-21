@@ -2005,6 +2005,17 @@ test("dock: Small-Signal is home, back when what covered it closes, hidden only 
   await expect(panel).toBeHidden();
   await page.keyboard.press("q");
   await expect(panel).toBeVisible();
+  // Properties a project panel covered come back once, then home.
+  await page.getByTestId("hit-M1").click();
+  await page.getByRole("button", { name: "More properties" }).click();
+  await netlist.click();
+  await netlist.click();
+  await expect(panel).toBeHidden();
+  await page.keyboard.press("q");
+  await expect(panel).toBeVisible();
+  await netlist.click();
+  await netlist.click();
+  await expect(panel).toBeVisible();
   // Hidden by its own button, it stays hidden behind another panel.
   await toggle.click();
   await expect(dock).toBeHidden();
@@ -2014,5 +2025,12 @@ test("dock: Small-Signal is home, back when what covered it closes, hidden only 
   // The next circuit opens onto it.
   await open();
   await page.getByRole("button", { name: "Continue without saving" }).click();
+  await expect(panel).toBeVisible();
+  // So does a new project tab.
+  await page
+    .getByRole("button", { name: "New project tab", exact: true })
+    .click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(panel).toBeVisible();
 });

@@ -3770,7 +3770,12 @@ function WorkspaceEditor({
 
   function closeProjectPanel(): void {
     setProjectPanel(null);
-    setSelectionOpen(propertiesOpenBeforeProjectPanelRef.current);
+    // Properties it covered come back once; where the dock covers the
+    // drawing, the drawing does.
+    setSelectionOpen(
+      propertiesOpenBeforeProjectPanelRef.current && !compactLayout,
+    );
+    propertiesOpenBeforeProjectPanelRef.current = false;
   }
 
   function toggleProjectPanel(mode: EditorProjectPanelMode): void {

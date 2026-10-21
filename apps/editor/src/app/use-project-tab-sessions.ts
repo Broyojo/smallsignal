@@ -355,7 +355,7 @@ export function useProjectTabSessions({
         draftingIds: [],
         junctionIds: [],
       },
-      panel: "netlist",
+      panel: "small-signal",
       properties: false,
       publication: null,
       publishDraft: null,
