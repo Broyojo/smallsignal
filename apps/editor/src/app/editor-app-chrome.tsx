@@ -181,7 +181,11 @@ export function EditorAppChrome({
             onClick={openGallery}
           >
             <span className="app-brand-mark" aria-hidden="true" />
-            <h1 title="Analog Canvas">Analog Canvas</h1>
+            {/* The tool, and under it the editor it is built on. */}
+            <span className="app-brand-name">
+              <h1 title="SmallSignal">SmallSignal</h1>
+              <span className="app-brand-sub">on Analog Canvas</span>
+            </span>
           </a>
           {projectHome}
           {/* The one thing called Gallery: where circuits are browsed,
@@ -514,6 +518,20 @@ export function EditorAppChrome({
               Desktop preview
             </span>
           )}
+          <div className="tokenzhang-credit smallsignal-credit">
+            <span className="tokenzhang-credit-kicker">SmallSignal by</span>
+            <span className="smallsignal-credit-names">
+              <a
+                className="tokenzhang-link"
+                href="https://broyojo.com"
+                target="_blank"
+                rel="noreferrer"
+              >
+                David Andrews
+              </a>{" "}
+              &amp; Caden Xu
+            </span>
+          </div>
           <div className="tokenzhang-credit">
             <span className="tokenzhang-credit-kicker">Presented by</span>
             <a

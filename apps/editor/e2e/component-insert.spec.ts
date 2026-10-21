@@ -638,7 +638,7 @@ test("publishes placement cancellation synchronously before rapid Copy", async (
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "c" }));
   });
   await expect(
-    page.getByRole("heading", { name: "Analog Canvas" }),
+    page.getByRole("heading", { name: "SmallSignal" }),
   ).toBeVisible();
   await chooseComponent(page, "nmos");
   await canvas.click({ position: { x: 320, y: 240 } });
