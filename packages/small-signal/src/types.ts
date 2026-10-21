@@ -605,6 +605,11 @@ export interface DistortionForm {
 export interface DistortionQuantity extends DistortionForm {
   display?: DistortionForm | null;
   simplified?: DistortionForm | null;
+  /** a₂ or a₃ as hand analysis nests it, the output's transimpedance times
+   * each device's coefficients and control voltages (a₁, a₂ where those
+   * are the output): equal to `display`, present where it is shorter or
+   * `display` is long, and every part reads without a sum. */
+  nested?: { latex: string; value: number } | null;
   /** Why there is no exact form, e.g. "too large for the exact closed form". */
   skipped?: string;
 }
