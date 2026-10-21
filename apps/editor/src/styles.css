@@ -257,8 +257,8 @@ body {
   color: var(--icm-accent);
 }
 
-/* The product's name with this fork's tool under it, on two tight lines
-   inside the menubar's height. */
+/* The tool's name with the editor it is built on under it, on two tight
+   lines inside the menubar's height. */
 .app-brand-name {
   display: grid;
   min-width: 0;
@@ -269,7 +269,7 @@ body {
 }
 
 .app-brand-sub {
-  color: var(--icm-accent);
+  color: var(--icm-text-muted);
   font-size: var(--icm-font-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -492,7 +492,8 @@ body {
 }
 
 @media (max-width: 900px) {
-  .gallery-chrome .gallery-home-link h1 {
+  .gallery-chrome .gallery-home-link h1,
+  .gallery-chrome .app-brand-sub {
     display: none;
   }
 
