@@ -258,6 +258,9 @@ describe("editor shell", () => {
     expect(markup).toContain('<h1 title="SmallSignal">SmallSignal</h1>');
     expect(markup).toContain("on Analog Canvas");
     expect(markup).toContain('href="https://broyojo.com"');
+    expect(markup).toContain(
+      'href="https://cornell.digication.com/cadenxu/about-me"',
+    );
     expect(markup).toContain("Caden Xu");
     expect(markup).toContain('href="https://tokenzhang.com"');
     expect(markup).toContain('src="/tokenzhang-favicon.png"');
