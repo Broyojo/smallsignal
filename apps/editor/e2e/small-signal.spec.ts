@@ -895,6 +895,15 @@ test("distortion: the balanced inverter's a₂ is 0, a₁ reads in ∥, the menu
   // NMOS and PMOS square-law terms cancel: 0, and said why.
   expect(alts).toContain("a_{2} = 0");
   await expect(section).toContainText("terms cancel at this bias");
+  // a₃ as hand analysis nests it, the flat form a click away.
+  expect(
+    alts.some((alt) =>
+      alt.startsWith("a_{3} = \\left(r_{o1} \\parallel r_{o2}\\right) \\left["),
+    ),
+  ).toBe(true);
+  await expect(
+    section.locator("summary", { hasText: /^Expanded$/u }),
+  ).toHaveCount(1);
   // "=" for a form exact without junction leakage: no "Exact" under it.
   const a1 = section
     .locator(".small-signal-formula-line")

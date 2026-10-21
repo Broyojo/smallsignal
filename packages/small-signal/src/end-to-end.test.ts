@@ -501,6 +501,7 @@ const QUANTITY_KEYS = allKeys<DistortionQuantity>()([
   "display",
   "simplified",
   "skipped",
+  "nested",
 ] as const);
 const VS_FREQ_KEYS = allKeys<DistortionVsFreqPoint>()([
   "f",

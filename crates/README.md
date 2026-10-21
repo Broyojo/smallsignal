@@ -452,6 +452,15 @@ transfer cofactors. Response `distortion`:
 - `display`/`simplified` work as for the other quantities; simplified is the
   r_o → ∞ leading order (Taylor coefficients with a v_DS/v_CE derivative count
   as output conductances), then magnitude pruning, within `tolerance`.
+- a₂ and a₃ carry `nested` `{latex, value}` where hand analysis's form
+  reads better: the output's transimpedance from each device output
+  (outputs sharing it, up to sign, under one bracket) times its Taylor
+  coefficients and control voltages, a control voltage that is the output
+  written a₁ (a₂ in a₃'s order-2 terms) and the input 1, e.g. the inverter's
+  a₃ = (r_{o1} ∥ r_{o2})[−a₁/(r_{o1}V_{OD1}²) − … − 2a₂/(r_{o1}V_{OD1}) + …].
+  Present only when every transimpedance and control voltage is free of
+  sums, its value is the display form's to 1e-9, and it is shorter than
+  the display form or that has more than 6 terms.
 - An a_n (and its HD) whose terms cancel to roundoff (|a_n| ≤ 1e-12 of their
   size; a balanced inverter's a₂) has `simplified` 0 with `method:
   "cancels"`, and every form is measured against that size, not the
